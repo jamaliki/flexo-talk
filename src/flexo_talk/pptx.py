@@ -19,6 +19,7 @@ offset and a scale), so a figure can be put anywhere on a slide at any size.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import cache
 from xml.sax.saxutils import escape
@@ -29,7 +30,8 @@ from lxml import etree
 EMU_PER_POINT = 12700
 _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _P = "http://schemas.openxmlformats.org/presentationml/2006/main"
-_NS = f'xmlns:a="{_A}" xmlns:p="{_P}"'
+_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_NS = f'xmlns:a="{_A}" xmlns:p="{_P}" xmlns:r="{_R}"'
 
 ASCENT = 0.8
 """Where a text box's first baseline sits below its top, as a fraction of the
@@ -69,9 +71,14 @@ class Placement:
         return round(value * self.scale * EMU_PER_POINT)
 
 
+type Pictures = Callable[[bytes, str], str]
+"""Adds a picture's bytes (and media type) to the slide; returns its relationship id."""
+
+
 class _Ids:
-    def __init__(self, start: int) -> None:
+    def __init__(self, start: int, pictures: Pictures | None = None) -> None:
         self.next = start
+        self.pictures = pictures
 
     def __call__(self) -> int:
         self.next += 1
@@ -86,17 +93,19 @@ def add_drawing(
     name: str | None = None,
     background: bool = True,
     groups: bool = True,
+    pictures: Pictures | None = None,
 ) -> None:
     """Append ``drawing`` to a slide's shape tree (``slide.shapes._spTree``).
 
     ``groups=False`` lays every shape flat on the slide instead of in Flexo's
     groups -- for renderers that cannot draw a freeform inside a group (macOS
-    Quick Look).
+    Quick Look). ``pictures`` adds an image's bytes to the slide (see
+    ``slide_pictures``); without it, pictures are left out.
     """
 
     placement = placement or Placement()
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
-    ids = _Ids(max(existing, default=1))
+    ids = _Ids(max(existing, default=1), pictures)
     items = [
         item
         for item in drawing.root.items
@@ -149,7 +158,78 @@ def _item(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids):
         return _shape(item, placement, ids)
     if isinstance(item, Text):
         return _text(item, placement, ids)
-    return None  # images: a later step
+    if isinstance(item, Image):
+        return _picture(item, placement, ids)
+    return None
+
+
+def slide_pictures(slide) -> Pictures:
+    """A ``Pictures`` for a python-pptx slide: PNG and JPEG as they are; an SVG
+    as a PNG drawn at print resolution with the SVG beside it, which PowerPoint
+    shows (and can turn into shapes) and other programs replace by the PNG."""
+
+    from io import BytesIO
+
+    from pptx.opc.constants import RELATIONSHIP_TYPE
+    from pptx.opc.package import Part
+
+    def add(data: bytes, mime: str) -> str:
+        if mime == "image/svg+xml":
+            raise ValueError("an SVG picture is added with its PNG: use add_svg")
+        return slide.part.get_or_add_image_part(BytesIO(data))[1]
+
+    def add_svg(data: bytes) -> str:
+        partname = slide.part.package.next_image_partname("svg")
+        part = Part(partname, "image/svg+xml", slide.part.package, data)
+        return slide.part.relate_to(part, RELATIONSHIP_TYPE.IMAGE)
+
+    add.svg = add_svg  # type: ignore[attr-defined]
+    return add
+
+
+def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | None:
+    import base64
+    import re
+    import struct
+
+    if ids.pictures is None:
+        return None
+    match = re.match(r"data:([^;,]+);base64,(.*)", image.href, re.DOTALL)
+    if match is None:
+        return None
+    mime, data = match.group(1), base64.b64decode(match.group(2))
+    extension = ""
+    if mime == "image/svg+xml":
+        import resvg_py
+
+        svg = data.decode("utf-8")
+        pixels = max(1, round(image.width * placement.scale / 72.0 * 300.0))
+        data = bytes(resvg_py.svg_to_bytes(svg_string=svg, width=pixels))
+        embed = ids.pictures(data, "image/png")
+        svg_id = ids.pictures.svg(svg.encode("utf-8"))  # type: ignore[attr-defined]
+        extension = (
+            '<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}">'
+            '<asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" '
+            f'r:embed="{svg_id}"/></a:ext></a:extLst>'
+        )
+        x, y, width, height = image.x, image.y, image.width, image.height
+    elif mime in {"image/png", "image/jpeg"}:
+        embed = ids.pictures(data, mime)
+        size = struct.unpack(">II", data[16:24]) if mime == "image/png" else None
+        x, y, width, height = image.placed(*size) if size else (image.x, image.y, image.width, image.height)
+    else:
+        return None
+    left, top = placement.point(x, y)
+    flips = (' flipH="1"' if image.flip_x else "") + (' flipV="1"' if image.flip_y else "")
+    label = escape(image.id or "picture", {'"': "&quot;"})
+    return etree.fromstring(
+        f'<p:pic {_NS}><p:nvPicPr><p:cNvPr id="{ids()}" name="{label}"/>'
+        f'<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
+        f'<p:blipFill><a:blip r:embed="{embed}">{extension}</a:blip><a:stretch><a:fillRect/></a:stretch></p:blipFill>'
+        f'<p:spPr><a:xfrm{flips}><a:off x="{left}" y="{top}"/>'
+        f'<a:ext cx="{placement.length(width)}" cy="{placement.length(height)}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
+    )
 
 
 # -- shapes ----------------------------------------------------------------------------
@@ -348,6 +428,50 @@ def _named_weight(run) -> bool:
 
 
 def _text(text: Text, placement: Placement, ids: _Ids) -> etree._Element | None:
+    element = _flat_text(replace(text, angle=0.0) if text.angle else text, placement, ids)
+    if element is None or not text.angle:
+        return element
+    return _turned(element, text, placement)
+
+
+def _turned(element: etree._Element, text: Text, placement: Placement) -> etree._Element:
+    """Turn a placed text about its pivot: a slide program turns a box about its centre,
+    so the box moves to where its centre goes and turns there."""
+
+    import math
+
+    turn = math.radians(text.angle)
+    cos, sin = math.cos(turn), math.sin(turn)
+    px, py = placement.point(*text.pivot)
+    boxes = [box for box in element.iter(f"{{{_A}}}xfrm") if box.getparent().tag != f"{{{_P}}}grpSpPr"]
+    for box in boxes:
+        off, ext = box.find(f"{{{_A}}}off"), box.find(f"{{{_A}}}ext")
+        cx = int(off.get("x")) + int(ext.get("cx")) / 2.0
+        cy = int(off.get("y")) + int(ext.get("cy")) / 2.0
+        tx = px + cos * (cx - px) - sin * (cy - py)
+        ty = py + sin * (cx - px) + cos * (cy - py)
+        off.set("x", str(round(int(off.get("x")) + tx - cx)))
+        off.set("y", str(round(int(off.get("y")) + ty - cy)))
+        box.set("rot", str(round(text.angle * 60000) % 21600000))
+    if element.tag == f"{{{_P}}}grpSp":
+        # The group's own extent follows its turned children.
+        own = {f"{{{_P}}}nvGrpSpPr", f"{{{_P}}}grpSpPr"}
+        extents = [_extent(child) for child in element if child.tag not in own]
+        left, top = min(e[0] for e in extents), min(e[1] for e in extents)
+        right, bottom = max(e[0] + e[2] for e in extents), max(e[1] + e[3] for e in extents)
+        group = element.find(f"{{{_P}}}grpSpPr/{{{_A}}}xfrm")
+        for tag, values in (("off", (left, top)), ("chOff", (left, top))):
+            node = group.find(f"{{{_A}}}{tag}")
+            node.set("x", str(values[0]))
+            node.set("y", str(values[1]))
+        for tag in ("ext", "chExt"):
+            node = group.find(f"{{{_A}}}{tag}")
+            node.set("cx", str(right - left))
+            node.set("cy", str(bottom - top))
+    return element
+
+
+def _flat_text(text: Text, placement: Placement, ids: _Ids) -> etree._Element | None:
     if not text.simple:
         # Runs stepped back over each other: each run in a box of its own.
         parts = []
@@ -479,7 +603,7 @@ def add_list(tree: etree._Element, deck, layout) -> None:
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(layout.id)}\"/>"
         f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
         f'<p:spPr><a:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
-        f'<a:ext cx="{round((layout.width + 2.0) * EMU_PER_POINT)}" cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
+        f'<a:ext cx="{round((layout.width + 0.25) * EMU_PER_POINT)}" cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
         f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
         f'<p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
         f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{''.join(paragraphs)}</p:txBody></p:sp>"

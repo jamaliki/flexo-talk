@@ -100,7 +100,15 @@ class _Image:
     width: float | None = None
 
 
-type _Block = _Bullets | _Words | _Figure | _Image
+@dataclass(slots=True)
+class _Plot:
+    figure: object
+    """A matplotlib ``Figure``."""
+    aspect: float | None = None
+    """Width over height; ``None`` fills the height the place has."""
+
+
+type _Block = _Bullets | _Words | _Figure | _Image | _Plot
 
 
 def inline(words: str) -> tuple[TextRun, ...]:
@@ -186,9 +194,22 @@ class Region:
         return self
 
     def image(self, source: str | Path, *, width: float | None = None) -> Region:
-        """A picture file (PNG, JPEG, or SVG), scaled to fit."""
+        """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
+        as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture."""
 
         self.blocks.append(_Image(str(source), width))
+        return self
+
+    def plot(self, figure: object, *, aspect: float | None = None) -> Region:
+        """A matplotlib figure, drawn at the size of this place in the deck's type.
+
+        The figure is laid out again at the place's size (matplotlib's
+        constrained layout), so its words are the deck's figure size rather than
+        scaled; its text is set in the deck's font and stays text. Make it inside
+        ``with deck.plotting():`` for the deck's colours as well.
+        """
+
+        self.blocks.append(_Plot(figure, aspect))
         return self
 
 
@@ -251,6 +272,10 @@ class Slide:
 
     def image(self, source: str | Path, *, width: float | None = None) -> Slide:
         next(iter(self.regions.values())).image(source, width=width)
+        return self
+
+    def plot(self, figure: object, *, aspect: float | None = None) -> Slide:
+        next(iter(self.regions.values())).plot(figure, aspect=aspect)
         return self
 
     def notes(self, text: str) -> Slide:
@@ -339,6 +364,68 @@ class Deck:
     def palette(self) -> Palette:
         return with_tone_roles(resolve_palette(self.theme, self.palette_name))
 
+    def plot_style(self) -> dict[str, object]:
+        """matplotlib settings for plots in the deck's look: its font and figure
+        size, its inks, and the palette's tones as the colour cycle."""
+
+        from cycler import cycler
+        from flexo.colour import is_dark, with_lightness
+
+        palette = self.palette
+        dark = is_dark(palette.get("canvas"))
+        tones = [palette.get(f"tone-{index}-stroke") for index in range(1, 7)]
+        colours = [with_lightness(tone, 0.74 if dark else 0.58, 0.16) for tone in tones]
+        ink, muted = palette.get("ink"), palette.get("muted-ink")
+        family = self.layout_style.typography.family
+        # Plot words sit a little above figure labels: tick labels are read from afar.
+        size = self.style.figure_size * 1.15
+        return {
+            "font.family": [family],
+            "font.size": size,
+            "axes.titlesize": size * 1.1,
+            "axes.labelsize": size,
+            "xtick.labelsize": size * 0.9,
+            "ytick.labelsize": size * 0.9,
+            "legend.fontsize": size * 0.9,
+            "text.color": ink,
+            "axes.labelcolor": ink,
+            "axes.titlecolor": ink,
+            "axes.edgecolor": muted,
+            "xtick.color": muted,
+            "ytick.color": muted,
+            "xtick.labelcolor": ink,
+            "ytick.labelcolor": ink,
+            "grid.color": muted,
+            "grid.alpha": 0.25,
+            "axes.prop_cycle": cycler(color=colours),
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.facecolor": "none",
+            "figure.facecolor": "none",
+            "legend.frameon": False,
+            "lines.linewidth": 2.0,
+            "patch.edgecolor": "none",
+            "mathtext.fontset": "custom",
+            "mathtext.rm": family,
+            "mathtext.it": f"{family}:italic",
+            "mathtext.bf": f"{family}:bold",
+            # Symbols the deck's face lacks come from Unicode fonts, so they stay
+            # the right characters when set as text (TeX fonts would not).
+            "mathtext.fallback": "stix",
+            "svg.fonttype": "none",
+            "figure.constrained_layout.use": True,
+        }
+
+    def plotting(self):
+        """``with deck.plotting():`` -- matplotlib figures made inside take the deck's look."""
+
+        import matplotlib
+
+        from flexo_talk.compose import register_fonts_with_matplotlib
+
+        register_fonts_with_matplotlib()
+        return matplotlib.rc_context(self.plot_style())
+
     def typography(self, size: float) -> TypographyStyle:
         return replace(self.layout_style.typography, size=pt(size), minimum_size=pt(min(size, 6.0)))
 
@@ -385,6 +472,7 @@ class RenderedSlide:
     slide: Slide
     svg: str
     lists: list[ListLayout]
+    diagnostics: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)

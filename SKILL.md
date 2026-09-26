@@ -15,6 +15,7 @@ place. The PowerPoint it writes is native shapes and text, editable everywhere.
 1. Write the deck (below): a title slide, then one slide per idea.
 2. `result = deck.build("build")` writes `build/<id>.pptx`, `build/<id>.pdf`
    (to present or share: fonts embedded), and an SVG and PNG per slide; `print(result.summary())` lists any figure's lint diagnostics.
+   (`flexo-talk build talk.py` does the same from the command line.)
 3. Look at the PNGs; fix wording, split crowded slides, simplify figures.
 
 ## Writing a deck
@@ -44,10 +45,18 @@ deck.build("build")
   `two-columns` (`slide.left`, `slide.right`), `figure` (one large figure), `blank`.
 - A region stacks blocks top to bottom: `bullets(*items)` (nested list = next
   level), `text(words, size=, align="start"|"middle"|"end", muted=)`,
-  `figure(**flexo_figure_options)` (use as `with`), `add(figure)`, `image(path)`.
+  `figure(**flexo_figure_options)` (use as `with`), `add(figure)`,
+  `plot(matplotlib_figure)`, `image(path)` (SVG as vectors; PNG/JPEG as pictures).
   Calling these on the slide uses its first region.
 - Slide text: `$...$` math (as in flexo), `*emphasis*`, `**strong**`.
 - `slide.notes(text)` becomes the PowerPoint speaker notes.
+
+## Plots
+
+Make matplotlib figures inside `with deck.plotting():` (the deck's font, sizes,
+inks, and tones), then `slide.plot(figure)`: the plot is laid out again at its
+place's size and placed as vectors and live text in PPTX and PDF. Don't set
+`figsize`; don't save it yourself.
 
 ## Beautiful by default: habits that pay
 
@@ -59,6 +68,8 @@ deck.build("build")
 - **Tones carry meaning across slides:** keep the same `tone=` names in every
   figure so "encoder" is one colour throughout; `badge="frozen"|"trained"|"tuned"`
   marks what trains.
+- **Too many words** are set smaller to fit, and the build summary says
+  `words set at 80% to fit`: split that slide.
 - Proportions live in `DeckStyle` (title, body, figure text sizes; margins;
   indents; title rule; slide numbers) -- change them once for the whole deck.
 

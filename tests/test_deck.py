@@ -80,3 +80,54 @@ def test_a_deck_takes_any_flexo_theme_and_checks_its_layouts() -> None:
         assert deck.render()[0].svg.startswith("<?xml")
     with pytest.raises(ValueError, match="layouts are"), Deck("t") as deck:
         deck.slide("x", layout="three-columns")  # type: ignore[arg-type]
+
+
+def test_a_matplotlib_plot_is_native_shapes_and_text(tmp_path: Path) -> None:
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("svg")
+    import matplotlib.pyplot as plt
+
+    deck = Deck("plots", theme="dark")
+    with deck.plotting():
+        figure, axes = plt.subplots()
+        axes.plot([0, 1, 2], [2, 1, 1.5], label="loss")
+        axes.set_ylabel(r"Loss $\theta$")
+        axes.imshow([[0, 1], [1, 0]], extent=(0, 2, 1, 2))
+    with deck.slide("A plot") as slide:
+        slide.plot(figure)
+    result = deck.build(tmp_path, formats=("pptx", "pdf"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    # Tick labels and the axis label are live text in the deck's font, the label turned.
+    assert 'typeface="Figtree"' in slide and ">Loss" in slide and 'rot="16200000"' in slide
+    # Lines are freeforms; the image is a picture, flipped as matplotlib stores it.
+    assert "<a:custGeom>" in slide and "<p:pic>" in slide and 'flipV="1"' in slide
+    assert "θ" in "".join(re.findall(r"<a:t>([^<]*)</a:t>", slide))
+
+
+def test_an_overfull_slide_is_set_smaller_and_reported(tmp_path: Path) -> None:
+    deck = Deck("full")
+    with deck.slide("Too much") as slide:
+        slide.bullets(*(["a long sentence that goes on and on across the whole slide width"] * 12))
+    result = deck.build(tmp_path, formats=("svg",))
+    assert any("to fit" in message for message in result.diagnostics)
+
+
+def test_a_png_picture_is_embedded(tmp_path: Path) -> None:
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", zlib.crc32(tag + payload))
+
+    rows = b"".join(b"\x00" + bytes([30, 120, 200] * 4) for _ in range(3))
+    source = tmp_path / "p.png"
+    source.write_bytes(
+        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 3, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+    )
+    deck = Deck("pictures")
+    with deck.slide("A picture") as slide:
+        slide.image(source)
+    result = deck.build(tmp_path, formats=("pptx",))
+    assert "<p:pic>" in _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert any(name.startswith("ppt/media/") for name in zipfile.ZipFile(result.pptx).namelist())  # type: ignore[arg-type]
