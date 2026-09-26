@@ -61,7 +61,33 @@ indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
-and `image(path)`. Slide text is flexo markup -- `$...$` is math -- plus
+`plot(matplotlib_figure)`, and `image(path)`. Words take the height they need
+and pictures share the rest; when a region has more words than room, its words
+are set smaller together (down to `DeckStyle.small_size`) and the build summary
+says so.
+
+## Plots
+
+```python
+import matplotlib.pyplot as plt
+
+with deck.plotting():                      # the deck's font, sizes, inks, and tones
+    figure, axes = plt.subplots()
+    axes.plot(epochs, loss, label="Adam")
+    axes.set_ylabel(r"Loss $\mathcal{L}_\theta$")
+with deck.slide("Training curves") as slide:
+    slide.plot(figure)
+```
+
+`plot()` lays a matplotlib figure out again at the size of its place
+(constrained layout), so its words are set at the deck's size rather than
+scaled, in the deck's font. It is placed as vectors: in the PowerPoint every
+line is a freeform and every tick label live text; in the PDF it is vectors and
+real text. `deck.plotting()` gives matplotlib the deck's look (`deck.plot_style()`
+is the same settings as a dict). An SVG saved by any program --
+`slide.image("plot.svg")` -- is placed as vectors the same way when it holds
+only what flexo draws exactly (paths, text, clips, pictures); otherwise, and for
+PNG and JPEG files, it is a picture. Slide text is flexo markup -- `$...$` is math -- plus
 `*emphasis*` and `**strong**`. The slide's own methods go to its first region, so a
 one-region slide reads simply. `slide.notes(text)` keeps the speaker notes.
 
@@ -83,6 +109,13 @@ The PDF needs no fonts where it is opened: it embeds them. The PowerPoint file's
 text is drawn by the program that opens it, in fonts installed there:
 install the theme's fonts (flexo bundles them: `flexo.fonts.bundled_font_directory()`)
 wherever the deck is opened, or choose a theme font that is already there.
+
+## Command line
+
+```bash
+flexo-talk build talk.py              # the deck the function talk() returns
+flexo-talk build talk.py:results -o out --formats pptx,pdf --theme dark
+```
 
 ## Development
 

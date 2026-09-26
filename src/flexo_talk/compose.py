@@ -39,6 +39,7 @@ from flexo_talk.deck import (
     _Bullets,
     _Figure,
     _Image,
+    _Plot,
     _Words,
 )
 
@@ -97,10 +98,19 @@ class _Canvas:
     # -- text --
 
     def measure(
-        self, runs: tuple[TextRun, ...], size: float, width: float | None, weight: int | None = None
+        self,
+        runs: tuple[TextRun, ...],
+        size: float,
+        width: float | None,
+        weight: int | None = None,
+        *,
+        balance: bool = True,
     ) -> TextMetrics:
+        """Words set at ``size`` in ``width``. A list wraps greedily (``balance=False``),
+        as the slide program that edits it will; a title or caption is balanced."""
+
         typography = self.deck.typography(size)
-        return TextMeasurer(typography).measure(runs, max_width=width, weight=weight)
+        return TextMeasurer(typography).measure(runs, max_width=width, weight=weight, balance=balance)
 
     def words(
         self,
@@ -193,7 +203,7 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
     _furniture(canvas, slide)
     stylesheet = element(canvas.defs, "style", id=f"{slide.id}.fonts", type="text/css")
     embed_fonts(stylesheet, canvas.root, deck.layout_style)
-    return RenderedSlide(slide, xml_document(canvas.root), canvas.lists)
+    return RenderedSlide(slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics)
 
 
 def _title_slide(canvas: _Canvas, slide: Slide) -> None:
@@ -273,14 +283,15 @@ def _furniture(canvas: _Canvas, slide: Slide) -> None:
 
 def _region(canvas: _Canvas, region: Region, box: Box) -> None:
     style = canvas.deck.style
-    words = [block for block in region.blocks if not isinstance(block, _Figure | _Image)]
-    pictures = [block for block in region.blocks if isinstance(block, _Figure | _Image)]
+    blocks = _fitted(canvas, region, box)
+    words = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot)]
+    pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot)]
     # Words take what they need; pictures share the height that is left.
     needed = sum(_height(canvas, block, box.width) for block in words)
-    gaps = style.block_gap * max(0, len(region.blocks) - 1)
+    gaps = style.block_gap * max(0, len(blocks) - 1)
     share = (box.height - needed - gaps) / len(pictures) if pictures else 0.0
     top = box.y
-    for index, block in enumerate(region.blocks):
+    for index, block in enumerate(blocks):
         identifier = f"{canvas.slide.id}.{region.name}.{index}"
         if isinstance(block, _Bullets):
             top += _bullets(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
@@ -295,7 +306,49 @@ def _region(canvas: _Canvas, region: Region, box: Box) -> None:
             top += _figure(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Image):
             top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
+        elif isinstance(block, _Plot):
+            top += _plot(canvas, identifier, block, Box(box.x, top, box.width, max(share, 60.0)))
         top += style.block_gap
+
+
+PICTURE_LEAST = 120.0
+"""The least height a figure, plot, or picture keeps when words crowd its place."""
+
+
+def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
+    """The region's blocks, their words set smaller if that is what it takes to fit.
+
+    Words shrink together, down to the deck's small size; a slide that still
+    does not fit is reported, since it has more on it than a slide can hold.
+    """
+
+    style = canvas.deck.style
+    blocks = list(region.blocks)
+    pictures = sum(isinstance(block, _Figure | _Image | _Plot) for block in blocks)
+    room = box.height - style.block_gap * max(0, len(blocks) - 1) - PICTURE_LEAST * pictures
+
+    def needed(scale: float) -> float:
+        return sum(_height(canvas, _sized(block, scale, style), box.width) for block in blocks)
+
+    if needed(1.0) <= room:
+        return blocks
+    low, high = style.small_size / style.body_size, 1.0
+    if needed(low) > room:
+        canvas.diagnostics.append(
+            f"{canvas.slide.id}: the words do not fit even at the small size -- split the slide"
+        )
+        return [_sized(block, low, style) for block in blocks]
+    for _ in range(10):
+        middle = (low + high) / 2.0
+        low, high = (middle, high) if needed(middle) <= room else (low, middle)
+    canvas.diagnostics.append(f"{canvas.slide.id}: words set at {round(low * 100)}% to fit")
+    return [_sized(block, low, style) for block in blocks]
+
+
+def _sized(block, scale: float, style):
+    if scale == 1.0 or not isinstance(block, _Bullets | _Words):
+        return block
+    return replace(block, size=(block.size or style.body_size) * scale)
 
 
 def _height(canvas: _Canvas, block, width: float) -> float:
@@ -307,7 +360,8 @@ def _height(canvas: _Canvas, block, width: float) -> float:
         total = 0.0
         for level, runs in block.items:
             offset = style.indent * level + size * 0.95
-            total += canvas.measure(runs, size, width - offset).height + style.paragraph_gap * size
+            metrics = canvas.measure(runs, size, width - offset, balance=False)
+            total += metrics.height + style.paragraph_gap * size
         return total
     return 0.0
 
@@ -323,7 +377,7 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     top = box.y
     for index, (level, runs) in enumerate(block.items):
         offset = style.indent * level + size * 0.95
-        metrics = canvas.measure(runs, size, box.width - offset)
+        metrics = canvas.measure(runs, size, box.width - offset, balance=False)
         layout.line_height = metrics.line_height
         baseline = top + metrics.baseline
         radius = size * (0.15 if level == 0 else 0.12)
@@ -376,6 +430,74 @@ def _figure(canvas: _Canvas, identifier: str, block: _Figure, box: Box) -> float
     return height * scale if not block.centre else box.height
 
 
+def _drawable(markup: str) -> bool:
+    from flexo.drawing import _drawable as drawable
+
+    return drawable(ET.fromstring(markup))
+
+
+_REGISTERED = False
+
+
+def register_fonts_with_matplotlib() -> None:
+    """Let matplotlib measure text in flexo's bundled faces (once per process)."""
+
+    global _REGISTERED
+    if _REGISTERED:
+        return
+    from flexo.fonts import bundled_font_directory
+    from matplotlib import font_manager
+
+    for path in sorted(bundled_font_directory().iterdir()):
+        if path.suffix.lower() in {".ttf", ".otf"}:
+            try:
+                font_manager.fontManager.addfont(str(path))
+            except Exception:
+                continue
+    _REGISTERED = True
+
+
+def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
+    """A matplotlib figure, laid out again at the size of its place, placed as vectors."""
+
+    import io
+
+    import matplotlib
+    import matplotlib.text
+
+    register_fonts_with_matplotlib()
+    figure = block.figure
+    width = box.width
+    height = min(box.height, width / block.aspect) if block.aspect else box.height
+    figure.set_size_inches(width / 72.0, height / 72.0)
+    if figure.get_layout_engine() is None:
+        figure.set_layout_engine("constrained")
+    family = canvas.deck.layout_style.typography.family
+    for text in figure.findobj(matplotlib.text.Text):
+        text.set_fontfamily([family])
+    settings = {
+        "svg.fonttype": "none",
+        "svg.hashsalt": identifier,
+        "mathtext.fontset": "custom",
+        "mathtext.rm": family,
+        "mathtext.it": f"{family}:italic",
+        "mathtext.bf": f"{family}:bold",
+        "mathtext.fallback": "stix",
+    }
+    buffer = io.StringIO()
+    with matplotlib.rc_context(settings):
+        try:
+            figure.savefig(buffer, format="svg", transparent=True, metadata={"Date": None})
+        except (ZeroDivisionError, ValueError):
+            # Constrained layout cannot take over a figure built without it
+            # (a colour bar made first): lay it out tightly instead.
+            figure.set_layout_engine("tight")
+            buffer = io.StringIO()
+            figure.savefig(buffer, format="svg", transparent=True, metadata={"Date": None})
+    _place_svg(canvas, identifier, buffer.getvalue(), box.x, box.y, 1.0)
+    return height
+
+
 def _ink(svg: str) -> tuple[float, float, float, float]:
     """The extent of everything a figure draws, in its own points."""
 
@@ -404,10 +526,22 @@ def _ink(svg: str) -> tuple[float, float, float, float]:
 
 
 def _place_svg(canvas: _Canvas, identifier: str, svg: str, x: float, y: float, scale: float) -> None:
-    """Put a flexo SVG on the slide at ``(x, y)``, scaled; its ids take a prefix."""
+    """Put an SVG on the slide at ``(x, y)``, scaled; its ids take a prefix.
 
-    source = ET.fromstring(svg)
+    A ``*`` rule in its stylesheet (matplotlib writes one) becomes attributes on
+    the group, so it applies to this drawing only, not to the whole slide.
+    """
+
+    source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
     prefix = f"{identifier}."
+    universal: dict[str, str] = {}
+    for item in source.iter():
+        if local_name(item.tag) == "style" and item.text:
+            for rule in re.finditer(r"(?:^|[}\s])\*\s*\{([^}]*)\}", item.text):
+                for declaration in rule.group(1).split(";"):
+                    name, _, value = declaration.partition(":")
+                    if name.strip() and value.strip():
+                        universal[name.strip()] = value.strip()
     for item in source.iter():
         if item.get("id"):
             item.set("id", prefix + item.get("id"))  # type: ignore[operator]
@@ -421,13 +555,18 @@ def _place_svg(canvas: _Canvas, identifier: str, svg: str, x: float, y: float, s
         transform=f"translate({number(x)},{number(y)}) scale({number(scale)})",
         data__flexo__talk="figure",
     )
+    for name, value in universal.items():
+        group.set(name, value)
+    view = [float(v) for v in re.split(r"[ ,]+", source.get("viewBox", "").strip()) if v]
+    if len(view) == 4 and (view[0] or view[1]):
+        group = element(group, "g", transform=f"translate({number(-view[0])},{number(-view[1])})")
     for child in source:
         tag = local_name(child.tag)
         if tag == "defs":
             for definition in child:
                 if local_name(definition.tag) != "style":
                     canvas.defs.append(definition)
-        elif tag in {"title", "desc", "metadata"} or child.get(inkscape_attr("label")) == "Background":
+        elif tag in {"title", "desc", "metadata", "style"} or child.get(inkscape_attr("label")) == "Background":
             continue
         else:
             child.attrib.pop(inkscape_attr("groupmode"), None)
@@ -440,6 +579,12 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
     natural_h = art.height or box.height
     scale = min((block.width or box.width) / natural_w, box.height / natural_h)
     width, height = natural_w * scale, natural_h * scale
+    if art.format == "svg" and _drawable(art.markup):
+        # Vectors the drawing reader draws exactly: placed as shapes and text.
+        view = [float(v) for v in re.split(r"[ ,]+", ET.fromstring(art.markup).get("viewBox", "").strip()) if v]
+        units = (natural_w / view[2]) if len(view) == 4 and view[2] else 1.0
+        _place_svg(canvas, identifier, art.markup, box.x + (box.width - width) / 2.0, box.y, scale * units)
+        return height
     if art.format == "svg":
         import base64
 

@@ -15,7 +15,7 @@ from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
 from flexo_talk.deck import Deck, DeckBuild, RenderedSlide
-from flexo_talk.pptx import Placement, add_drawing, add_list
+from flexo_talk.pptx import Placement, add_drawing, add_list, slide_pictures
 
 FORMATS = ("pptx", "pdf", "svg", "png")
 
@@ -26,7 +26,7 @@ def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...]) -> DeckBui
         raise ValueError(f"unknown format(s) {', '.join(sorted(unknown))}; use {', '.join(FORMATS)}")
     directory.mkdir(parents=True, exist_ok=True)
     rendered = deck.render()
-    diagnostics: list[str] = []
+    diagnostics = [message for item in rendered for message in item.diagnostics]
     svgs: list[Path] = []
     pngs: list[Path] = []
     for item in rendered:
@@ -66,7 +66,10 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
             slide.background.fill.fore_color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
         drawing = read_drawing(item.svg)
         _drop_lists(drawing.root)
-        add_drawing(slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False, groups=groups)
+        add_drawing(
+            slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False,
+            groups=groups, pictures=slide_pictures(slide),
+        )
         for layout in item.lists:
             add_list(slide.shapes._spTree, deck, layout)
         if item.slide.notes_text:
