@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flexo-talk"
+version = "0.1.0"
+description = "Slide decks in flexo's language: one theme, exported to SVG and PPTX"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Kiarash Jamali" }]
+dependencies = [
+  "flexo",
+  "python-pptx>=1.0",
+  "lxml>=5.0",
+]
+
+[project.scripts]
+flexo-talk = "flexo_talk.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "ruff>=0.12",
+]
+
+[tool.uv.sources]
+flexo = { path = "../flexo", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flexo_talk"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
