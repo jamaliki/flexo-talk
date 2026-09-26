@@ -32,6 +32,8 @@ def talk(theme: str = "tikz") -> Deck:
                     ["4.0", "91.7", "3.2", "$-94.9$"],
                 ]
             )
+            slide.footnote("[1] Kingma & Welling, *Auto-Encoding Variational Bayes*, ICLR 2014.")
+            slide.footnote("[2] Higgins et al., *$\\beta$-VAE*, ICLR 2017.")
         with deck.slide("A figure with a picture in it", layout="two-columns") as slide:
             slide.left.bullets("A molecule $M$ is embedded", "The encoder reads $\\phi(M)$")
             with slide.right.figure() as figure:

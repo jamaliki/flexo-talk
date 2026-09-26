@@ -165,6 +165,18 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
     width, height, margin = style.width, style.height, style.margin
     title_weight = deck.title_weight
     bottom = height - margin - (style.small_size if style.numbers or deck.footer else 0.0)
+    if slide.footnotes:
+        # Footnotes sit at the foot of the body, above the footer; the body ends above them.
+        size = style.small_size
+        heights = [canvas.measure(runs, size, width - 2 * margin).height for runs in slide.footnotes]
+        top = bottom - sum(heights) - size * 0.3 * (len(heights) - 1)
+        for index, (runs, used) in enumerate(zip(slide.footnotes, heights, strict=True)):
+            canvas.words(
+                f"{slide.id}.footnote{index}", runs, Box(margin, top, width - 2 * margin, 0.0),
+                size=size, role="muted-ink",
+            )
+            top += used + size * 0.3
+        bottom -= sum(heights) + size * 0.3 * len(heights) + size * 0.6
     if slide.layout == "title":
         _title_slide(canvas, slide)
     elif slide.layout == "section":

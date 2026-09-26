@@ -87,7 +87,8 @@ the build summary says so.
 Slide text is flexo markup -- `$...$` is math, `` `code` `` is monospace --
 plus `*emphasis*` and `**strong**`. The slide's own methods go to its first
 region, so a one-region slide reads simply. `slide.notes(text)` keeps the
-speaker notes.
+speaker notes; `slide.footnote(text)` sets a reference small and muted at the
+foot of the slide.
 
 ## Tables
 
