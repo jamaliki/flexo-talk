@@ -117,7 +117,10 @@ class _Canvas:
         ``title`` sets them in the deck's title font."""
 
         typography = self.deck.typography(size, title=title)
-        return TextMeasurer(typography).measure(runs, max_width=width, weight=weight, balance=balance)
+        # A word wider than the slide (a URL) breaks rather than running off it.
+        return TextMeasurer(typography).measure(
+            runs, max_width=width, weight=weight, balance=balance, break_words=True
+        )
 
     def words(
         self,

@@ -146,8 +146,12 @@ def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | No
 
 
 def _extent(element: etree._Element) -> tuple[int, int, int, int]:
-    off = element.find(f".//{{{_A}}}off")
-    ext = element.find(f".//{{{_A}}}ext")
+    # The shape's own transform: a picture's blip also holds an <a:ext> (its extensions).
+    xfrm = element.find(f".//{{{_A}}}xfrm")
+    if xfrm is None:
+        xfrm = element.find(f".//{{{_P}}}xfrm")
+    off = xfrm.find(f"{{{_A}}}off")
+    ext = xfrm.find(f"{{{_A}}}ext")
     return int(off.get("x")), int(off.get("y")), int(ext.get("cx")), int(ext.get("cy"))
 
 
@@ -204,7 +208,7 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
 
         svg = data.decode("utf-8")
         pixels = max(1, round(image.width * placement.scale / 72.0 * 300.0))
-        data = bytes(resvg_py.svg_to_bytes(svg_string=svg, width=pixels))
+        data = bytes(resvg_py.svg_to_bytes(svg_string=svg, dpi=72, width=pixels))
         embed = ids.pictures(data, "image/png")
         svg_id = ids.pictures.svg(svg.encode("utf-8"))  # type: ignore[attr-defined]
         extension = (
@@ -586,12 +590,13 @@ def add_list(tree: etree._Element, deck, layout) -> None:
     them when the fonts are the same, and reflow like any list when edited.
     """
 
-    from flexo.text import FontStack, drawn_weight
+    from flexo.text import drawn_weight, font_stack
 
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
     ids = _Ids(max(existing, default=1))
     typography = deck.typography(layout.size)
-    stack = FontStack(typography)
+    # flexo's shared stack: it holds the families measuring adopted for other scripts.
+    stack = font_stack(typography)
     palette = deck.palette
     ink = palette.get("ink")
     accent = _colour(palette.get("tone-1-stroke"))
@@ -647,11 +652,11 @@ def add_table(tree: etree._Element, deck, layout) -> None:
     under the header, below), and every other border is off.
     """
 
-    from flexo.text import FontStack, drawn_weight
+    from flexo.text import drawn_weight, font_stack
 
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
     ids = _Ids(max(existing, default=1))
-    stack = FontStack(deck.typography(layout.size))
+    stack = font_stack(deck.typography(layout.size))
     ink = deck.palette.get("ink")
     colour = _colour(ink)
     top_rule, mid_rule, bottom_rule = layout.rules
