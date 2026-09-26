@@ -635,7 +635,7 @@ class _Prepared:
     id: str
 
 
-LEGIBLE = 9.0
+LEGIBLE = 7.0
 """Words on a slide smaller than this (points) are reported: they will not read."""
 
 
