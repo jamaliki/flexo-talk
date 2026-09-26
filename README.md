@@ -159,3 +159,12 @@ uv sync --all-groups        # uses ../flexo, editable
 uv run pytest
 uv run python examples/demo.py
 ```
+
+`examples/stress/` holds decks that push at the edges: `results.py` (matplotlib
+plots, a saved SVG and a PNG, a table, maths, an overfull slide), `variety.py`
+(`sketchy`, hand-drawn with literature figures; `lab`, a YAML theme file),
+`typefaces.py` (a family per role, code), and `edges.py` (4:3 slides, CJK and
+Arabic, unbreakable words, deep lists, a JPEG, a gradient SVG). Each is checked
+by rendering its PowerPoint file in ONLYOFFICE (its `x2t` converter, to PDF) and
+comparing every page with flexo-talk's own PDF of the same deck; they agree to
+within antialiasing.
