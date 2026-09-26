@@ -72,6 +72,7 @@ indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
 | `deck.section(title, subtitle=)` | A divider between parts |
 | `deck.slide(title, layout="content")` | A title over one body (`slide.body`) |
 | `deck.slide(title, layout="two-columns", split=0.5)` | A title over `slide.left` and `slide.right`; `split` is the left's share |
+| `deck.slide(title, layout="columns", columns=3)` | Any number of columns, `slide.columns[i]`; `widths=(2, 1, 1)` makes them uneven |
 | `deck.slide(title, layout="figure")` | A title over one figure as large as the slide allows |
 | `deck.slide(layout="blank")` | The whole slide as one body |
 
@@ -80,7 +81,8 @@ is the level below; `numbered=True` numbers the outer level, natively in PowerPo
 `reveal=True` shows the outer items one click at a time -- PowerPoint builds, and a
 PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
-`plot(matplotlib_figure)`, `table(rows)`, `code(source)` (a monospace listing
+`plot(matplotlib_figure)`, `table(rows)`, `gallery(pictures)` (logos or people in a
+grid, captions under them, `crop="circle"` for photographs), `code(source)` (a monospace listing
 on a tinted panel, comment lines muted), and `image(path)`. Words take the
 height they need and pictures share the rest; when a region has more words than
 room, its words are set smaller together (down to `DeckStyle.small_size`) and
@@ -92,7 +94,8 @@ on the right, and PowerPoint gets right-to-left paragraphs; English words,
 numbers, and maths inside it keep their order.
 
 Slide text is flexo markup -- `$...$` is math, `` `code` `` is monospace,
-`[words](url)` links (a hyperlink in the PowerPoint, a link in the PDF) --
+`[words](url)` links (a hyperlink in the PowerPoint, a link in the PDF),
+`[words]{accent}` paints words (`accent2`..., `muted`, `#rrggbb`) --
 plus `*emphasis*` and `**strong**`. The slide's own methods go to its first
 region, so a one-region slide reads simply. `slide.notes(text)` keeps the
 speaker notes; `slide.footnote(text)` sets a reference small and muted at the

@@ -230,7 +230,10 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
 
         svg = data.decode("utf-8")
         pixels = max(1, round(image.width * placement.scale / 72.0 * 300.0))
-        data = bytes(resvg_py.svg_to_bytes(svg_string=svg, dpi=72, width=pixels))
+        from flexo.fonts import font_directories
+
+        folders = [str(folder) for folder in font_directories()]
+        data = bytes(resvg_py.svg_to_bytes(svg_string=svg, dpi=72, width=pixels, font_dirs=folders))
         embed = ids.pictures(data, "image/png")
         svg_id = ids.pictures.svg(svg.encode("utf-8"))  # type: ignore[attr-defined]
         extension = (
@@ -636,6 +639,14 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
     )
 
 
+def _ink_of(run, palette, ink: str) -> str:
+    """The colour a list or table run is written in: its own, a link's, or the text's."""
+
+    from flexo.render_common import run_colour
+
+    return run_colour(run, palette) or ink
+
+
 def _rtl_text(text: str) -> bool:
     from flexo.bidi import base_level
 
@@ -679,7 +690,6 @@ def add_list(tree: etree._Element, deck, layout) -> int:
     stack = font_stack(typography)
     palette = deck.palette
     ink = palette.get("ink")
-    accent_ink = palette.get("tone-1-stroke")
     accent = _colour(palette.get("tone-1-stroke"))
     muted = _colour(palette.get("muted-ink"))
     paragraphs = []
@@ -695,7 +705,7 @@ def add_list(tree: etree._Element, deck, layout) -> int:
                 shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
                 pieces.append(
                     _run_xml(
-                        _ListRun(text, size, weight, run.italic, face, accent_ink if run.link else ink, link=run.link),
+                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, deck.palette, ink), link=run.link),
                         baseline=shift,
                     )
                 )
@@ -789,7 +799,6 @@ def add_table(tree: etree._Element, deck, layout) -> None:
     ids = _Ids(max(existing, default=1))
     stack = font_stack(deck.typography(layout.size))
     ink = deck.palette.get("ink")
-    accent_ink = deck.palette.get("tone-1-stroke")
     colour = _colour(ink)
     top_rule, mid_rule, bottom_rule = layout.rules
     rows = []
@@ -807,7 +816,7 @@ def add_table(tree: etree._Element, deck, layout) -> None:
                     shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
                     pieces.append(
                         _run_xml(
-                        _ListRun(text, size, weight, run.italic, face, accent_ink if run.link else ink, link=run.link),
+                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, deck.palette, ink), link=run.link),
                         baseline=shift,
                     )
                     )

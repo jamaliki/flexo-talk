@@ -267,3 +267,22 @@ def test_a_persian_list_is_set_right_to_left(tmp_path: Path) -> None:
     assert slide.count('rtl="1"') == 2 and 'algn="r"' in slide
     svg = result.svgs[0].read_text()
     assert 'text-anchor="end"' in svg
+
+
+def test_an_acknowledgement_slide_has_columns_colours_and_a_gallery(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    photo = tmp_path / "face.jpg"
+    Image.new("RGB", (300, 400), (200, 150, 120)).save(photo)
+    deck = Deck("thanks")
+    with deck.slide("Thanks", layout="columns", widths=(2, 1, 1)) as slide:
+        first, second, third = slide.columns
+        first.text("**Lab** [— PI]{muted}", colour="accent")
+        second.bullets("[Emmy]{accent2}", "[Bob]{#c0392b}")
+        third.gallery([(photo, "**Ada**\\nPI")], crop="circle")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    svg = result.svgs[0].read_text()
+    assert 'data-flexo-talk="gallery"' in svg and "data:image/png;base64" in svg
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "C0392B" in slide and "<p:pic>" in slide and ">Ada<" in slide

@@ -37,8 +37,8 @@ from flexo.style import LayoutStyle, Palette, TypographyStyle
 from flexo.themes import resolve_palette, resolve_style, with_tone_roles
 from flexo.units import pt
 
-type Layout = Literal["content", "two-columns", "figure", "title", "section", "blank"]
-LAYOUTS: tuple[str, ...] = ("content", "two-columns", "figure", "title", "section", "blank")
+type Layout = Literal["content", "two-columns", "columns", "figure", "title", "section", "blank"]
+LAYOUTS: tuple[str, ...] = ("content", "two-columns", "columns", "figure", "title", "section", "blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +93,7 @@ class _Words:
     size: float | None = None
     align: Literal["start", "middle", "end"] = "start"
     muted: bool = False
+    colour: str | None = None
 
 
 @dataclass(slots=True)
@@ -125,25 +126,38 @@ class _Table:
 
 
 @dataclass(slots=True)
+class _Gallery:
+    items: list[tuple[str, tuple[TextRun, ...]]]
+    """``(picture file, caption runs)`` for each cell."""
+    columns: int | None = None
+    height: float | None = None
+    crop: str | None = None
+    size: float | None = None
+
+
+@dataclass(slots=True)
 class _Code:
     lines: list[str]
     size: float | None = None
 
 
-type _Block = _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code
+type _Block = _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery
 
 
 def inline(words: str) -> tuple[TextRun, ...]:
     """Slide text as runs: ``*emphasis*`` is italic, ``**strong**`` bold, ``$...$``
-    math, ``code`` between backticks is set in the monospace family, and
-    ``[words](url)`` links.
+    math, ``code`` between backticks is set in the monospace family,
+    ``[words](url)`` links, and ``[words]{accent}`` (or ``{accent2}``, ``{muted}``,
+    ``{#c0392b}``) colours.
 
     Emphasis is slide markup only -- a figure's labels keep their asterisks.
     """
 
     runs: list[TextRun] = []
     # Split on links, code, maths, ** and *; each piece takes the styles open around it.
-    tokens = re.split(r"(\[[^\]\n]+\]\([^)\s]+\)|`[^`]*`|\$[^$]*\$|\*\*|\*)", words)
+    tokens = re.split(
+        r"(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\$[^$]*\$|\*\*|\*)", words
+    )
     bold = italic = False
     for token in tokens:
         if token == "**":
@@ -155,12 +169,14 @@ def inline(words: str) -> tuple[TextRun, ...]:
         if not token:
             continue
         link = re.fullmatch(r"\[([^\]\n]+)\]\(([^)\s]+)\)", token)
-        # A link's words may carry emphasis of their own; the link holds for all of them.
-        pieces = (
-            tuple(replace(run, link=link.group(2)) for run in inline(link.group(1)))
-            if link
-            else parse_label(token)
-        )
+        coloured = re.fullmatch(r"\[([^\]\n]+)\]\{([^}\s]+)\}", token)
+        # A link's or a colour's words may carry emphasis of their own.
+        if link:
+            pieces = tuple(replace(run, link=link.group(2)) for run in inline(link.group(1)))
+        elif coloured:
+            pieces = tuple(replace(run, color=coloured.group(2)) for run in inline(coloured.group(1)))
+        else:
+            pieces = parse_label(token)
         for run in pieces:
             runs.append(
                 replace(
@@ -212,10 +228,37 @@ class Region:
         size: float | None = None,
         align: Literal["start", "middle", "end"] = "start",
         muted: bool = False,
+        colour: str | None = None,
     ) -> Region:
-        """A paragraph, wrapped to the region; ``$...$`` is math, as in flexo labels."""
+        """A paragraph, wrapped to the region; ``$...$`` is math, as in flexo labels.
+        ``colour`` paints it: ``accent`` (``accent2``...), ``muted``, a palette role,
+        or ``#rrggbb``; ``[words]{colour}`` paints only some words."""
 
-        self.blocks.append(_Words(inline(words), size, align, muted))
+        self.blocks.append(_Words(inline(words), size, align, muted, colour))
+        return self
+
+    def gallery(
+        self,
+        items: Sequence[str | Path | tuple[str | Path, str]],
+        *,
+        columns: int | None = None,
+        height: float | None = None,
+        crop: Literal["circle", "square"] | None = None,
+        size: float | None = None,
+    ) -> Region:
+        """Pictures in a grid -- logos, or people with their names -- each with an
+        optional caption under it (``(file, "**Name**\\nInstitute")``).
+
+        ``columns`` defaults to all in one row up to five; ``height`` is each
+        picture's height (the cell's width at most); ``crop="circle"`` cuts
+        photographs to circles (and ``"square"`` to squares), which needs Pillow.
+        """
+
+        cells = []
+        for item in items:
+            source, caption = (item, "") if isinstance(item, str | Path) else item
+            cells.append((str(source), inline(caption) if caption else ()))
+        self.blocks.append(_Gallery(cells, columns, height, crop, size))
         return self
 
     def figure(self, id: str | None = None, *, turn: bool = True, **options: object) -> flexo.Figure:
@@ -318,7 +361,15 @@ class Slide:
     """One slide: a title, regions by layout, and speaker notes."""
 
     def __init__(
-        self, deck: Deck, index: int, title: str, layout: Layout, subtitle: str, split: float = 0.5
+        self,
+        deck: Deck,
+        index: int,
+        title: str,
+        layout: Layout,
+        subtitle: str,
+        split: float = 0.5,
+        columns: int = 3,
+        widths: Sequence[float] | None = None,
     ) -> None:
         if layout not in LAYOUTS:
             raise ValueError(f'unknown layout "{layout}"; layouts are {", ".join(LAYOUTS)}')
@@ -332,8 +383,24 @@ class Slide:
         """The share of the width the left column takes, on a two-column slide."""
         self.notes_text = ""
         self.footnotes: list[tuple[TextRun, ...]] = []
-        names = {"two-columns": ("left", "right")}.get(layout, ("body",))
+        if layout == "columns":
+            count = len(widths) if widths else columns
+            if count < 1:
+                raise ValueError("a columns slide needs at least one column")
+            names = tuple(f"column{index + 1}" for index in range(count))
+            total = sum(widths) if widths else float(count)
+            self.shares = [share / total for share in widths] if widths else [1.0 / count] * count
+        else:
+            names = {"two-columns": ("left", "right")}.get(layout, ("body",))
+            self.shares = [split, 1.0 - split] if layout == "two-columns" else [1.0]
+        """Each column's share of the width, left to right."""
         self.regions = {name: Region(self, name) for name in names}
+
+    @property
+    def columns(self) -> list[Region]:
+        """The regions left to right: ``slide.columns[0]`` is the first column."""
+
+        return list(self.regions.values())
 
     def __enter__(self) -> Slide:
         return self
@@ -384,6 +451,10 @@ class Slide:
 
     def image(self, source: str | Path, *, width: float | None = None) -> Slide:
         next(iter(self.regions.values())).image(source, width=width)
+        return self
+
+    def gallery(self, items, **options: object) -> Slide:
+        next(iter(self.regions.values())).gallery(items, **options)  # type: ignore[arg-type]
         return self
 
     def code(self, source: str, *, size: float | None = None) -> Slide:
@@ -462,15 +533,23 @@ class Deck:
     # -- authoring --
 
     def slide(
-        self, title: str = "", *, layout: Layout = "content", subtitle: str = "", split: float = 0.5
+        self,
+        title: str = "",
+        *,
+        layout: Layout = "content",
+        subtitle: str = "",
+        split: float = 0.5,
+        columns: int = 3,
+        widths: Sequence[float] | None = None,
     ) -> Slide:
         """A slide: ``content`` (a title over one body), ``two-columns`` (``split`` is
-        the left column's share of the width), ``figure`` (a title over a figure as
-        large as the slide allows), or ``blank``."""
+        the left column's share of the width), ``columns`` (``columns`` of them, or
+        as many as ``widths``, relative: ``(2, 1, 1)``; ``slide.columns[i]``),
+        ``figure`` (a title over a figure as large as the slide allows), or ``blank``."""
 
         if not 0.15 <= split <= 0.85:
             raise ValueError("split is the left column's share of the width, between 0.15 and 0.85")
-        made = Slide(self, len(self.slides) + 1, title, layout, subtitle, split)
+        made = Slide(self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths)
         self.slides.append(made)
         return made
 
