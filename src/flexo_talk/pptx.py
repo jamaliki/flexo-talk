@@ -19,7 +19,7 @@ offset and a scale), so a figure can be put anywhere on a slide at any size.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from xml.sax.saxutils import escape
 
@@ -34,6 +34,21 @@ _NS = f'xmlns:a="{_A}" xmlns:p="{_P}"'
 ASCENT = 0.8
 """Where a text box's first baseline sits below its top, as a fraction of the
 line spacing, when the spacing is set exactly. Calibrated against renderers."""
+
+SCRIPT_SCALE = 0.65
+"""How much smaller a slide program draws a raised or lowered run than its size
+says (measured in ONLYOFFICE, which follows PowerPoint): a script is written at
+its own size divided by this, so it is drawn at its own size."""
+
+DASHES = {
+    "sysDot": (1.0, 1.0),
+    "sysDash": (3.0, 1.0),
+    "dash": (4.0, 3.0),
+    "lgDash": (8.0, 3.0),
+    "dot": (1.0, 3.0),
+}
+"""PowerPoint's preset dashes, as (dash, gap) in line widths. Presets, not
+custom dashes: every slide program draws them, and some draw custom ones solid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,19 +175,30 @@ def _line(paint: Paint, placement: Placement) -> str:
     width = placement.length(paint.stroke_width)
     cap = {"round": "rnd", "square": "sq"}.get(paint.linecap, "flat")
     join = {"round": "<a:round/>", "bevel": "<a:bevel/>"}.get(paint.linejoin, '<a:miter lim="800000"/>')
-    dash = ""
-    if paint.dash:
-        # A custom dash is in thousandths of a percent of the line's width.
-        base = max(paint.stroke_width, 1e-6)
-        pairs = list(paint.dash) if len(paint.dash) % 2 == 0 else list(paint.dash) * 2
-        parts = "".join(
-            f'<a:ds d="{round(pairs[i] / base * 100000)}" sp="{round(pairs[i + 1] / base * 100000)}"/>'
-            for i in range(0, len(pairs), 2)
-        )
-        dash = f"<a:custDash>{parts}</a:custDash>"
+    dash = f'<a:prstDash val="{dash_preset(paint)}"/>' if paint.dash else ""
     return (
         f'<a:ln w="{width}" cap="{cap}">'
         f"{_fill(paint.stroke, paint.stroke_opacity * paint.opacity)}{dash}{join}</a:ln>"
+    )
+
+
+def dash_preset(paint: Paint) -> str:
+    """The preset dash nearest a line's dash pattern, as the eye sees it.
+
+    A preset's dash includes its caps; a round or square cap adds a line width
+    to what an SVG dash draws (a zero-length dash with round caps is a dot).
+    """
+
+    import math
+
+    width = max(paint.stroke_width, 1e-6)
+    pattern = list(paint.dash) if len(paint.dash) % 2 == 0 else list(paint.dash) * 2
+    capped = 1.0 if paint.linecap in {"round", "square"} else 0.0
+    on = max(pattern[0] / width + capped, 0.25)
+    off = max(pattern[1] / width - capped, 0.25)
+    return min(
+        DASHES,
+        key=lambda name: abs(math.log(on / DASHES[name][0])) + abs(math.log(off / DASHES[name][1])),
     )
 
 
@@ -327,8 +353,10 @@ def _text(text: Text, placement: Placement, ids: _Ids) -> etree._Element | None:
         parts = []
         for line in text.lines:
             for run in line.runs:
+                # Each box sits at its run's own baseline, so no run is raised.
+                flat = replace(run, shift=0.0)
                 single = Text(
-                    None, "start", run.x, (type(line)(line.baseline, (run,)),), run.size,
+                    None, "start", run.x, (type(line)(run.baseline, (flat,)),), run.size,
                     run.family, run.weight, run.fill, run.fill_role, text.line_height, True,
                 )
                 part = _text_box(single, placement, ids, name="run")
@@ -353,9 +381,12 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
         runs = []
         for run in line.runs:
             if run.shift:
-                # A raised or lowered run: its own size, and the raise as a
-                # percentage of that size, as DrawingML measures it.
-                runs.append(_run_xml(run, baseline=round(run.shift / run.size * 100000)))
+                # A raised or lowered run is drawn smaller than its size: write
+                # it larger so it is drawn at its own, raised as a percentage.
+                written = run.size / SCRIPT_SCALE
+                runs.append(
+                    _run_xml(run, size=written, baseline=round(run.shift / written * 100000))
+                )
             else:
                 runs.append(_run_xml(run))
         paragraphs.append(
@@ -424,7 +455,8 @@ def add_list(tree: etree._Element, deck, layout) -> None:
         for run in runs:
             weight = drawn_weight(run, None)
             for face, text in stack.segments(run.text, weight, run.italic):
-                size = layout.size * (0.72 if run.baseline_shift != "normal" else 1.0)
+                script = run.baseline_shift != "normal"
+                size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
                 shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
                 pieces.append(
                     _run_xml(_ListRun(text, size, weight, run.italic, face, ink), baseline=shift)

@@ -12,7 +12,7 @@ with Deck("results", theme="paper") as deck:
         with slide.right.figure() as figure:
             x = figure.root.text("x", "$x$")
             figure.root.block("encoder", label="Encoder", input=x)
-deck.build("build")                      # talk.pptx, and an SVG and PNG per slide
+deck.build("build")                      # talk.pptx, talk.pdf, and an SVG and PNG per slide
 ```
 
 Every slide is set in the deck's theme -- any flexo theme or theme file, with
@@ -355,9 +355,9 @@ class Deck:
         self,
         directory: str | Path = "build",
         *,
-        formats: Sequence[str] = ("pptx", "svg", "png"),
+        formats: Sequence[str] = ("pptx", "pdf", "svg", "png"),
     ) -> DeckBuild:
-        """Write the deck: ``pptx`` (one file), and ``svg`` and ``png`` per slide."""
+        """Write the deck: ``pptx`` and ``pdf`` (one file each), ``svg`` and ``png`` per slide."""
 
         from flexo_talk.export import build_deck
 
@@ -390,11 +390,12 @@ class RenderedSlide:
 @dataclass(frozen=True, slots=True)
 class DeckBuild:
     pptx: Path | None
+    pdf: Path | None
     svgs: tuple[Path, ...]
     pngs: tuple[Path, ...]
     diagnostics: tuple[str, ...]
 
     def summary(self) -> str:
-        written = [str(path) for path in (self.pptx, *self.svgs, *self.pngs) if path]
+        written = [str(path) for path in (self.pptx, self.pdf, *self.svgs, *self.pngs) if path]
         head = "ok" if not self.diagnostics else "warnings:\n  " + "\n  ".join(self.diagnostics)
         return head + "\n" + "\n".join(written)

@@ -37,6 +37,9 @@ def test_the_demo_builds_every_format(tmp_path: Path) -> None:
     assert result.pptx is not None and result.pptx.exists()
     assert len(result.svgs) == len(result.pngs) == 5
     assert not result.diagnostics, result.summary()
+    assert result.pdf is not None
+    pdf = result.pdf.read_bytes()
+    assert pdf.count(b"/Type /Page ") == 5 and b"/FontFile2" in pdf
 
 
 def test_every_word_on_a_slide_is_live_text_in_the_pptx(tmp_path: Path) -> None:
@@ -51,6 +54,10 @@ def test_every_word_on_a_slide_is_live_text_in_the_pptx(tmp_path: Path) -> None:
     assert slides[1].count("<a:buChar") == 5 and 'lvl="1"' in slides[1]
     # The figure is native shapes: a rounded box per component, a freeform per line.
     assert slides[4].count('prst="roundRect"') >= 5 and "<a:cubicBezTo>" in slides[4]
+    # Dashes are presets every slide program draws; scripts are written larger
+    # than drawn, since slide programs shrink raised runs.
+    assert '<a:prstDash val="dash"/>' in slides[4] and "custDash" not in slides[4]
+    assert re.search(r'sz="\d+" i="1" baseline="', slides[4]) or 'baseline="' in slides[4]
     notes = [n for n in zipfile.ZipFile(result.pptx).namelist() if "notesSlide" in n]  # type: ignore[arg-type]
     assert notes, "the speaker notes are kept"
 

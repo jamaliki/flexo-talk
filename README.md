@@ -3,7 +3,8 @@
 Slide decks written in [flexo](https://github.com/jamaliki/flexo)'s language: a
 `with` block, one theme, and figures that are real flexo figures. A deck builds
 to a PowerPoint file whose every box, line, and word is a native, editable
-shape, and to an SVG and a PNG per slide.
+shape, to a PDF (one page per slide, real text, embedded fonts), and to an SVG
+and a PNG per slide -- all in Python.
 
 ```python
 from flexo_talk import Deck
@@ -27,7 +28,7 @@ with Deck("results", theme="paper", footer="Group meeting") as deck:
     with deck.slide("Deep Q-learning", layout="figure") as slide:
         slide.add(my_flexo_figure)                     # any flexo figure, redrawn in the deck's look
 
-result = deck.build("build")        # build/results.pptx, results-01.svg/.png, ...
+result = deck.build("build")        # build/results.pptx, results.pdf, results-01.svg/.png, ...
 print(result.summary())
 ```
 
@@ -74,7 +75,12 @@ component a group named by its id. A bulleted list is one text box of bulleted
 paragraphs, so it edits like any PowerPoint list. The slide background, notes,
 and 16:9 size are set as PowerPoint sets them.
 
-Text is drawn by the program that opens the file, in fonts installed there:
+Dashed lines use PowerPoint's preset dashes (nearest to the figure's pattern),
+which every slide program draws; raised and lowered runs are written so they
+are drawn at the figure's script size.
+
+The PDF needs no fonts where it is opened: it embeds them. The PowerPoint file's
+text is drawn by the program that opens it, in fonts installed there:
 install the theme's fonts (flexo bundles them: `flexo.fonts.bundled_font_directory()`)
 wherever the deck is opened, or choose a theme font that is already there.
 
