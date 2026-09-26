@@ -15,12 +15,12 @@ from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
 from flexo_talk.deck import Deck, DeckBuild, RenderedSlide
-from flexo_talk.pptx import Placement, add_drawing, add_list, add_table, slide_pictures
+from flexo_talk.pptx import Placement, add_drawing, add_list, add_reveals, add_table, slide_pictures
 
 FORMATS = ("pptx", "pdf", "svg", "png")
 
 
-def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...]) -> DeckBuild:
+def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...], *, handout: bool = False) -> DeckBuild:
     unknown = set(formats) - set(FORMATS)
     if unknown:
         raise ValueError(f"unknown format(s) {', '.join(sorted(unknown))}; use {', '.join(FORMATS)}")
@@ -42,7 +42,13 @@ def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...]) -> DeckBui
             pngs.append(path)
     pdf = None
     if "pdf" in formats:
-        pdf = write_pdf([item.svg for item in rendered], directory / f"{deck.id}.pdf", title=deck.id)
+        # A slide that reveals its list takes a page per step, unless this is a handout.
+        pages = [
+            page
+            for item in rendered
+            for page in ([item.svg] if handout else [item.at_step(step) for step in range(1, item.steps + 1)])
+        ]
+        pdf = write_pdf(pages, directory / f"{deck.id}.pdf", title=deck.id)
     pptx = None
     if "pptx" in formats:
         pptx = directory / f"{deck.id}.pptx"
@@ -72,12 +78,19 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
             groups=groups, pictures=slide_pictures(slide),
             backdrop=deck.palette.get("canvas"),
         )
+        reveals = []
         for layout in item.lists:
-            add_list(slide.shapes._spTree, deck, layout)
+            shape_id = add_list(slide.shapes._spTree, deck, layout)
+            if layout.reveal:
+                outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
+                ends = [*outer[1:], len(layout.items)]
+                ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
+                reveals.append((shape_id, ranges))
         for layout in item.tables:
             add_table(slide.shapes._spTree, deck, layout)
         if item.slide.notes_text:
             slide.notes_slide.notes_text_frame.text = item.slide.notes_text
+        add_reveals(slide._element, reveals)
     buffer = BytesIO()
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())

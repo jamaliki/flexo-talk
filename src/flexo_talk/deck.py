@@ -84,6 +84,7 @@ class _Bullets:
     items: list[tuple[int, tuple[TextRun, ...]]]
     size: float | None = None
     numbered: bool = False
+    reveal: bool = False
 
 
 @dataclass(slots=True)
@@ -172,10 +173,16 @@ class Region:
         self.blocks: list[_Block] = []
 
     def bullets(
-        self, *items: str | Sequence[str], size: float | None = None, numbered: bool = False
+        self,
+        *items: str | Sequence[str],
+        size: float | None = None,
+        numbered: bool = False,
+        reveal: bool = False,
     ) -> Region:
         """A bulleted list. A nested list of strings is the level below the item before it.
-        ``numbered=True`` numbers the outer level (1., 2., ...); levels below keep bullets."""
+        ``numbered=True`` numbers the outer level (1., 2., ...); levels below keep bullets.
+        ``reveal=True`` shows the outer items one at a time: a click each in the
+        PowerPoint, a page each in the PDF (the SVG and PNG show them all)."""
 
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
 
@@ -187,7 +194,7 @@ class Region:
                     add(entry, level + 1)
 
         add(items, 0)
-        self.blocks.append(_Bullets(flattened, size, numbered))
+        self.blocks.append(_Bullets(flattened, size, numbered, reveal))
         return self
 
     def text(
@@ -346,9 +353,13 @@ class Slide:
 
     # The first region stands for the slide, so a one-region slide reads simply.
     def bullets(
-        self, *items: str | Sequence[str], size: float | None = None, numbered: bool = False
+        self,
+        *items: str | Sequence[str],
+        size: float | None = None,
+        numbered: bool = False,
+        reveal: bool = False,
     ) -> Slide:
-        next(iter(self.regions.values())).bullets(*items, size=size, numbered=numbered)
+        next(iter(self.regions.values())).bullets(*items, size=size, numbered=numbered, reveal=reveal)
         return self
 
     def text(self, words: str, **options: object) -> Slide:
@@ -569,12 +580,13 @@ class Deck:
         directory: str | Path = "build",
         *,
         formats: Sequence[str] = ("pptx", "pdf", "svg", "png"),
+        handout: bool = False,
     ) -> DeckBuild:
         """Write the deck: ``pptx`` and ``pdf`` (one file each), ``svg`` and ``png`` per slide."""
 
         from flexo_talk.export import build_deck
 
-        return build_deck(self, Path(directory), tuple(formats))
+        return build_deck(self, Path(directory), tuple(formats), handout=handout)
 
 
 @dataclass(slots=True)
@@ -592,6 +604,8 @@ class ListLayout:
     """``(level, runs, baseline of its first line)`` for each item."""
     id: str = ""
     numbered: bool = False
+    reveal: bool = False
+    """Whether the outer items appear one click (one PDF page) at a time."""
     number_room: float = 0.0
     """How far an outer item's words start from its number's left edge, when numbered."""
 
@@ -637,6 +651,22 @@ class RenderedSlide:
     diagnostics: list[str] = field(default_factory=list)
     tables: list[TableLayout] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    steps: int = 1
+    """How many states the slide shows in turn (revealed lists); 1 for most."""
+
+    def at_step(self, step: int) -> str:
+        """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""
+
+        if self.steps <= 1:
+            return self.svg
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(self.svg)
+        for parent in root.iter():
+            for child in list(parent):
+                if int(child.get("data-flexo-step", "0")) > step:
+                    parent.remove(child)
+        return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
 
 
 @dataclass(frozen=True, slots=True)

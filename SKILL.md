@@ -57,6 +57,8 @@ deck.build("build")
 - Type by role: `Deck(font=, title_font=, figure_font=)`;
   `DeckStyle(title_align="middle", title_role="tone-1-stroke")`.
 - `slide.notes(text)` becomes the PowerPoint speaker notes.
+- `bullets(..., numbered=True)` numbers them; `reveal=True` builds them one click at a
+  a time (a PDF page per step; `deck.build(handout=True)` for one page per slide).
 
 ## Plots
 

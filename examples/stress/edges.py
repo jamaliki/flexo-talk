@@ -61,6 +61,7 @@ def talk(theme: str = "paper") -> Deck:
                 "Present", "Answer questions", "Rebuild when the model changes", "Repeat",
                 "Profit", "Sleep", "Ten items make the numbers wider",
                 numbered=True,
+                reveal=True,
             )
         deck.slide("A slide with a title and nothing else")
         deck.slide(layout="blank")

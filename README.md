@@ -74,7 +74,9 @@ indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
 | `deck.slide(layout="blank")` | The whole slide as one body |
 
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
-is the level below; `numbered=True` numbers the outer level, natively in PowerPoint), `text(words, size=, align=, muted=)`, `figure(**options)`
+is the level below; `numbered=True` numbers the outer level, natively in PowerPoint;
+`reveal=True` shows the outer items one click at a time -- PowerPoint builds, and a
+PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
 `plot(matplotlib_figure)`, `table(rows)`, `code(source)` (a monospace listing
 on a tinted panel, comment lines muted), and `image(path)`. Words take the

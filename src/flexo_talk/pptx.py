@@ -621,7 +621,7 @@ class _ListRun:
     shift: float = 0.0
 
 
-def add_list(tree: etree._Element, deck, layout) -> None:
+def add_list(tree: etree._Element, deck, layout) -> int:
     """A bulleted list as one text box of bulleted paragraphs, wrapped by the slide program.
 
     The box is as wide as the list was set, so the words break where Flexo broke
@@ -674,8 +674,9 @@ def add_list(tree: etree._Element, deck, layout) -> None:
     last = layout.items[-1][2] if layout.items else layout.y
     top = first - ascent(stack.face(400, False)) * layout.line_height
     height = last - top + layout.line_height
+    shape_id = ids()
     element = etree.fromstring(
-        f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(layout.id)}\"/>"
+        f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{shape_id}\" name=\"{escape(layout.id)}\"/>"
         f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
         f'<p:spPr><a:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
         f'<a:ext cx="{round((layout.width + 0.25) * EMU_PER_POINT)}" cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
@@ -684,6 +685,43 @@ def add_list(tree: etree._Element, deck, layout) -> None:
         f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{''.join(paragraphs)}</p:txBody></p:sp>"
     )
     tree.append(element)
+    return shape_id
+
+
+def add_reveals(slide_element: etree._Element, reveals: list[tuple[int, list[tuple[int, int]]]]) -> None:
+    """Click-by-click builds: each ``(shape id, [(first, last) paragraph, ...])`` shows
+    its paragraph ranges one click at a time, as PowerPoint's "Appear" by paragraph."""
+
+    if not reveals:
+        return
+    ids = iter(range(3, 10_000))
+    clicks = []
+    for shape_id, ranges in reveals:
+        for first, last in ranges:
+            outer, inner, effect, behaviour = next(ids), next(ids), next(ids), next(ids)
+            clicks.append(
+                f'<p:par><p:cTn id="{outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst>'
+                f'<p:childTnLst><p:par><p:cTn id="{inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst>'
+                f'<p:childTnLst><p:par><p:cTn id="{effect}" presetID="1" presetClass="entr" presetSubtype="0" '
+                f'fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>'
+                f'<p:childTnLst><p:set><p:cBhvr><p:cTn id="{behaviour}" dur="1" fill="hold">'
+                f'<p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{shape_id}">'
+                f'<p:txEl><p:pRg st="{first}" end="{last}"/></p:txEl></p:spTgt></p:tgtEl>'
+                f"<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr>"
+                f'<p:to><p:strVal val="visible"/></p:to></p:set></p:childTnLst></p:cTn></p:par>'
+                f"</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>"
+            )
+    builds = "".join(f'<p:bldP spid="{shape_id}" grpId="0" build="p"/>' for shape_id, _ in reveals)
+    timing = etree.fromstring(
+        f'<p:timing {_NS}><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot">'
+        f'<p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq">'
+        f"<p:childTnLst>{''.join(clicks)}</p:childTnLst></p:cTn>"
+        f'<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>'
+        f'<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst>'
+        f"</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst>{builds}</p:bldLst></p:timing>"
+    )
+    # <p:timing> follows <p:clrMapOvr> (and <p:transition>) in a slide.
+    slide_element.append(timing)
 
 
 # -- tables ----------------------------------------------------------------------------
