@@ -255,3 +255,15 @@ def test_links_are_native_hyperlinks_in_the_pptx(tmp_path: Path) -> None:
     assert "https://github.com/jamaliki/flexo" in relations and "https://arxiv.org/abs/1706.03762" in relations
     assert archive.read("ppt/slides/slide1.xml").decode().count("<a:hlinkClick") == 2
     assert result.pdf is not None and result.pdf.read_bytes().count(b"/Subtype /Link") == 2
+
+
+def test_a_persian_list_is_set_right_to_left(tmp_path: Path) -> None:
+    deck = Deck("fa")
+    with deck.slide("سلام دنیا") as slide:
+        slide.bullets("این یک جمله است", "English و فارسی")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    # The title and the Persian item read right to left; the item starting in English does not.
+    assert slide.count('rtl="1"') == 2 and 'algn="r"' in slide
+    svg = result.svgs[0].read_text()
+    assert 'text-anchor="end"' in svg

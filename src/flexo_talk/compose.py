@@ -142,6 +142,9 @@ class _Canvas:
 
         if not runs:
             return 0.0
+        if align == "start" and _rtl(runs):
+            # Right-to-left words start at the right.
+            align = "end"
         metrics = self.measure(runs, size, box.width if wrap else None, weight, title=title)
         x = {"start": box.x, "middle": box.x + box.width / 2.0, "end": box.x + box.width}[align]
         render_runs(
@@ -215,7 +218,11 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                     canvas.layer,
                     "rect",
                     id=f"{slide.id}.rule",
-                    x=margin if style.title_align == "start" else width / 2.0 - 20.0,
+                    x=(
+                        (width - margin - 40.0 if _rtl(slide.title_runs) else margin)
+                        if style.title_align == "start"
+                        else width / 2.0 - 20.0
+                    ),
                     # Below the ink, not the line box: faces sit differently in theirs,
                     # and a centred rule close under a word reads as its underline.
                     y=max(top, ink_bottom) + (8.0 if style.title_align == "start" else 12.0),
@@ -553,6 +560,14 @@ def _height(canvas: _Canvas, block, width: float) -> float:
     return 0.0
 
 
+def _rtl(runs: tuple[TextRun, ...]) -> bool:
+    """Whether words read right to left (their first strong letter does)."""
+
+    from flexo.bidi import base_level
+
+    return base_level("".join(run.text for run in runs)) == 1
+
+
 def _list_layout(canvas: _Canvas, block: _Bullets, box: Box) -> ListLayout:
     """The geometry of a list: sizes, gaps, and where numbers and words start."""
 
@@ -589,25 +604,32 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
         layout.line_height = metrics.line_height
         baseline = top + metrics.baseline
         role = "tone-1-stroke" if level == 0 else "muted-ink"
+        rtl = _rtl(runs)
+
+        def across(distance: float, rtl: bool = rtl) -> float:
+            """A distance in from the list's start edge: the left, or the right for RTL."""
+
+            return box.x + box.width - distance if rtl else box.x + distance
         if block.numbered and level == 0:
             number += 1
             label = (TextRun(f"{number}."),)
             canvas.words(
                 f"{identifier}.{index}.mark", label,
-                Box(box.x, top + metrics.baseline - canvas.measure(label, size, None).baseline, 0.0, 0.0),
-                size=size, role=role, parent=item,
+                Box(across(0.0), top + metrics.baseline - canvas.measure(label, size, None).baseline, 0.0, 0.0),
+                size=size, role=role, parent=item, align="end" if rtl else "start",
             )
         else:
             radius = size * (0.15 if level == 0 else 0.12)
-            cx = box.x + style.indent * level + size * 0.3
+            cx = across(style.indent * level + size * 0.3)
             cy = baseline - (metrics.cap_height or size * 0.7) / 2.0
             element(
                 item, "circle", id=f"{identifier}.{index}.mark", cx=cx, cy=cy, r=radius,
                 fill=canvas.palette.get(role), data__flexo__fill=role,
             )
         render_runs(
-            item, f"{identifier}.{index}", metrics, x=box.x + offset, y=baseline,
+            item, f"{identifier}.{index}", metrics, x=across(offset), y=baseline,
             typography=canvas.deck.typography(size), palette=canvas.palette, fill_role="ink",
+            anchor="end" if rtl else None,
         )
         layout.items.append((level, runs, baseline))
         layout.id = identifier

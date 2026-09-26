@@ -86,6 +86,11 @@ height they need and pictures share the rest; when a region has more words than
 room, its words are set smaller together (down to `DeckStyle.small_size`) and
 the build summary says so.
 
+Right-to-left text (Persian, Arabic, Hebrew) is set right to left: a title or
+paragraph whose first letter is right to left aligns right, its bullet or number
+on the right, and PowerPoint gets right-to-left paragraphs; English words,
+numbers, and maths inside it keep their order.
+
 Slide text is flexo markup -- `$...$` is math, `` `code` `` is monospace,
 `[words](url)` links (a hyperlink in the PowerPoint, a link in the PDF) --
 plus `*emphasis*` and `**strong**`. The slide's own methods go to its first

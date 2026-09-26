@@ -602,7 +602,9 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
     paragraphs = []
     for line in lines:
         runs = []
-        for run in line.runs:
+        # A right-to-left line is written as it is read; the slide program orders it.
+        rtl = bool(line.logical) and _rtl_text("".join(run.text for run in line.logical))
+        for run in line.logical or line.runs:
             if run.shift:
                 # A raised or lowered run is drawn smaller than its size: write
                 # it larger so it is drawn at its own, raised as a percentage.
@@ -613,7 +615,8 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
             else:
                 runs.append(_run_xml(run))
         paragraphs.append(
-            f'<a:p><a:pPr algn="{align}"><a:lnSpc><a:spcPts val="{round(spacing * placement.scale * 100)}"/></a:lnSpc>'
+            f'<a:p><a:pPr algn="{align}"{' rtl="1"' if rtl else ""}>'
+            f'<a:lnSpc><a:spcPts val="{round(spacing * placement.scale * 100)}"/></a:lnSpc>'
             f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
             f"{''.join(runs)}</a:p>"
         )
@@ -631,6 +634,12 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
         f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
         f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{body}</p:txBody></p:sp>"
     )
+
+
+def _rtl_text(text: str) -> bool:
+    from flexo.bidi import base_level
+
+    return base_level(text) == 1
 
 
 def _scaled(body: str, scale: float) -> str:
@@ -699,9 +708,11 @@ def add_list(tree: etree._Element, deck, layout) -> int:
             mark = '<a:buFont typeface="Arial"/><a:buChar char="\u2022"/>'
 
         colour = accent if level == 0 else muted
+        rtl = _rtl_text("".join(run.text for run in runs))
         paragraphs.append(
             f'<a:p><a:pPr marL="{round(offset * EMU_PER_POINT)}" '
-            f'indent="{round((mark_at - offset) * EMU_PER_POINT)}" lvl="{min(level, 8)}">'
+            f'indent="{round((mark_at - offset) * EMU_PER_POINT)}" lvl="{min(level, 8)}"'
+            f'{" rtl=\"1\" algn=\"r\"" if rtl else ""}>'
             f'<a:lnSpc><a:spcPts val="{round(layout.line_height * 100)}"/></a:lnSpc>'
             f'<a:spcBef><a:spcPts val="{before}"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft>'
             f'<a:buClr><a:srgbClr val="{colour}"/></a:buClr><a:buSzPct val="{100000 if level == 0 else 85000}"/>'
