@@ -146,3 +146,48 @@ def test_a_table_is_a_native_table_ruled_as_in_a_paper(tmp_path: Path) -> None:
     assert 'algn="r"' in slide and "λ" in slide
     # The drawn copy of the table is not also in the PowerPoint.
     assert slide.count(">Model<") == 1
+
+
+def test_titles_words_and_figures_each_take_their_own_family(tmp_path: Path) -> None:
+    from flexo_talk import DeckStyle
+
+    deck = Deck(
+        "type", font="IBM Plex Sans", title_font="Latin Modern Roman", figure_font="Figtree",
+        style=DeckStyle(title_align="middle", title_role="tone-1-stroke"),
+    )
+    with deck.slide("A title", layout="two-columns") as slide:
+        slide.left.bullets("Words and `code`")
+        with slide.right.figure() as figure:
+            figure.block("b", label="Block")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    svg = result.svgs[0].read_text()
+    assert 'font-family="Latin Modern Roman"' in svg and 'text-anchor="middle"' in svg
+    assert 'font-family="Figtree"' in svg
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert 'typeface="LM Roman 10"' in slide and 'typeface="IBM Plex Sans"' in slide
+
+
+def test_a_tall_figure_is_laid_out_for_a_wide_slide(tmp_path: Path) -> None:
+    deck = Deck("tall")
+    with deck.slide("A stack", layout="figure") as slide, slide.figure() as figure, figure.column(
+        "layers", reverse=True
+    ) as layers:
+        previous = layers.text("x", "$x$")
+        for index in range(6):
+            previous = layers.block(f"b{index}", label=f"Layer {index}", input=previous)
+    result = deck.build(tmp_path, formats=("svg",))
+    assert any("laid out turned" in note for note in result.notes)
+    assert not any("too small" in message for message in result.diagnostics)
+
+
+def test_a_code_listing_is_set_in_monospace(tmp_path: Path) -> None:
+    deck = Deck("code")
+    with deck.slide("Code") as slide:
+        slide.code("""
+            def f(x):
+                # a comment
+                return x + 1
+        """)
+    svg = deck.build(tmp_path, formats=("svg",)).svgs[0].read_text()
+    assert "def f(x):" in svg and 'xml:space="preserve"' in svg
+    assert 'data-flexo-fill="muted-ink"' in svg
