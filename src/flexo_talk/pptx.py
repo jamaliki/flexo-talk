@@ -387,7 +387,7 @@ def _run_xml(run, *, size: float | None = None, baseline: int | None = None) -> 
 
     size = size if size is not None else run.size
     face = escape(_family_name(run), {'"': "&quot;"})
-    bold = ' b="1"' if run.weight >= 600 and not _named_weight(run) else ""
+    bold = ' b="1"' if _bold(run) else ""
     italic = ' i="1"' if run.italic else ""
     raise_ = f' baseline="{baseline}"' if baseline else ""
     return (
@@ -419,12 +419,37 @@ def _legacy_family(source: str, index: int) -> str | None:
         else TTFont(source, lazy=True)
     )
     name = font["name"]
-    legacy = name.getDebugName(1)
-    return str(legacy) if legacy else None
+    # Office finds a face by its Windows family name (platform 3), which may
+    # differ from the Mac one ("LM Roman 10" against "Latin Modern Roman").
+    legacy = name.getName(1, 3, 1, 0x409) or name.getName(1, 3, 1) or name.getName(1, 3, 10)
+    if legacy is not None:
+        return legacy.toUnicode()
+    fallback = name.getDebugName(1)
+    return str(fallback) if fallback else None
 
 
-def _named_weight(run) -> bool:
-    return _family_name(run) != run.face.family
+def _bold(run) -> bool:
+    """Whether the run asks for its family's bold: a static face says so in its
+    Windows style name ("Bold", not "Regular" of "Figtree SemiBold"); a variable
+    face is bold from 600 up."""
+
+    if run.face.variable:
+        return run.weight >= 600
+    return "bold" in _style_name(run.face.source, run.face.index).lower()
+
+
+@cache
+def _style_name(source: str, index: int) -> str:
+    from fontTools.ttLib import TTCollection, TTFont
+
+    font = (
+        TTCollection(source, lazy=True).fonts[index]
+        if source.lower().endswith((".ttc", ".otc"))
+        else TTFont(source, lazy=True)
+    )
+    name = font["name"]
+    record = name.getName(2, 3, 1, 0x409) or name.getName(2, 3, 1)
+    return record.toUnicode() if record is not None else str(name.getDebugName(2) or "")
 
 
 def _text(text: Text, placement: Placement, ids: _Ids) -> etree._Element | None:

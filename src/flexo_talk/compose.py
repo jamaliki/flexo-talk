@@ -289,7 +289,24 @@ def _region(canvas: _Canvas, region: Region, box: Box) -> None:
     # Words take what they need; pictures share the height that is left.
     needed = sum(_height(canvas, block, box.width) for block in words)
     gaps = style.block_gap * max(0, len(blocks) - 1)
-    share = (box.height - needed - gaps) / len(pictures) if pictures else 0.0
+    room = box.height - needed - gaps
+    share = room / len(pictures) if pictures else 0.0
+    # Figures in one place share one scale, so their words are one size: the
+    # largest at which all of them fit the room figures have together.
+    prepared = {
+        index: _prepare(canvas, block, box.width)
+        for index, block in enumerate(blocks)
+        if isinstance(block, _Figure)
+    }
+    scale = 0.0
+    if prepared:
+        figure_room = max(room * len(prepared) / len(pictures), 40.0 * len(prepared))
+        scale = min(
+            min(item.most for item in prepared.values()),
+            min(box.width / item.width for item in prepared.values()),
+            figure_room / sum(item.height for item in prepared.values()),
+        )
+        _check_legible(canvas, prepared.values(), scale)
     top = box.y
     for index, block in enumerate(blocks):
         identifier = f"{canvas.slide.id}.{region.name}.{index}"
@@ -302,8 +319,9 @@ def _region(canvas: _Canvas, region: Region, box: Box) -> None:
                 align=block.align, role="muted-ink" if block.muted else "ink",
             )
         elif isinstance(block, _Figure):
-            block.centre = 1.0 if len(region.blocks) == 1 else 0.0
-            top += _figure(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
+            alone = len(blocks) == 1
+            height = room if alone else prepared[index].height * scale
+            top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
         elif isinstance(block, _Image):
             top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Plot):
@@ -401,7 +419,27 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
 # -- figures ---------------------------------------------------------------------------
 
 
-def _figure(canvas: _Canvas, identifier: str, block: _Figure, box: Box) -> float:
+@dataclass(frozen=True, slots=True)
+class _Prepared:
+    """A figure compiled for its place, and the extent of its ink."""
+
+    svg: str
+    left: float
+    top: float
+    width: float
+    height: float
+    most: float
+    """The largest scale: words no larger than the body text."""
+    size: float
+    """The size of its words, unscaled."""
+    id: str
+
+
+LEGIBLE = 9.0
+"""Words on a slide smaller than this (points) are reported: they will not read."""
+
+
+def _prepare(canvas: _Canvas, block: _Figure, width: float) -> _Prepared:
     deck = canvas.deck
     spec = block.figure.spec if isinstance(block.figure, flexo.Figure) else block.figure
     if not isinstance(block.figure, flexo.Figure) or spec.style != deck.theme:
@@ -415,19 +453,35 @@ def _figure(canvas: _Canvas, identifier: str, block: _Figure, box: Box) -> float
     # cropped to its ink and scaled to fill its place, but never so far that its
     # words outgrow the body text.
     least = deck.style.figure_size / base
-    most = deck.style.body_size / base
-    spec = replace(spec, width=f"{box.width / least:.3f}pt", background=False)
+    spec = replace(spec, width=f"{width / least:.3f}pt", background=False)
     compiled = compile_figure(spec)
     for diagnostic in lint_compilation(compiled).diagnostics:
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {diagnostic.code}")
     left, top, right, bottom = _ink(compiled.document.text)
     pad = 2.0
-    width, height = right - left + 2 * pad, bottom - top + 2 * pad
-    scale = min(most, box.width / width, box.height / height)
-    x = box.x + (box.width - width * scale) / 2.0 - (left - pad) * scale
-    y = box.y + (box.height - height * scale) / 2.0 * block.centre - (top - pad) * scale
-    _place_svg(canvas, identifier, compiled.document.text, x, y, scale)
-    return height * scale if not block.centre else box.height
+    return _Prepared(
+        compiled.document.text, left - pad, top - pad, right - left + 2 * pad, bottom - top + 2 * pad,
+        deck.style.body_size / base, base, spec.id,
+    )
+
+
+def _check_legible(canvas: _Canvas, prepared, scale: float) -> None:
+    for item in prepared:
+        drawn = item.size * scale
+        if drawn < LEGIBLE:
+            canvas.diagnostics.append(
+                f"{canvas.slide.id} {item.id}: its words are {drawn:.1f}pt, too small to read -- "
+                "give the figure a slide of its own, a wider layout, or fewer parts"
+            )
+
+
+def _place_figure(canvas: _Canvas, identifier: str, item: _Prepared, box: Box, scale: float) -> float:
+    """Put a prepared figure in ``box`` at ``scale``: centred across, and down if it has room."""
+
+    x = box.x + (box.width - item.width * scale) / 2.0 - item.left * scale
+    y = box.y + (box.height - item.height * scale) / 2.0 - item.top * scale
+    _place_svg(canvas, identifier, item.svg, x, y, scale)
+    return box.height
 
 
 def _drawable(markup: str) -> bool:
