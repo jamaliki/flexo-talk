@@ -113,6 +113,20 @@ def talk(theme: str = "paper") -> Deck:
         with deck.slide("Samples (a PNG)") as slide:
             slide.image(saved_png())
             slide.text("Eight samples from the model at epoch 50.", align="middle", muted=True)
+        with deck.slide("Results on ImageNet") as slide:
+            slide.table(
+                [
+                    ["Model", "Params", "FLOPs", "Top-1 (%)", "Top-5 (%)"],
+                    ["ResNet-50", "25.6M", "4.1G", "76.1", "92.9"],
+                    ["ViT-S/16", "22.1M", "4.6G", "79.9 $\\pm$ 0.2", "95.0"],
+                    ["ViT-B/16", "86.6M", "17.6G", "**81.8**", "**95.9**"],
+                    ["Ours ($\\lambda = 0.1$)", "24.0M", "4.3G", "81.2", "95.6"],
+                ]
+            )
+            slide.text("Mean of three seeds; best in **bold**.", muted=True, size=14)
+        with deck.slide("Uneven columns", layout="two-columns", split=0.35) as slide:
+            slide.left.bullets("A narrow column of words", "and a wide plot")
+            slide.right.plot(curves(deck))
         with deck.slide("The objective") as slide:
             slide.bullets(
                 "We minimise $\\mathcal{L}(\\theta) = \\mathbb{E}_{x \\sim p}[-\\log q_\\theta(x)]$",

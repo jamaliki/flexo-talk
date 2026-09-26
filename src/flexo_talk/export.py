@@ -15,7 +15,7 @@ from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
 from flexo_talk.deck import Deck, DeckBuild, RenderedSlide
-from flexo_talk.pptx import Placement, add_drawing, add_list, slide_pictures
+from flexo_talk.pptx import Placement, add_drawing, add_list, add_table, slide_pictures
 
 FORMATS = ("pptx", "pdf", "svg", "png")
 
@@ -72,6 +72,8 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
         )
         for layout in item.lists:
             add_list(slide.shapes._spTree, deck, layout)
+        for layout in item.tables:
+            add_table(slide.shapes._spTree, deck, layout)
         if item.slide.notes_text:
             slide.notes_slide.notes_text_frame.text = item.slide.notes_text
     buffer = BytesIO()
@@ -81,12 +83,13 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
 
 
 def _drop_lists(group: Group) -> None:
-    """Bulleted lists are set natively (``add_list``), so their drawn copy goes."""
+    """Bulleted lists and tables are set natively (``add_list``, ``add_table``), so
+    their drawn copies go."""
 
     group.items = [
         item
         for item in group.items
-        if not (isinstance(item, Group) and item.data.get("data-flexo-talk") == "bullets")
+        if not (isinstance(item, Group) and item.data.get("data-flexo-talk") in {"bullets", "table"})
     ]
     for item in group.items:
         if isinstance(item, Group):

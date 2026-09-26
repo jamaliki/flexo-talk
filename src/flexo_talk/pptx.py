@@ -634,3 +634,78 @@ def add_list(tree: etree._Element, deck, layout) -> None:
         f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{''.join(paragraphs)}</p:txBody></p:sp>"
     )
     tree.append(element)
+
+
+# -- tables ----------------------------------------------------------------------------
+
+
+def add_table(tree: etree._Element, deck, layout) -> None:
+    """A table as a native PowerPoint table: its columns, rows, rules, and words as set.
+
+    Column widths and row heights are Flexo's; each cell's margins put its first
+    baseline where Flexo put it; the rules are cell borders (booktabs: above,
+    under the header, below), and every other border is off.
+    """
+
+    from flexo.text import FontStack, drawn_weight
+
+    existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
+    ids = _Ids(max(existing, default=1))
+    stack = FontStack(deck.typography(layout.size))
+    ink = deck.palette.get("ink")
+    colour = _colour(ink)
+    top_rule, mid_rule, bottom_rule = layout.rules
+    rows = []
+    last = len(layout.cells) - 1
+    for r, row in enumerate(layout.cells):
+        heading = layout.header and r == 0
+        cells = []
+        for c, cell in enumerate(row):
+            pieces = []
+            for run in cell:
+                weight = 700 if heading and run.weight == 400 else drawn_weight(run, None)
+                for face, text in stack.segments(run.text, weight, run.italic):
+                    script = run.baseline_shift != "normal"
+                    size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
+                    shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
+                    pieces.append(
+                        _run_xml(_ListRun(text, size, weight, run.italic, face, ink), baseline=shift)
+                    )
+            algn = {"start": "l", "middle": "ctr", "end": "r"}[layout.align[c]]
+            end = f'<a:endParaRPr lang="en-GB" sz="{round(layout.size * 100)}" dirty="0"/>'
+
+            def border(tag: str, width: float | None) -> str:
+                if not width:
+                    return f"<a:{tag} w=\"0\"><a:noFill/></a:{tag}>"
+                return (
+                    f'<a:{tag} w="{round(width * EMU_PER_POINT)}" cap="flat" cmpd="sng">'
+                    f'<a:solidFill><a:srgbClr val="{colour}"/></a:solidFill><a:prstDash val="solid"/></a:{tag}>'
+                )
+
+            above = top_rule if r == 0 else (mid_rule if layout.header and r == 1 else None)
+            below = bottom_rule if r == last else (mid_rule if heading else None)
+            inset = round((layout.baseline - ASCENT * layout.line_height) * EMU_PER_POINT)
+            margin = round(layout.pad * EMU_PER_POINT)
+            cells.append(
+                f"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"{algn}\">"
+                f'<a:lnSpc><a:spcPts val="{round(layout.line_height * 100)}"/></a:lnSpc>'
+                f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
+                f"{''.join(pieces)}{end}</a:p></a:txBody>"
+                f'<a:tcPr marL="{margin}" marR="{margin}" marT="{max(inset, 0)}" marB="0" anchor="t">'
+                f"{border('lnL', None)}{border('lnR', None)}{border('lnT', above)}{border('lnB', below)}"
+                f"<a:noFill/></a:tcPr></a:tc>"
+            )
+        rows.append(f'<a:tr h="{round(layout.heights[r] * EMU_PER_POINT)}">{"".join(cells)}</a:tr>')
+    grid = "".join(f'<a:gridCol w="{round(width * EMU_PER_POINT)}"/>' for width in layout.widths)
+    width = round(sum(layout.widths) * EMU_PER_POINT)
+    height = round(sum(layout.heights) * EMU_PER_POINT)
+    element = etree.fromstring(
+        f'<p:graphicFrame {_NS}><p:nvGraphicFramePr><p:cNvPr id="{ids()}" name="{escape(layout.id)}"/>'
+        f'<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>'
+        f'<p:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(layout.y * EMU_PER_POINT)}"/>'
+        f'<a:ext cx="{width}" cy="{height}"/></p:xfrm>'
+        f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
+        f'<a:tbl><a:tblPr firstRow="{1 if layout.header else 0}" bandRow="0"/><a:tblGrid>{grid}</a:tblGrid>'
+        f"{''.join(rows)}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+    )
+    tree.append(element)
