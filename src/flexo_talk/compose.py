@@ -1027,6 +1027,10 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
         "mathtext.bf": f"{family}:bold",
         "mathtext.fallback": "stix",
     }
+    import logging
+
+    # matplotlib reports every face it substitutes; the deck sets the words itself.
+    logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
     buffer = io.StringIO()
     with matplotlib.rc_context(settings):
         try:
