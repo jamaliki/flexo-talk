@@ -70,6 +70,7 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
         add_drawing(
             slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False,
             groups=groups, pictures=slide_pictures(slide),
+            backdrop=deck.palette.get("canvas"),
         )
         for layout in item.lists:
             add_list(slide.shapes._spTree, deck, layout)

@@ -35,7 +35,22 @@ _NS = f'xmlns:a="{_A}" xmlns:p="{_P}" xmlns:r="{_R}"'
 
 ASCENT = 0.8
 """Where a text box's first baseline sits below its top, as a fraction of the
-line spacing, when the spacing is set exactly. Calibrated against renderers."""
+line spacing, when the spacing is set exactly -- for a face whose metrics are
+unknown. A known face uses its own share (``ascent``)."""
+
+
+def ascent(face) -> float:
+    """Where a slide program puts the first baseline of exactly spaced lines in
+    ``face``, as a share of the spacing: the face's ascent over its full height
+    (0.79 for Figtree, 0.67 for Kalam), as measured against ONLYOFFICE."""
+
+    if face is None:
+        return ASCENT
+    from flexo.fonts import load_face
+
+    loaded = load_face(face)
+    total = loaded.ascent + loaded.descent
+    return loaded.ascent / total if total > 0 else ASCENT
 
 SCRIPT_SCALE = 0.65
 """How much smaller a slide program draws a raised or lowered run than its size
@@ -76,9 +91,13 @@ type Pictures = Callable[[bytes, str], str]
 
 
 class _Ids:
-    def __init__(self, start: int, pictures: Pictures | None = None) -> None:
+    def __init__(
+        self, start: int, pictures: Pictures | None = None, backdrop: str | None = None
+    ) -> None:
         self.next = start
         self.pictures = pictures
+        self.backdrop = backdrop
+        """The page colour, for drawing a multiply blend (which slide programs lack)."""
 
     def __call__(self) -> int:
         self.next += 1
@@ -94,6 +113,7 @@ def add_drawing(
     background: bool = True,
     groups: bool = True,
     pictures: Pictures | None = None,
+    backdrop: str | None = None,
 ) -> None:
     """Append ``drawing`` to a slide's shape tree (``slide.shapes._spTree``).
 
@@ -105,7 +125,7 @@ def add_drawing(
 
     placement = placement or Placement()
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
-    ids = _Ids(max(existing, default=1), pictures)
+    ids = _Ids(max(existing, default=1), pictures, backdrop)
     items = [
         item
         for item in drawing.root.items
@@ -246,6 +266,23 @@ def _colour(value: str) -> str:
     return value.upper()
 
 
+def _blended(colour: str | None, blend: str, backdrop: str | None) -> str | None:
+    """A multiply blend drawn as a plain fill: the colour it makes over the page.
+
+    Slide programs have no blend modes; a wash multiplied onto the page is, over
+    the page, the product of the two colours, so that product is drawn instead.
+    """
+
+    if colour is None or blend != "multiply" or not backdrop:
+        return colour
+    from flexo.colour import to_hex, to_rgb
+
+    try:
+        return to_hex([a * b for a, b in zip(to_rgb(colour), to_rgb(backdrop), strict=True)])
+    except ValueError:
+        return colour
+
+
 def _fill(colour: str | None, alpha: float) -> str:
     if colour is None:
         return "<a:noFill/>"
@@ -344,7 +381,8 @@ def _geometry_shape(
     return etree.fromstring(
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{label}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
         f'<p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm>'
-        f"{geometry}{_fill(paint.fill, paint.fill_opacity * paint.opacity)}{_line(paint, placement)}</p:spPr>"
+        f"{geometry}{_fill(_blended(paint.fill, paint.blend, ids.backdrop), paint.fill_opacity * paint.opacity)}"
+        f"{_line(paint, placement)}</p:spPr>"
         f"</p:sp>"
     )
 
@@ -526,7 +564,7 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
     right = max(line.right for line in lines)
     slack = 2.0
     first = lines[0].baseline
-    top = first - ASCENT * spacing
+    top = first - ascent(lines[0].runs[0].face if lines[0].runs else None) * spacing
     height = spacing * len(lines)
     align = {"start": "l", "middle": "ctr", "end": "r"}[text.anchor]
     paragraphs = []
@@ -627,7 +665,7 @@ def add_list(tree: etree._Element, deck, layout) -> None:
         )
     first = layout.items[0][2] if layout.items else layout.y
     last = layout.items[-1][2] if layout.items else layout.y
-    top = first - ASCENT * layout.line_height
+    top = first - ascent(stack.face(400, False)) * layout.line_height
     height = last - top + layout.line_height
     element = etree.fromstring(
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(layout.id)}\"/>"
@@ -689,7 +727,8 @@ def add_table(tree: etree._Element, deck, layout) -> None:
 
             above = top_rule if r == 0 else (mid_rule if layout.header and r == 1 else None)
             below = bottom_rule if r == last else (mid_rule if heading else None)
-            inset = round((layout.baseline - ASCENT * layout.line_height) * EMU_PER_POINT)
+            share = ascent(stack.face(400, False))
+            inset = round((layout.baseline - share * layout.line_height) * EMU_PER_POINT)
             margin = round(layout.pad * EMU_PER_POINT)
             cells.append(
                 f"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"{algn}\">"
