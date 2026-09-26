@@ -38,10 +38,25 @@ print(result.summary())
 or a theme file (`theme="lab.yaml"`), with `palette=`, `font=`, `conventions=`
 and `sketch=` exactly as a flexo `Figure` takes them. Titles, bullets, and
 figures share its typeface and colours: bullet marks and title rules take the
-palette's first colour, captions and footers its muted ink. A figure on a slide
-is compiled by flexo at the width of its place -- at a size where its words read
-at the deck's figure size -- then cropped to its ink and scaled to fill the place,
-never so far that its words outgrow the body text.
+palette's first colour, captions and footers its muted ink.
+
+Type can be set by role: `Deck(font="IBM Plex Sans", title_font="Latin Modern
+Roman", figure_font="Figtree")` sets the words, the titles and section headings,
+and the figures each in their own family (each falls back to `font`, then the
+theme's). `DeckStyle(title_align="middle", title_role="tone-1-stroke",
+title_weight=700)` centres titles and paints them in the accent colour.
+
+### Figures are laid out for the slide
+
+A figure on a slide is laid out by flexo for its place -- its width *and* its
+height (`flexo.fit_in_box`) -- at a size where its words read at the deck's
+figure size: as written, or **turned** (a stack that reads upward laid out left
+to right, rows as columns, Q/K/V glyphs lying down), or spaced closer, whichever
+lets its words be largest there, never larger than the body text. The build
+summary notes a figure it turned; `slide.add(figure, turn=False)` keeps one as
+written. Figures sharing a region take one scale, so their words match. A figure
+with too many parts to read in any layout (the full transformer on one slide) is
+reported with what to do.
 
 The slide's proportions -- sizes of title, body and figure text, margins,
 indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
@@ -61,10 +76,16 @@ indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
-`plot(matplotlib_figure)`, `table(rows)`, and `image(path)`. Words take the height they need
-and pictures share the rest; when a region has more words than room, its words
-are set smaller together (down to `DeckStyle.small_size`) and the build summary
-says so.
+`plot(matplotlib_figure)`, `table(rows)`, `code(source)` (a monospace listing
+on a tinted panel, comment lines muted), and `image(path)`. Words take the
+height they need and pictures share the rest; when a region has more words than
+room, its words are set smaller together (down to `DeckStyle.small_size`) and
+the build summary says so.
+
+Slide text is flexo markup -- `$...$` is math, `` `code` `` is monospace --
+plus `*emphasis*` and `**strong**`. The slide's own methods go to its first
+region, so a one-region slide reads simply. `slide.notes(text)` keeps the
+speaker notes.
 
 ## Tables
 
@@ -103,9 +124,7 @@ real text. `deck.plotting()` gives matplotlib the deck's look (`deck.plot_style(
 is the same settings as a dict). An SVG saved by any program --
 `slide.image("plot.svg")` -- is placed as vectors the same way when it holds
 only what flexo draws exactly (paths, text, clips, pictures); otherwise, and for
-PNG and JPEG files, it is a picture. Slide text is flexo markup -- `$...$` is math -- plus
-`*emphasis*` and `**strong**`. The slide's own methods go to its first region, so a
-one-region slide reads simply. `slide.notes(text)` keeps the speaker notes.
+PNG and JPEG files, it is a picture.
 
 ## PowerPoint
 

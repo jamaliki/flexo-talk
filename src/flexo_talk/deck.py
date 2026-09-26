@@ -71,6 +71,12 @@ class DeckStyle:
     """A short accent rule under each slide title."""
     numbers: bool = True
     """A slide number in the bottom-right corner."""
+    title_weight: int | None = None
+    """The weight of slide titles; the theme's title weight when unset."""
+    title_align: Literal["start", "middle"] = "start"
+    """Slide titles flush left, or centred (with their rule)."""
+    title_role: str = "ink"
+    """The palette role that paints slide titles: ``ink``, or ``tone-1-stroke`` for the accent."""
 
 
 @dataclass(slots=True)
@@ -90,6 +96,8 @@ class _Words:
 @dataclass(slots=True)
 class _Figure:
     figure: flexo.Figure | FigureSpec
+    turn: bool = True
+    """Whether flexo may lay the figure out turned when that fits its place better."""
 
 
 @dataclass(slots=True)
@@ -114,18 +122,25 @@ class _Table:
     size: float | None = None
 
 
-type _Block = _Bullets | _Words | _Figure | _Image | _Plot | _Table
+@dataclass(slots=True)
+class _Code:
+    lines: list[str]
+    size: float | None = None
+
+
+type _Block = _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code
 
 
 def inline(words: str) -> tuple[TextRun, ...]:
-    """Slide text as runs: ``*emphasis*`` is italic, ``**strong**`` bold, ``$...$`` math.
+    """Slide text as runs: ``*emphasis*`` is italic, ``**strong**`` bold, ``$...$``
+    math, and ``code`` between backticks is set in the monospace family.
 
     Emphasis is slide markup only -- a figure's labels keep their asterisks.
     """
 
     runs: list[TextRun] = []
     # Split on ** and * outside math; each piece takes the styles open around it.
-    tokens = re.split(r"(\$[^$]*\$|\*\*|\*)", words)
+    tokens = re.split(r"(`[^`]*`|\$[^$]*\$|\*\*|\*)", words)
     bold = italic = False
     for token in tokens:
         if token == "**":
@@ -184,19 +199,25 @@ class Region:
         self.blocks.append(_Words(inline(words), size, align, muted))
         return self
 
-    def figure(self, id: str | None = None, **options: object) -> flexo.Figure:
-        """A flexo figure in the deck's theme, placed here: use it as a ``with`` block."""
+    def figure(self, id: str | None = None, *, turn: bool = True, **options: object) -> flexo.Figure:
+        """A flexo figure in the deck's theme, laid out for this place: use it as a
+        ``with`` block. ``turn=False`` keeps it as written (see ``add``)."""
 
         deck = self._slide.deck
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
-        self.blocks.append(_Figure(figure))
+        self.blocks.append(_Figure(figure, turn))
         return figure
 
-    def add(self, figure: flexo.Figure | FigureSpec) -> Region:
-        """An existing flexo figure, redrawn in the deck's theme at the size of this place."""
+    def add(self, figure: flexo.Figure | FigureSpec, *, turn: bool = True) -> Region:
+        """An existing flexo figure, laid out again in the deck's theme for this place.
 
-        self.blocks.append(_Figure(figure))
+        Flexo lays it out for the place's width *and* height: as written, or turned
+        (a tall stack read left to right) or spaced closer when that lets its words
+        be larger -- ``turn=False`` keeps it as written.
+        """
+
+        self.blocks.append(_Figure(figure, turn))
         return self
 
     def image(self, source: str | Path, *, width: float | None = None) -> Region:
@@ -241,6 +262,16 @@ class Region:
                 for index in range(columns)
             )
         self.blocks.append(_Table(cells, header, aligned, size))
+        return self
+
+    def code(self, source: str, *, size: float | None = None) -> Region:
+        """A code listing in the monospace family, on a tinted panel; lines are kept as
+        written (tabs become four spaces) and whole-line comments are set muted."""
+
+        import textwrap
+
+        text = textwrap.dedent(source.expandtabs(4)).strip("\n")
+        self.blocks.append(_Code(text.splitlines() or [""], size))
         return self
 
     def plot(self, figure: object, *, aspect: float | None = None) -> Region:
@@ -318,15 +349,19 @@ class Slide:
         next(iter(self.regions.values())).text(words, **options)  # type: ignore[arg-type]
         return self
 
-    def figure(self, id: str | None = None, **options: object) -> flexo.Figure:
-        return next(iter(self.regions.values())).figure(id, **options)
+    def figure(self, id: str | None = None, *, turn: bool = True, **options: object) -> flexo.Figure:
+        return next(iter(self.regions.values())).figure(id, turn=turn, **options)
 
-    def add(self, figure: flexo.Figure | FigureSpec) -> Slide:
-        next(iter(self.regions.values())).add(figure)
+    def add(self, figure: flexo.Figure | FigureSpec, *, turn: bool = True) -> Slide:
+        next(iter(self.regions.values())).add(figure, turn=turn)
         return self
 
     def image(self, source: str | Path, *, width: float | None = None) -> Slide:
         next(iter(self.regions.values())).image(source, width=width)
+        return self
+
+    def code(self, source: str, *, size: float | None = None) -> Slide:
+        next(iter(self.regions.values())).code(source, size=size)
         return self
 
     def table(self, rows: Sequence[Sequence[object]], **options: object) -> Slide:
@@ -354,6 +389,8 @@ class Deck:
         theme: str = "paper",
         palette: str | Sequence[str] = "default",
         font: str | None = None,
+        title_font: str | None = None,
+        figure_font: str | None = None,
         conventions: dict[str, object] | None = None,
         sketch: object = None,
         background: bool | str = True,
@@ -366,6 +403,16 @@ class Deck:
         self.theme = probe.style
         self.palette_name = probe.palette
         self.font = font
+        """The family of the slides' words and figures; the theme's when unset."""
+        self.title_font = title_font
+        """The family of slide titles and section headings; ``font`` when unset."""
+        self.figure_font = figure_font
+        """The family of the figures' words; ``font`` when unset."""
+        from flexo.fonts import require_family
+
+        for family in (font, title_font, figure_font):
+            if family:
+                require_family(family)
         self.conventions = conventions
         self.sketch = sketch
         self.background = background
@@ -410,8 +457,8 @@ class Deck:
 
     def figure_options(self) -> dict[str, object]:
         options: dict[str, object] = {"theme": self.theme, "palette": self.palette_name}
-        if self.font:
-            options["font"] = self.font
+        if self.figure_font or self.font:
+            options["font"] = self.figure_font or self.font
         if self.conventions:
             options["conventions"] = self.conventions
         if self.sketch is not None:
@@ -490,8 +537,17 @@ class Deck:
         register_fonts_with_matplotlib()
         return matplotlib.rc_context(self.plot_style())
 
-    def typography(self, size: float) -> TypographyStyle:
-        return replace(self.layout_style.typography, size=pt(size), minimum_size=pt(min(size, 6.0)))
+    def typography(self, size: float, *, title: bool = False) -> TypographyStyle:
+        """The type at ``size``: in the title font for a heading, else the words' font."""
+
+        typography = self.layout_style.typography
+        if title and self.title_font:
+            typography = typography.with_family(self.title_font)
+        return replace(typography, size=pt(size), minimum_size=pt(min(size, 6.0)))
+
+    @property
+    def title_weight(self) -> int:
+        return self.style.title_weight or self.layout_style.typography.title_weight
 
     # -- output --
 
@@ -559,6 +615,7 @@ class RenderedSlide:
     lists: list[ListLayout]
     diagnostics: list[str] = field(default_factory=list)
     tables: list[TableLayout] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,8 +625,11 @@ class DeckBuild:
     svgs: tuple[Path, ...]
     pngs: tuple[Path, ...]
     diagnostics: tuple[str, ...]
+    notes: tuple[str, ...] = ()
+    """What the build chose that is worth knowing: a figure laid out turned to fit."""
 
     def summary(self) -> str:
         written = [str(path) for path in (self.pptx, self.pdf, *self.svgs, *self.pngs) if path]
         head = "ok" if not self.diagnostics else "warnings:\n  " + "\n  ".join(self.diagnostics)
-        return head + "\n" + "\n".join(written)
+        notes = ["notes:", *(f"  {note}" for note in self.notes)] if self.notes else []
+        return "\n".join([head, *notes, *written])

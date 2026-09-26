@@ -47,7 +47,8 @@ def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...]) -> DeckBui
     if "pptx" in formats:
         pptx = directory / f"{deck.id}.pptx"
         write_pptx(deck, rendered, pptx)
-    return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics))
+    notes = tuple(note for item in rendered for note in item.notes)
+    return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics), notes)
 
 
 def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, groups: bool = True) -> Path:

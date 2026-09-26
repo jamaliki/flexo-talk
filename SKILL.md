@@ -49,7 +49,13 @@ deck.build("build")
   `plot(matplotlib_figure)`, `table(rows)` (booktabs rules; native PowerPoint
   table), `image(path)` (SVG as vectors; PNG/JPEG as pictures).
   Calling these on the slide uses its first region.
-- Slide text: `$...$` math (as in flexo), `*emphasis*`, `**strong**`.
+- Slide text: `$...$` math (as in flexo), `*emphasis*`, `**strong**`, `` `code` ``;
+  `slide.code(source)` for a listing.
+- Figures are laid out for their place (width and height): flexo turns a tall
+  one to read left to right when that makes its words larger (`turn=False` keeps
+  it). Don't pre-shrink or redraw figures for slides.
+- Type by role: `Deck(font=, title_font=, figure_font=)`;
+  `DeckStyle(title_align="middle", title_role="tone-1-stroke")`.
 - `slide.notes(text)` becomes the PowerPoint speaker notes.
 
 ## Plots

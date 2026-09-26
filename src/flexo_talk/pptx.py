@@ -603,7 +603,7 @@ def add_list(tree: etree._Element, deck, layout) -> None:
         pieces = []
         for run in runs:
             weight = drawn_weight(run, None)
-            for face, text in stack.segments(run.text, weight, run.italic):
+            for face, text in stack.segments(run.text, weight, run.italic, code=run.code):
                 script = run.baseline_shift != "normal"
                 size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
                 shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
@@ -664,7 +664,7 @@ def add_table(tree: etree._Element, deck, layout) -> None:
             pieces = []
             for run in cell:
                 weight = 700 if heading and run.weight == 400 else drawn_weight(run, None)
-                for face, text in stack.segments(run.text, weight, run.italic):
+                for face, text in stack.segments(run.text, weight, run.italic, code=run.code):
                     script = run.baseline_shift != "normal"
                     size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
                     shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
