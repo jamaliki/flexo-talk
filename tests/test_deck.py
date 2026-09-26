@@ -306,3 +306,15 @@ def test_a_figure_laid_out_once_is_reused(tmp_path: Path, monkeypatch: pytest.Mo
             figure.block("b", label="Block", input=figure.text("x", "$x$"))
         deck.render()
     assert len(calls) == 1 and list((tmp_path / "cache" / "fits").glob("*.json"))
+
+
+def test_a_persian_table_reads_from_the_right(tmp_path: Path) -> None:
+    deck = Deck("fa-table")
+    with deck.slide("Table") as slide:
+        slide.table([["مدل", "دقت"], ["الف", "81.2"]])
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    header = re.search(r"<a:tr .*?</a:tr>", slide)
+    assert header is not None
+    cells = re.findall(r"<a:t>([^<]*)</a:t>", header.group(0))
+    assert cells == ["دقت", "مدل"]  # the first column is written last

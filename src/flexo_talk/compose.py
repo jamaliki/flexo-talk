@@ -476,25 +476,30 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float) -> TableLayout:
 
 def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     plan = _table_plan(canvas, block, box.width)
-    plan.x, plan.y, plan.id = box.x, box.y, identifier
+    total = sum(plan.widths)
+    # A table headed in a right-to-left script reads from the right: its first
+    # column on the right, the table against the right edge, cells set from the right.
+    plan.rtl = bool(plan.cells) and _rtl(tuple(run for cell in plan.cells[0] for run in cell))
+    left = box.x + box.width - total if plan.rtl else box.x
+    plan.x, plan.y, plan.id = left, box.y, identifier
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="table")
     ink = canvas.palette.get("ink")
-    total = sum(plan.widths)
+    mirrored = {"start": "end", "end": "start", "middle": "middle"}
     y = box.y
     for r, row in enumerate(plan.cells):
-        x = box.x
         for c, cell in enumerate(row):
             if cell:
+                x = left + total - sum(plan.widths[: c + 1]) if plan.rtl else left + sum(plan.widths[:c])
                 inner = Box(x + plan.pad, y + plan.baseline, plan.widths[c] - 2 * plan.pad, 0.0)
                 metrics = canvas.measure(cell, plan.size, None, 700 if plan.header and r == 0 else None)
+                align = mirrored[plan.align[c]] if plan.rtl else plan.align[c]
                 anchor = {"start": inner.x, "middle": inner.x + inner.width / 2.0, "end": inner.x + inner.width}
                 render_runs(
-                    group, f"{identifier}.{r}.{c}", metrics, x=anchor[plan.align[c]], y=inner.y,
+                    group, f"{identifier}.{r}.{c}", metrics, x=anchor[align], y=inner.y,
                     typography=canvas.deck.typography(plan.size), palette=canvas.palette,
-                    fill_role="ink", anchor=plan.align[c],
+                    fill_role="ink", anchor=align,
                     weight=700 if plan.header and r == 0 else None,
                 )
-            x += plan.widths[c]
         y += plan.heights[r]
     top_rule, mid_rule, bottom_rule = plan.rules
     rules = [(box.y, top_rule), (y, bottom_rule)]
@@ -503,7 +508,7 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     for index, (level, weight) in enumerate(rules):
         element(
             group, "path", id=f"{identifier}.rule{index}",
-            d=f"M {number(box.x)} {number(level)} H {number(box.x + total)}",
+            d=f"M {number(left)} {number(level)} H {number(left + total)}",
             stroke=ink, stroke_width=weight, fill="none", data__flexo__stroke="ink",
         )
     canvas.tables.append(plan)

@@ -820,7 +820,9 @@ def add_table(tree: etree._Element, deck, layout) -> None:
                         baseline=shift,
                     )
                     )
-            algn = {"start": "l", "middle": "ctr", "end": "r"}[layout.align[c]]
+            mirrored = {"start": "r", "middle": "ctr", "end": "l"}
+            algn = (mirrored if layout.rtl else {"start": "l", "middle": "ctr", "end": "r"})[layout.align[c]]
+            direction = ' rtl="1"' if _rtl_text("".join(run.text for run in cell)) else ""
             end = f'<a:endParaRPr lang="en-GB" sz="{round(layout.size * 100)}" dirty="0"/>'
 
             def border(tag: str, width: float | None) -> str:
@@ -837,7 +839,7 @@ def add_table(tree: etree._Element, deck, layout) -> None:
             inset = round((layout.baseline - share * layout.line_height) * EMU_PER_POINT)
             margin = round(layout.pad * EMU_PER_POINT)
             cells.append(
-                f"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"{algn}\">"
+                f"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"{algn}\"{direction}>"
                 f'<a:lnSpc><a:spcPts val="{round(layout.line_height * 100)}"/></a:lnSpc>'
                 f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
                 f"{''.join(pieces)}{end}</a:p></a:txBody>"
@@ -845,8 +847,12 @@ def add_table(tree: etree._Element, deck, layout) -> None:
                 f"{border('lnL', None)}{border('lnR', None)}{border('lnT', above)}{border('lnB', below)}"
                 f"<a:noFill/></a:tcPr></a:tc>"
             )
-        rows.append(f'<a:tr h="{round(layout.heights[r] * EMU_PER_POINT)}">{"".join(cells)}</a:tr>')
-    grid = "".join(f'<a:gridCol w="{round(width * EMU_PER_POINT)}"/>' for width in layout.widths)
+        # A right-to-left table is written in the order it is seen, right column last,
+        # rather than flagged rtl: not every slide program honours the flag.
+        order = reversed(cells) if layout.rtl else cells
+        rows.append(f'<a:tr h="{round(layout.heights[r] * EMU_PER_POINT)}">{"".join(order)}</a:tr>')
+    widths = list(reversed(layout.widths)) if layout.rtl else layout.widths
+    grid = "".join(f'<a:gridCol w="{round(width * EMU_PER_POINT)}"/>' for width in widths)
     width = round(sum(layout.widths) * EMU_PER_POINT)
     height = round(sum(layout.heights) * EMU_PER_POINT)
     element = etree.fromstring(
