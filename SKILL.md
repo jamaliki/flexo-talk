@@ -54,6 +54,9 @@ deck.build("build")
 - Figures are laid out for their place (width and height): flexo turns a tall
   one to read left to right when that makes its words larger (`turn=False` keeps
   it). Don't pre-shrink or redraw figures for slides.
+- Acknowledgements and people: `layout="columns", columns=3` (or `widths=(2, 1, 1)`),
+  `gallery([(photo, "**Name**\nRole")], crop="circle")`, `[words]{accent2}` colours,
+  `text(..., colour="accent")`.
 - Type by role: `Deck(font=, title_font=, figure_font=)`;
   `DeckStyle(title_align="middle", title_role="tone-1-stroke")`.
 - `slide.notes(text)` becomes the PowerPoint speaker notes.

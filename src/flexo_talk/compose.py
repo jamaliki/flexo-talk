@@ -39,6 +39,7 @@ from flexo_talk.deck import (
     _Bullets,
     _Code,
     _Figure,
+    _Gallery,
     _Image,
     _Plot,
     _Table,
@@ -136,6 +137,7 @@ class _Canvas:
         parent: ET.Element | None = None,
         title: bool = False,
         wrap: bool = True,
+        fill: str | None = None,
     ) -> float:
         """Set ``runs`` in ``box`` from its top; return the height they took.
         ``wrap=False`` keeps each line whole (code keeps its indentation)."""
@@ -156,6 +158,7 @@ class _Canvas:
             typography=self.deck.typography(size, title=title),
             palette=self.palette,
             fill_role=role,
+            fill=fill,
             anchor=None if align == "start" else align,
             weight=weight,
         )
@@ -235,15 +238,12 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
             top += style.title_gap
         body = Box(margin, top, width - 2 * margin, bottom - top)
         names = list(slide.regions)
-        if len(names) == 2:
-            left = (body.width - style.column_gap) * slide.split
-            right = body.width - style.column_gap - left
-            boxes = [
-                Box(body.x, body.y, left, body.height),
-                Box(body.x + left + style.column_gap, body.y, right, body.height),
-            ]
-        else:
-            boxes = [body]
+        available = body.width - style.column_gap * (len(names) - 1)
+        boxes = []
+        x = body.x
+        for share in slide.shares:
+            boxes.append(Box(x, body.y, available * share, body.height))
+            x += available * share + style.column_gap
         for name, box in zip(names, boxes, strict=True):
             _region(canvas, slide.regions[name], box)
     _furniture(canvas, slide)
@@ -369,10 +369,13 @@ def _region(canvas: _Canvas, region: Region, box: Box) -> None:
             top += _bullets(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Words):
             size = block.size or style.body_size
+            role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
             top += canvas.words(
                 identifier, block.runs, Box(box.x, top, box.width, 0.0), size=size,
-                align=block.align, role="muted-ink" if block.muted else "ink",
+                align=block.align, role=role, fill=fill,
             )
+        elif isinstance(block, _Gallery):
+            top += _gallery(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Figure):
             alone = len(blocks) == 1
             height = room if alone else prepared[index].height * scale
@@ -540,8 +543,124 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
     return height
 
 
+def _paint_of(colour: str | None, default: str) -> tuple[str, str | None]:
+    """A block colour as ``(role, literal fill)``: a role or friendly name, or a hex."""
+
+    if not colour:
+        return default, None
+    if colour.startswith("#"):
+        return default, colour
+    if colour.startswith("accent"):
+        return f"tone-{colour[6:] or 1}-stroke", None
+    return {"muted": "muted-ink"}.get(colour, colour), None
+
+
+def _gallery_plan(canvas: _Canvas, block: _Gallery, width: float) -> tuple[int, float, float, float]:
+    """``columns, cell width, picture height, caption height`` of a gallery."""
+
+    style = canvas.deck.style
+    count = len(block.items)
+    columns = block.columns or (count if count <= 5 else -(-count // 2))
+    gap = style.column_gap * 0.6
+    cell = (width - gap * (columns - 1)) / columns
+    picture = min(block.height or cell, cell)
+    size = block.size or style.small_size
+    captions = [
+        canvas.measure(runs, size, cell, balance=True).height for _, runs in block.items if runs
+    ]
+    return columns, cell, picture, max(captions, default=0.0)
+
+
+def _gallery(canvas: _Canvas, identifier: str, block: _Gallery, box: Box, *, draw: bool = True) -> float:
+    """Pictures in a grid, each fitted to its cell and centred, a caption under it."""
+
+    style = canvas.deck.style
+    columns, cell, picture, caption = _gallery_plan(canvas, block, box.width)
+    gap = style.column_gap * 0.6
+    under = style.small_size * 0.5 if caption else 0.0
+    row_height = picture + under + caption
+    rows = -(-len(block.items) // columns)
+    height = rows * row_height + (rows - 1) * gap
+    if not draw:
+        return height
+    group = element(canvas.layer, "g", id=identifier, data__flexo__talk="gallery")
+    # A last row shorter than the others is centred under them.
+    for index, (source, runs) in enumerate(block.items):
+        row, column = divmod(index, columns)
+        in_row = min(columns, len(block.items) - row * columns)
+        shift = (columns - in_row) * (cell + gap) / 2.0
+        x = box.x + shift + column * (cell + gap)
+        y = box.y + row * (row_height + gap)
+        _fitted_picture(canvas, f"{identifier}.{index}", source, Box(x, y, cell, picture), block.crop, group)
+        if runs:
+            canvas.words(
+                f"{identifier}.{index}.caption", runs, Box(x, y + picture + under, cell, 0.0),
+                size=block.size or style.small_size, align="middle", parent=group,
+            )
+    return height
+
+
+def _fitted_picture(
+    canvas: _Canvas, identifier: str, source: str, box: Box, crop: str | None, parent: ET.Element
+) -> None:
+    """A picture fitted inside ``box`` and centred there; cropped to a circle or square."""
+
+    art = load_artwork(identifier, source)
+    if art.format == "svg" and _drawable(art.markup):
+        # Vectors flexo draws exactly: placed as shapes and live text, fitted and centred.
+        natural_w, natural_h = art.width or box.width, art.height or box.height
+        scale = min(box.width / natural_w, box.height / natural_h)
+        view = [float(v) for v in re.split(r"[ ,]+", ET.fromstring(art.markup).get("viewBox", "").strip()) if v]
+        units = (natural_w / view[2]) if len(view) == 4 and view[2] else 1.0
+        x = box.x + (box.width - natural_w * scale) / 2.0
+        y = box.y + (box.height - natural_h * scale) / 2.0
+        _place_svg(canvas, identifier, art.markup, x, y, scale * units)
+        return
+    if crop and art.format != "svg":
+        href, natural_w, natural_h = _cropped(source, crop)
+    elif art.format == "svg":
+        import base64
+
+        href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+        natural_w, natural_h = art.width or box.width, art.height or box.height
+    else:
+        href, natural_w, natural_h = art.data_uri, art.width or box.width, art.height or box.height
+    scale = min(box.width / natural_w, box.height / natural_h)
+    width, height = natural_w * scale, natural_h * scale
+    element(
+        parent, "image", id=identifier, x=box.x + (box.width - width) / 2.0,
+        y=box.y + (box.height - height) / 2.0, width=width, height=height, href=href,
+    )
+
+
+def _cropped(source: str, crop: str) -> tuple[str, float, float]:
+    """A photograph cut to a centred square, and to a circle within it: a PNG data URI."""
+
+    import base64
+    import io
+
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as error:  # pragma: no cover - depends on the environment
+        raise ValueError("cropping pictures needs Pillow: pip install pillow") from error
+    with Image.open(source) as opened:
+        picture = opened.convert("RGBA")
+    side = min(picture.size)
+    left, top = (picture.width - side) // 2, (picture.height - side) // 2
+    picture = picture.crop((left, top, left + side, top + side)).resize((min(side, 600),) * 2)
+    if crop == "circle":
+        mask = Image.new("L", picture.size, 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, picture.width - 1, picture.height - 1), fill=255)
+        picture.putalpha(mask)
+    buffer = io.BytesIO()
+    picture.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(), 100.0, 100.0
+
+
 def _height(canvas: _Canvas, block, width: float) -> float:
     style = canvas.deck.style
+    if isinstance(block, _Gallery):
+        return _gallery(canvas, "", block, Box(0.0, 0.0, width, 0.0), draw=False)
     if isinstance(block, _Code):
         return _code(canvas, "", block, Box(0.0, 0.0, width, 0.0), draw=False)
     if isinstance(block, _Table):
