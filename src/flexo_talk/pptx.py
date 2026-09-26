@@ -20,6 +20,8 @@ offset and a scale), so a figure can be put anywhere on a slide at any size.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cache
 from xml.sax.saxutils import escape
@@ -424,18 +426,48 @@ def _custom(
 # -- text ------------------------------------------------------------------------------
 
 
+_LINKS: ContextVar[Callable[[str], str] | None] = ContextVar("flexo_talk_links", default=None)
+"""Relates a URL to the slide being written and gives its relationship id."""
+
+
+@contextmanager
+def linking(slide):
+    """While writing ``slide``, a run's link becomes a hyperlink on that slide."""
+
+    from pptx.opc.constants import RELATIONSHIP_TYPE
+
+    def relate(url: str) -> str:
+        return slide.part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+
+    token = _LINKS.set(relate)
+    try:
+        yield
+    finally:
+        _LINKS.reset(token)
+
+
 def _run_xml(run, *, size: float | None = None, baseline: int | None = None) -> str:
-    """One run: its face, size, style, colour, and any raise."""
+    """One run: its face, size, style, colour, any raise, and any link."""
 
     size = size if size is not None else run.size
     face = escape(_family_name(run), {'"': "&quot;"})
     bold = ' b="1"' if _bold(run) else ""
     italic = ' i="1"' if run.italic else ""
     raise_ = f' baseline="{baseline}"' if baseline else ""
+    link = ""
+    relate = _LINKS.get()
+    if getattr(run, "link", "") and relate is not None:
+        # The run keeps its own colour (hlinkClr "tx"), not the theme's hyperlink blue.
+        link = (
+            f'<a:hlinkClick r:id="{relate(run.link)}"><a:extLst>'
+            '<a:ext uri="{A12FA001-AC4F-418D-AE19-62706E023703}">'
+            '<ahyp:hlinkClr xmlns:ahyp="http://schemas.microsoft.com/office/drawing/2018/hyperlinkcolor" '
+            'val="tx"/></a:ext></a:extLst></a:hlinkClick>'
+        )
     return (
         f'<a:r><a:rPr lang="en-GB" sz="{round(size * 100)}"{bold}{italic}{raise_} dirty="0">'
         f"{_fill(run.fill, 1.0)}"
-        f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/><a:cs typeface="{face}"/>'
+        f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/><a:cs typeface="{face}"/>{link}'
         f"</a:rPr><a:t>{escape(run.text)}</a:t></a:r>"
     )
 
@@ -619,6 +651,7 @@ class _ListRun:
     face: object
     fill: str
     shift: float = 0.0
+    link: str = ""
 
 
 def add_list(tree: etree._Element, deck, layout) -> int:
@@ -637,6 +670,7 @@ def add_list(tree: etree._Element, deck, layout) -> int:
     stack = font_stack(typography)
     palette = deck.palette
     ink = palette.get("ink")
+    accent_ink = palette.get("tone-1-stroke")
     accent = _colour(palette.get("tone-1-stroke"))
     muted = _colour(palette.get("muted-ink"))
     paragraphs = []
@@ -651,7 +685,10 @@ def add_list(tree: etree._Element, deck, layout) -> int:
                 size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
                 shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
                 pieces.append(
-                    _run_xml(_ListRun(text, size, weight, run.italic, face, ink), baseline=shift)
+                    _run_xml(
+                        _ListRun(text, size, weight, run.italic, face, accent_ink if run.link else ink, link=run.link),
+                        baseline=shift,
+                    )
                 )
         before = 0 if position == 0 else round(layout.gap * 100)
         if layout.numbered and level == 0:
@@ -741,6 +778,7 @@ def add_table(tree: etree._Element, deck, layout) -> None:
     ids = _Ids(max(existing, default=1))
     stack = font_stack(deck.typography(layout.size))
     ink = deck.palette.get("ink")
+    accent_ink = deck.palette.get("tone-1-stroke")
     colour = _colour(ink)
     top_rule, mid_rule, bottom_rule = layout.rules
     rows = []
@@ -757,7 +795,10 @@ def add_table(tree: etree._Element, deck, layout) -> None:
                     size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
                     shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
                     pieces.append(
-                        _run_xml(_ListRun(text, size, weight, run.italic, face, ink), baseline=shift)
+                        _run_xml(
+                        _ListRun(text, size, weight, run.italic, face, accent_ink if run.link else ink, link=run.link),
+                        baseline=shift,
+                    )
                     )
             algn = {"start": "l", "middle": "ctr", "end": "r"}[layout.align[c]]
             end = f'<a:endParaRPr lang="en-GB" sz="{round(layout.size * 100)}" dirty="0"/>'

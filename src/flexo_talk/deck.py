@@ -135,14 +135,15 @@ type _Block = _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code
 
 def inline(words: str) -> tuple[TextRun, ...]:
     """Slide text as runs: ``*emphasis*`` is italic, ``**strong**`` bold, ``$...$``
-    math, and ``code`` between backticks is set in the monospace family.
+    math, ``code`` between backticks is set in the monospace family, and
+    ``[words](url)`` links.
 
     Emphasis is slide markup only -- a figure's labels keep their asterisks.
     """
 
     runs: list[TextRun] = []
-    # Split on ** and * outside math; each piece takes the styles open around it.
-    tokens = re.split(r"(`[^`]*`|\$[^$]*\$|\*\*|\*)", words)
+    # Split on links, code, maths, ** and *; each piece takes the styles open around it.
+    tokens = re.split(r"(\[[^\]\n]+\]\([^)\s]+\)|`[^`]*`|\$[^$]*\$|\*\*|\*)", words)
     bold = italic = False
     for token in tokens:
         if token == "**":
@@ -153,7 +154,14 @@ def inline(words: str) -> tuple[TextRun, ...]:
             continue
         if not token:
             continue
-        for run in parse_label(token):
+        link = re.fullmatch(r"\[([^\]\n]+)\]\(([^)\s]+)\)", token)
+        # A link's words may carry emphasis of their own; the link holds for all of them.
+        pieces = (
+            tuple(replace(run, link=link.group(2)) for run in inline(link.group(1)))
+            if link
+            else parse_label(token)
+        )
+        for run in pieces:
             runs.append(
                 replace(
                     run,

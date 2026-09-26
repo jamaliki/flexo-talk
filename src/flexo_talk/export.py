@@ -15,7 +15,15 @@ from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
 from flexo_talk.deck import Deck, DeckBuild, RenderedSlide
-from flexo_talk.pptx import Placement, add_drawing, add_list, add_reveals, add_table, slide_pictures
+from flexo_talk.pptx import (
+    Placement,
+    add_drawing,
+    add_list,
+    add_reveals,
+    add_table,
+    linking,
+    slide_pictures,
+)
 
 FORMATS = ("pptx", "pdf", "svg", "png")
 
@@ -66,31 +74,32 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
     blank = presentation.slide_layouts[6]
     for item in rendered:
         slide = presentation.slides.add_slide(blank)
-        page = deck.background
-        if page:
-            colour = deck.palette.get("canvas") if page is True else str(page)
-            slide.background.fill.solid()
-            slide.background.fill.fore_color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
-        drawing = read_drawing(item.svg)
-        _drop_lists(drawing.root)
-        add_drawing(
-            slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False,
-            groups=groups, pictures=slide_pictures(slide),
-            backdrop=deck.palette.get("canvas"),
-        )
-        reveals = []
-        for layout in item.lists:
-            shape_id = add_list(slide.shapes._spTree, deck, layout)
-            if layout.reveal:
-                outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
-                ends = [*outer[1:], len(layout.items)]
-                ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
-                reveals.append((shape_id, ranges))
-        for layout in item.tables:
-            add_table(slide.shapes._spTree, deck, layout)
-        if item.slide.notes_text:
-            slide.notes_slide.notes_text_frame.text = item.slide.notes_text
-        add_reveals(slide._element, reveals)
+        with linking(slide):
+            page = deck.background
+            if page:
+                colour = deck.palette.get("canvas") if page is True else str(page)
+                slide.background.fill.solid()
+                slide.background.fill.fore_color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
+            drawing = read_drawing(item.svg)
+            _drop_lists(drawing.root)
+            add_drawing(
+                slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False,
+                groups=groups, pictures=slide_pictures(slide),
+                backdrop=deck.palette.get("canvas"),
+            )
+            reveals = []
+            for layout in item.lists:
+                shape_id = add_list(slide.shapes._spTree, deck, layout)
+                if layout.reveal:
+                    outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
+                    ends = [*outer[1:], len(layout.items)]
+                    ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
+                    reveals.append((shape_id, ranges))
+            for layout in item.tables:
+                add_table(slide.shapes._spTree, deck, layout)
+            if item.slide.notes_text:
+                slide.notes_slide.notes_text_frame.text = item.slide.notes_text
+            add_reveals(slide._element, reveals)
     buffer = BytesIO()
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())

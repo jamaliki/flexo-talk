@@ -242,3 +242,16 @@ def test_footnotes_sit_above_the_footer_and_shorten_the_body(tmp_path: Path) -> 
     svg = result.svgs[0].read_text()
     assert "[1] A reference." in svg
     assert any("fit" in message for message in result.diagnostics)
+
+
+def test_links_are_native_hyperlinks_in_the_pptx(tmp_path: Path) -> None:
+    deck = Deck("links")
+    with deck.slide("Links") as slide:
+        slide.bullets("Code: [the repository](https://github.com/jamaliki/flexo)")
+        slide.footnote("[1] [*A paper*](https://arxiv.org/abs/1706.03762)")
+    result = deck.build(tmp_path, formats=("pptx", "pdf"))
+    archive = zipfile.ZipFile(result.pptx)  # type: ignore[arg-type]
+    relations = archive.read("ppt/slides/_rels/slide1.xml.rels").decode()
+    assert "https://github.com/jamaliki/flexo" in relations and "https://arxiv.org/abs/1706.03762" in relations
+    assert archive.read("ppt/slides/slide1.xml").decode().count("<a:hlinkClick") == 2
+    assert result.pdf is not None and result.pdf.read_bytes().count(b"/Subtype /Link") == 2
