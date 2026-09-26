@@ -90,8 +90,6 @@ class _Words:
 @dataclass(slots=True)
 class _Figure:
     figure: flexo.Figure | FigureSpec
-    centre: float = 0.0
-    """1 to centre the figure in its place's height (it is alone there), 0 to top it."""
 
 
 @dataclass(slots=True)
