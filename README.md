@@ -84,7 +84,8 @@ height they need and pictures share the rest; when a region has more words than
 room, its words are set smaller together (down to `DeckStyle.small_size`) and
 the build summary says so.
 
-Slide text is flexo markup -- `$...$` is math, `` `code` `` is monospace --
+Slide text is flexo markup -- `$...$` is math, `` `code` `` is monospace,
+`[words](url)` links (a hyperlink in the PowerPoint, a link in the PDF) --
 plus `*emphasis*` and `**strong**`. The slide's own methods go to its first
 region, so a one-region slide reads simply. `slide.notes(text)` keeps the
 speaker notes; `slide.footnote(text)` sets a reference small and muted at the
