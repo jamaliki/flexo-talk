@@ -58,7 +58,11 @@ transformer on one slide: encoder above, decoder folded, 7pt words instead of
 4pt). The build summary notes a figure it turned or folded;
 `slide.add(figure, turn=False)` keeps one as written. Figures sharing a region
 take one scale, so their words match. A figure whose words still end up under
-7pt is reported with what to do.
+7pt is reported with what to do. Laying a figure out can take a while for a large one (the
+full transformer, about half a minute), so each is kept in a cache between builds
+(`~/Library/Caches/flexo-talk` or `$XDG_CACHE_HOME/flexo-talk`), keyed by the figure,
+its place, and flexo's own source: a rebuild after editing words is immediate.
+`FLEXO_TALK_CACHE=0` turns the cache off; `FLEXO_TALK_CACHE=dir` moves it.
 
 The slide's proportions -- sizes of title, body and figure text, margins,
 indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import flexo
 from flexo.artwork import load_artwork
@@ -794,22 +795,94 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box) -> _Prepared:
             spec, style=deck.theme, palette=deck.palette_name,
             font=deck.figure_font or deck.font or spec.font,
         )
-    base = figure_style(spec).typography.size.points
-    fit = flexo.fit_in_box(
-        spec, box.width, box.height, words=deck.style.figure_size, largest=deck.style.body_size,
-        turn=block.turn,
-    )
-    for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics:
-        if diagnostic.code == "layout.width.grown":
-            continue  # the figure is laid out for its place and scaled to it
-        canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {diagnostic.code}")
-    if fit.layout != "as written":
-        canvas.notes.append(f"{canvas.slide.id} {spec.id}: laid out {fit.layout} to fit the slide")
-    left, top, width, height = fit.ink
-    return _Prepared(
-        fit.compilation.document.text, left, top, width, height,
-        deck.style.body_size / base, base, spec.id,
-    )
+    style = figure_style(spec)
+    base = style.typography.size.points
+    key = (spec, style, box.width, box.height, deck.style.figure_size, deck.style.body_size, block.turn)
+    laid = _cached_fit(key)
+    if laid is None:
+        fit = flexo.fit_in_box(
+            spec, box.width, box.height, words=deck.style.figure_size, largest=deck.style.body_size,
+            turn=block.turn,
+        )
+        codes = [
+            diagnostic.code
+            for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics
+            # The figure is laid out for its place and scaled to it: a grown width is moot.
+            if diagnostic.code != "layout.width.grown"
+        ]
+        laid = {"svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes}
+        _store_fit(key, laid)
+    for code in laid["codes"]:
+        canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {code}")
+    if laid["layout"] != "as written":
+        canvas.notes.append(f"{canvas.slide.id} {spec.id}: laid out {laid['layout']} to fit the slide")
+    left, top, width, height = laid["ink"]
+    return _Prepared(laid["svg"], left, top, width, height, deck.style.body_size / base, base, spec.id)
+
+
+# -- the figure cache --------------------------------------------------------------------
+
+_FLEXO_FINGERPRINT: list[str] = []
+
+
+def _fingerprint() -> str:
+    """A hash of flexo's own source: any change to the engine makes cached layouts stale."""
+
+    if not _FLEXO_FINGERPRINT:
+        import hashlib
+
+        digest = hashlib.sha256()
+        root = Path(flexo.__file__).parent
+        for path in sorted(root.rglob("*.py")):
+            digest.update(path.read_bytes())
+        _FLEXO_FINGERPRINT.append(digest.hexdigest()[:16])
+    return _FLEXO_FINGERPRINT[0]
+
+
+def _cache_path(key: tuple) -> Path | None:
+    """Where a figure laid out for a box is kept between builds (``FLEXO_TALK_CACHE=0``
+    turns the cache off; ``FLEXO_TALK_CACHE=/some/dir`` moves it)."""
+
+    import hashlib
+    import os
+    import sys
+
+    setting = os.environ.get("FLEXO_TALK_CACHE", "")
+    if setting == "0":
+        return None
+    if setting:
+        folder = Path(setting)
+    elif sys.platform == "darwin":
+        folder = Path.home() / "Library/Caches/flexo-talk"
+    else:
+        folder = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "flexo-talk"
+    name = hashlib.sha256(repr((key, _fingerprint())).encode("utf-8")).hexdigest()[:32]
+    return folder / "fits" / f"{name}.json"
+
+
+def _cached_fit(key: tuple) -> dict | None:
+    import json
+
+    path = _cache_path(key)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _store_fit(key: tuple, laid: dict) -> None:
+    import json
+
+    path = _cache_path(key)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(laid), encoding="utf-8")
+    except OSError:
+        return
 
 
 def _check_legible(canvas: _Canvas, prepared, scale: float) -> None:
