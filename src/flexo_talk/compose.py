@@ -68,6 +68,16 @@ class _Canvas:
         self.deck = deck
         self.slide = slide
         self.palette = deck.palette
+        if _dark_slide(deck, slide):
+            # Words over a dark background or a shaded picture are set light.
+            from flexo.colour import is_dark, with_lightness
+
+            lighter = {"ink": "#f7f5f0", "muted-ink": "#d4d0c8"}
+            for role, colour in self.palette.paints.items():
+                # Accents drawn for a light page are too dark to read on this one.
+                if role.startswith("tone-") and role.endswith("-stroke") and is_dark(colour):
+                    lighter[role] = with_lightness(colour, 0.78, 0.14)
+            self.palette = self.palette.with_overrides(lighter)
         width_mm = style.width / POINTS_PER_INCH * MILLIMETRES_PER_INCH
         height_mm = style.height / POINTS_PER_INCH * MILLIMETRES_PER_INCH
         self.root = ET.Element(
@@ -95,6 +105,8 @@ class _Canvas:
             fill=self.palette.get("canvas") if page is True else (page or "none"),
         )
         self.layer = layer(self.root, f"{slide.id}.content", "Slide")
+        if slide.background:
+            _slide_background(self, slide)
         self.lists: list[ListLayout] = []
         self.diagnostics: list[str] = []
         self.tables: list[TableLayout] = []
@@ -683,6 +695,45 @@ def _height(canvas: _Canvas, block, width: float) -> float:
             total += metrics.height + style.paragraph_gap * size
         return total
     return 0.0
+
+
+def _dark_slide(deck: Deck, slide: Slide) -> bool:
+    if slide.dark is not None:
+        return slide.dark
+    if not slide.background:
+        return False
+    if slide.background.startswith("#"):
+        from flexo.colour import is_dark
+
+        return is_dark(slide.background)
+    return slide.shade >= 0.3
+
+
+def _slide_background(canvas: _Canvas, slide: Slide) -> None:
+    """A slide's own background: a colour over the page, or a picture filling it
+    (cropped to the slide, never stretched) under an optional dark shade."""
+
+    style = canvas.deck.style
+    source = slide.background or ""
+    if source.startswith("#"):
+        canvas.root.find(f".//{{{SVG_NS}}}rect[@id='canvas.background']").set("fill", source)  # type: ignore[union-attr]
+        return
+    art = load_artwork(f"{slide.id}.backdrop", source)
+    if art.format == "svg":
+        import base64
+
+        href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+    else:
+        href = art.data_uri
+    element(
+        canvas.layer, "image", id=f"{slide.id}.backdrop", x=0.0, y=0.0, width=style.width,
+        height=style.height, preserveAspectRatio="xMidYMid slice", href=href,
+    )
+    if slide.shade > 0:
+        element(
+            canvas.layer, "rect", id=f"{slide.id}.shade", x=0.0, y=0.0, width=style.width,
+            height=style.height, fill="#000000", fill_opacity=min(slide.shade, 1.0),
+        )
 
 
 def _rtl(runs: tuple[TextRun, ...]) -> bool:

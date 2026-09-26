@@ -318,3 +318,21 @@ def test_a_persian_table_reads_from_the_right(tmp_path: Path) -> None:
     assert header is not None
     cells = re.findall(r"<a:t>([^<]*)</a:t>", header.group(0))
     assert cells == ["دقت", "مدل"]  # the first column is written last
+
+
+def test_a_slide_takes_its_own_background(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    photo = tmp_path / "wide.jpg"
+    Image.new("RGB", (1600, 600), (40, 80, 120)).save(photo)
+    deck = Deck("backgrounds")
+    deck.title("On a photograph", background=photo, shade=0.5)
+    with deck.slide("On a colour", background="#1b2a41") as slide:
+        slide.bullets("Light words, lighter accents")
+    result = deck.build(tmp_path, formats=("pptx", "svg", "pdf"))
+    first, second = _slides(result.pptx)  # type: ignore[arg-type]
+    # The photograph is cropped to the slide natively, not stretched.
+    assert "<a:srcRect" in first and "<p:pic>" in first
+    assert "1B2A41" in second
+    assert 'fill="#f7f5f0"' in result.svgs[1].read_text()

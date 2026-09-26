@@ -370,6 +370,9 @@ class Slide:
         split: float = 0.5,
         columns: int = 3,
         widths: Sequence[float] | None = None,
+        background: str | Path | None = None,
+        shade: float = 0.0,
+        dark: bool | None = None,
     ) -> None:
         if layout not in LAYOUTS:
             raise ValueError(f'unknown layout "{layout}"; layouts are {", ".join(LAYOUTS)}')
@@ -383,6 +386,12 @@ class Slide:
         """The share of the width the left column takes, on a two-column slide."""
         self.notes_text = ""
         self.footnotes: list[tuple[TextRun, ...]] = []
+        self.background = str(background) if background is not None else None
+        """This slide's own background: a colour (``#1b2a41``) or a picture file."""
+        self.shade = shade
+        """How much a background picture is darkened (0 to 1), for words over it."""
+        self.dark = dark
+        """Whether the slide's words are light; decided from the background when unset."""
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:
@@ -541,31 +550,53 @@ class Deck:
         split: float = 0.5,
         columns: int = 3,
         widths: Sequence[float] | None = None,
+        background: str | Path | None = None,
+        shade: float = 0.0,
+        dark: bool | None = None,
     ) -> Slide:
         """A slide: ``content`` (a title over one body), ``two-columns`` (``split`` is
         the left column's share of the width), ``columns`` (``columns`` of them, or
         as many as ``widths``, relative: ``(2, 1, 1)``; ``slide.columns[i]``),
-        ``figure`` (a title over a figure as large as the slide allows), or ``blank``."""
+        ``figure`` (a title over a figure as large as the slide allows), or ``blank``.
+
+        ``background`` gives this slide its own background: a colour, or a picture
+        that fills the slide (cropped, never stretched), darkened by ``shade``; on a
+        dark background the slide's words are set light (``dark`` overrides)."""
 
         if not 0.15 <= split <= 0.85:
             raise ValueError("split is the left column's share of the width, between 0.15 and 0.85")
-        made = Slide(self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths)
+        made = Slide(
+            self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
+            background, shade, dark,
+        )
         self.slides.append(made)
         return made
 
-    def title(self, title: str, *, subtitle: str = "", author: str = "", date: str = "") -> Slide:
-        """The opening slide: the talk's title, a subtitle, who and when."""
+    def title(
+        self,
+        title: str,
+        *,
+        subtitle: str = "",
+        author: str = "",
+        date: str = "",
+        background: str | Path | None = None,
+        shade: float = 0.0,
+    ) -> Slide:
+        """The opening slide: the talk's title, a subtitle, who and when (and, if
+        given, a background colour or picture: see ``slide``)."""
 
-        made = self.slide(title, layout="title", subtitle=subtitle)
+        made = self.slide(title, layout="title", subtitle=subtitle, background=background, shade=shade)
         byline = " · ".join(part for part in (author, date) if part)
         if byline:
             made.body.text(byline, align="middle", muted=True, size=self.style.subtitle_size)
         return made
 
-    def section(self, title: str, *, subtitle: str = "") -> Slide:
+    def section(
+        self, title: str, *, subtitle: str = "", background: str | Path | None = None, shade: float = 0.0
+    ) -> Slide:
         """A divider between parts of the talk."""
 
-        return self.slide(title, layout="section", subtitle=subtitle)
+        return self.slide(title, layout="section", subtitle=subtitle, background=background, shade=shade)
 
     def figure_options(self) -> dict[str, object]:
         options: dict[str, object] = {"theme": self.theme, "palette": self.palette_name}
