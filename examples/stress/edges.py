@@ -44,7 +44,7 @@ def talk(theme: str = "paper") -> Deck:
         with deck.slide("Scripts beyond Latin") as slide:
             slide.bullets(
                 "日本語のスライドも書けます",
-                "中文：图表自动排版",
+                "中文：图表自动排版",  # noqa: RUF001 - a Chinese colon is the point
                 "한국어 문장도 됩니다",
                 "العربية تُكتب من اليمين إلى اليسار",
             )
