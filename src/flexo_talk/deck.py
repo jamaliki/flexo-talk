@@ -736,6 +736,8 @@ class TableLayout:
     rules: tuple[float, float, float]
     """The widths of the top rule, the rule under the header, and the bottom rule."""
     id: str = ""
+    rtl: bool = False
+    """Whether the table reads from the right (its header is in a right-to-left script)."""
 
 
 @dataclass(slots=True)
