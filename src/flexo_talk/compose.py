@@ -952,8 +952,21 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
     if figure.get_layout_engine() is None:
         figure.set_layout_engine("constrained")
     family = canvas.deck.layout_style.typography.family
-    for text in figure.findobj(matplotlib.text.Text):
-        text.set_fontfamily([family])
+    texts = figure.findobj(matplotlib.text.Text)
+    # Characters the deck's face lacks (a plot labelled in Persian) get an installed
+    # family that has them, so matplotlib measures the words it lays out.
+    from flexo.fonts import family_covering, family_faces, load_face, select_face
+
+    faces = family_faces(family)
+    primary = load_face(select_face(faces, 400, False)) if faces else None
+    missing = {
+        ch for text in texts for ch in text.get_text() if not ch.isspace() and ch.isalpha()
+        and (primary is None or not primary.has(ch))
+    }
+    covering = family_covering(missing) if missing else None
+    families = [family, covering] if covering else [family]
+    for text in texts:
+        text.set_fontfamily(families)
     settings = {
         "svg.fonttype": "none",
         "svg.hashsalt": identifier,
