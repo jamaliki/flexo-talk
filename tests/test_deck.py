@@ -191,3 +191,17 @@ def test_a_code_listing_is_set_in_monospace(tmp_path: Path) -> None:
     svg = deck.build(tmp_path, formats=("svg",)).svgs[0].read_text()
     assert "def f(x):" in svg and 'xml:space="preserve"' in svg
     assert 'data-flexo-fill="muted-ink"' in svg
+
+
+def test_a_list_in_another_script_names_a_face_that_has_it(tmp_path: Path) -> None:
+    from flexo.fonts import family_covering
+
+    if family_covering("한국어") is None:
+        pytest.skip("no installed font has Hangul")
+    deck = Deck("scripts")
+    with deck.slide("Scripts") as slide:
+        slide.bullets("한국어 문장도 됩니다", "See https://github.com/jamaliki/flexo-talk/blob/main/src/flexo_talk/compose.py")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    run = re.search(r'<a:r>(?:(?!</a:r>).)*한국어(?:(?!</a:r>).)*</a:r>', slide)
+    assert run is not None and 'typeface="Figtree"' not in run.group(0)
