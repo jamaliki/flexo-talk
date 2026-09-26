@@ -148,6 +148,11 @@ The PDF needs no fonts where it is opened: it embeds them. The PowerPoint file's
 text is drawn by the program that opens it, in fonts installed there:
 install the theme's fonts (flexo bundles them: `flexo.fonts.bundled_font_directory()`)
 wherever the deck is opened, or choose a theme font that is already there.
+A variable face (IBM Plex Sans in the classic and paper themes) is drawn by slide
+programs at regular or bold only; a weight between (a 600 title) comes out as
+one of the two. Choose a family with static faces (Figtree has a SemiBold) where
+an in-between weight matters. Emoji are pictures, not outlines, and are refused
+with a message rather than drawn in a substitute.
 
 ## Command line
 
