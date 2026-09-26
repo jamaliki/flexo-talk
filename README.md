@@ -52,11 +52,13 @@ A figure on a slide is laid out by flexo for its place -- its width *and* its
 height (`flexo.fit_in_box`) -- at a size where its words read at the deck's
 figure size: as written, or **turned** (a stack that reads upward laid out left
 to right, rows as columns, Q/K/V glyphs lying down), or spaced closer, whichever
-lets its words be largest there, never larger than the body text. The build
-summary notes a figure it turned; `slide.add(figure, turn=False)` keeps one as
-written. Figures sharing a region take one scale, so their words match. A figure
-with too many parts to read in any layout (the full transformer on one slide) is
-reported with what to do.
+lets its words be largest there, never larger than the body text; a figure
+still too small is **folded**, its long rows set on two lines (the full
+transformer on one slide: encoder above, decoder folded, 7pt words instead of
+4pt). The build summary notes a figure it turned or folded;
+`slide.add(figure, turn=False)` keeps one as written. Figures sharing a region
+take one scale, so their words match. A figure whose words still end up under
+7pt is reported with what to do.
 
 The slide's proportions -- sizes of title, body and figure text, margins,
 indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
