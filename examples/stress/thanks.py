@@ -59,12 +59,14 @@ def talk(theme: str = "paper") -> Deck:
             funding.text("Compute: [**Frontier**]{#c0392b} at ORNL", size=14, muted=True)
         with deck.slide("The people who did the work") as slide:
             slide.gallery(
-                [(photo, f"**{name}**\n[{role}]{{muted}}") for photo, (name, role) in zip(photos, PEOPLE, strict=True)],
+                [(photo, f"**{name}**\n[{role}]{{muted}}")
+                 for photo, (name, role) in zip(photos, PEOPLE, strict=True)],
                 columns=4, height=110, crop="circle",
             )
         with deck.slide("Thank you", layout="columns", widths=(2, 1)) as slide:
             slide.columns[0].text("Questions?", size=40)
-            slide.columns[0].text("Slides and code: [github.com/jamaliki/flexo-talk](https://github.com/jamaliki/flexo-talk)", size=16)
+            repository = "[github.com/jamaliki/flexo-talk](https://github.com/jamaliki/flexo-talk)"
+            slide.columns[0].text(f"Slides and code: {repository}", size=16)
             slide.columns[1].gallery([(photos[0], "**Ada Lovelace**\nada@example.org")], crop="circle", height=150)
     return deck
 
