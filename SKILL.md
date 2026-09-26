@@ -42,11 +42,12 @@ deck.build("build")
 - `Deck(id, theme=, palette=, font=, conventions=, sketch=, background=True, footer=, style=DeckStyle(...))`.
 - Slides: `deck.title(...)`, `deck.section(title, subtitle=)`,
   `deck.slide(title, layout=...)` with layouts `content` (one `slide.body`),
-  `two-columns` (`slide.left`, `slide.right`), `figure` (one large figure), `blank`.
+  `two-columns` (`slide.left`, `slide.right`; `split=0.4` for a narrower left), `figure` (one large figure), `blank`.
 - A region stacks blocks top to bottom: `bullets(*items)` (nested list = next
   level), `text(words, size=, align="start"|"middle"|"end", muted=)`,
   `figure(**flexo_figure_options)` (use as `with`), `add(figure)`,
-  `plot(matplotlib_figure)`, `image(path)` (SVG as vectors; PNG/JPEG as pictures).
+  `plot(matplotlib_figure)`, `table(rows)` (booktabs rules; native PowerPoint
+  table), `image(path)` (SVG as vectors; PNG/JPEG as pictures).
   Calling these on the slide uses its first region.
 - Slide text: `$...$` math (as in flexo), `*emphasis*`, `**strong**`.
 - `slide.notes(text)` becomes the PowerPoint speaker notes.

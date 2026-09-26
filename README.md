@@ -54,17 +54,33 @@ indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
 | `deck.title(title, subtitle=, author=, date=)` | The opening slide, centred |
 | `deck.section(title, subtitle=)` | A divider between parts |
 | `deck.slide(title, layout="content")` | A title over one body (`slide.body`) |
-| `deck.slide(title, layout="two-columns")` | A title over `slide.left` and `slide.right` |
+| `deck.slide(title, layout="two-columns", split=0.5)` | A title over `slide.left` and `slide.right`; `split` is the left's share |
 | `deck.slide(title, layout="figure")` | A title over one figure as large as the slide allows |
 | `deck.slide(layout="blank")` | The whole slide as one body |
 
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
-`plot(matplotlib_figure)`, and `image(path)`. Words take the height they need
+`plot(matplotlib_figure)`, `table(rows)`, and `image(path)`. Words take the height they need
 and pictures share the rest; when a region has more words than room, its words
 are set smaller together (down to `DeckStyle.small_size`) and the build summary
 says so.
+
+## Tables
+
+```python
+slide.table([
+    ["Model", "Params", "Top-1 (%)"],
+    ["ResNet-50", "25.6M", "76.1"],
+    ["Ours ($\\lambda = 0.1$)", "24.0M", "**81.2**"],
+])
+```
+
+A table is ruled as in a paper -- a rule above, one under the header, one below,
+no grid -- with its header bold and each column as wide as its widest cell.
+Columns of numbers are set flush right (`align="lrr"` or a list of
+`start`/`middle`/`end` to choose); `header=False` drops the header. In the
+PowerPoint it is a native table with the same columns, rows, and rules.
 
 ## Plots
 

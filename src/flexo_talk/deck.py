@@ -106,7 +106,15 @@ class _Plot:
     """Width over height; ``None`` fills the height the place has."""
 
 
-type _Block = _Bullets | _Words | _Figure | _Image | _Plot
+@dataclass(slots=True)
+class _Table:
+    rows: list[list[tuple[TextRun, ...]]]
+    header: bool = True
+    align: tuple[str, ...] = ()
+    size: float | None = None
+
+
+type _Block = _Bullets | _Words | _Figure | _Image | _Plot | _Table
 
 
 def inline(words: str) -> tuple[TextRun, ...]:
@@ -198,6 +206,43 @@ class Region:
         self.blocks.append(_Image(str(source), width))
         return self
 
+    def table(
+        self,
+        rows: Sequence[Sequence[object]],
+        *,
+        header: bool = True,
+        align: str | Sequence[str] = "",
+        size: float | None = None,
+    ) -> Region:
+        """A table, ruled as in a paper: a rule above, one under the header, one below.
+
+        ``rows`` are lists of cells (words, with ``$...$`` maths, or numbers);
+        the first row is the header unless ``header=False``. ``align`` gives each
+        column ``start``, ``middle``, or ``end`` (``"lrr"`` also works); by
+        default a column of numbers is set flush right and any other flush left.
+        """
+
+        cells = [[inline(str(cell)) for cell in row] for row in rows]
+        columns = max((len(row) for row in cells), default=0)
+        cells = [row + [()] * (columns - len(row)) for row in cells]
+        names = {"l": "start", "c": "middle", "r": "end"}
+        if isinstance(align, str) and align and all(ch in names for ch in align):
+            aligned = tuple(names[ch] for ch in align)
+        elif isinstance(align, str):
+            aligned = ()
+        else:
+            aligned = tuple(align)
+        if len(aligned) != columns:
+            body = [list(row) for row in rows[1 if header else 0 :]]
+            aligned = tuple(
+                "end"
+                if body and all(_numeric(row[index]) for row in body if index < len(row))
+                else "start"
+                for index in range(columns)
+            )
+        self.blocks.append(_Table(cells, header, aligned, size))
+        return self
+
     def plot(self, figure: object, *, aspect: float | None = None) -> Region:
         """A matplotlib figure, drawn at the size of this place in the deck's type.
 
@@ -211,10 +256,20 @@ class Region:
         return self
 
 
+def _numeric(cell: object) -> bool:
+    if isinstance(cell, int | float):
+        return True
+    text = str(cell).strip().replace("$", "").replace("*", "").replace(",", "")
+    text = text.replace("\\pm", "±").rstrip("%").strip()
+    return bool(re.fullmatch(r"[-+\u2212]?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?\s*[kKMGTBx\u00d7]?", text))
+
+
 class Slide:
     """One slide: a title, regions by layout, and speaker notes."""
 
-    def __init__(self, deck: Deck, index: int, title: str, layout: Layout, subtitle: str) -> None:
+    def __init__(
+        self, deck: Deck, index: int, title: str, layout: Layout, subtitle: str, split: float = 0.5
+    ) -> None:
         if layout not in LAYOUTS:
             raise ValueError(f'unknown layout "{layout}"; layouts are {", ".join(LAYOUTS)}')
         self.deck = deck
@@ -223,6 +278,8 @@ class Slide:
         self.title_runs = inline(title) if title else ()
         self.subtitle_runs = inline(subtitle) if subtitle else ()
         self.layout = layout
+        self.split = split
+        """The share of the width the left column takes, on a two-column slide."""
         self.notes_text = ""
         names = {"two-columns": ("left", "right")}.get(layout, ("body",))
         self.regions = {name: Region(self, name) for name in names}
@@ -270,6 +327,10 @@ class Slide:
 
     def image(self, source: str | Path, *, width: float | None = None) -> Slide:
         next(iter(self.regions.values())).image(source, width=width)
+        return self
+
+    def table(self, rows: Sequence[Sequence[object]], **options: object) -> Slide:
+        next(iter(self.regions.values())).table(rows, **options)  # type: ignore[arg-type]
         return self
 
     def plot(self, figure: object, *, aspect: float | None = None) -> Slide:
@@ -320,11 +381,16 @@ class Deck:
 
     # -- authoring --
 
-    def slide(self, title: str = "", *, layout: Layout = "content", subtitle: str = "") -> Slide:
-        """A slide: ``content`` (a title over one body), ``two-columns``, ``figure``
-        (a title over a figure as large as the slide allows), or ``blank``."""
+    def slide(
+        self, title: str = "", *, layout: Layout = "content", subtitle: str = "", split: float = 0.5
+    ) -> Slide:
+        """A slide: ``content`` (a title over one body), ``two-columns`` (``split`` is
+        the left column's share of the width), ``figure`` (a title over a figure as
+        large as the slide allows), or ``blank``."""
 
-        made = Slide(self, len(self.slides) + 1, title, layout, subtitle)
+        if not 0.15 <= split <= 0.85:
+            raise ValueError("split is the left column's share of the width, between 0.15 and 0.85")
+        made = Slide(self, len(self.slides) + 1, title, layout, subtitle, split)
         self.slides.append(made)
         return made
 
@@ -466,11 +532,33 @@ class ListLayout:
 
 
 @dataclass(slots=True)
+class TableLayout:
+    """Where a table was set, for writers that set tables natively."""
+
+    x: float
+    y: float
+    widths: list[float]
+    heights: list[float]
+    cells: list[list[tuple[TextRun, ...]]]
+    align: tuple[str, ...]
+    size: float
+    line_height: float
+    baseline: float
+    """Where each row's first baseline sits below the row's top."""
+    pad: float
+    header: bool
+    rules: tuple[float, float, float]
+    """The widths of the top rule, the rule under the header, and the bottom rule."""
+    id: str = ""
+
+
+@dataclass(slots=True)
 class RenderedSlide:
     slide: Slide
     svg: str
     lists: list[ListLayout]
     diagnostics: list[str] = field(default_factory=list)
+    tables: list[TableLayout] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)

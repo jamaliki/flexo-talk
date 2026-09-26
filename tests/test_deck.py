@@ -131,3 +131,18 @@ def test_a_png_picture_is_embedded(tmp_path: Path) -> None:
     result = deck.build(tmp_path, formats=("pptx",))
     assert "<p:pic>" in _slides(result.pptx)[0]  # type: ignore[arg-type]
     assert any(name.startswith("ppt/media/") for name in zipfile.ZipFile(result.pptx).namelist())  # type: ignore[arg-type]
+
+
+def test_a_table_is_a_native_table_ruled_as_in_a_paper(tmp_path: Path) -> None:
+    deck = Deck("tables")
+    with deck.slide("Results", layout="two-columns", split=0.6) as slide:
+        slide.left.table([["Model", "Top-1"], ["ViT", "**81.8**"], ["Ours ($\\lambda$)", "81.2"]])
+        slide.right.bullets("Numbers are set flush right")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "<a:tbl>" in slide and slide.count("<a:tr ") == 3 and slide.count("<a:gridCol ") == 2
+    # Booktabs: a rule above, one under the header, one below; nothing else.
+    assert slide.count("<a:lnT w=\"13970\"") + slide.count("<a:lnB w=\"13970\"") >= 2
+    assert 'algn="r"' in slide and "λ" in slide
+    # The drawn copy of the table is not also in the PowerPoint.
+    assert slide.count(">Model<") == 1

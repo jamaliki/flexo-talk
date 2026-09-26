@@ -36,10 +36,12 @@ from flexo_talk.deck import (
     Region,
     RenderedSlide,
     Slide,
+    TableLayout,
     _Bullets,
     _Figure,
     _Image,
     _Plot,
+    _Table,
     _Words,
 )
 
@@ -93,6 +95,7 @@ class _Canvas:
         self.layer = layer(self.root, f"{slide.id}.content", "Slide")
         self.lists: list[ListLayout] = []
         self.diagnostics: list[str] = []
+        self.tables: list[TableLayout] = []
         self._figures = 0
 
     # -- text --
@@ -191,10 +194,11 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
         body = Box(margin, top, width - 2 * margin, bottom - top)
         names = list(slide.regions)
         if len(names) == 2:
-            column = (body.width - style.column_gap) / 2.0
+            left = (body.width - style.column_gap) * slide.split
+            right = body.width - style.column_gap - left
             boxes = [
-                Box(body.x, body.y, column, body.height),
-                Box(body.x + column + style.column_gap, body.y, column, body.height),
+                Box(body.x, body.y, left, body.height),
+                Box(body.x + left + style.column_gap, body.y, right, body.height),
             ]
         else:
             boxes = [body]
@@ -203,7 +207,9 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
     _furniture(canvas, slide)
     stylesheet = element(canvas.defs, "style", id=f"{slide.id}.fonts", type="text/css")
     embed_fonts(stylesheet, canvas.root, deck.layout_style)
-    return RenderedSlide(slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics)
+    return RenderedSlide(
+        slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics, canvas.tables
+    )
 
 
 def _title_slide(canvas: _Canvas, slide: Slide) -> None:
@@ -284,7 +290,7 @@ def _furniture(canvas: _Canvas, slide: Slide) -> None:
 def _region(canvas: _Canvas, region: Region, box: Box) -> None:
     style = canvas.deck.style
     blocks = _fitted(canvas, region, box)
-    words = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot)]
+    words = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot)]  # and tables
     pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot)]
     # Words take what they need; pictures share the height that is left.
     needed = sum(_height(canvas, block, box.width) for block in words)
@@ -326,6 +332,8 @@ def _region(canvas: _Canvas, region: Region, box: Box) -> None:
             top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Plot):
             top += _plot(canvas, identifier, block, Box(box.x, top, box.width, max(share, 60.0)))
+        elif isinstance(block, _Table):
+            top += _table(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         top += style.block_gap
 
 
@@ -364,13 +372,88 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
 
 
 def _sized(block, scale: float, style):
-    if scale == 1.0 or not isinstance(block, _Bullets | _Words):
+    if scale == 1.0 or not isinstance(block, _Bullets | _Words | _Table):
         return block
-    return replace(block, size=(block.size or style.body_size) * scale)
+    base = _table_size(block, style) if isinstance(block, _Table) else block.size or style.body_size
+    return replace(block, size=base * scale)
+
+
+def _table_size(block: _Table, style) -> float:
+    return block.size or style.body_size * 0.85
+
+
+def _table_plan(canvas: _Canvas, block: _Table, width: float) -> TableLayout:
+    """Column widths and row heights: each column as wide as its widest cell,
+    the table set smaller if that is wider than its place."""
+
+    style = canvas.deck.style
+    size = _table_size(block, style)
+    for _ in range(3):
+        pad = size * 0.6
+        measured = [
+            [canvas.measure(cell, size, None, 700 if block.header and r == 0 else None) for cell in row]
+            for r, row in enumerate(block.rows)
+        ]
+        columns = len(block.rows[0]) if block.rows else 0
+        # A little slack, so a slide program measuring a hair wider keeps each cell on one line.
+        widths = [
+            max((row[c].width for row in measured), default=0.0) + 2 * pad + size * 0.2
+            for c in range(columns)
+        ]
+        if sum(widths) <= width or size <= style.small_size:
+            break
+        size = max(style.small_size, size * width / sum(widths))
+    line = max((m.line_height for row in measured for m in row if m.lines), default=size * 1.2)
+    baseline = max((m.baseline for row in measured for m in row if m.lines), default=size)
+    lines = [max((len(m.lines) for m in row), default=1) or 1 for row in measured]
+    vertical = size * 0.35
+    heights = [line * count + 2 * vertical for count in lines]
+    return TableLayout(
+        0.0, 0.0, widths, heights, block.rows, block.align, size, line, vertical + baseline,
+        pad, block.header, (1.1, 0.6, 1.1),
+    )
+
+
+def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
+    plan = _table_plan(canvas, block, box.width)
+    plan.x, plan.y, plan.id = box.x, box.y, identifier
+    group = element(canvas.layer, "g", id=identifier, data__flexo__talk="table")
+    ink = canvas.palette.get("ink")
+    total = sum(plan.widths)
+    y = box.y
+    for r, row in enumerate(plan.cells):
+        x = box.x
+        for c, cell in enumerate(row):
+            if cell:
+                inner = Box(x + plan.pad, y + plan.baseline, plan.widths[c] - 2 * plan.pad, 0.0)
+                metrics = canvas.measure(cell, plan.size, None, 700 if plan.header and r == 0 else None)
+                anchor = {"start": inner.x, "middle": inner.x + inner.width / 2.0, "end": inner.x + inner.width}
+                render_runs(
+                    group, f"{identifier}.{r}.{c}", metrics, x=anchor[plan.align[c]], y=inner.y,
+                    typography=canvas.deck.typography(plan.size), palette=canvas.palette,
+                    fill_role="ink", anchor=plan.align[c],
+                    weight=700 if plan.header and r == 0 else None,
+                )
+            x += plan.widths[c]
+        y += plan.heights[r]
+    top_rule, mid_rule, bottom_rule = plan.rules
+    rules = [(box.y, top_rule), (y, bottom_rule)]
+    if plan.header and len(plan.heights) > 1:
+        rules.insert(1, (box.y + plan.heights[0], mid_rule))
+    for index, (level, weight) in enumerate(rules):
+        element(
+            group, "path", id=f"{identifier}.rule{index}",
+            d=f"M {number(box.x)} {number(level)} H {number(box.x + total)}",
+            stroke=ink, stroke_width=weight, fill="none", data__flexo__stroke="ink",
+        )
+    canvas.tables.append(plan)
+    return y - box.y
 
 
 def _height(canvas: _Canvas, block, width: float) -> float:
     style = canvas.deck.style
+    if isinstance(block, _Table):
+        return sum(_table_plan(canvas, block, width).heights)
     if isinstance(block, _Words):
         return canvas.measure(block.runs, block.size or style.body_size, width).height
     if isinstance(block, _Bullets):
