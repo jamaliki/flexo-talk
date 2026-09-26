@@ -205,3 +205,14 @@ def test_a_list_in_another_script_names_a_face_that_has_it(tmp_path: Path) -> No
     slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
     run = re.search(r'<a:r>(?:(?!</a:r>).)*한국어(?:(?!</a:r>).)*</a:r>', slide)
     assert run is not None and 'typeface="Figtree"' not in run.group(0)
+
+
+def test_a_numbered_list_is_numbered_natively(tmp_path: Path) -> None:
+    deck = Deck("numbers")
+    with deck.slide("Steps") as slide:
+        slide.bullets("First", ["a detail"], "Second", numbered=True)
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert slide.count('<a:buAutoNum type="arabicPeriod"/>') == 2 and slide.count("<a:buChar") == 1
+    svg = result.svgs[0].read_text()
+    assert ">1.<" in svg and ">2.<" in svg
