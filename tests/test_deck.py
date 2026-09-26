@@ -216,3 +216,18 @@ def test_a_numbered_list_is_numbered_natively(tmp_path: Path) -> None:
     assert slide.count('<a:buAutoNum type="arabicPeriod"/>') == 2 and slide.count("<a:buChar") == 1
     svg = result.svgs[0].read_text()
     assert ">1.<" in svg and ">2.<" in svg
+
+
+def test_a_revealed_list_builds_click_by_click(tmp_path: Path) -> None:
+    deck = Deck("reveal")
+    with deck.slide("Steps") as slide:
+        slide.bullets("First", ["under the first"], "Second", "Third", reveal=True)
+    with deck.slide("Plain") as slide:
+        slide.bullets("No steps")
+    result = deck.build(tmp_path, formats=("pptx", "pdf"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert slide.count('nodeType="clickEffect"') == 3 and '<p:pRg st="0" end="1"/>' in slide
+    # Title alone, then one item at a time: four pages, and one for the plain slide.
+    assert result.pdf is not None and result.pdf.read_bytes().count(b"/Type /Page ") == 5
+    handout = deck.build(tmp_path / "handout", formats=("pdf",), handout=True)
+    assert handout.pdf is not None and handout.pdf.read_bytes().count(b"/Type /Page ") == 2

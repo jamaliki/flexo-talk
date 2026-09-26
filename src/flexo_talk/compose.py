@@ -97,6 +97,7 @@ class _Canvas:
         self.diagnostics: list[str] = []
         self.tables: list[TableLayout] = []
         self.notes: list[str] = []
+        self.steps = 1
         """What the build did that the author may want to know (a figure turned to fit)."""
         self._figures = 0
 
@@ -233,7 +234,8 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
         headings = element(canvas.defs, "style", id=f"{slide.id}.title-fonts", type="text/css")
         embed_fonts(headings, canvas.root, replace(deck.layout_style, typography=deck.typography(12, title=True)))
     return RenderedSlide(
-        slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics, canvas.tables, canvas.notes
+        slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics, canvas.tables, canvas.notes,
+        canvas.steps,
     )
 
 
@@ -546,7 +548,7 @@ def _list_layout(canvas: _Canvas, block: _Bullets, box: Box) -> ListLayout:
     size = block.size or style.body_size
     layout = ListLayout(
         box.x, box.y, box.width, size, size * style.line_height, style.paragraph_gap * size,
-        style.indent, numbered=block.numbered,
+        style.indent, numbered=block.numbered, reveal=block.reveal,
     )
     if block.numbered:
         count = sum(level == 0 for level, _ in block.items)
@@ -562,7 +564,14 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     layout = _list_layout(canvas, block, box)
     top = box.y
     number = 0
+    step = 0
     for index, (level, runs) in enumerate(block.items):
+        if level == 0:
+            step += 1
+        # A revealed item (with the items under it) is its own group, tagged with its step.
+        item = element(group, "g", data__flexo__step=step + 1) if block.reveal else group
+        if block.reveal:
+            canvas.steps = max(canvas.steps, step + 1)
         offset = layout.offset(level)
         metrics = canvas.measure(runs, size, box.width - offset, balance=False)
         layout.line_height = metrics.line_height
@@ -574,18 +583,18 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
             canvas.words(
                 f"{identifier}.{index}.mark", label,
                 Box(box.x, top + metrics.baseline - canvas.measure(label, size, None).baseline, 0.0, 0.0),
-                size=size, role=role, parent=group,
+                size=size, role=role, parent=item,
             )
         else:
             radius = size * (0.15 if level == 0 else 0.12)
             cx = box.x + style.indent * level + size * 0.3
             cy = baseline - (metrics.cap_height or size * 0.7) / 2.0
             element(
-                group, "circle", id=f"{identifier}.{index}.mark", cx=cx, cy=cy, r=radius,
+                item, "circle", id=f"{identifier}.{index}.mark", cx=cx, cy=cy, r=radius,
                 fill=canvas.palette.get(role), data__flexo__fill=role,
             )
         render_runs(
-            group, f"{identifier}.{index}", metrics, x=box.x + offset, y=baseline,
+            item, f"{identifier}.{index}", metrics, x=box.x + offset, y=baseline,
             typography=canvas.deck.typography(size), palette=canvas.palette, fill_role="ink",
         )
         layout.items.append((level, runs, baseline))
