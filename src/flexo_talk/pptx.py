@@ -213,6 +213,19 @@ def slide_pictures(slide) -> Pictures:
     return add
 
 
+def _jpeg_size(data: bytes) -> tuple[int, int] | None:
+    import struct
+
+    index = 2
+    while data.startswith(b"\xff\xd8") and index + 9 < len(data):
+        marker, length = data[index + 1], struct.unpack(">H", data[index + 2 : index + 4])[0]
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height, width = struct.unpack(">HH", data[index + 5 : index + 9])
+            return width, height
+        index += 2 + length
+    return None
+
+
 def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | None:
     import base64
     import re
@@ -244,17 +257,28 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
         x, y, width, height = image.x, image.y, image.width, image.height
     elif mime in {"image/png", "image/jpeg"}:
         embed = ids.pictures(data, mime)
-        size = struct.unpack(">II", data[16:24]) if mime == "image/png" else None
+        size = struct.unpack(">II", data[16:24]) if mime == "image/png" else _jpeg_size(data)
         x, y, width, height = image.placed(*size) if size else (image.x, image.y, image.width, image.height)
+        if size and "slice" in image.fit and (width > image.width + 0.01 or height > image.height + 0.01):
+            # A picture filling its box, cropped rather than stretched: a native crop.
+            crop = (
+                (image.x - x) / width, (image.y - y) / height,
+                (x + width - image.x - image.width) / width, (y + height - image.y - image.height) / height,
+            )
+            extension = '<a:srcRect l="{}" t="{}" r="{}" b="{}"/>'.format(*(round(v * 100000) for v in crop))
+            x, y, width, height = image.x, image.y, image.width, image.height
     else:
         return None
+    blip_extension = extension if extension.startswith("<a:extLst") else ""
+    crop_rect = extension if extension.startswith("<a:srcRect") else ""
     left, top = placement.point(x, y)
     flips = (' flipH="1"' if image.flip_x else "") + (' flipV="1"' if image.flip_y else "")
     label = escape(image.id or "picture", {'"': "&quot;"})
     return etree.fromstring(
         f'<p:pic {_NS}><p:nvPicPr><p:cNvPr id="{ids()}" name="{label}"/>'
         f'<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
-        f'<p:blipFill><a:blip r:embed="{embed}">{extension}</a:blip><a:stretch><a:fillRect/></a:stretch></p:blipFill>'
+        f'<p:blipFill><a:blip r:embed="{embed}">{blip_extension}</a:blip>{crop_rect}'
+        f"<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
         f'<p:spPr><a:xfrm{flips}><a:off x="{left}" y="{top}"/>'
         f'<a:ext cx="{placement.length(width)}" cy="{placement.length(height)}"/></a:xfrm>'
         f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'

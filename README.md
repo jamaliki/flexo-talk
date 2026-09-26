@@ -80,6 +80,11 @@ indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
 | `deck.slide(title, layout="figure")` | A title over one figure as large as the slide allows |
 | `deck.slide(layout="blank")` | The whole slide as one body |
 
+Any slide (title and section slides too) can take `background=`: a colour
+(`"#1b2a41"`) or a picture that fills the slide, cropped rather than stretched
+(a native crop in PowerPoint), with `shade=0.4` to darken it. On a dark
+background the slide's words and accents are set light (`dark=` overrides).
+
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below; `numbered=True` numbers the outer level, natively in PowerPoint;
 `reveal=True` shows the outer items one click at a time -- PowerPoint builds, and a

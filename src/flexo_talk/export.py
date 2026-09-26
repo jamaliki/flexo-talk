@@ -76,6 +76,9 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
         slide = presentation.slides.add_slide(blank)
         with linking(slide):
             page = deck.background
+            own = item.slide.background
+            if own and own.startswith("#"):
+                page = own
             if page:
                 colour = deck.palette.get("canvas") if page is True else str(page)
                 slide.background.fill.solid()
