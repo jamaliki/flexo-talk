@@ -1,6 +1,6 @@
 ---
 name: flexo-talk
-description: Make slide decks in one consistent theme with flexo-talk -- titles, bullets, and real flexo figures -- exported to editable PowerPoint (PPTX) and to SVG/PNG per slide. Use when asked for a talk, presentation, or slides that should match a paper's figures or a lab's style.
+description: Make slide decks in one consistent theme with flexo-talk -- titles, bullets, and real flexo figures -- exported to editable PowerPoint (PPTX), PDF, and SVG/PNG per slide. Use when asked for a talk, presentation, or slides that should match a paper's figures or a lab's style.
 ---
 
 # Making slide decks with flexo-talk
@@ -13,8 +13,8 @@ place. The PowerPoint it writes is native shapes and text, editable everywhere.
 ## The loop
 
 1. Write the deck (below): a title slide, then one slide per idea.
-2. `result = deck.build("build")` writes `build/<id>.pptx` and an SVG and PNG
-   per slide; `print(result.summary())` lists any figure's lint diagnostics.
+2. `result = deck.build("build")` writes `build/<id>.pptx`, `build/<id>.pdf`
+   (to present or share: fonts embedded), and an SVG and PNG per slide; `print(result.summary())` lists any figure's lint diagnostics.
 3. Look at the PNGs; fix wording, split crowded slides, simplify figures.
 
 ## Writing a deck

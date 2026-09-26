@@ -1,4 +1,4 @@
-"""Writing a deck: one PowerPoint file, and an SVG and a PNG per slide."""
+"""Writing a deck: one PowerPoint file, one PDF, and an SVG and a PNG per slide."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ from io import BytesIO
 from pathlib import Path
 
 from flexo.drawing import Group, read_drawing
-from flexo.fonts import font_directories
+from flexo.export import rasterise
+from flexo.pdf import write_pdf
+from flexo.portable import portable_svg
 from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -15,11 +17,13 @@ from pptx.util import Pt
 from flexo_talk.deck import Deck, DeckBuild, RenderedSlide
 from flexo_talk.pptx import Placement, add_drawing, add_list
 
+FORMATS = ("pptx", "pdf", "svg", "png")
+
 
 def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...]) -> DeckBuild:
-    unknown = set(formats) - {"pptx", "svg", "png"}
+    unknown = set(formats) - set(FORMATS)
     if unknown:
-        raise ValueError(f"unknown format(s) {', '.join(sorted(unknown))}; use pptx, svg, png")
+        raise ValueError(f"unknown format(s) {', '.join(sorted(unknown))}; use {', '.join(FORMATS)}")
     directory.mkdir(parents=True, exist_ok=True)
     rendered = deck.render()
     diagnostics: list[str] = []
@@ -32,21 +36,18 @@ def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...]) -> DeckBui
             path.write_text(item.svg, encoding="utf-8")
             svgs.append(path)
         if "png" in formats:
-            import resvg_py
-
-            data = resvg_py.svg_to_bytes(
-                svg_string=item.svg,
-                font_dirs=[str(folder) for folder in font_directories()],
-                dpi=144,
-            )
+            # Drawn from outlines, so the preview shows exactly the glyphs measured.
             path = directory / f"{stem}.png"
-            path.write_bytes(bytes(data))
+            path.write_bytes(rasterise(portable_svg(item.svg), dpi=144))
             pngs.append(path)
+    pdf = None
+    if "pdf" in formats:
+        pdf = write_pdf([item.svg for item in rendered], directory / f"{deck.id}.pdf", title=deck.id)
     pptx = None
     if "pptx" in formats:
         pptx = directory / f"{deck.id}.pptx"
         write_pptx(deck, rendered, pptx)
-    return DeckBuild(pptx, tuple(svgs), tuple(pngs), tuple(diagnostics))
+    return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics))
 
 
 def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, groups: bool = True) -> Path:
