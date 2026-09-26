@@ -286,3 +286,23 @@ def test_an_acknowledgement_slide_has_columns_colours_and_a_gallery(tmp_path: Pa
     assert 'data-flexo-talk="gallery"' in svg and "data:image/png;base64" in svg
     slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
     assert "C0392B" in slide and "<p:pic>" in slide and ">Ada<" in slide
+
+
+def test_a_figure_laid_out_once_is_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import flexo
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", str(tmp_path / "cache"))
+    calls = []
+    real = flexo.fit_in_box
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(flexo, "fit_in_box", counting)
+    for _ in range(2):
+        deck = Deck("cached")
+        with deck.slide("A figure") as slide, slide.figure() as figure:
+            figure.block("b", label="Block", input=figure.text("x", "$x$"))
+        deck.render()
+    assert len(calls) == 1 and list((tmp_path / "cache" / "fits").glob("*.json"))
