@@ -83,6 +83,7 @@ class DeckStyle:
 class _Bullets:
     items: list[tuple[int, tuple[TextRun, ...]]]
     size: float | None = None
+    numbered: bool = False
 
 
 @dataclass(slots=True)
@@ -170,8 +171,11 @@ class Region:
         self.name = name
         self.blocks: list[_Block] = []
 
-    def bullets(self, *items: str | Sequence[str], size: float | None = None) -> Region:
-        """A bulleted list. A nested list of strings is the level below the item before it."""
+    def bullets(
+        self, *items: str | Sequence[str], size: float | None = None, numbered: bool = False
+    ) -> Region:
+        """A bulleted list. A nested list of strings is the level below the item before it.
+        ``numbered=True`` numbers the outer level (1., 2., ...); levels below keep bullets."""
 
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
 
@@ -183,7 +187,7 @@ class Region:
                     add(entry, level + 1)
 
         add(items, 0)
-        self.blocks.append(_Bullets(flattened, size))
+        self.blocks.append(_Bullets(flattened, size, numbered))
         return self
 
     def text(
@@ -341,8 +345,10 @@ class Slide:
         return self.regions[name]
 
     # The first region stands for the slide, so a one-region slide reads simply.
-    def bullets(self, *items: str | Sequence[str], size: float | None = None) -> Slide:
-        next(iter(self.regions.values())).bullets(*items, size=size)
+    def bullets(
+        self, *items: str | Sequence[str], size: float | None = None, numbered: bool = False
+    ) -> Slide:
+        next(iter(self.regions.values())).bullets(*items, size=size, numbered=numbered)
         return self
 
     def text(self, words: str, **options: object) -> Slide:
@@ -585,6 +591,21 @@ class ListLayout:
     items: list[tuple[int, tuple[TextRun, ...], float]] = field(default_factory=list)
     """``(level, runs, baseline of its first line)`` for each item."""
     id: str = ""
+    numbered: bool = False
+    number_room: float = 0.0
+    """How far an outer item's words start from its number's left edge, when numbered."""
+
+    def offset(self, level: int) -> float:
+        """Where an item's words start, from the list's left edge."""
+
+        if self.numbered and level == 0:
+            return self.number_room
+        return self.indent * level + self.size * 0.95
+
+    def mark_at(self, level: int) -> float:
+        """Where an item's bullet or number starts, from the list's left edge."""
+
+        return 0.0 if self.numbered and level == 0 else self.indent * level + self.size * 0.12
 
 
 @dataclass(slots=True)

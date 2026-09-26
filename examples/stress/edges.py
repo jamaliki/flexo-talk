@@ -55,6 +55,13 @@ def talk(theme: str = "paper") -> Deck:
             )
         with deck.slide("Deep lists") as slide:
             slide.bullets("One", ["Two", ["Three", ["Four, the deepest level"]]], "Back to one")
+        with deck.slide("Numbered steps") as slide:
+            slide.bullets(
+                "Write the figure once", "Build the deck", ["PowerPoint, PDF, SVG, PNG", "all in Python"],
+                "Present", "Answer questions", "Rebuild when the model changes", "Repeat",
+                "Profit", "Sleep", "Ten items make the numbers wider",
+                numbered=True,
+            )
         deck.slide("A slide with a title and nothing else")
         deck.slide(layout="blank")
         with deck.slide("Pictures", layout="two-columns") as slide:

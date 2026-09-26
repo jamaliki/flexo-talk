@@ -529,42 +529,67 @@ def _height(canvas: _Canvas, block, width: float) -> float:
         return canvas.measure(block.runs, block.size or style.body_size, width).height
     if isinstance(block, _Bullets):
         size = block.size or style.body_size
+        layout = _list_layout(canvas, block, Box(0.0, 0.0, width, 0.0))
         total = 0.0
         for level, runs in block.items:
-            offset = style.indent * level + size * 0.95
+            offset = layout.offset(level)
             metrics = canvas.measure(runs, size, width - offset, balance=False)
             total += metrics.height + style.paragraph_gap * size
         return total
     return 0.0
 
 
+def _list_layout(canvas: _Canvas, block: _Bullets, box: Box) -> ListLayout:
+    """The geometry of a list: sizes, gaps, and where numbers and words start."""
+
+    style = canvas.deck.style
+    size = block.size or style.body_size
+    layout = ListLayout(
+        box.x, box.y, box.width, size, size * style.line_height, style.paragraph_gap * size,
+        style.indent, numbered=block.numbered,
+    )
+    if block.numbered:
+        count = sum(level == 0 for level, _ in block.items)
+        widest = max(canvas.measure((TextRun(f"{n}."),), size, None).width for n in range(1, count + 1))
+        layout.number_room = widest + size * 0.45
+    return layout
+
+
 def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> float:
     style = canvas.deck.style
     size = block.size or style.body_size
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="bullets")
-    layout = ListLayout(
-        box.x, box.y, box.width, size, size * style.line_height, style.paragraph_gap * size,
-        style.indent, id=identifier,
-    )
+    layout = _list_layout(canvas, block, box)
     top = box.y
+    number = 0
     for index, (level, runs) in enumerate(block.items):
-        offset = style.indent * level + size * 0.95
+        offset = layout.offset(level)
         metrics = canvas.measure(runs, size, box.width - offset, balance=False)
         layout.line_height = metrics.line_height
         baseline = top + metrics.baseline
-        radius = size * (0.15 if level == 0 else 0.12)
-        cx = box.x + style.indent * level + size * 0.3
-        cy = baseline - (metrics.cap_height or size * 0.7) / 2.0
         role = "tone-1-stroke" if level == 0 else "muted-ink"
-        element(
-            group, "circle", id=f"{identifier}.{index}.mark", cx=cx, cy=cy, r=radius,
-            fill=canvas.palette.get(role), data__flexo__fill=role,
-        )
+        if block.numbered and level == 0:
+            number += 1
+            label = (TextRun(f"{number}."),)
+            canvas.words(
+                f"{identifier}.{index}.mark", label,
+                Box(box.x, top + metrics.baseline - canvas.measure(label, size, None).baseline, 0.0, 0.0),
+                size=size, role=role, parent=group,
+            )
+        else:
+            radius = size * (0.15 if level == 0 else 0.12)
+            cx = box.x + style.indent * level + size * 0.3
+            cy = baseline - (metrics.cap_height or size * 0.7) / 2.0
+            element(
+                group, "circle", id=f"{identifier}.{index}.mark", cx=cx, cy=cy, r=radius,
+                fill=canvas.palette.get(role), data__flexo__fill=role,
+            )
         render_runs(
             group, f"{identifier}.{index}", metrics, x=box.x + offset, y=baseline,
             typography=canvas.deck.typography(size), palette=canvas.palette, fill_role="ink",
         )
         layout.items.append((level, runs, baseline))
+        layout.id = identifier
         top += metrics.height + style.paragraph_gap * size
     canvas.lists.append(layout)
     return top - box.y - style.paragraph_gap * size

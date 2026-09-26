@@ -641,8 +641,8 @@ def add_list(tree: etree._Element, deck, layout) -> None:
     muted = _colour(palette.get("muted-ink"))
     paragraphs = []
     for position, (level, runs, _baseline) in enumerate(layout.items):
-        offset = layout.indent * level + layout.size * 0.95
-        mark_at = layout.indent * level + layout.size * 0.12
+        offset = layout.offset(level)
+        mark_at = layout.mark_at(level)
         pieces = []
         for run in runs:
             weight = drawn_weight(run, None)
@@ -654,6 +654,13 @@ def add_list(tree: etree._Element, deck, layout) -> None:
                     _run_xml(_ListRun(text, size, weight, run.italic, face, ink), baseline=shift)
                 )
         before = 0 if position == 0 else round(layout.gap * 100)
+        if layout.numbered and level == 0:
+            # A native numbered list: the program numbers it, in the words' face.
+            face = escape(_family_name(_ListRun("1", layout.size, 400, False, stack.face(400, False), ink)))
+            mark = f'<a:buFont typeface="{face}"/><a:buAutoNum type="arabicPeriod"/>'
+        else:
+            mark = '<a:buFont typeface="Arial"/><a:buChar char="\u2022"/>'
+
         colour = accent if level == 0 else muted
         paragraphs.append(
             f'<a:p><a:pPr marL="{round(offset * EMU_PER_POINT)}" '
@@ -661,7 +668,7 @@ def add_list(tree: etree._Element, deck, layout) -> None:
             f'<a:lnSpc><a:spcPts val="{round(layout.line_height * 100)}"/></a:lnSpc>'
             f'<a:spcBef><a:spcPts val="{before}"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft>'
             f'<a:buClr><a:srgbClr val="{colour}"/></a:buClr><a:buSzPct val="{100000 if level == 0 else 85000}"/>'
-            f'<a:buFont typeface="Arial"/><a:buChar char="\u2022"/></a:pPr>{"".join(pieces)}</a:p>'
+            f"{mark}</a:pPr>{''.join(pieces)}</a:p>"
         )
     first = layout.items[0][2] if layout.items else layout.y
     last = layout.items[-1][2] if layout.items else layout.y
