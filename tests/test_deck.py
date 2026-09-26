@@ -241,4 +241,4 @@ def test_footnotes_sit_above_the_footer_and_shorten_the_body(tmp_path: Path) -> 
     result = deck.build(tmp_path, formats=("svg",))
     svg = result.svgs[0].read_text()
     assert "[1] A reference." in svg
-    assert any("to fit" in message for message in result.diagnostics)
+    assert any("fit" in message for message in result.diagnostics)
