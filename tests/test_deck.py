@@ -231,3 +231,14 @@ def test_a_revealed_list_builds_click_by_click(tmp_path: Path) -> None:
     assert result.pdf is not None and result.pdf.read_bytes().count(b"/Type /Page ") == 5
     handout = deck.build(tmp_path / "handout", formats=("pdf",), handout=True)
     assert handout.pdf is not None and handout.pdf.read_bytes().count(b"/Type /Page ") == 2
+
+
+def test_footnotes_sit_above_the_footer_and_shorten_the_body(tmp_path: Path) -> None:
+    deck = Deck("notes", footer="Footer")
+    with deck.slide("Cited") as slide:
+        slide.bullets(*(["a line of text that takes its room"] * 14))
+        slide.footnote("[1] A reference.")
+    result = deck.build(tmp_path, formats=("svg",))
+    svg = result.svgs[0].read_text()
+    assert "[1] A reference." in svg
+    assert any("to fit" in message for message in result.diagnostics)

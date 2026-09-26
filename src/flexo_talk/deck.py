@@ -323,6 +323,7 @@ class Slide:
         self.split = split
         """The share of the width the left column takes, on a two-column slide."""
         self.notes_text = ""
+        self.footnotes: list[tuple[TextRun, ...]] = []
         names = {"two-columns": ("left", "right")}.get(layout, ("body",))
         self.regions = {name: Region(self, name) for name in names}
 
@@ -393,6 +394,13 @@ class Slide:
         """What to say: kept as the slide's speaker notes."""
 
         self.notes_text = text
+        return self
+
+    def footnote(self, text: str) -> Slide:
+        """A reference or aside, set small and muted at the foot of the slide
+        (above the footer); several stack in the order given."""
+
+        self.footnotes.append(inline(text))
         return self
 
 
