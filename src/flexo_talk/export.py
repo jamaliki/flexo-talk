@@ -76,7 +76,7 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
         slide = presentation.slides.add_slide(blank)
         with linking(slide):
             page = deck.background
-            own = item.slide.background
+            own = item.slide.backdrop
             if own and own.startswith("#"):
                 page = own
             if page:
@@ -85,6 +85,7 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
                 slide.background.fill.fore_color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
             drawing = read_drawing(item.svg)
             _drop_lists(drawing.root)
+            _dissolve_regions(drawing.root)
             add_drawing(
                 slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False,
                 groups=groups, pictures=slide_pictures(slide),
@@ -121,6 +122,21 @@ def _drop_lists(group: Group) -> None:
     for item in group.items:
         if isinstance(item, Group):
             _drop_lists(item)
+
+
+def _dissolve_regions(group: Group) -> None:
+    """A slide's regions are groups only so the layout can move each whole; in the
+    PowerPoint their shapes stand on the slide, as if placed there by hand."""
+
+    items: list = []
+    for item in group.items:
+        if isinstance(item, Group):
+            _dissolve_regions(item)
+            if item.data.get("data-flexo-talk") == "region":
+                items.extend(item.items)
+                continue
+        items.append(item)
+    group.items = items
 
 
 _ = etree

@@ -336,3 +336,106 @@ def test_a_slide_takes_its_own_background(tmp_path: Path) -> None:
     assert "<a:srcRect" in first and "<p:pic>" in first
     assert "1B2A41" in second
     assert 'fill="#f7f5f0"' in result.svgs[1].read_text()
+    # The native list on a dark slide is set in the slide's light ink, not the page's.
+    assert "F7F5F0" in second
+
+
+def _texts(svg: str, pattern: str) -> list[tuple[float, float]]:
+    """The ``(x, y)`` of every text element whose id matches ``pattern``."""
+
+    import xml.etree.ElementTree as ET
+
+    found = []
+    for item in ET.fromstring(svg).iter():
+        if item.tag.endswith("text") and re.search(pattern, item.get("id", "")):
+            found.append((float(item.get("x", 0)), float(item.get("y", 0))))
+    return found
+
+
+@pytest.mark.parametrize("look", ["classic", "band", "editorial", "keynote", "margin"])
+def test_every_look_builds_every_kind_of_slide(tmp_path: Path, look: str) -> None:
+    deck = Deck("looks", look=look)
+    deck.title("A talk", subtitle="In one look", author="Ada")
+    deck.agenda()
+    deck.section("First part", subtitle="Why")
+    deck.statement("One claim, [large]{accent}.", by="someone")
+    with deck.slide("Numbers") as slide:
+        slide.stats(("93%", "accuracy"), ("4x", "faster"))
+        slide.callout("The *key* point.", title="Idea", colour="accent2")
+    with deck.slide("Words") as slide:
+        slide.quote("A thing worth saying.", by="a reader")
+    deck.section("Second part")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    assert not result.diagnostics, result.summary()
+    agenda = result.svgs[1].read_text()
+    assert "First part" in agenda and "Second part" in agenda and ">02<" in agenda
+    slides = _slides(result.pptx)  # type: ignore[arg-type]
+    assert ">93%<" in slides[4] and ">Idea<" in slides[4]
+    assert "“" in slides[5] and "a reader" in slides[5]
+
+
+def test_a_filled_section_takes_the_accent_and_light_words(tmp_path: Path) -> None:
+    deck = Deck("fill", look="band")
+    deck.section("A part")
+    with deck.slide("After it") as slide:
+        slide.bullets("An item")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    section, _ = _slides(result.pptx)  # type: ignore[arg-type]
+    accent = deck.palette.get("tone-1-stroke").lstrip("#").upper()
+    assert re.search(rf'<p:bg>.*?<a:srgbClr val="{accent}"/>', section, re.S)
+    assert "F7F5F0" in section  # its words set light
+    # The content slide's title sits on a band of the accent across the top.
+    assert 'id="slide2.band"' in result.svgs[1].read_text()
+
+
+def test_a_picture_beside_words_is_centred_against_them(tmp_path: Path) -> None:
+    deck = Deck("aligned")
+    with deck.slide("Side by side", layout="two-columns") as slide:
+        slide.left.bullets("One", "Two")
+        with slide.right.figure() as figure:
+            a = figure.block("a", label="A")
+            b = figure.block("b", label="B", input=a)
+            figure.block("c", label="C", input=b)
+    with deck.slide("Top", layout="two-columns", align="top") as slide:
+        slide.left.bullets("One", "Two")
+        with slide.right.figure() as figure:
+            a = figure.block("a", label="A")
+            b = figure.block("b", label="B", input=a)
+            figure.block("c", label="C", input=b)
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    centred, top = (path.read_text() for path in result.svgs)
+    assert 'id="slide1.left" data-flexo-talk="region" transform="translate(0 ' in centred
+    assert 'transform="translate(0' not in top.split('id="slide2.left"')[1][:80]
+    # The native list moved with its region: its box starts lower on the centred slide.
+    first, second = _slides(result.pptx)  # type: ignore[arg-type]
+    box = r'name="slide\d\.left\.0".*?<a:off x="\d+" y="(\d+)"'
+    offsets = [int(re.search(box, s, re.S).group(1)) for s in (first, second)]  # type: ignore[union-attr]
+    assert offsets[0] > offsets[1]
+
+
+def test_a_single_column_gallery_is_flush_with_the_words(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    logo = tmp_path / "logo.png"
+    Image.new("RGB", (200, 80), (30, 90, 160)).save(logo)
+    deck = Deck("logos")
+    with deck.slide("Funding") as slide:
+        slide.text("**Funded by**")
+        slide.gallery([logo, logo], columns=1, height=30)
+    result = deck.build(tmp_path, formats=("svg",))
+    svg = result.svgs[0].read_text()
+    xs = {float(x) for x in re.findall(r'<image id="slide1\.body\.1\.\d" x="([\d.]+)"', svg)}
+    assert xs == {deck.style.margin}
+
+
+def test_a_look_is_a_style_preset() -> None:
+    from flexo_talk import DeckStyle
+
+    assert DeckStyle.look("band").header == "band"
+    assert Deck(look="editorial").style.sections == "number"
+    assert DeckStyle.look("keynote", body_size=24).body_size == 24
+    with pytest.raises(ValueError, match="looks are"):
+        Deck(look="fancy")
+    with pytest.raises(ValueError, match="callout"):
+        Deck().slide("x").callout("words", colour="red")

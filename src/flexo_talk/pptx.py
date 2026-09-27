@@ -712,7 +712,7 @@ def add_list(tree: etree._Element, deck, layout) -> int:
     typography = deck.typography(layout.size)
     # flexo's shared stack: it holds the families measuring adopted for other scripts.
     stack = font_stack(typography)
-    palette = deck.palette
+    palette = layout.palette or deck.palette
     ink = palette.get("ink")
     accent = _colour(palette.get("tone-1-stroke"))
     muted = _colour(palette.get("muted-ink"))
@@ -729,7 +729,7 @@ def add_list(tree: etree._Element, deck, layout) -> int:
                 shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
                 pieces.append(
                     _run_xml(
-                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, deck.palette, ink), link=run.link),
+                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, palette, ink), link=run.link),
                         baseline=shift,
                     )
                 )
@@ -822,7 +822,8 @@ def add_table(tree: etree._Element, deck, layout) -> None:
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
     ids = _Ids(max(existing, default=1))
     stack = font_stack(deck.typography(layout.size))
-    ink = deck.palette.get("ink")
+    palette = layout.palette or deck.palette
+    ink = palette.get("ink")
     colour = _colour(ink)
     top_rule, mid_rule, bottom_rule = layout.rules
     rows = []
@@ -840,7 +841,7 @@ def add_table(tree: etree._Element, deck, layout) -> None:
                     shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
                     pieces.append(
                         _run_xml(
-                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, deck.palette, ink), link=run.link),
+                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, palette, ink), link=run.link),
                         baseline=shift,
                     )
                     )
