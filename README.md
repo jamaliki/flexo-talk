@@ -65,8 +65,48 @@ its place, and flexo's own source: a rebuild after editing words is immediate.
 `FLEXO_TALK_CACHE=0` turns the cache off; `FLEXO_TALK_CACHE=dir` moves it.
 
 The slide's proportions -- sizes of title, body and figure text, margins,
-indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
+indents, gaps, slide numbers -- are `DeckStyle` fields:
 `Deck(style=DeckStyle(body_size=22, numbers=False))`.
+
+## Looks
+
+The theme decides type and colour; a **look** decides the page around them --
+how titles are marked, how the talk opens, how sections are divided.
+`Deck(look="band")` picks one; `DeckStyle.look("band", body_size=22)` picks one
+and changes any field.
+
+| Look | Titles | Opening slide | Sections |
+| --- | --- | --- | --- |
+| `classic` (default) | a short accent rule under each | centred | a rule over the title |
+| `band` | on a band of the accent across the top | title on an accent band | the slide filled with the accent, numbered |
+| `editorial` | a hairline across the slide under each | flush left beside an accent bar | the number set large in the accent |
+| `keynote` | centred, no rule; content centred on the slide | centred | filled with the accent, centred |
+| `margin` | in the accent; a bar down each slide's edge | flush left beside an accent bar | the number set large |
+
+The pieces are `DeckStyle` fields and mix freely: `header` (`rule`, `band`,
+`line`, `none`), `opening` (`centred`, `left`, `band`), `sections` (`rule`,
+`fill`, `number`), `edge`, `title_align`, `title_role`, `align`. A light accent
+(a dark theme's) is deepened where words are set on it, so they read either way.
+`examples/showcase.py` builds one talk in every look, each with a theme that
+suits it (classic/paper, band/swiss, editorial/classic with Latin Modern
+headings, keynote/dark, margin/midcentury).
+
+## Alignment
+
+flexo lays out each *figure* (its boxes, ports, routes); the *slide* is laid out
+by flexo-talk, measuring every word with flexo's own measurer, so wrapping and
+sizes agree in every output. Each region is set from its top and then aligned
+as a whole (`DeckStyle.align`, or `deck.slide(..., align=)`):
+
+- `auto` (the default): words stay at the top; a figure, plot, picture, gallery,
+  or quotation standing alone is centred in the room it has; a column of
+  pictures is centred against the column of words beside it -- and the words
+  against the pictures when those are taller. Columns of words share one top.
+- `top`: everything at the top. `middle`: the content centred in the body.
+
+A single-column gallery (a column of logos) stands flush with the words above
+it; a grid is centred. Native lists and tables move with their region, so the
+PowerPoint matches the PDF.
 
 ## Slides
 
@@ -79,6 +119,8 @@ indents, gaps, the title rule, slide numbers -- are `DeckStyle` fields:
 | `deck.slide(title, layout="columns", columns=3)` | Any number of columns, `slide.columns[i]`; `widths=(2, 1, 1)` makes them uneven |
 | `deck.slide(title, layout="figure")` | A title over one figure as large as the slide allows |
 | `deck.slide(layout="blank")` | The whole slide as one body |
+| `deck.agenda(title="Outline")` | The talk's section slides, numbered (wherever they are in the deck) |
+| `deck.statement(words, by=)` | One sentence, large, in the middle of the slide |
 
 Any slide (title and section slides too) can take `background=`: a colour
 (`"#1b2a41"`) or a picture that fills the slide, cropped rather than stretched
@@ -92,7 +134,10 @@ PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
 `plot(matplotlib_figure)`, `table(rows)`, `gallery(pictures)` (logos or people in a
 grid, captions under them, `crop="circle"` for photographs), `code(source)` (a monospace listing
-on a tinted panel, comment lines muted), and `image(path)`. Words take the
+on a tinted panel, comment lines muted), `image(path)`, `quote(words, by=)` (set large,
+an accent quotation mark hung in the margin), `stats(("93%", "accuracy"), ("4x", "faster"))`
+(numbers to remember, very large in the accent, labels under them), and
+`callout(words, title=, colour="accent2")` (a key point on a panel tinted in a tone). Words take the
 height they need and pictures share the rest; when a region has more words than
 room, its words are set smaller together (down to `DeckStyle.small_size`) and
 the build summary says so.

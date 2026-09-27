@@ -37,8 +37,12 @@ from flexo.style import LayoutStyle, Palette, TypographyStyle
 from flexo.themes import resolve_palette, resolve_style, with_tone_roles
 from flexo.units import pt
 
-type Layout = Literal["content", "two-columns", "columns", "figure", "title", "section", "blank"]
-LAYOUTS: tuple[str, ...] = ("content", "two-columns", "columns", "figure", "title", "section", "blank")
+type Layout = Literal[
+    "content", "two-columns", "columns", "figure", "title", "section", "statement", "agenda", "blank"
+]
+LAYOUTS: tuple[str, ...] = (
+    "content", "two-columns", "columns", "figure", "title", "section", "statement", "agenda", "blank"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,8 +71,22 @@ class DeckStyle:
     """Space between two blocks placed one under the other in a region."""
     title_gap: float = 22.0
     """Space between a slide's title and its body."""
-    rule: bool = True
-    """A short accent rule under each slide title."""
+    header: Literal["rule", "band", "line", "none"] = "rule"
+    """What marks a slide's title: a short accent rule under it, a band of the
+    accent colour behind it, a hairline across the slide under it, or nothing."""
+    opening: Literal["centred", "left", "band"] = "centred"
+    """The title slide: centred, flush left beside an accent bar, or on an accent band."""
+    sections: Literal["rule", "fill", "number"] = "rule"
+    """Section slides: a rule over the title, the whole slide in the accent colour
+    (with the section's number), or the section's number set large in the accent."""
+    edge: bool = False
+    """A thin accent bar down the left edge of every slide but the opening."""
+    align: Literal["auto", "top", "middle"] = "auto"
+    """Where a slide's content sits in its body, top to bottom: ``auto`` keeps
+    words at the top, centres pictures standing alone in the room they have, and
+    centres a column of pictures against a column of words beside it (and the
+    words against the pictures when those are taller); ``top`` sets everything at
+    the top; ``middle`` centres the whole content in the body."""
     numbers: bool = True
     """A slide number in the bottom-right corner."""
     title_weight: int | None = None
@@ -77,6 +95,31 @@ class DeckStyle:
     """Slide titles flush left, or centred (with their rule)."""
     title_role: str = "ink"
     """The palette role that paints slide titles: ``ink``, or ``tone-1-stroke`` for the accent."""
+
+    @classmethod
+    def look(cls, name: str, **changes: object) -> DeckStyle:
+        """A named look (see ``LOOKS``), with any field changed: ``DeckStyle.look("band", body_size=22)``."""
+
+        if name not in LOOKS:
+            raise ValueError(f'unknown look "{name}"; looks are {", ".join(LOOKS)}')
+        return cls(**{**LOOKS[name], **changes})  # type: ignore[arg-type]
+
+
+LOOKS: dict[str, dict[str, object]] = {
+    "classic": {},
+    "band": {"header": "band", "opening": "band", "sections": "fill"},
+    "editorial": {"header": "line", "opening": "left", "sections": "number", "title_size": 32},
+    "keynote": {
+        "header": "none", "title_align": "middle", "sections": "fill", "title_size": 34, "body_size": 22,
+        "align": "middle",
+    },
+    "margin": {"edge": True, "opening": "left", "sections": "number", "title_role": "tone-1-stroke"},
+}
+"""Named looks: the same theme and words, a different page. ``classic`` is a short
+rule under each title; ``band`` sets titles on a band of the accent colour and fills
+section slides with it; ``editorial`` rules a hairline under each title and numbers
+sections large; ``keynote`` centres titles and content, without rules; ``margin``
+runs an accent bar down each slide's edge and paints titles in the accent."""
 
 
 @dataclass(slots=True)
@@ -133,6 +176,8 @@ class _Gallery:
     height: float | None = None
     crop: str | None = None
     size: float | None = None
+    align: str | None = None
+    """``start`` or ``middle``; ``None`` sets one column flush with the words, a grid centred."""
 
 
 @dataclass(slots=True)
@@ -141,7 +186,42 @@ class _Code:
     size: float | None = None
 
 
-type _Block = _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery
+@dataclass(slots=True)
+class _Quote:
+    runs: tuple[TextRun, ...]
+    by: tuple[TextRun, ...] = ()
+    size: float | None = None
+
+
+@dataclass(slots=True)
+class _Stats:
+    items: list[tuple[tuple[TextRun, ...], tuple[TextRun, ...]]]
+    """``(value, label)`` runs for each figure."""
+    colour: str | None = None
+    size: float | None = None
+
+
+@dataclass(slots=True)
+class _Callout:
+    runs: tuple[TextRun, ...]
+    title: tuple[TextRun, ...] = ()
+    colour: str = "accent"
+    size: float | None = None
+
+
+type _Block = (
+    _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery | _Quote | _Stats | _Callout
+)
+
+
+def accent_field(palette: Palette) -> str:
+    """The accent as a field to set words on: itself, or deepened when it is light
+    (a dark theme's accent), so light words read on it either way."""
+
+    from flexo.colour import is_dark, with_lightness
+
+    accent = palette.get("tone-1-stroke")
+    return accent if is_dark(accent) else with_lightness(accent, 0.45)
 
 
 def inline(words: str) -> tuple[TextRun, ...]:
@@ -245,6 +325,7 @@ class Region:
         height: float | None = None,
         crop: Literal["circle", "square"] | None = None,
         size: float | None = None,
+        align: Literal["start", "middle"] | None = None,
     ) -> Region:
         """Pictures in a grid -- logos, or people with their names -- each with an
         optional caption under it (``(file, "**Name**\\nInstitute")``).
@@ -252,13 +333,51 @@ class Region:
         ``columns`` defaults to all in one row up to five; ``height`` is each
         picture's height (the cell's width at most); ``crop="circle"`` cuts
         photographs to circles (and ``"square"`` to squares), which needs Pillow.
+        ``align`` sets a single column flush with the words (``start``, its default)
+        or centred; a grid of several columns is centred.
         """
 
         cells = []
         for item in items:
             source, caption = (item, "") if isinstance(item, str | Path) else item
             cells.append((str(source), inline(caption) if caption else ()))
-        self.blocks.append(_Gallery(cells, columns, height, crop, size))
+        self.blocks.append(_Gallery(cells, columns, height, crop, size, align))
+        return self
+
+    def quote(self, words: str, *, by: str = "", size: float | None = None) -> Region:
+        """A quotation set large in the title face, an accent quotation mark hung in
+        the margin beside it, and who said it (``by``) under it, muted."""
+
+        self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size))
+        return self
+
+    def stats(
+        self,
+        *items: tuple[object, str],
+        colour: str | None = None,
+        size: float | None = None,
+    ) -> Region:
+        """Numbers to remember, side by side: ``stats(("93%", "top-1 accuracy"), ("4x", "faster"))``.
+        Each value is set very large in the accent colour (``colour`` to choose
+        another: ``accent2``, ``#hex``) with its label under it, muted; ``size``
+        is the values' size."""
+
+        if not items:
+            raise ValueError("stats needs at least one (value, label) pair")
+        self.blocks.append(
+            _Stats([(inline(str(value)), inline(label)) for value, label in items], colour, size)
+        )
+        return self
+
+    def callout(
+        self, words: str, *, title: str = "", colour: str = "accent", size: float | None = None
+    ) -> Region:
+        """A key point on a panel tinted in a tone, a bar of the tone along its edge:
+        ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words."""
+
+        if not (colour.startswith("accent") and colour[6:] in {"", *map(str, range(1, 13))}):
+            raise ValueError(f'a callout\'s colour is "accent", "accent2", ... not "{colour}"')
+        self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
         return self
 
     def figure(self, id: str | None = None, *, turn: bool = True, **options: object) -> flexo.Figure:
@@ -373,6 +492,7 @@ class Slide:
         background: str | Path | None = None,
         shade: float = 0.0,
         dark: bool | None = None,
+        align: str | None = None,
     ) -> None:
         if layout not in LAYOUTS:
             raise ValueError(f'unknown layout "{layout}"; layouts are {", ".join(LAYOUTS)}')
@@ -392,6 +512,12 @@ class Slide:
         """How much a background picture is darkened (0 to 1), for words over it."""
         self.dark = dark
         """Whether the slide's words are light; decided from the background when unset."""
+        if align not in {None, "auto", "top", "middle"}:
+            raise ValueError(f'align is "auto", "top", or "middle", not "{align}"')
+        self.align = align
+        """Where the content sits in the body; the deck style's ``align`` when unset."""
+        self.byline_runs: tuple[TextRun, ...] = ()
+        """Who and when, on a title slide."""
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:
@@ -404,6 +530,17 @@ class Slide:
             self.shares = [split, 1.0 - split] if layout == "two-columns" else [1.0]
         """Each column's share of the width, left to right."""
         self.regions = {name: Region(self, name) for name in names}
+
+    @property
+    def backdrop(self) -> str | None:
+        """What the slide is drawn on when not the deck's page: its own background,
+        or the accent colour that fills a section slide in a look that fills them."""
+
+        if self.background:
+            return self.background
+        if self.layout == "section" and self.deck.style.sections == "fill":
+            return accent_field(self.deck.palette)
+        return None
 
     @property
     def columns(self) -> list[Region]:
@@ -478,6 +615,18 @@ class Slide:
         next(iter(self.regions.values())).plot(figure, aspect=aspect)
         return self
 
+    def quote(self, words: str, **options: object) -> Slide:
+        next(iter(self.regions.values())).quote(words, **options)  # type: ignore[arg-type]
+        return self
+
+    def stats(self, *items: tuple[object, str], **options: object) -> Slide:
+        next(iter(self.regions.values())).stats(*items, **options)  # type: ignore[arg-type]
+        return self
+
+    def callout(self, words: str, **options: object) -> Slide:
+        next(iter(self.regions.values())).callout(words, **options)  # type: ignore[arg-type]
+        return self
+
     def notes(self, text: str) -> Slide:
         """What to say: kept as the slide's speaker notes."""
 
@@ -509,6 +658,7 @@ class Deck:
         background: bool | str = True,
         footer: str = "",
         style: DeckStyle | None = None,
+        look: str | None = None,
     ) -> None:
         # A theme file is read now, by the Figure machinery that knows how.
         probe = flexo.Figure("probe", theme=theme, palette=palette)
@@ -530,6 +680,11 @@ class Deck:
         self.sketch = sketch
         self.background = background
         self.footer = footer
+        if look is not None:
+            if look not in LOOKS:
+                raise ValueError(f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+            # A look sets the page; a style given beside it keeps its own sizes.
+            style = replace(style, **LOOKS[look]) if style else DeckStyle.look(look)  # type: ignore[arg-type]
         self.style = style or DeckStyle()
         self.slides: list[Slide] = []
 
@@ -553,6 +708,7 @@ class Deck:
         background: str | Path | None = None,
         shade: float = 0.0,
         dark: bool | None = None,
+        align: Literal["auto", "top", "middle"] | None = None,
     ) -> Slide:
         """A slide: ``content`` (a title over one body), ``two-columns`` (``split`` is
         the left column's share of the width), ``columns`` (``columns`` of them, or
@@ -561,13 +717,14 @@ class Deck:
 
         ``background`` gives this slide its own background: a colour, or a picture
         that fills the slide (cropped, never stretched), darkened by ``shade``; on a
-        dark background the slide's words are set light (``dark`` overrides)."""
+        dark background the slide's words are set light (``dark`` overrides).
+        ``align`` places the content in the body (see ``DeckStyle.align``)."""
 
         if not 0.15 <= split <= 0.85:
             raise ValueError("split is the left column's share of the width, between 0.15 and 0.85")
         made = Slide(
             self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
-            background, shade, dark,
+            background, shade, dark, align,
         )
         self.slides.append(made)
         return made
@@ -587,8 +744,7 @@ class Deck:
 
         made = self.slide(title, layout="title", subtitle=subtitle, background=background, shade=shade)
         byline = " · ".join(part for part in (author, date) if part)
-        if byline:
-            made.body.text(byline, align="middle", muted=True, size=self.style.subtitle_size)
+        made.byline_runs = inline(byline) if byline else ()
         return made
 
     def section(
@@ -597,6 +753,22 @@ class Deck:
         """A divider between parts of the talk."""
 
         return self.slide(title, layout="section", subtitle=subtitle, background=background, shade=shade)
+
+    def statement(
+        self, words: str, *, by: str = "", background: str | Path | None = None, shade: float = 0.0
+    ) -> Slide:
+        """A slide that says one thing, large, in the middle: a claim, a question, a
+        quotation (``by`` says whose). ``[words]{accent}`` paints the words that matter."""
+
+        made = self.slide(words, layout="statement", background=background, shade=shade)
+        made.byline_runs = inline(f"\u2014 {by}") if by else ()
+        return made
+
+    def agenda(self, title: str = "Outline") -> Slide:
+        """A slide listing the talk's sections, numbered -- the ``section`` slides
+        anywhere in the deck, so it can come before them."""
+
+        return self.slide(title, layout="agenda")
 
     def figure_options(self) -> dict[str, object]:
         options: dict[str, object] = {"theme": self.theme, "palette": self.palette_name}
@@ -734,6 +906,8 @@ class ListLayout:
     """Whether the outer items appear one click (one PDF page) at a time."""
     number_room: float = 0.0
     """How far an outer item's words start from its number's left edge, when numbered."""
+    palette: Palette | None = None
+    """The slide's paints (light words on a dark slide); the deck's when unset."""
 
     def offset(self, level: int) -> float:
         """Where an item's words start, from the list's left edge."""
@@ -769,6 +943,8 @@ class TableLayout:
     id: str = ""
     rtl: bool = False
     """Whether the table reads from the right (its header is in a right-to-left script)."""
+    palette: Palette | None = None
+    """The slide's paints (light words on a dark slide); the deck's when unset."""
 
 
 @dataclass(slots=True)
