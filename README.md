@@ -68,6 +68,24 @@ The slide's proportions -- sizes of title, body and figure text, margins,
 indents, gaps, slide numbers -- are `DeckStyle` fields:
 `Deck(style=DeckStyle(body_size=22, numbers=False))`.
 
+A theme file can also say how slides set in it look: `slides:` beside `theme:`
+takes the deck's `look`, `style` (any `DeckStyle` field), `background` (a colour,
+or a picture such as a paper texture, drawn under every slide), and its families by
+role (`font`, `title_font`, `figure_font`). A deck takes each unless it says
+otherwise, and what came from the theme is not written into the deck's document.
+
+```yaml
+theme: {name: notebook, base: sketch, font: Kalam, palette: ["#c0392b", "#2b4c9b"]}
+fonts: [fonts/]
+slides:
+  look: margin
+  background: papers/notebook.jpg
+  title_font: Caveat
+  style: {header: none, title_size: 40}
+```
+
+A slide over a picture sets its words light or dark from how light the picture is.
+
 ## Looks
 
 The theme decides type and colour; a **look** decides the page around them --

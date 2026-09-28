@@ -237,3 +237,49 @@ def test_a_deck_redraws_when_its_theme_file_changes(tmp_path: Path) -> None:
     second = kind.draw(document, tmp_path, {})
     assert first.pages[0].svg != second.pages[0].svg
     assert theme.resolve() in second.files
+
+
+def test_a_theme_file_sets_the_slides_too(tmp_path: Path) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (64, 36), "#f3ecdc").save(tmp_path / "paper.png")
+    Image.new("RGB", (64, 36), "#101828").save(tmp_path / "night.png")
+    (tmp_path / "notebook.yaml").write_text(
+        "theme: {name: notebook-test, base: sketch, palette: ['#2b4c9b', '#c0392b']}\n"
+        "slides:\n"
+        "  look: margin\n"
+        "  style: {header: none, body_size: 22}\n"
+        "  background: paper.png\n"
+        "  title_font: Caveat\n",
+        encoding="utf-8",
+    )
+    document = {"deck": {"theme": "notebook.yaml"}, "slides": [
+        {"title": "Paper"}, {"title": "Night", "background": "night.png"}]}
+    deck = deck_from_document(document, tmp_path)
+    assert deck.look == "margin" and deck.style.header == "none" and deck.style.body_size == 22
+    assert deck.style.edge  # the look's, kept where the theme said nothing
+    assert deck.title_font == "Caveat" and deck.background == str(tmp_path / "paper.png")
+    # What the theme set is the theme's: the document is written back as it was.
+    assert deck_document(deck)["deck"] == {"id": "talk", "theme": "notebook.yaml"}
+    first, second = (render_slide(deck, slide).svg for slide in deck.slides)
+    assert 'id="slide1.paper"' in first and "Caveat" in first
+    # Words over a dark picture are set light, judged from the picture itself;
+    # and a slide with a backdrop of its own is not covered by the paper.
+    assert "#d4d0c8" in second and "#d4d0c8" not in first
+    assert 'id="slide2.paper"' not in second and 'id="slide2.backdrop"' in second
+
+    # The deck's own settings win over the theme's.
+    mine = {"deck": {"theme": "notebook.yaml", "look": "band", "background": "#ffffff",
+                     "style": {"body_size": 18}}, "slides": [{"title": "Mine"}]}
+    deck = deck_from_document(mine, tmp_path)
+    assert deck.style.header == "band" and deck.style.body_size == 18 and deck.background == "#ffffff"
+    assert deck_document(deck)["deck"] == {"id": "talk", **mine["deck"]}
+    assert 'id="slide1.paper"' not in render_slide(deck, deck.slides[0]).svg
+
+
+def test_a_theme_file_says_where_its_slides_section_is_wrong(tmp_path: Path) -> None:
+    (tmp_path / "wrong.yaml").write_text(
+        "theme: {name: wrong-slides-test, base: paper}\nslides: {look: sideways}\n", encoding="utf-8"
+    )
+    with pytest.raises(DeckDocumentError, match="sideways"):
+        deck_from_document({"deck": {"theme": "wrong.yaml"}, "slides": []}, tmp_path)

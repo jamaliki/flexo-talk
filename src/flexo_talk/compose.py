@@ -98,9 +98,17 @@ class _Canvas:
             y=0.0,
             width=style.width,
             height=style.height,
-            fill=self.palette.get("canvas") if page is True else (page or "none"),
+            fill=self.palette.get("canvas") if page is True or _is_picture(page) else (page or "none"),
         )
         self.layer = layer(self.root, f"{slide.id}.content", "Slide")
+        if _is_picture(page) and not slide.backdrop:
+            # The deck's paper, first in the slide (so a PowerPoint slide has it too),
+            # under everything the slide draws; a slide with a backdrop of its own
+            # (a colour, a picture, a filled section) is drawn on that instead.
+            element(
+                self.layer, "image", id=f"{slide.id}.paper", x=0.0, y=0.0, width=style.width,
+                height=style.height, preserveAspectRatio="xMidYMid slice", href=_picture_href(str(page)),
+            )
         if slide.backdrop:
             _slide_background(self, slide)
         self.lists: list[ListLayout] = []
@@ -1064,7 +1072,49 @@ def _dark_slide(deck: Deck, slide: Slide) -> bool:
         from flexo.colour import is_dark
 
         return is_dark(backdrop)
-    return slide.shade >= 0.3
+    # A picture is as dark as it looks under its shade.
+    return _lightness(backdrop) * (1.0 - min(max(slide.shade, 0.0), 1.0)) < 0.45
+
+
+def _is_picture(page: object) -> bool:
+    return isinstance(page, str) and bool(page) and not page.startswith("#")
+
+
+_PAGE_PICTURES: dict[tuple[str, int], tuple[str, float]] = {}
+
+
+def _picture(source: str) -> tuple[str, float]:
+    """A picture's data URI and its mean lightness (0 to 1), read once for each version of it."""
+
+    path = Path(source)
+    stamp = path.stat().st_mtime_ns if path.is_file() else 0
+    known = _PAGE_PICTURES.get((source, stamp))
+    if known:
+        return known
+    art = load_artwork("picture", source)
+    if art.format == "svg":
+        import base64
+
+        href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+        lightness = 1.0
+    else:
+        from PIL import Image, ImageStat
+
+        with Image.open(path) as image:
+            lightness = ImageStat.Stat(image.convert("L").resize((32, 32))).mean[0] / 255
+        href = art.data_uri
+    if len(_PAGE_PICTURES) > 64:
+        _PAGE_PICTURES.clear()
+    _PAGE_PICTURES[(source, stamp)] = (href, lightness)
+    return href, lightness
+
+
+def _picture_href(source: str) -> str:
+    return _picture(source)[0]
+
+
+def _lightness(source: str) -> float:
+    return _picture(source)[1]
 
 
 def _slide_palette(deck: Deck, slide: Slide):
@@ -1096,13 +1146,7 @@ def _slide_background(canvas: _Canvas, slide: Slide) -> None:
     if source.startswith("#"):
         canvas.root.find(f".//{{{SVG_NS}}}rect[@id='canvas.background']").set("fill", source)  # type: ignore[union-attr]
         return
-    art = load_artwork(f"{slide.id}.backdrop", source)
-    if art.format == "svg":
-        import base64
-
-        href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
-    else:
-        href = art.data_uri
+    href = _picture_href(source)
     element(
         canvas.layer, "image", id=f"{slide.id}.backdrop", x=0.0, y=0.0, width=style.width,
         height=style.height, preserveAspectRatio="xMidYMid slice", href=href,

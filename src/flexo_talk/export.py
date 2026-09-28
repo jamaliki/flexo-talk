@@ -80,7 +80,8 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
             if own and own.startswith("#"):
                 page = own
             if page:
-                colour = deck.palette.get("canvas") if page is True else str(page)
+                # A picture page (paper) comes as the slide's first picture; under it, the theme's page.
+                colour = str(page) if str(page).startswith("#") else deck.palette.get("canvas")
                 slide.background.fill.solid()
                 slide.background.fill.fore_color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
             drawing = read_drawing(item.svg)
