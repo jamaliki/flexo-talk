@@ -49,6 +49,7 @@ from flexo_talk.deck import (
     _Table,
     _Words,
     accent_field,
+    made,
 )
 
 
@@ -1221,8 +1222,9 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box) -> _Prepared:
     though never larger than the body text."""
 
     deck = canvas.deck
-    spec = block.figure.spec if isinstance(block.figure, flexo.Figure) else block.figure
-    if not isinstance(block.figure, flexo.Figure) or spec.style != deck.theme:
+    figure = made(block.figure)
+    spec = figure.spec if isinstance(figure, flexo.Figure) else figure
+    if not isinstance(figure, flexo.Figure) or spec.style != deck.theme:
         # A figure made elsewhere is redrawn in the deck's look.
         spec = replace(
             spec, style=deck.theme, palette=deck.palette_name,
@@ -1373,7 +1375,7 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
     import matplotlib.text
 
     register_fonts_with_matplotlib()
-    figure = block.figure
+    figure = made(block.figure)
     width = box.width
     height = min(box.height, width / block.aspect) if block.aspect else box.height
     figure.set_size_inches(width / 72.0, height / 72.0)

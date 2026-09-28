@@ -209,6 +209,29 @@ class _Callout:
     size: float | None = None
 
 
+class Reference:
+    """A figure or plot named by where it is made (``plots.py:loss``), made only when drawn."""
+
+    def __init__(self, target: str, make) -> None:
+        self.target = target
+        self._make = make
+        self._made: list[object] = []
+
+    def resolve(self) -> object:
+        if not self._made:
+            self._made.append(self._make())
+        return self._made[0]
+
+    def __repr__(self) -> str:
+        return f"Reference({self.target!r})"
+
+
+def made(value: object) -> object:
+    """A block's figure or plot, made now if a deck document named it by reference."""
+
+    return value.resolve() if isinstance(value, Reference) else value
+
+
 type _Block = (
     _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery | _Quote | _Stats | _Callout
 )
@@ -275,6 +298,11 @@ class Region:
         self._slide = slide
         self.name = name
         self.blocks: list[_Block] = []
+        self.sources: list[dict[str, object]] = []
+        """Each block as a deck document writes it (see ``flexo_talk.document``)."""
+
+    def _record(self, kind: str, value: object, **options: object) -> None:
+        self.sources.append({kind: value, **{key: item for key, item in options.items() if item is not None}})
 
     def bullets(
         self,
@@ -299,6 +327,7 @@ class Region:
 
         add(items, 0)
         self.blocks.append(_Bullets(flattened, size, numbered, reveal))
+        self._record("bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None)
         return self
 
     def text(
@@ -315,6 +344,9 @@ class Region:
         or ``#rrggbb``; ``[words]{colour}`` paints only some words."""
 
         self.blocks.append(_Words(inline(words), size, align, muted, colour))
+        self._record(
+            "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
+        )
         return self
 
     def gallery(
@@ -342,6 +374,9 @@ class Region:
             source, caption = (item, "") if isinstance(item, str | Path) else item
             cells.append((str(source), inline(caption) if caption else ()))
         self.blocks.append(_Gallery(cells, columns, height, crop, size, align))
+        pictures = [str(item) if isinstance(item, str | Path) else {"picture": str(item[0]), "caption": item[1]}
+                    for item in items]
+        self._record("gallery", pictures, columns=columns, height=height, crop=crop, size=size, align=align)
         return self
 
     def quote(self, words: str, *, by: str = "", size: float | None = None) -> Region:
@@ -349,6 +384,7 @@ class Region:
         the margin beside it, and who said it (``by``) under it, muted."""
 
         self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size))
+        self._record("quote", words, by=by or None, size=size)
         return self
 
     def stats(
@@ -367,6 +403,9 @@ class Region:
         self.blocks.append(
             _Stats([(inline(str(value)), inline(label)) for value, label in items], colour, size)
         )
+        self._record(
+            "stats", [{"value": value, "label": label} for value, label in items], colour=colour, size=size
+        )
         return self
 
     def callout(
@@ -378,6 +417,9 @@ class Region:
         if not (colour.startswith("accent") and colour[6:] in {"", *map(str, range(1, 13))}):
             raise ValueError(f'a callout\'s colour is "accent", "accent2", ... not "{colour}"')
         self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
+        self._record(
+            "callout", words, title=title or None, colour=None if colour == "accent" else colour, size=size
+        )
         return self
 
     def figure(self, id: str | None = None, *, turn: bool = True, **options: object) -> flexo.Figure:
@@ -388,6 +430,7 @@ class Region:
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
         self.blocks.append(_Figure(figure, turn))
+        self._record("figure", None, turn=None if turn else False)
         return figure
 
     def add(self, figure: flexo.Figure | FigureSpec, *, turn: bool = True) -> Region:
@@ -399,6 +442,7 @@ class Region:
         """
 
         self.blocks.append(_Figure(figure, turn))
+        self._record("figure", None, turn=None if turn else False)
         return self
 
     def image(self, source: str | Path, *, width: float | None = None) -> Region:
@@ -406,6 +450,7 @@ class Region:
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture."""
 
         self.blocks.append(_Image(str(source), width))
+        self._record("image", str(source), width=width)
         return self
 
     def table(
@@ -443,6 +488,8 @@ class Region:
                 for index in range(columns)
             )
         self.blocks.append(_Table(cells, header, aligned, size))
+        given = align if isinstance(align, str) else list(align)
+        self._record("table", _plain(rows), header=None if header else False, align=given or None, size=size)
         return self
 
     def code(self, source: str, *, size: float | None = None) -> Region:
@@ -453,6 +500,7 @@ class Region:
 
         text = textwrap.dedent(source.expandtabs(4)).strip("\n")
         self.blocks.append(_Code(text.splitlines() or [""], size))
+        self._record("code", text, size=size)
         return self
 
     def plot(self, figure: object, *, aspect: float | None = None) -> Region:
@@ -465,7 +513,16 @@ class Region:
         """
 
         self.blocks.append(_Plot(figure, aspect))
+        self._record("plot", None, aspect=aspect)
         return self
+
+
+def _plain(items: object) -> object:
+    """Nested tuples and lists as lists, for a document."""
+
+    if isinstance(items, list | tuple):
+        return [_plain(item) for item in items]
+    return items
 
 
 def _numeric(cell: object) -> bool:
@@ -506,6 +563,9 @@ class Slide:
         """The share of the width the left column takes, on a two-column slide."""
         self.notes_text = ""
         self.footnotes: list[tuple[TextRun, ...]] = []
+        self.footnote_sources: list[str] = []
+        self.source: dict[str, object] = {}
+        """The slide's settings as a deck document writes them (see ``flexo_talk.document``)."""
         self.background = str(background) if background is not None else None
         """This slide's own background: a colour (``#1b2a41``) or a picture file."""
         self.shade = shade
@@ -638,6 +698,7 @@ class Slide:
         (above the footer); several stack in the order given."""
 
         self.footnotes.append(inline(text))
+        self.footnote_sources.append(text)
         return self
 
 
@@ -660,6 +721,12 @@ class Deck:
         style: DeckStyle | None = None,
         look: str | None = None,
     ) -> None:
+        self.source: dict[str, object] = {
+            "theme": theme, "palette": _plain(palette), "font": font, "title_font": title_font,
+            "figure_font": figure_font, "conventions": conventions, "sketch": sketch, "background": background,
+            "footer": footer, "look": look,
+        }
+        """What the deck was made with, as a deck document writes it (see ``flexo_talk.document``)."""
         # A theme file is read now, by the Figure machinery that knows how.
         probe = flexo.Figure("probe", theme=theme, palette=palette)
         self.id = id
@@ -686,6 +753,8 @@ class Deck:
             # A look sets the page; a style given beside it keeps its own sizes.
             style = replace(style, **LOOKS[look]) if style else DeckStyle.look(look)  # type: ignore[arg-type]
         self.style = style or DeckStyle()
+        self.look = look
+        """The named look the style started from, if any."""
         self.slides: list[Slide] = []
 
     def __enter__(self) -> Deck:
@@ -726,6 +795,12 @@ class Deck:
             self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
             background, shade, dark, align,
         )
+        made.source = {
+            "layout": layout, "title": title, "subtitle": subtitle, "split": split,
+            "widths": list(widths) if widths else None, "columns": columns,
+            "background": str(background) if background is not None else None, "shade": shade, "dark": dark,
+            "align": align,
+        }
         self.slides.append(made)
         return made
 
@@ -743,6 +818,7 @@ class Deck:
         given, a background colour or picture: see ``slide``)."""
 
         made = self.slide(title, layout="title", subtitle=subtitle, background=background, shade=shade)
+        made.source.update(author=author, date=date)
         byline = " · ".join(part for part in (author, date) if part)
         made.byline_runs = inline(byline) if byline else ()
         return made
@@ -761,6 +837,7 @@ class Deck:
         quotation (``by`` says whose). ``[words]{accent}`` paints the words that matter."""
 
         made = self.slide(words, layout="statement", background=background, shade=shade)
+        made.source.update(by=by)
         made.byline_runs = inline(f"\u2014 {by}") if by else ()
         return made
 
