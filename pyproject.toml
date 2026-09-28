@@ -25,6 +25,9 @@ flexo-talk = "flexo_talk.cli:main"
 [project.entry-points."flexo.studio"]
 deck = "flexo_talk.studio:kind"
 
+[project.entry-points."flexo.studio.specimens"]
+slides = "flexo_talk.studio:SlideSamples"
+
 [dependency-groups]
 dev = [
   "matplotlib>=3.8",

@@ -110,6 +110,85 @@ class DeckKind:
     def save(self, path: Path, document: dict[str, Any]) -> None:
         save_document(document, path)
 
+    def dump(self, document: dict[str, Any]) -> str:
+        return dump_document(document)
+
+    def parse(self, text: str) -> Any:
+        import yaml
+
+        return yaml.safe_load(text)
+
+    def guide(self) -> str:
+        import flexo_talk.document as module
+
+        blocks = "\n".join(f"  {kind}: options {', '.join(options) or '(none)'}" for kind, options in BLOCKS.items())
+        layouts = "\n".join(f"  {name}: {', '.join(keys)} -- {LAYOUT_NOTES[name]}" for name, keys in SLIDE_KEYS.items())
+        return (
+            "A flexo-talk deck document.\n" + (module.__doc__ or "")
+            + f"\nEvery slide may also take: {', '.join(COMMON_KEYS)}.\nLayouts and their keys:\n{layouts}"
+            + f"\nBlocks:\n{blocks}\n"
+            + f"Looks: {', '.join(LOOKS)}. Colours for words and panels: accent, accent2, ..., muted, #rrggbb.\n"
+            "Slide words are markup: **strong**, *emphasis*, $maths$, `code`, [link](url), [words]{accent}.\n"
+            "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
+            "Look at each slide after changing it."
+        )
+
+    def check(self, document: Any, base: Path) -> list[str]:
+        errors: list[DeckDocumentError] = []
+        try:
+            deck_from_document(document, base, errors=errors)
+        except DeckDocumentError as error:
+            return [str(error)]
+        return [str(error) for error in errors]
+
+    def describe(self, before: Any, after: Any) -> list[dict[str, Any]]:
+        """What a change did, slide by slide, for the activity list and for following."""
+
+        import difflib
+
+        before = before if isinstance(before, dict) else {}
+        after = after if isinstance(after, dict) else {}
+        notes: list[dict[str, Any]] = []
+        old_deck, new_deck = before.get("deck") or {}, after.get("deck") or {}
+        if old_deck != new_deck:
+            changed = sorted(key for key in {*old_deck, *new_deck} if old_deck.get(key) != new_deck.get(key))
+            words = {
+                "look": "the look", "theme": "the theme", "palette": "the palette", "footer": "the footer",
+                "font": "the type", "title_font": "the type", "figure_font": "the type", "style": "the proportions",
+            }
+            said = list(dict.fromkeys(words.get(key, "the deck's settings") for key in changed))
+            notes.append({"text": "changed " + " and ".join(said[:2]), "where": {"label": "Design"}})
+        old, new = before.get("slides") or [], after.get("slides") or []
+        keys = [_stable(slide) for slide in old], [_stable(slide) for slide in new]
+        for tag, a1, a2, b1, b2 in difflib.SequenceMatcher(None, *keys, autojunk=False).get_opcodes():
+            if tag == "equal":
+                continue
+            if tag == "insert":
+                for index in range(b1, b2):
+                    notes.append(_slide_note("added", new, index))
+            elif tag == "delete":
+                at = min(a1 + 1, max(len(new), 1))
+                notes.append({"text": f"removed slide {a1 + 1}" if a2 - a1 == 1 else f"removed {a2 - a1} slides",
+                              "where": {"page": at, "label": f"Slide {at}"}})
+            else:
+                # Slides replaced by others: pair each new one with the old one it most resembles.
+                unused = list(range(a1, a2))
+                for index in range(b1, b2):
+                    text = json.dumps(new[index], sort_keys=True, default=str)
+                    scored = [(_likeness(old[i], text), i) for i in unused]
+                    best = max(scored, default=(0.0, -1))
+                    if best[0] > 0.5:
+                        unused.remove(best[1])
+                        notes.append(_slide_note("edited", new, index, _what_changed(old[best[1]], new[index])))
+                    else:
+                        notes.append(_slide_note("added", new, index))
+                if unused:
+                    at = min(b1 + 1, max(len(new), 1))
+                    count = len(unused)
+                    notes.append({"text": f"removed slide {unused[0] + 1}" if count == 1 else f"removed {count} slides",
+                                  "where": {"page": at, "label": f"Slide {at}"}})
+        return notes
+
     def catalog(self) -> dict[str, Any]:
         from flexo.colour import design_palettes
         from flexo.fonts import available_families
@@ -155,7 +234,12 @@ class DeckKind:
             return Drawing([], [Message(f"{type(error).__name__}: {error}", "error", "deck")])
         slides = document.get("slides") or []
         failed = {_slide_of(error.where): error for error in errors}
-        head = _stable({"deck": document.get("deck"), "base": str(base), "count": len(slides)})
+        deck_data = document.get("deck") or {}
+        head = _stable({
+            "deck": deck_data, "base": str(base), "count": len(slides),
+            # A theme file edited in the studio changes every slide without changing the deck.
+            "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
+        })
         sections = [
             (slide.get("title"), slide.get("subtitle")) for slide in slides
             if isinstance(slide, dict) and slide.get("layout") == "section"
@@ -234,6 +318,81 @@ def _order(count: int, focus: int) -> list[int]:
     near = [focus, focus + 1, focus - 1, focus + 2, focus - 2]
     seen = [index for index in dict.fromkeys(near) if 0 <= index < count]
     return seen + [index for index in range(count) if index not in seen]
+
+
+def _likeness(old: Any, text: str) -> float:
+    import difflib
+
+    return difflib.SequenceMatcher(None, json.dumps(old, sort_keys=True, default=str), text).ratio()
+
+
+def _slide_note(verb: str, slides: list, index: int, what: str = "") -> dict[str, Any]:
+    slide = slides[index] if index < len(slides) and isinstance(slides[index], dict) else {}
+    title = str(slide.get("words") or slide.get("title") or "").strip()
+    named = f" ({title[:40]})" if title and verb == "added" else ""
+    return {"text": f"{verb} slide {index + 1}{named}{f': {what}' if what else ''}",
+            "where": {"page": index + 1, "label": f"Slide {index + 1}"}}
+
+
+def _what_changed(old: Any, new: Any) -> str:
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return ""
+    keys = [key for key in dict.fromkeys([*old, *new]) if old.get(key) != new.get(key)]
+    names = {"title": "the title", "words": "the words", "subtitle": "the subtitle", "notes": "the notes",
+             "layout": "the layout", "body": "its content", "left": "the left column", "right": "the right column",
+             "columns": "its columns", "background": "the background", "footnotes": "the footnotes"}
+    said = list(dict.fromkeys(names.get(key, key) for key in keys))
+    return " and ".join(said[:2])
+
+
+class SlideSamples:
+    """Slides for the theme editor: a few of every kind, or a deck's own."""
+
+    title = "Slides"
+
+    def pages(self, theme: str, base: Path, hints: dict[str, Any]) -> list[tuple[str, str, Any]]:
+        from flexo_talk.compose import render_slide
+
+        deck_file = hints.get("deck")
+        if deck_file:
+            path = (base / deck_file).resolve()
+            document = load_document(path)
+            folder = path.parent
+        else:
+            document, folder = SAMPLE_DECK, base
+        document = {**document, "deck": {**(document.get("deck") or {}), "theme": theme}}
+        document["deck"].pop("palette", None)
+        errors: list[DeckDocumentError] = []
+        deck = deck_from_document(document, folder, errors=errors)
+        return [
+            (f"slide{slide.index}", _label(data) or f"Slide {slide.index}",
+             (lambda slide=slide: render_slide(deck, slide).svg))
+            for slide, data in list(zip(deck.slides, document.get("slides") or [], strict=True))[:8]
+        ]
+
+
+SAMPLE_DECK: dict[str, Any] = {
+    "deck": {"id": "sample", "footer": "A sample · 2026"},
+    "slides": [
+        {"layout": "title", "title": "Folding proteins with diffusion", "subtitle": "What the model learns",
+         "author": "Ada Lovelace", "date": "2026"},
+        {"layout": "two-columns", "title": "From sequence to structure",
+         "left": [{"bullets": ["A language model reads the sequence", "A denoiser makes the coordinates",
+                               ["trained on solved structures"]]}],
+         "right": [{"figure": {"figure": {"id": "sample-model"}, "nodes": [
+             {"id": "s", "kind": "text", "label": "Sequence $s$"},
+             {"id": "lm", "label": "Language model", "properties": {"tone": "encoder"}},
+             {"id": "den", "label": "Denoiser", "properties": {"tone": "head"}},
+             {"id": "x", "kind": "text", "label": "Structure $x_0$"}],
+             "edges": [{"from": "s", "to": "lm"}, {"from": "lm", "to": "den"}, {"from": "den", "to": "x"}]}}]},
+        {"title": "The gap", "body": [
+            {"stats": [{"value": "200M", "label": "predicted"}, {"value": "0.1%", "label": "solved"}]},
+            {"callout": "A model that knows *how sure it is* tells us what to solve first.", "title": "The idea"}]},
+        {"title": "Results", "body": [{"table": [["Model", "Params", "Top-1 (%)"], ["Baseline", "25.6M", "76.1"],
+                                                 ["Ours", "24.0M", "**81.2**"]]}]},
+        {"layout": "section", "title": "What next", "subtitle": "Three open questions"},
+    ],
+}
 
 
 def _literal(annotation: object) -> object:
