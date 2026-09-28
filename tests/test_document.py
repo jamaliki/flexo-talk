@@ -160,6 +160,18 @@ def test_the_studio_draws_the_slide_in_focus_first(tmp_path: Path, monkeypatch: 
     assert [page.svg for page in again.pages] == [page.svg for page in drawing.pages]
 
 
+def test_a_figure_written_in_the_deck_is_read_once_for_each_version(tmp_path: Path) -> None:
+    figure = {"figure": {"id": "small"}, "nodes": [{"id": "a", "label": "A"}]}
+    document = {"deck": {}, "slides": [{"body": [{"figure": figure}]}]}
+
+    def read() -> object:
+        return deck_from_document(document, tmp_path).slides[0].regions["body"].blocks[0].figure
+
+    assert read() is read()
+    figure["nodes"][0]["label"] = "B"
+    assert read().nodes[0].label[0].text == "B"
+
+
 def test_the_studio_reports_a_wrong_slide_on_its_page(tmp_path: Path) -> None:
     kind = DeckKind()
     document = {"deck": {}, "slides": [{"title": "Fine"}, {"body": [{"stats": []}]}]}

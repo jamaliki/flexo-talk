@@ -50,6 +50,8 @@ import importlib.util
 import inspect
 import json
 import sys
+import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
@@ -380,14 +382,29 @@ def _stat(item: object, where: str) -> tuple[object, str]:
     raise DeckDocumentError(where, "each of stats is {value, label}")
 
 
+_FIGURES: OrderedDict[str, object] = OrderedDict()
+_FIGURES_LOCK = threading.Lock()
+
+
 def _figure(base: Path, value: object, where: str, region: Region) -> object:
     from flexo.serialization import load_figure, parse_figure
 
     if isinstance(value, dict):
+        # A figure is read once for each version of it: the studio reads the deck on every edit.
+        key = json.dumps(value, sort_keys=True, default=str)
+        with _FIGURES_LOCK:
+            if key in _FIGURES:
+                _FIGURES.move_to_end(key)
+                return _FIGURES[key]
         try:
-            return parse_figure(value)
+            figure = parse_figure(value)
         except Exception as error:
             raise DeckDocumentError(where, f"the figure is not a flexo figure document: {error}") from error
+        with _FIGURES_LOCK:
+            _FIGURES[key] = figure
+            while len(_FIGURES) > 64:
+                _FIGURES.popitem(last=False)
+        return figure
     if not isinstance(value, str) or not value:
         raise DeckDocumentError(where, "a figure is a figure file, file.py:function, or a flexo figure document")
     if _is_code(value):
