@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same } from "/static/studio/studio.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph" },
@@ -165,12 +165,6 @@ function placeOf(where) {
   return { slide: Number(match[1]), region, index: match[4] !== undefined ? Number(match[4]) : null };
 }
 
-function stable(value) {
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stable(value[k])}`).join(",")}}`;
-  return JSON.stringify(value ?? null);
-}
-
 // -- small pictures ---------------------------------------------------------------------
 
 function glyph(layout) {
@@ -221,7 +215,6 @@ export function mount(studio, container) {
   let pages = [];
   let messages = [];
   let pending = false;
-  const thumbs = new Map();
   let inline = null;
 
   studio.hints = () => ({ focus: state.slide });
@@ -348,53 +341,72 @@ export function mount(studio, container) {
   }
 
   // -- the rail --
+  // Each thumbnail is built again only when what it shows changes; a drawing
+  // arriving for one slide leaves the others' nodes alone.
   let dragFrom = null;
-  const thumbUrl = (page) => {
-    if (!page?.svg) return null;
-    if (!thumbs.has(page.hash)) thumbs.set(page.hash, URL.createObjectURL(new Blob([page.svg], { type: "image/svg+xml" })));
-    return thumbs.get(page.hash);
-  };
+  let railKeys = [];
 
   function renderRail() {
     const list = slides();
     const others = studio.others();
-    clear(railList, list.map((slide, index) => {
+    const old = [...railList.querySelectorAll(":scope > .thumb")];
+    const keys = [];
+    const nodes = list.map((slide, index) => {
       const page = pages[index];
-      const url = thumbUrl(page);
       const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note");
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = others.filter((entry) => entry.where?.page === index + 1);
-      const node = h(`div.thumb${index === state.slide ? ".on" : ""}${page?.stale ? ".stale" : ""}`, {
-        draggable: true, dataset: { index },
-        onclick: () => select(index),
-        oncontextmenu: (event) => { event.preventDefault(); slideMenu({ x: event.clientX, y: event.clientY }, index); },
-        ondragstart: (event) => { dragFrom = index; node.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); },
-        ondragend: () => { dragFrom = null; node.classList.remove("dragging"); railList.querySelectorAll(".drop-before,.drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after")); },
-        ondragover: (event) => {
-          if (dragFrom === null) return;
-          event.preventDefault();
-          const box = node.getBoundingClientRect();
-          railList.querySelectorAll(".drop-before,.drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after"));
-          node.classList.add(event.clientY > box.top + box.height / 2 ? "drop-after" : "drop-before");
-        },
-        ondrop: (event) => {
-          if (dragFrom === null) return;
-          event.preventDefault();
-          let to = index + (node.classList.contains("drop-after") ? 1 : 0);
-          if (dragFrom < to) to -= 1;
-          moveSlide(dragFrom, to);
-        },
+      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), index === state.slide,
+        worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
+      keys.push(key);
+      if (railKeys[index] === key && old[index]) return old[index];
+      return thumbNode(slide, index, page, own, worst, here);
+    });
+    railKeys = keys;
+    const kept = new Set(nodes);
+    for (const node of old) if (!kept.has(node)) node.remove();
+    let at = railList.firstChild;
+    for (const node of nodes) {
+      if (at === node) { at = at.nextSibling; continue; }
+      railList.insertBefore(node, at);
+    }
+    if (!railList.querySelector(":scope > .rail-add")) {
+      railList.append(h("button.rail-add", { type: "button", onclick: (event) => newSlidePopover(event.currentTarget, slides().length) }, icon("plus"), "New slide"));
+    } else railList.append(railList.querySelector(":scope > .rail-add"));
+  }
+
+  function thumbNode(slide, index, page, own, worst, here) {
+    const clearDrops = () => railList.querySelectorAll(".drop-before,.drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after"));
+    const node = h(`div.thumb${index === state.slide ? ".on" : ""}${page?.stale ? ".stale" : ""}`, {
+      draggable: true, dataset: { index },
+      onclick: () => select(index),
+      oncontextmenu: (event) => { event.preventDefault(); slideMenu({ x: event.clientX, y: event.clientY }, index); },
+      ondragstart: (event) => { dragFrom = index; node.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); },
+      ondragend: () => { dragFrom = null; node.classList.remove("dragging"); clearDrops(); },
+      ondragover: (event) => {
+        if (dragFrom === null) return;
+        event.preventDefault();
+        const box = node.getBoundingClientRect();
+        clearDrops();
+        node.classList.add(event.clientY > box.top + box.height / 2 ? "drop-after" : "drop-before");
       },
-      h("div.num", {}, index + 1),
-      h("div.frame", { style: here.length ? { boxShadow: `0 0 0 2px ${colourOf(here[0].who)}` } : {} },
-        url ? h("img", { src: url, alt: "", draggable: false }) : h("div.placeholder", {}, slideTitle(slide)),
-        worst ? h(`div.badge.${worst}`, { title: own.map((m) => m.text).join("\n") }, icon(worst === "error" ? "close" : "warning", { weight: "2" })) : null,
-        page?.steps > 1 ? h("div.steps", { title: "Revealed one item at a time" }, `${page.steps} steps`) : null,
-        here.length ? h("div.here", {}, here.slice(0, 2).map((entry) => avatar(entry.who, { size: 18 }))) : null,
-        slideMoreButton(index)),
-      h("button.insert-after", { type: "button", title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
-      return node;
-    }), h("button.rail-add", { type: "button", onclick: (event) => newSlidePopover(event.currentTarget, slides().length) }, icon("plus"), "New slide"));
+      ondrop: (event) => {
+        if (dragFrom === null) return;
+        event.preventDefault();
+        let to = index + (node.classList.contains("drop-after") ? 1 : 0);
+        if (dragFrom < to) to -= 1;
+        moveSlide(dragFrom, to);
+      },
+    },
+    h("div.num", {}, index + 1),
+    h("div.frame", { style: here.length ? { boxShadow: `0 0 0 2px ${colourOf(here[0].who)}` } : {} },
+      page?.svg ? picture(page.svg, page.hash) : h("div.placeholder", {}, slideTitle(slide)),
+      worst ? h(`div.badge.${worst}`, { title: own.map((m) => m.text).join("\n") }, icon(worst === "error" ? "close" : "warning", { weight: "2" })) : null,
+      page?.steps > 1 ? h("div.steps", { title: "Revealed one item at a time" }, `${page.steps} steps`) : null,
+      here.length ? h("div.here", {}, here.slice(0, 2).map((entry) => avatar(entry.who, { size: 18 }))) : null,
+      slideMoreButton(index)),
+    h("button.insert-after", { type: "button", title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
+    return node;
   }
 
   function slideMoreButton(index) {
@@ -412,6 +424,9 @@ export function mount(studio, container) {
   const hover = h("div.hit.hover", { hidden: true }, h("span.hit-label"));
   const chosen = h("div.hit.selected", { hidden: true }, h("span.hit-label"));
   let pageNode = null;
+  const stageMeta = h("div.slide-meta");
+  const stageMessages = h("div.slide-messages.messages", { hidden: true });
+  const stageWrap = h("div.slide-wrap", {}, stageMeta, stageMessages);
 
   function renderStage() {
     const list = slides();
@@ -430,26 +445,35 @@ export function mount(studio, container) {
       return;
     }
     const page = pages[state.slide];
-    pageNode = h(`div.slide-page${page?.error ? ".error" : ""}${pending || page?.stale ? ".pending" : ""}`);
-    if (page?.svg) pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, "");
-    else pageNode.append(h("div.placeholder", {}, h("div.spinner")));
-    const svg = pageNode.querySelector("svg");
-    if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
-    pageNode.append(hover, chosen);
-    pageNode.addEventListener("mousemove", onHover);
-    pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
-    pageNode.addEventListener("click", onPick);
-    pageNode.addEventListener("dblclick", onEdit);
+    // The slide's drawing is put in the page again only when it changed: parsing
+    // and laying out an SVG is the costliest thing the stage does.
+    const shows = page?.svg ? `${state.slide}:${page.hash}` : "";
+    if (!pageNode || pageNode.dataset.shows !== shows) {
+      pageNode = h("div.slide-page", { dataset: { shows } });
+      if (page?.svg) pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, "");
+      else pageNode.append(h("div.placeholder", {}, h("div.spinner")));
+      const svg = pageNode.querySelector("svg");
+      if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
+      pageNode.append(hover, chosen);
+      pageNode.addEventListener("mousemove", onHover);
+      pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
+      pageNode.addEventListener("click", onPick);
+      pageNode.addEventListener("dblclick", onEdit);
+    }
+    pageNode.classList.toggle("error", Boolean(page?.error));
+    pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
     const own = messages.filter((m) => m.page === `slide${state.slide + 1}`);
     const here = studio.others().filter((entry) => entry.where?.page === state.slide + 1);
-    clear(stage, h("div.slide-wrap", {}, pageNode,
-      h("div.slide-meta", {},
-        h("span.slide-count", {}, `${state.slide + 1} / ${list.length}`),
-        page?.steps > 1 ? h("span.chip", {}, icon("reveal"), `${page.steps} steps`) : null,
-        here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), entry.who.name, entry.doing ? h("span.muted", {}, ` · ${entry.doing}`) : null)),
-        h("span.spacer", { style: { flex: 1 } }),
-        pending ? h("span.row.drawing", {}, h("span.spinner"), "Drawing…") : h("span.stage-hint", {}, "Click to choose · double-click words to edit")),
-      own.length ? h("div.slide-messages.messages", {}, own.map(messageView)) : null));
+    if (stageWrap.parentNode !== stage) clear(stage, stageWrap);
+    if (stageWrap.firstChild !== pageNode) stageWrap.replaceChildren(pageNode, stageMeta, stageMessages);
+    clear(stageMeta,
+      h("span.slide-count", {}, `${state.slide + 1} / ${list.length}`),
+      page?.steps > 1 ? h("span.chip", {}, icon("reveal"), `${page.steps} steps`) : null,
+      here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), entry.who.name, entry.doing ? h("span.muted", {}, ` · ${entry.doing}`) : null)),
+      h("span.spacer", { style: { flex: 1 } }),
+      pending ? h("span.row.drawing", {}, h("span.spinner"), "Drawing…") : h("span.stage-hint", {}, "Click to choose · double-click words to edit"));
+    clear(stageMessages, own.map(messageView));
+    stageMessages.hidden = !own.length;
     fitStage();
     placeChosen();
     if (inline) positionInline();
@@ -500,7 +524,7 @@ export function mount(studio, container) {
   }
 
   function boxOf(id) {
-    const target = pageNode && [...pageNode.querySelectorAll("[id]")].find((el) => el.id === id);
+    const target = pageNode?.querySelector(`[id="${CSS.escape(id)}"]`);
     if (!target) return null;
     const outer = pageNode.getBoundingClientRect(), inner = target.getBoundingClientRect();
     if (!inner.width && !inner.height) return null;
@@ -1382,13 +1406,12 @@ export function mount(studio, container) {
     pending = !result.latest || Boolean(result.unfinished);
     pages = result.pages;
     messages = result.messages || [];
-    const live = new Set(pages.map((page) => page.hash));
-    for (const [hash, url] of thumbs) if (!live.has(hash)) { URL.revokeObjectURL(url); thumbs.delete(hash); }
     renderRail();
     renderStage();
     const key = JSON.stringify(studio.info?.palette || {});
     if (key !== lastKey) { lastKey = key; renderInspector(); } else markBlockErrors();
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
+    stage.querySelector(":scope > .deck-error")?.remove();
     if (deckError) stage.prepend(h("div.messages.deck-error", {}, messageView(deckError)));
   });
   studio.workspace.on("presence", () => { if (studio.active) { renderRail(); renderStage(); } });
@@ -1396,7 +1419,7 @@ export function mount(studio, container) {
 
   function flash(before, who) {
     const old = before.slides || [];
-    const changed = slides().map((slide, index) => (stable(slide) !== stable(old[index]) ? index : -1)).filter((index) => index >= 0);
+    const changed = slides().map((slide, index) => (same(slide, old[index]) ? -1 : index)).filter((index) => index >= 0);
     const colour = colourOf(who || {});
     requestAnimationFrame(() => {
       for (const index of changed) {

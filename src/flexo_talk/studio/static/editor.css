@@ -17,7 +17,8 @@
 .thumb.on .frame { box-shadow: 0 0 0 2.5px var(--accent); }
 .thumb.on .num { color: var(--accent); font-weight: 700; }
 .rail-list:focus-visible .thumb.on .frame { box-shadow: 0 0 0 2.5px var(--accent), 0 0 0 5px var(--accent-soft); }
-.thumb img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.thumb .picture { width: 100%; height: 100%; }
+.thumb .frame { content-visibility: auto; contain-intrinsic-size: auto 90px; }
 .thumb .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); font-size: 10.5px; padding: 6px; text-align: center; background: var(--raised); }
 .thumb .badge { position: absolute; right: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; background: var(--warn); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 .thumb .badge.error { background: var(--error); }
@@ -27,7 +28,7 @@
 .thumb .more { position: absolute; right: 2px; bottom: 2px; opacity: 0; background: var(--raised); }
 .thumb:hover .more { opacity: 1; }
 .thumb.dragging { opacity: 0.35; }
-.thumb.stale .frame img { opacity: 0.55; }
+.thumb.stale .frame .picture { opacity: 0.55; }
 .thumb.drop-before::before, .thumb.drop-after::after { content: ""; position: absolute; left: 24px; right: 0; height: 3px; background: var(--accent); border-radius: 2px; }
 .thumb.drop-before::before { top: -7px; }
 .thumb.drop-after::after { bottom: -7px; }
