@@ -27,7 +27,7 @@ from flexo.render_common import render_runs
 from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, xml_document
 from flexo.svg_resources import embed_fonts
 from flexo.text import TextMeasurer
-from flexo.themes import figure_style
+from flexo.themes import figure_palette, figure_style
 from flexo.units import MILLIMETRES_PER_INCH, POINTS_PER_INCH
 
 from flexo_talk.deck import (
@@ -1232,7 +1232,11 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box) -> _Prepared:
         )
     style = figure_style(spec)
     base = style.typography.size.points
-    key = (spec, style, box.width, box.height, deck.style.figure_size, deck.style.body_size, block.turn)
+    # The palette is in the key too: a theme file's colours can change under the same name.
+    key = (
+        spec, style, repr(figure_palette(spec)), box.width, box.height, deck.style.figure_size,
+        deck.style.body_size, block.turn,
+    )
     laid = _cached_fit(key)
     if laid is None:
         fit = flexo.fit_in_box(

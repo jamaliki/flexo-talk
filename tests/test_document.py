@@ -175,3 +175,53 @@ def test_the_studio_catalog_offers_every_look_layout_and_block() -> None:
     assert "two-columns" in catalog["slide_keys"] and "split" in catalog["slide_keys"]["two-columns"]
     header = next(field for field in catalog["style"] if field["name"] == "header")
     assert header["kind"] == "choice" and header["choices"] == ["rule", "band", "line", "none"]
+
+
+def test_the_studio_names_what_a_change_did_slide_by_slide() -> None:
+    kind = DeckKind()
+    before = {"deck": {"look": "classic"}, "slides": [
+        {"title": "A", "body": [{"text": "long enough words to be recognised"}]}, {"title": "B"}, {"title": "C"}]}
+    after = {"deck": {"look": "band"}, "slides": [
+        {"title": "A!", "body": [{"text": "long enough words to be recognised"}]}, {"title": "New"}, {"title": "B"}]}
+    notes = kind.describe(before, after)
+    assert [note["text"] for note in notes] == [
+        "changed the look", "edited slide 1: the title", "added slide 2 (New)", "removed slide 3",
+    ]
+    assert notes[1]["where"] == {"page": 1, "label": "Slide 1"}
+
+
+def test_an_agent_gets_a_guide_and_a_quick_check() -> None:
+    kind = DeckKind()
+    guide = kind.guide()
+    assert "two-columns" in guide and "bullets" in guide and "Look at each slide" in guide
+    assert kind.check({"deck": {}, "slides": [{"body": [{"table": 1}]}]}, ROOT) == [
+        "slides[0].body[0] (table): a table is a list of rows, each a list of cells"
+    ]
+    document = {"schema_version": 1, **_small()}
+    assert kind.parse(kind.dump(document)) == document
+
+
+def test_the_theme_editor_shows_a_theme_on_slides_and_on_a_deck(tmp_path: Path) -> None:
+    from flexo_talk.studio import SlideSamples
+
+    samples = SlideSamples().pages("paper", tmp_path, {})
+    assert len(samples) == 5 and "<svg" in samples[1][2]()
+    (tmp_path / "talk.yaml").write_text(dump_document({"schema_version": 1, **_small()}), encoding="utf-8")
+    own = SlideSamples().pages("tikz", tmp_path, {"deck": "talk.yaml"})
+    assert [label for _, label, _ in own][:2] == ["A talk", "Part one"]
+
+
+def test_a_deck_redraws_when_its_theme_file_changes(tmp_path: Path) -> None:
+    import time
+
+    theme = tmp_path / "lab.yaml"
+    theme.write_text("theme: {name: lab-deck, base: paper, palette: ['#1d4e89']}\n", encoding="utf-8")
+    stats = {"stats": [{"value": "9", "label": "x"}]}
+    document = {"deck": {"theme": "lab.yaml"}, "slides": [{"title": "A", "body": [stats]}]}
+    kind = DeckKind()
+    first = kind.draw(document, tmp_path, {})
+    time.sleep(0.01)
+    theme.write_text("theme: {name: lab-deck, base: paper, palette: ['#8b1e3f']}\n", encoding="utf-8")
+    second = kind.draw(document, tmp_path, {})
+    assert first.pages[0].svg != second.pages[0].svg
+    assert theme.resolve() in second.files

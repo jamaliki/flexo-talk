@@ -256,17 +256,28 @@ names Python runs it when drawn, as a Python deck would: open only decks you tru
 Python deck as a document (its figures inline, its plots saved as SVG pictures);
 `flexo_talk.document` reads and writes them from Python.
 
-`flexo-talk studio talk.yaml` opens the deck in **flexo studio**, an editor in
-the browser served from this machine: slides in a rail (drag to reorder), the
-slide drawn as you type, and every part of it in forms beside it -- lists as
-indented lines, tables as grids (paste from a spreadsheet), pictures dropped on
-the slide, looks and palettes shown as you choose them, speaker notes under the
-slide, and each warning on the slide it concerns. Click anything on the slide to
-edit it. The slide being edited is drawn first; a figure file opens in flexo's
-figure editor beside it, and the deck redraws when that file is saved. It
-presents full screen (with reveals, notes, and a clock) and exports PowerPoint,
-PDF, SVG, and PNG. Undo, redo, and save are ⌘Z, ⇧⌘Z, ⌘S; saving writes the
-document back as YAML (comments in a hand-written file are not kept).
+`flexo-talk studio talk.yaml` opens the deck in **flexo studio**, the browser
+editor flexo serves from this machine (see flexo's README for the studio as a
+whole: live co-editing with Claude and other agents, themes, figures). For a deck:
+
+- **The slide is where you work.** Click a part to choose it; double-click words
+  (a title, a list, a paragraph) to edit them in place, on the slide. The bar
+  above adds slides (N, with a picture of each layout) and parts -- text, a list,
+  a figure, a picture, a table, and more -- after the one chosen. Pictures dropped
+  on the slide are added to it.
+- **The inspector shows what is chosen**: a part's own settings, or, with nothing
+  chosen, the slide's title, its parts in order (drag to reorder), its layout,
+  background, and footnotes. **Design** holds the look, theme, palette, type, and
+  proportions; *Customise* starts a theme file from the deck's theme and opens it
+  in the theme editor, and the deck redraws as the theme changes.
+- **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
+  delete, **+** between two to insert. Speaker notes sit under the slide. The slide
+  being edited is drawn first; the others follow.
+- **Others, live**: slides an agent or another person changes flash in their
+  colour, and their avatars show which slide they are on.
+- It presents full screen (reveals, notes, a clock) and exports PowerPoint, PDF,
+  SVG, and PNG. Saving is automatic; ⌘Z undoes your own last change. Saving
+  writes the document back as YAML (comments in a hand-written file are not kept).
 
 ## Command line
 
