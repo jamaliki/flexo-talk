@@ -147,6 +147,7 @@ dependencies = [
     { name = "flexo" },
     { name = "lxml" },
     { name = "python-pptx" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -168,6 +169,7 @@ requires-dist = [
     { name = "lxml", specifier = ">=5.0" },
     { name = "matplotlib", marker = "extra == 'plots'", specifier = ">=3.8" },
     { name = "python-pptx", specifier = ">=1.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["plots"]
 

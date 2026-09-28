@@ -218,11 +218,64 @@ one of the two. Choose a family with static faces (Figtree has a SemiBold) where
 an in-between weight matters. Emoji are pictures, not outlines, and are refused
 with a message rather than drawn in a substitute.
 
+## Decks as documents, and the studio
+
+A deck can also be a YAML (or JSON) document that says what the Python says:
+
+```yaml
+schema_version: 1
+deck: {id: results, theme: paper, look: band, footer: Group meeting}
+slides:
+- layout: title
+  title: Figures that draw themselves
+  author: Kiarash Jamali
+- title: Why another figure tool?
+  body:
+  - bullets:
+    - Figures take hours to draw
+    - - boxes drift out of line        # a nested list is the level below
+  notes: Everyone here has redrawn a figure at 2 a.m.
+- title: The model
+  layout: two-columns
+  left: [{text: Write what the model *is*}]
+  right: [{figure: model.yaml}]        # a flexo figure file, or model.py:figure
+- title: Training
+  body: [{plot: plots.py:loss}]        # a function returning a matplotlib figure
+```
+
+Each slide takes `layout` (`content` when left out), the settings its `Deck` call
+takes, and its regions (`body`, `left`/`right`, or `columns`, a list of block
+lists); each block is named by its kind with that call's options beside it. A
+figure is a flexo figure file, a figure document written inline, or
+`file.py:function`; a plot is `file.py:function` (called inside
+`deck.plotting()`). Files are found next to the document. A wrong document says
+where: `slides[3].left[1] (table): a table is a list of rows`. A document that
+names Python runs it when drawn, as a Python deck would: open only decks you trust.
+
+`flexo-talk build talk.yaml` builds one; `flexo-talk convert talk.py` writes a
+Python deck as a document (its figures inline, its plots saved as SVG pictures);
+`flexo_talk.document` reads and writes them from Python.
+
+`flexo-talk studio talk.yaml` opens the deck in **flexo studio**, an editor in
+the browser served from this machine: slides in a rail (drag to reorder), the
+slide drawn as you type, and every part of it in forms beside it -- lists as
+indented lines, tables as grids (paste from a spreadsheet), pictures dropped on
+the slide, looks and palettes shown as you choose them, speaker notes under the
+slide, and each warning on the slide it concerns. Click anything on the slide to
+edit it. The slide being edited is drawn first; a figure file opens in flexo's
+figure editor beside it, and the deck redraws when that file is saved. It
+presents full screen (with reveals, notes, and a clock) and exports PowerPoint,
+PDF, SVG, and PNG. Undo, redo, and save are ⌘Z, ⇧⌘Z, ⌘S; saving writes the
+document back as YAML (comments in a hand-written file are not kept).
+
 ## Command line
 
 ```bash
 flexo-talk build talk.py              # the deck the function talk() returns
 flexo-talk build talk.py:results -o out --formats pptx,pdf --theme dark
+flexo-talk build talk.yaml            # a deck document
+flexo-talk convert talk.py            # talk.py's deck as talk.yaml
+flexo-talk studio talk.yaml           # edit it in the browser (made if missing)
 ```
 
 ## Development
