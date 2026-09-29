@@ -118,11 +118,11 @@ by flexo-talk, measuring every word with flexo's own measurer, so wrapping and
 sizes agree in every output. Each region is set from its top and then aligned
 as a whole (`DeckStyle.align`, or `deck.slide(..., align=)`):
 
-- `auto` (the default): words stay at the top; a figure, plot, picture, gallery,
-  quotation, table, code listing, or row of numbers standing alone is centred in
-  the room it has (a table narrower than its place across it too); a column of
-  pictures is centred against the column of words beside it -- and the words
-  against the pictures when those are taller. Columns of words share one top.
+- `auto` (the default): words start at the top of the body, on every slide; a
+  figure, plot, picture, gallery, quotation, table, code listing, or row of
+  numbers standing alone is centred in the room it has (a table narrower than
+  its place across it too); a column of pictures is centred against a taller
+  column of words beside it, and a taller one starts level with the words.
 - `top`: everything at the top. `middle`: the content centred in the body.
 
 A single-column gallery (a column of logos) stands flush with the words above
