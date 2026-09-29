@@ -286,6 +286,13 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
   a figure, a picture, a table, and more -- after the one chosen. Pictures dropped
   on the slide are added to it.
+- **Figures are edited on their slides.** Choose a figure and its parts can be
+  chosen, typed on (double-click), connected, and gathered where they are drawn,
+  as in flexo's figure editor: a bar above the figure adds parts (A) and draws
+  lines (C), and the inspector shows the part chosen. A figure written in the deck
+  changes in the deck, and undoes with it; a figure file changes in its file,
+  comments and all. Esc steps out, a part at a time. A figure made in Python is
+  changed in its Python.
 - **The inspector shows what is chosen**: a part's own settings, or, with nothing
   chosen, the slide's title, its parts in order (drag to reorder), its layout,
   background, and footnotes. **Design** holds the look, theme, palette, type, and

@@ -391,13 +391,13 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
 
     if isinstance(value, dict):
         # A figure is read once for each version of it: the studio reads the deck on every edit.
-        key = json.dumps(value, sort_keys=True, default=str)
+        key = json.dumps([str(base), value], sort_keys=True, default=str)
         with _FIGURES_LOCK:
             if key in _FIGURES:
                 _FIGURES.move_to_end(key)
                 return _FIGURES[key]
         try:
-            figure = parse_figure(value)
+            figure = parse_figure(_beside(base, value))
         except Exception as error:
             raise DeckDocumentError(where, f"the figure is not a flexo figure document: {error}") from error
         with _FIGURES_LOCK:
@@ -415,6 +415,23 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
         raise
     except Exception as error:
         raise DeckDocumentError(where, f"{value}: {error}") from error
+
+
+def _beside(base: Path, figure: dict) -> dict:
+    """A figure written in the deck, the pictures and structures its parts draw found
+    beside the deck."""
+
+    nodes = figure.get("nodes")
+    if not isinstance(nodes, list):
+        return figure
+    found = []
+    for node in nodes:
+        properties = node.get("properties") if isinstance(node, dict) else None
+        source = properties.get("source") if isinstance(properties, dict) else None
+        if isinstance(source, str) and source and (base / source).is_file():
+            node = {**node, "properties": {**properties, "source": str((base / source).resolve())}}
+        found.append(node)
+    return {**figure, "nodes": found}
 
 
 def _as_figure(made: object, target: str, where: str) -> object:

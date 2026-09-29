@@ -215,6 +215,8 @@ class DeckKind:
             "layouts": [{"name": name, "note": LAYOUT_NOTES[name]} for name in LAYOUTS],
             "slide_keys": {layout: [*COMMON_KEYS, *keys] for layout, keys in SLIDE_KEYS.items()},
             "blocks": {kind: list(options) for kind, options in BLOCKS.items()},
+            # What the figure editor offers, for figures edited on their slides.
+            "figure_editor": _figure_editor(),
         }
 
     # -- drawing --
@@ -301,6 +303,37 @@ class DeckKind:
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
         return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck)})
 
+    def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+        """An edit to a figure on a slide, made where the figure is written: in the deck
+        (a figure written inline) or in its own file. ``action`` is ``{"do": "figure",
+        "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}``."""
+
+        import copy
+
+        from flexo.studio.figure_edit import EditError, apply, apply_to_data, model
+
+        if action.get("do") != "figure":
+            raise EditError(f'unknown deck edit "{action.get("do")}"')
+        at = action.get("at") or {}
+        edit = action.get("edit") or {}
+        changed = copy.deepcopy(document)
+        block = _block_at(changed, at)
+        value = block.get("figure") if isinstance(block, dict) else None
+        if isinstance(value, dict):
+            made = apply_to_data(value, edit, base=base)
+            block["figure"] = made["data"]
+            return {"document": changed, "select": made["select"], "model": made["model"]}
+        if isinstance(value, str) and value and ".py:" not in value:
+            path = (base / value).resolve()
+            if not path.is_file() or not path.is_relative_to(base.resolve()):
+                raise EditError(f"no figure file {value} beside the deck")
+            result = apply(path.read_text(encoding="utf-8"), edit, suffix=path.suffix, base=path.parent)
+            if edit.get("do") != "read":
+                path.write_text(result["text"], encoding="utf-8")
+            return {"document": document, "select": result["select"],
+                    "model": model(result["text"], suffix=path.suffix), "file": value}
+        raise EditError("a figure made in Python is changed in its Python file")
+
     def export(self, document: dict[str, Any], base: Path, stem: str, formats: list[str]) -> list[Path]:
         deck = deck_from_document(document, base)
         result = deck.build(base / "build", formats=tuple(formats))
@@ -309,6 +342,28 @@ class DeckKind:
 
     def text(self, document: dict[str, Any]) -> str:
         return dump_document(document)
+
+
+def _figure_editor() -> dict[str, Any]:
+    from flexo.studio.figure_parts import catalogue
+
+    return catalogue()
+
+
+def _block_at(document: dict[str, Any], at: dict[str, Any]) -> Any:
+    """The block at ``{"slide", "region", "index"}``: a region is ``body``, ``left``,
+    ``right``, or ``columns.N``."""
+
+    from flexo.studio.figure_edit import EditError
+
+    try:
+        slide = (document.get("slides") or [])[int(at["slide"])]
+        region = str(at["region"])
+        column = region.startswith("columns.")
+        blocks = slide["columns"][int(region.split(".", 1)[1])] if column else slide[region]
+        return blocks[int(at["index"])]
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise EditError("that part of the slide is gone: someone changed it meanwhile") from error
 
 
 def _order(count: int, focus: int) -> list[int]:

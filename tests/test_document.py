@@ -303,3 +303,82 @@ def test_a_table_alone_on_its_slide_is_centred(tmp_path: Path) -> None:
     assert tables[0].y > tables[1].y + 40
     # Under words, a table stands flush with them.
     assert abs(tables[1].x - style.margin) < 1.0
+
+
+def _deck_with_figures() -> dict:
+    figure = {
+        "figure": {"id": "inline"},
+        "nodes": [{"id": "x", "kind": "text", "label": "x"}, {"id": "m", "label": "Model"}],
+        "edges": [{"from": "x", "to": "m"}],
+    }
+    return {
+        "schema_version": 1,
+        "deck": {"id": "talk"},
+        "slides": [
+            {"title": "Here", "layout": "two-columns", "left": [{"text": "Words"}], "right": [{"figure": figure}]},
+            {"title": "A file", "layout": "figure", "body": [{"figure": "model.yaml"}]},
+            {"title": "Python", "body": [{"figure": "figures.py:model"}]},
+        ],
+    }
+
+
+def test_a_figure_written_in_the_deck_is_edited_where_it_is_written(tmp_path: Path) -> None:
+    kind = DeckKind()
+    document = _deck_with_figures()
+    at = {"slide": 0, "region": "right", "index": 0}
+    read = kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+    assert [node["id"] for node in read["model"]["nodes"]] == ["x", "m"] and read["document"] == document
+    edit = {"do": "add", "kind": "mlp", "after": "m", "source": "m"}
+    made = kind.act(document, {"do": "figure", "at": at, "edit": edit}, tmp_path)
+    assert made["select"] == ["mlp"]
+    figure = made["document"]["slides"][0]["right"][0]["figure"]
+    assert {"from": "m", "to": "mlp"} in figure["edges"] and len(figure["nodes"]) == 3
+    assert len(document["slides"][0]["right"][0]["figure"]["nodes"]) == 2  # the one given is left alone
+    deck = deck_from_document({**made["document"], "slides": made["document"]["slides"][:1]}, tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
+
+
+def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
+    from flexo.studio.figure_kind import NEW_FIGURE
+
+    (tmp_path / "model.yaml").write_text(NEW_FIGURE, encoding="utf-8")
+    kind = DeckKind()
+    document = _deck_with_figures()
+    at = {"slide": 1, "region": "body", "index": 0}
+    kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+    assert (tmp_path / "model.yaml").read_text() == NEW_FIGURE  # reading writes nothing
+    rename = {"do": "rename", "id": "encoder", "to": "backbone"}
+    result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
+    assert result["file"] == "model.yaml" and result["document"] is document
+    text = (tmp_path / "model.yaml").read_text()
+    assert text.startswith("# A flexo figure") and "id: backbone" in text and "to: backbone" in text
+
+
+def test_a_figure_made_in_python_or_gone_is_not_edited_on_its_slide(tmp_path: Path) -> None:
+    from flexo.studio.figure_edit import EditError
+
+    kind = DeckKind()
+    document = _deck_with_figures()
+    def read(slide: int, region: str, index: int) -> None:
+        at = {"slide": slide, "region": region, "index": index}
+        kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+
+    with pytest.raises(EditError, match="Python file"):
+        read(2, "body", 0)
+    with pytest.raises(EditError, match="gone"):
+        read(0, "right", 5)
+
+
+def test_the_studio_offers_the_figure_editor_for_figures_on_slides() -> None:
+    parts = DeckKind().catalog()["figure_editor"]["parts"]
+    assert {"block", "protein", "plasmid", "attention"} <= set(parts)
+
+
+def test_a_picture_in_a_figure_written_in_the_deck_is_found_beside_the_deck(tmp_path: Path) -> None:
+    (tmp_path / "logo.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>'
+    )
+    figure = {"figure": {"id": "pic"}, "nodes": [{"id": "logo", "kind": "image", "properties": {"source": "logo.svg"}}]}
+    document = {"schema_version": 1, "deck": {"id": "t"}, "slides": [{"title": "Logo", "body": [{"figure": figure}]}]}
+    deck = deck_from_document(document, tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
