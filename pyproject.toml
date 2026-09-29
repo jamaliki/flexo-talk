@@ -30,6 +30,7 @@ slides = "flexo_talk.studio:SlideSamples"
 
 [dependency-groups]
 dev = [
+  "flexo[structures,molecules]",
   "matplotlib>=3.8",
   "pypdfium2>=4.0",
   "pytest>=8.4",

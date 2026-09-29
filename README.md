@@ -53,11 +53,13 @@ height (`flexo.fit_in_box`) -- at a size where its words read at the deck's
 figure size: as written, or **turned** (a stack that reads upward laid out left
 to right, rows as columns, Q/K/V glyphs lying down), or spaced closer, whichever
 lets its words be largest there, never larger than the body text; a figure
-still too small is **folded**, its long rows set on two lines (the full
-transformer on one slide: encoder above, decoder folded, 7pt words instead of
-4pt). The build summary notes a figure it turned or folded;
-`slide.add(figure, turn=False)` keeps one as written. Figures sharing a region
-take one scale, so their words match. A figure whose words still end up under
+still smaller than that is **folded** when that sets its words clearly larger,
+its long rows set on two lines (the full transformer on one slide: encoder
+above, decoder folded, 7pt words instead of 4pt). The build summary notes a
+figure it turned or folded; `slide.add(figure, turn=False)` keeps one as
+written. Figures on one slide -- in one region or side by side -- set their
+words at one size: the largest at which every one fits its place, each laid out
+as written where that reaches it. A figure whose words still end up under
 7pt is reported with what to do. Laying a figure out can take a while for a large one (the
 full transformer, about half a minute), so each is kept in a cache between builds
 (`~/Library/Caches/flexo-talk` or `$XDG_CACHE_HOME/flexo-talk`), keyed by the figure,
@@ -315,6 +317,11 @@ uv sync --all-groups        # uses ../flexo, editable
 uv run pytest
 uv run python examples/demo.py
 ```
+
+`examples/journal_club.py` is a real talk -- a journal club on the Vision
+Transformer, with its figures, a table and plots from the paper, code, and a
+picture -- built in any theme (`python examples/journal_club.py
+../design-corner/talks/themes/night.yaml`).
 
 `examples/stress/` holds decks that push at the edges: `results.py` (matplotlib
 plots, a saved SVG and a PNG, a table, maths, an overfull slide), `variety.py`
