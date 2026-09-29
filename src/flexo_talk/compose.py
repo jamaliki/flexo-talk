@@ -116,6 +116,8 @@ class _Canvas:
         self.tables: list[TableLayout] = []
         self.notes: list[str] = []
         self.steps = 1
+        self.alone = False
+        """Whether the block being set has its region to itself."""
         """What the build did that the author may want to know (a figure turned to fit)."""
         self._figures = 0
 
@@ -531,8 +533,9 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             _shift(canvas, group, shift, lists, tables)
 
 
-_PICTURES = (_Figure, _Image, _Plot, _Gallery, _Quote)
-"""Blocks that stand on their own: centred in the room they have when nothing else shares it."""
+_PICTURES = (_Figure, _Image, _Plot, _Gallery, _Quote, _Table, _Code, _Stats)
+"""Blocks that stand on their own -- pictures, and the graphics made of words: a table,
+a listing, a row of numbers -- centred in the room they have when nothing else shares it."""
 
 
 def _shift(canvas: _Canvas, group: ET.Element, down: float, lists: int, tables: int) -> None:
@@ -576,6 +579,8 @@ def _region(canvas: _Canvas, region: Region, box: Box) -> float:
 
     style = canvas.deck.style
     blocks = _fitted(canvas, region, box)
+    # A block with its place to itself is centred across it (a table narrower than the place).
+    canvas.alone = len(blocks) == 1
     words = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot)]  # and tables
     pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot)]
     # Words take what they need; pictures share the height that is left.
@@ -730,6 +735,8 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     # column on the right, the table against the right edge, cells set from the right.
     plan.rtl = bool(plan.cells) and _rtl(tuple(run for cell in plan.cells[0] for run in cell))
     left = box.x + box.width - total if plan.rtl else box.x
+    if canvas.alone:
+        left = box.x + (box.width - total) / 2.0
     plan.x, plan.y, plan.id = left, box.y, identifier
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="table")
     ink = canvas.palette.get("ink")
