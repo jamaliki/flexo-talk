@@ -5,6 +5,7 @@
 // the slides they touch flash in their colour.
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same } from "/static/studio/studio.js";
+import { figureParts, widenLines } from "/static/kinds/figure/parts.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph" },
@@ -321,6 +322,7 @@ export function mount(studio, container) {
 
   function select(index, focus = null) {
     closeInline();
+    leaveFigure(false);
     state.slide = Math.max(0, Math.min(index, slides().length - 1));
     state.focus = focus;
     renderRail();
@@ -454,6 +456,7 @@ export function mount(studio, container) {
       else pageNode.append(h("div.placeholder", {}, h("div.spinner")));
       const svg = pageNode.querySelector("svg");
       if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
+      if (svg) widenLines(svg);
       pageNode.append(hover, chosen);
       pageNode.addEventListener("mousemove", onHover);
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
@@ -477,6 +480,9 @@ export function mount(studio, container) {
     fitStage();
     placeChosen();
     if (inline) positionInline();
+    if (figureMarks.parentNode !== pageNode) pageNode.append(figureMarks, figureBar);
+    placeFigure();
+    figure?.parts.placeInline();
   }
 
   function messageView(message) {
@@ -492,7 +498,7 @@ export function mount(studio, container) {
     const width = Math.max(320, Math.min(room.width - 80, (room.height - 110) * 16 / 9));
     stage.style.setProperty("--slide-max", `${width}px`);
   }
-  new ResizeObserver(() => { fitStage(); placeChosen(); if (inline) positionInline(); }).observe(stage);
+  new ResizeObserver(() => { fitStage(); placeChosen(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline(); }).observe(stage);
 
   const PART = /^slide(\d+)\.(body|left|right|column(\d+))\.(\d+)(?:\.|$)/;
   const WORDS = /^slide(\d+)\.(title|subtitle|byline)$/;
@@ -545,11 +551,19 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
+    if (inFigure(event)) {
+      const id = figure.parts.idAt(event);
+      const box = id && figure.parts.model ? boxOf(figurePrefix() + id) : null;
+      place(hover, box, id ? figure.parts.nameOf(id) : "");
+      return;
+    }
     const part = partAt(event);
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
   function onPick(event) {
+    if (event.target.closest(".fig-inline, .figure-bar")) return;
+    if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
     if (!part) { state.focus = null; placeChosen(); renderInspector(); reportFocus(); return; }
     if (part.kind === "block") focusBlock(part.region, part.index);
@@ -561,6 +575,8 @@ export function mount(studio, container) {
   }
 
   function onEdit(event) {
+    if (event.target.closest(".fig-inline, .figure-bar")) return;
+    if (inFigure(event)) { figure.parts.dblclick(event); return; }
     const part = partAt(event);
     if (!part) return;
     if (part.kind === "field") openInline({ kind: "field", field: part.field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : part.field });
@@ -583,9 +599,115 @@ export function mount(studio, container) {
     closeInline();
     state.tab = "slide";
     state.focus = { region, index };
+    const block = blocksAt(slideAt(), region)[index];
+    if (block && kindOf(block) === "figure") enterFigure(region, index);
+    else leaveFigure(false);
     renderInspector();
     placeChosen();
     reportFocus();
+  }
+
+  // -- a figure's parts, edited on the slide --
+  // A figure chosen on the slide is edited in place: clicks inside it choose its
+  // parts, a bar above it adds and connects them, and the inspector shows the part
+  // (parts.js, as in the figure editor). Edits go to where the figure is written --
+  // the deck, for a figure written in it, so they undo with the deck's; or the
+  // figure's own file.
+  const figureMarks = h("div.fig-marks");
+  const figureBar = h("div.figure-bar", { hidden: true });
+  let figure = null;
+
+  function figureBlock() {
+    if (!figure || figure.slide !== state.slide) return null;
+    const block = blocksAt(slideAt() || {}, figure.region)[figure.index];
+    return block && kindOf(block) === "figure" ? block : null;
+  }
+  const editable = (block) => {
+    const value = block?.figure;
+    return Boolean(value) && (typeof value === "object" || (typeof value === "string" && !value.includes(".py:")));
+  };
+  function figurePrefix() {
+    const region = figure && regionsOf(slideAt()).find((r) => r.key === figure.region);
+    return region ? `slide${state.slide + 1}.${region.svg}.${figure.index}.` : null;
+  }
+  function inFigure(event) {
+    if (!figureBlock()) return false;
+    const part = partAt(event);
+    return part?.kind === "block" && part.region === figure.region && part.index === figure.index;
+  }
+
+  function enterFigure(region, index) {
+    const block = blocksAt(slideAt(), region)[index];
+    if (!editable(block)) { leaveFigure(false); return; }
+    if (figure && figure.slide === state.slide && figure.region === region && figure.index === index) return;
+    leaveFigure(false);
+    figure = { slide: state.slide, region, index };
+    figure.parts = figureParts({
+      catalog: catalog.figure_editor,
+      get overlay() { return pageNode; },
+      element: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
+      idOf: (id) => { const prefix = figurePrefix(); return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : null; },
+      box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
+      changed: () => { renderInspector(); placeFigure(); },
+      chooseFile,
+      addAnchor: () => figureBar.querySelector(".add") || figureBar,
+      groupAnchor: () => figureBar.querySelector(".group") || figureBar,
+      crumbs: () => h("button.crumb", { type: "button", onclick: () => { state.focus = null; renderInspector(); placeChosen(); reportFocus(); } }, `Slide ${state.slide + 1}`),
+      nothing: () => [...blockPanel(slideAt(), figureBlock()), figure.parts.howTo()],
+      run: runFigure,
+    });
+    figure.parts.act({ do: "read" }, { select: false });
+  }
+
+  function leaveFigure(render = true) {
+    if (!figure) return;
+    figure.parts.closeInline(false);
+    figure = null;
+    clear(figureMarks);
+    figureBar.hidden = true;
+    root.classList.remove("wide");
+    if (render) renderInspector();
+  }
+
+  // The server makes the edit where the figure is written; if the deck changed while
+  // it did, the edit is made again on the deck as it is now.
+  async function runFigure(action, { merge }) {
+    if (!figure) return null;
+    const at = { slide: figure.slide, region: figure.region, index: figure.index };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const sent = studio.doc;
+      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } });
+      if (!same(studio.doc, sent)) continue;
+      if (result.file) { if (action.do !== "read") studio.requestDraw(0); }
+      else if (!same(result.document, sent)) studio.change(() => result.document, { merge, quiet: true });
+      return result;
+    }
+    return null;
+  }
+
+  function placeFigure() {
+    const block = figureBlock();
+    if (!block || !figure.parts.model || !pageNode) { clear(figureMarks); figureBar.hidden = true; return; }
+    clear(figureMarks, figure.parts.marks().map(({ box, group, name }) => h(`div.fig-mark${group ? ".group" : ""}`, { style: {
+      left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` } },
+    group ? h("span.fig-mark-label", {}, name) : null)));
+    const region = regionsOf(slideAt()).find((r) => r.key === figure.region);
+    const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${figure.index}`);
+    figureBar.hidden = !box;
+    if (!box) return;
+    const words = figure.parts.hint();
+    clear(figureBar, words ? h("span.figure-hint", {}, words) : [
+      ui.button("Add part", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add a part to the figure (A)", id: undefined }),
+      ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one part to another (C)" }),
+      ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Gather the chosen parts (G)" }),
+      figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete the chosen parts (⌫)" }) : null,
+    ]);
+    figureBar.querySelector(".btn.primary")?.classList.add("add");
+    figureBar.querySelectorAll(".btn")[2]?.classList.add("group");
+    // Over the figure's right end: its left end carries the part's own tag.
+    const left = Math.max(4, Math.min(box.left + box.width - figureBar.offsetWidth, pageNode.clientWidth - figureBar.offsetWidth - 4));
+    Object.assign(figureBar.style, { left: `${left}px`, top: `${box.top > 44 ? box.top - 40 : box.top + 6}px` });
+    stage.classList.toggle("connecting", Boolean(words));
   }
 
   // -- editing words in place --
@@ -735,6 +857,10 @@ export function mount(studio, container) {
 
   // -- the inspector --
   function renderInspector() {
+    // A figure is edited while it is the part chosen on the slide shown.
+    const focus = state.focus;
+    if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
+    root.classList.toggle("wide", Boolean(figure && figureBlock() && figure.parts.wantsRoom()));
     keepFocus(inspectorBody, () => {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
@@ -744,6 +870,7 @@ export function mount(studio, container) {
         h(`button.insp-tab${state.tab === "design" ? ".on" : ""}`, { type: "button", onclick: () => { state.tab = "design"; renderInspector(); } }, icon("palette"), "Design")));
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides yet."));
+      else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, figure.parts.panel());
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
@@ -1182,7 +1309,7 @@ export function mount(studio, container) {
       let done = false;
       const finish = (value) => { if (!done) { done = true; resolve(value); box.close(); } };
       const list = h("div.list-rows", {}, h("div.empty", {}, h("div.spinner")));
-      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg" : ".yaml,.yml,.json", hidden: true,
+      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
         onchange: async () => { const file = upload.files[0]; if (file) finish(await studio.upload(file)); } });
       const actions = [];
       if (types.includes("image") || types.includes("figure")) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });
@@ -1361,12 +1488,13 @@ export function mount(studio, container) {
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key === "Enter") { event.preventDefault(); present(); return; }
     if (typing) return;
+    if (figure && figureBlock() && figure.parts.key(event)) return;
     const key = event.key;
     if (mod && key.toLowerCase() === "d") { event.preventDefault(); if (slides().length) duplicateSlide(state.slide); }
     else if (mod) return;
     else if (["ArrowDown", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
     else if (["ArrowUp", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
-    else if (key === "Escape" && state.focus) { state.focus = null; renderInspector(); placeChosen(); reportFocus(); }
+    else if (key === "Escape" && state.focus) { state.focus = null; leaveFigure(false); renderInspector(); placeChosen(); reportFocus(); }
     else if (key === "Enter" && state.focus) {
       event.preventDefault();
       const block = blocksAt(slideAt(), state.focus.region)[state.focus.index];
@@ -1399,6 +1527,10 @@ export function mount(studio, container) {
     pending = true;
     if (source === "remote" && before) flash(before, who);
     if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
+    if (figure && source !== "edit") {
+      if (figureBlock() && editable(figureBlock())) figure.parts.act({ do: "read" }, { select: false });
+      else leaveFigure();
+    }
     pageNode?.classList.add("pending");
   });
   studio.on("drawing", () => { pending = true; });
@@ -1408,6 +1540,7 @@ export function mount(studio, container) {
     messages = result.messages || [];
     renderRail();
     renderStage();
+    if (figure && typeof figureBlock()?.figure === "string") figure.parts.act({ do: "read" }, { select: false });
     const key = JSON.stringify(studio.info?.palette || {});
     if (key !== lastKey) { lastKey = key; renderInspector(); } else markBlockErrors();
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
