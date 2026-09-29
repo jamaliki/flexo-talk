@@ -304,6 +304,10 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
         top = y + 0.75
     elif style.header == "band":
         top = band - style.title_gap * 0.35
+    else:
+        # No mark: the body starts where it would under a rule, so the words keep
+        # one distance from the title whatever marks it.
+        top = max(top, ink_bottom) + 11.0
     return top + style.title_gap
 
 
@@ -489,8 +493,8 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
 
     Each region is drawn in a group of its own, so aligning moves it whole: words
     stay at the top; pictures standing alone are centred in the room they have; a
-    column of pictures is centred against the column of words beside it (and the
-    words against the pictures, when those are taller).
+    column of pictures shorter than the column of words beside it is centred
+    against it, and a taller one starts level with the words.
     """
 
     style = canvas.deck.style
@@ -540,9 +544,13 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             shift = max(body.height - used, 0.0) / 2.0
         elif pictures:
             shift = lead + (band - used) / 2.0
-        else:
+        elif align == "middle":
             # Words share one top, so columns of words stay aligned with each other.
             shift = lead + (band - words) / 2.0
+        else:
+            # Words start where the body starts on every slide, beside a taller
+            # picture too: the eye finds them in the same place each time.
+            shift = 0.0
         if shift > 0.01:
             _shift(canvas, group, shift, lists, tables)
 

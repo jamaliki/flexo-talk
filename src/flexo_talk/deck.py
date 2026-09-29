@@ -69,7 +69,7 @@ class DeckStyle:
     column_gap: float = 36.0
     block_gap: float = 18.0
     """Space between two blocks placed one under the other in a region."""
-    title_gap: float = 22.0
+    title_gap: float = 32.0
     """Space between a slide's title and its body."""
     header: Literal["rule", "band", "line", "none"] = "rule"
     """What marks a slide's title: a short accent rule under it, a band of the
@@ -84,9 +84,9 @@ class DeckStyle:
     align: Literal["auto", "top", "middle"] = "auto"
     """Where a slide's content sits in its body, top to bottom: ``auto`` keeps
     words at the top, centres pictures standing alone in the room they have, and
-    centres a column of pictures against a column of words beside it (and the
-    words against the pictures when those are taller); ``top`` sets everything at
-    the top; ``middle`` centres the whole content in the body."""
+    centres a column of pictures against a taller column of words beside it (a
+    taller column of pictures starts level with the words); ``top`` sets
+    everything at the top; ``middle`` centres the whole content in the body."""
     numbers: bool = True
     """A slide number in the bottom-right corner."""
     title_weight: int | None = None

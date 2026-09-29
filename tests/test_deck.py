@@ -388,29 +388,39 @@ def test_a_filled_section_takes_the_accent_and_light_words(tmp_path: Path) -> No
     assert 'id="slide2.band"' in result.svgs[1].read_text()
 
 
-def test_a_picture_beside_words_is_centred_against_them(tmp_path: Path) -> None:
+def test_words_start_at_the_top_and_a_shorter_picture_is_centred_against_them(tmp_path: Path) -> None:
+    def tall(figure) -> None:
+        previous = figure.block("a", label="A")
+        for name in "bcdef":
+            previous = figure.block(name, label=name.upper(), input=previous)
+
     deck = Deck("aligned")
-    with deck.slide("Side by side", layout="two-columns") as slide:
+    with deck.slide("Beside a taller picture", layout="two-columns") as slide:
         slide.left.bullets("One", "Two")
+        with slide.right.figure(turn=False) as figure:
+            tall(figure)
+    with deck.slide("Beside a shorter picture", layout="two-columns") as slide:
+        slide.left.bullets(*(f"Point {index}" for index in range(8)))
         with slide.right.figure() as figure:
-            a = figure.block("a", label="A")
-            b = figure.block("b", label="B", input=a)
-            figure.block("c", label="C", input=b)
-    with deck.slide("Top", layout="two-columns", align="top") as slide:
+            figure.block("a", label="A")
+    with deck.slide("Middle", layout="two-columns", align="middle") as slide:
         slide.left.bullets("One", "Two")
-        with slide.right.figure() as figure:
-            a = figure.block("a", label="A")
-            b = figure.block("b", label="B", input=a)
-            figure.block("c", label="C", input=b)
+        with slide.right.figure(turn=False) as figure:
+            tall(figure)
     result = deck.build(tmp_path, formats=("pptx", "svg"))
-    centred, top = (path.read_text() for path in result.svgs)
-    assert 'id="slide1.left" data-flexo-talk="region" transform="translate(0 ' in centred
-    assert 'transform="translate(0' not in top.split('id="slide2.left"')[1][:80]
-    # The native list moved with its region: its box starts lower on the centred slide.
-    first, second = _slides(result.pptx)  # type: ignore[arg-type]
+    taller, shorter, middle = (path.read_text() for path in result.svgs)
+
+    def moved(svg: str, region: str) -> bool:
+        return 'transform="translate(0' in svg.split(f'id="{region}"')[1][:80]
+
+    # The words start where the body starts, whatever is beside them.
+    assert not moved(taller, "slide1.left") and not moved(shorter, "slide2.left")
+    assert moved(shorter, "slide2.right") and moved(middle, "slide3.left")
+    # The native list moves with its region: its box starts lower on the middle slide.
+    first, _, third = _slides(result.pptx)  # type: ignore[arg-type]
     box = r'name="slide\d\.left\.0".*?<a:off x="\d+" y="(\d+)"'
-    offsets = [int(re.search(box, s, re.S).group(1)) for s in (first, second)]  # type: ignore[union-attr]
-    assert offsets[0] > offsets[1]
+    offsets = [int(re.search(box, s, re.S).group(1)) for s in (first, third)]  # type: ignore[union-attr]
+    assert offsets[1] > offsets[0]
 
 
 def test_a_single_column_gallery_is_flush_with_the_words(tmp_path: Path) -> None:
