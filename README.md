@@ -68,6 +68,24 @@ The slide's proportions -- sizes of title, body and figure text, margins,
 indents, gaps, slide numbers -- are `DeckStyle` fields:
 `Deck(style=DeckStyle(body_size=22, numbers=False))`.
 
+A theme file can also say how slides set in it look: `slides:` beside `theme:`
+takes the deck's `look`, `style` (any `DeckStyle` field), `background` (a colour,
+or a picture such as a paper texture, drawn under every slide), and its families by
+role (`font`, `title_font`, `figure_font`). A deck takes each unless it says
+otherwise, and what came from the theme is not written into the deck's document.
+
+```yaml
+theme: {name: notebook, base: sketch, font: Kalam, palette: ["#c0392b", "#2b4c9b"]}
+fonts: [fonts/]
+slides:
+  look: margin
+  background: papers/notebook.jpg
+  title_font: Caveat
+  style: {header: none, title_size: 40}
+```
+
+A slide over a picture sets its words light or dark from how light the picture is.
+
 ## Looks
 
 The theme decides type and colour; a **look** decides the page around them --
@@ -99,7 +117,8 @@ sizes agree in every output. Each region is set from its top and then aligned
 as a whole (`DeckStyle.align`, or `deck.slide(..., align=)`):
 
 - `auto` (the default): words stay at the top; a figure, plot, picture, gallery,
-  or quotation standing alone is centred in the room it has; a column of
+  quotation, table, code listing, or row of numbers standing alone is centred in
+  the room it has (a table narrower than its place across it too); a column of
   pictures is centred against the column of words beside it -- and the words
   against the pictures when those are taller. Columns of words share one top.
 - `top`: everything at the top. `middle`: the content centred in the body.

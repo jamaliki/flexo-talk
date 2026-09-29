@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Literal
 
@@ -702,6 +702,59 @@ class Slide:
         return self
 
 
+THEME_SLIDE_KEYS = ("look", "style", "background", "font", "title_font", "figure_font")
+_THEME_SLIDES: dict[str, tuple[int, dict[str, object]]] = {}
+
+
+def theme_slides(theme: object) -> dict[str, object]:
+    """What a theme file says about the slides set in it, beside its figures' look.
+
+    A theme file may carry ``slides:`` next to ``theme:``: the deck's ``look``,
+    ``style`` (``DeckStyle`` fields), ``background`` (a colour, or a picture such
+    as a paper texture, found beside the theme file), and its families by role
+    (``font``, ``title_font``, ``figure_font``). A deck set in the theme takes
+    each of these unless it says otherwise. A theme named rather than filed has
+    none: ``{}``.
+    """
+
+    import yaml
+
+    if not isinstance(theme, str) or not theme.lower().endswith((".yaml", ".yml", ".json")):
+        return {}
+    path = Path(theme).expanduser().resolve()
+    if not path.is_file():
+        return {}
+    stamp = path.stat().st_mtime_ns
+    known = _THEME_SLIDES.get(str(path))
+    if known and known[0] == stamp:
+        return dict(known[1])
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    slides = (data.get("slides") or {}) if isinstance(data, dict) else {}
+    if not isinstance(slides, dict):
+        raise ValueError(f"{path.name}: slides: is a mapping ({', '.join(THEME_SLIDE_KEYS)})")
+    unknown = sorted(set(slides) - set(THEME_SLIDE_KEYS))
+    if unknown:
+        raise ValueError(
+            f"{path.name}: slides: has no {', '.join(unknown)}; it takes {', '.join(THEME_SLIDE_KEYS)}"
+        )
+    style = slides.get("style") or {}
+    names = {item.name for item in fields(DeckStyle)}
+    if not isinstance(style, dict) or set(style) - names:
+        wrong = sorted(set(style) - names) if isinstance(style, dict) else ["(not a mapping)"]
+        raise ValueError(f"{path.name}: slides.style has no {', '.join(wrong)}")
+    look = slides.get("look")
+    if look is not None and look not in LOOKS:
+        raise ValueError(f'{path.name}: unknown look "{look}"; looks are {", ".join(LOOKS)}')
+    background = slides.get("background")
+    if isinstance(background, str) and not background.startswith("#"):
+        picture = (path.parent / background).resolve()
+        if not picture.is_file():
+            raise ValueError(f"{path.name}: slides.background: no picture {background}")
+        slides = {**slides, "background": str(picture)}
+    _THEME_SLIDES[str(path)] = (stamp, slides)
+    return dict(slides)
+
+
 class Deck:
     """A slide deck in one flexo theme; see the module docs."""
 
@@ -727,8 +780,17 @@ class Deck:
             "footer": footer, "look": look,
         }
         """What the deck was made with, as a deck document writes it (see ``flexo_talk.document``)."""
-        # A theme file is read now, by the Figure machinery that knows how.
+        # A theme file is read now, by the Figure machinery that knows how, and
+        # what it says about slides fills in what the deck leaves unsaid.
         probe = flexo.Figure("probe", theme=theme, palette=palette)
+        slides = theme_slides(theme)
+        own_look = look
+        look = look if look is not None else slides.get("look")  # type: ignore[assignment]
+        font = font or slides.get("font")  # type: ignore[assignment]
+        title_font = title_font or slides.get("title_font")  # type: ignore[assignment]
+        figure_font = figure_font or slides.get("figure_font")  # type: ignore[assignment]
+        if background is True and slides.get("background") is not None:
+            background = slides["background"]  # type: ignore[assignment]
         self.id = id
         self.theme = probe.style
         self.palette_name = probe.palette
@@ -746,15 +808,29 @@ class Deck:
         self.conventions = conventions
         self.sketch = sketch
         self.background = background
+        """The page every slide is drawn on: the theme's page colour (``True``), a colour,
+        a picture that fills each slide (a paper texture), or nothing (``False``)."""
         self.footer = footer
-        if look is not None:
-            if look not in LOOKS:
-                raise ValueError(f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+        if look is not None and look not in LOOKS:
+            raise ValueError(f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+        # The theme's proportions, and the look: the deck's own look over the
+        # theme's style, the theme's style over a look the theme chose.
+        theme_style = slides.get("style") or {}
+        baseline = DeckStyle()
+        if own_look is not None:
+            baseline = replace(replace(baseline, **theme_style), **LOOKS[own_look])  # type: ignore[arg-type]
+        elif look is not None:
+            baseline = replace(DeckStyle.look(look), **theme_style)  # type: ignore[arg-type]
+        else:
+            baseline = replace(baseline, **theme_style)  # type: ignore[arg-type]
+        self.baseline = baseline
+        """The style before the deck's own changes: the look and the theme's proportions."""
+        if style is not None and own_look is not None:
             # A look sets the page; a style given beside it keeps its own sizes.
-            style = replace(style, **LOOKS[look]) if style else DeckStyle.look(look)  # type: ignore[arg-type]
-        self.style = style or DeckStyle()
+            style = replace(style, **LOOKS[own_look])  # type: ignore[arg-type]
+        self.style = style or baseline
         self.look = look
-        """The named look the style started from, if any."""
+        """The named look the style started from, if any (the deck's, or its theme's)."""
         self.slides: list[Slide] = []
 
     def __enter__(self) -> Deck:
