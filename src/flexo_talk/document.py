@@ -53,7 +53,7 @@ import sys
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -195,7 +195,6 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
         raise DeckDocumentError("deck.style", "style is a mapping of DeckStyle fields")
     _only(changes, STYLE_FIELDS, "deck.style")
     try:
-        style = DeckStyle.look(look, **changes) if look else DeckStyle(**changes)
         theme = data.get("theme", "paper")
         if isinstance(theme, str) and theme.lower().endswith((".yaml", ".yml", ".json")):
             theme = str(_file(base, theme))
@@ -213,13 +212,14 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
             sketch=data.get("sketch"),
             background=data.get("background", True),
             footer=str(data.get("footer", "")),
-            style=style,
+            look=look,
         )
+        # The document's proportions are changes to what the look and theme set.
+        deck.style = replace(deck.style, **changes)
     except DeckDocumentError:
         raise
     except Exception as error:
         raise DeckDocumentError("deck", str(error)) from error
-    deck.look = look
     deck.source = {**deck.source, **{key: value for key, value in data.items() if key != "style"}}
     return deck
 
@@ -539,7 +539,7 @@ def _deck_data(deck: Deck) -> dict[str, Any]:
         if value is None or value == defaults.get(key):
             continue
         data[key] = value
-    start = DeckStyle.look(deck.look) if deck.look else DeckStyle()
+    start = deck.baseline
     changes = {name: getattr(deck.style, name) for name in STYLE_FIELDS
                if getattr(deck.style, name) != getattr(start, name)}
     if changes:
