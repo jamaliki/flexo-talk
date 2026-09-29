@@ -439,3 +439,59 @@ def test_a_look_is_a_style_preset() -> None:
         Deck(look="fancy")
     with pytest.raises(ValueError, match="callout"):
         Deck().slide("x").callout("words", colour="red")
+
+
+def _word_sizes(svg: str) -> dict[str, set[float]]:
+    """The sizes words are drawn at, by the region they are in."""
+
+    from flexo.drawing import Text, read_drawing
+
+    sizes: dict[str, set[float]] = {}
+    for item in read_drawing(svg).walk():
+        if isinstance(item, Text) and item.id and item.id.count(".") > 2:
+            region = ".".join(item.id.split(".")[:2])
+            sizes.setdefault(region, set()).update(round(run.size, 2) for line in item.lines for run in line.runs)
+    return sizes
+
+
+def test_figures_side_by_side_set_their_words_at_one_size(tmp_path: Path) -> None:
+    deck = Deck("shared")
+    with deck.slide("Two figures", layout="two-columns") as slide:
+        with slide.left.figure() as figure:
+            a = figure.block("a", label="Short")
+            figure.block("b", label="Pair", input=a)
+        with slide.right.figure() as figure:
+            previous = figure.text("x", "$x$")
+            for index in range(6):
+                previous = figure.block(f"b{index}", label=f"Layer {index}", input=previous)
+    result = deck.build(tmp_path, formats=("svg",))
+    sizes = _word_sizes(result.svgs[0].read_text())
+    # The short pair alone would be set at the body size; beside the tall stack it matches it.
+    assert sizes["slide1.left"] == sizes["slide1.right"]
+    assert max(sizes["slide1.left"]) < deck.style.body_size
+
+
+def test_a_column_of_numbers_with_gaps_is_still_set_flush_right() -> None:
+    deck = Deck("gaps")
+    with deck.slide("Results") as slide:
+        slide.table([["", "Ours", "Theirs"], ["ImageNet", "88.55", "88.4"], ["CIFAR-100", "94.55", "\N{EN DASH}"]])
+    (table,) = slide.body.blocks
+    assert table.align == ("start", "end", "end")
+
+
+def test_a_callout_fills_its_panel_line_by_line(tmp_path: Path) -> None:
+    from flexo.drawing import Text, read_drawing
+
+    words = "DeiT trained ViTs on ImageNet alone, with strong augmentation and distillation from a CNN teacher."
+    deck = Deck("panel")
+    with deck.slide("Next", layout="two-columns") as slide:
+        slide.left.bullets("One")
+        slide.right.callout(words, title="What came next")
+    result = deck.build(tmp_path, formats=("svg",))
+    (text,) = [
+        item for item in read_drawing(result.svgs[0].read_text()).walk()
+        if isinstance(item, Text) and item.id == "slide1.right.0.words"
+    ]
+    first = "".join(run.text for run in text.lines[0].runs)
+    # Greedy: the first line takes all it can, as a paragraph does; balanced lines leave the panel ragged.
+    assert len(first) > len(words) / len(text.lines) + 5

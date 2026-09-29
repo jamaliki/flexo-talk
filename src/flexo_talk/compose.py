@@ -157,16 +157,18 @@ class _Canvas:
         title: bool = False,
         wrap: bool = True,
         fill: str | None = None,
+        balance: bool = True,
     ) -> float:
         """Set ``runs`` in ``box`` from its top; return the height they took.
-        ``wrap=False`` keeps each line whole (code keeps its indentation)."""
+        ``wrap=False`` keeps each line whole (code keeps its indentation);
+        ``balance=False`` fills each line before the next (words on a panel)."""
 
         if not runs:
             return 0.0
         if align == "start" and _rtl(runs):
             # Right-to-left words start at the right.
             align = "end"
-        metrics = self.measure(runs, size, box.width if wrap else None, weight, title=title)
+        metrics = self.measure(runs, size, box.width if wrap else None, weight, title=title, balance=balance)
         x = {"start": box.x, "middle": box.x + box.width / 2.0, "end": box.x + box.width}[align]
         render_runs(
             parent if parent is not None else self.layer,
@@ -494,18 +496,30 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     style = canvas.deck.style
     names = list(slide.regions)
     available = body.width - style.column_gap * (len(names) - 1)
-    placed = []
+    boxes = []
     x = body.x
-    outer = canvas.layer
-    for name, share in zip(names, slide.shares, strict=True):
-        box = Box(x, body.y, available * share, body.height)
+    for share in slide.shares:
+        boxes.append(Box(x, body.y, available * share, body.height))
         x += available * share + style.column_gap
+    # Figures side by side on one slide set their words at one size: the largest
+    # at which every one of them fits its own place.
+    shared = None
+    figured = [
+        (slide.regions[name], box)
+        for name, box in zip(names, boxes, strict=True)
+        if any(isinstance(block, _Figure) for block in slide.regions[name].blocks)
+    ]
+    if len(figured) > 1:
+        shared = min(_figure_words(canvas, region, box) for region, box in figured)
+    placed = []
+    outer = canvas.layer
+    for name, box in zip(names, boxes, strict=True):
         region = slide.regions[name]
         group = element(outer, "g", id=f"{slide.id}.{name}", data__flexo__talk="region")
         lists, tables = len(canvas.lists), len(canvas.tables)
         canvas.layer = group
         try:
-            used = _region(canvas, region, box)
+            used = _region(canvas, region, box, words=shared)
         finally:
             canvas.layer = outer
         pictures = bool(region.blocks) and all(isinstance(block, _PICTURES) for block in region.blocks)
@@ -573,18 +587,28 @@ def _furniture(canvas: _Canvas, slide: Slide) -> None:
 # -- regions ---------------------------------------------------------------------------
 
 
-def _region(canvas: _Canvas, region: Region, box: Box) -> float:
-    """Set a region's blocks one under the other from the top of ``box``; return
-    the height they took."""
+def _figure_words(canvas: _Canvas, region: Region, box: Box) -> float:
+    """The size a region's figures would set their words at on their own, in points."""
+
+    # A trial: what it would note or warn of is said when the region is set.
+    diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
+    blocks = _fitted(canvas, region, box)
+    prepared, scale, _ = _plan_figures(canvas, blocks, box, None)
+    del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
+    return min(item.size for item in prepared.values()) * scale
+
+
+def _plan_figures(
+    canvas: _Canvas, blocks: list, box: Box, words: float | None
+) -> tuple[dict[int, _Prepared], float, float]:
+    """The region's figures laid out for their places, the one scale they take,
+    and the height each other picture has."""
 
     style = canvas.deck.style
-    blocks = _fitted(canvas, region, box)
-    # A block with its place to itself is centred across it (a table narrower than the place).
-    canvas.alone = len(blocks) == 1
-    words = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot)]  # and tables
+    worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot)]  # and tables
     pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot)]
     # Words take what they need; pictures share the height that is left.
-    needed = sum(_height(canvas, block, box.width) for block in words)
+    needed = sum(_height(canvas, block, box.width) for block in worded)
     gaps = style.block_gap * max(0, len(blocks) - 1)
     room = box.height - needed - gaps
     share = room / len(pictures) if pictures else 0.0
@@ -594,18 +618,45 @@ def _region(canvas: _Canvas, region: Region, box: Box) -> float:
     figure_room = max(room * count / len(pictures), 40.0 * count) if count else 0.0
     # Each figure is laid out for its share of the place -- turned or spaced
     # closer if that lets its words be larger -- then all take one scale.
-    prepared = {
-        index: _prepare(canvas, block, Box(box.x, 0.0, box.width, figure_room / count))
-        for index, block in enumerate(blocks)
-        if isinstance(block, _Figure)
-    }
-    scale = 0.0
-    if prepared:
-        scale = min(
+    place = Box(box.x, 0.0, box.width, figure_room / count) if count else box
+
+    def laid(largest: float) -> tuple[dict[int, _Prepared], float]:
+        prepared = {
+            index: _prepare(canvas, block, place, largest)
+            for index, block in enumerate(blocks)
+            if isinstance(block, _Figure)
+        }
+        if not prepared:
+            return prepared, 0.0
+        return prepared, min(
             min(item.most for item in prepared.values()),
             min(box.width / item.width for item in prepared.values()),
             figure_room / sum(item.height for item in prepared.values()),
         )
+
+    diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
+    prepared, scale = laid(min(style.body_size, words) if words else style.body_size)
+    if words and prepared and min(item.size for item in prepared.values()) * scale < words * 0.97:
+        # Held to the size of the figures beside them, these fall short of it as
+        # laid out for that size: take the layout that reaches it (folded, say),
+        # drawn at that size.
+        del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
+        prepared, scale = laid(style.body_size)
+        scale = min(scale, words / max(item.size for item in prepared.values()))
+    return prepared, scale, share
+
+
+def _region(canvas: _Canvas, region: Region, box: Box, *, words: float | None = None) -> float:
+    """Set a region's blocks one under the other from the top of ``box``; return
+    the height they took. ``words`` caps the size of its figures' words (points),
+    so they match the figures beside them."""
+
+    style = canvas.deck.style
+    blocks = _fitted(canvas, region, box)
+    # A block with its place to itself is centred across it (a table narrower than the place).
+    canvas.alone = len(blocks) == 1
+    prepared, scale, share = _plan_figures(canvas, blocks, box, words)
+    if prepared:
         _check_legible(canvas, prepared.values(), scale)
     top = box.y
     for index, block in enumerate(blocks):
@@ -818,8 +869,9 @@ def _quote(canvas: _Canvas, identifier: str, block: _Quote, box: Box, *, draw: b
     mark = (TextRun("\u201d" if rtl else "\u201c"),)
     big = size * 3.6
     metrics = canvas.measure(mark, big, None, title=True)
-    # The mark hangs in the margin beside the words, as wide as it is and a gap.
-    hang = metrics.width + size * 0.3
+    # The mark hangs in the margin beside the words, as wide as its ink (a
+    # slanted hand's reaches past its advance) and a gap.
+    hang = max(metrics.width, _ink_right(canvas, mark[0].text, big)) + size * 0.3
     inner = Box(box.x if rtl else box.x + hang, box.y, box.width - hang, 0.0)
     words = canvas.measure(block.runs, size, inner.width, title=True)
     by_size = max(size * 0.62, style.small_size)
@@ -842,6 +894,25 @@ def _quote(canvas: _Canvas, identifier: str, block: _Quote, box: Box, *, draw: b
             role="muted-ink", parent=group,
         )
     return height
+
+
+def _ink_right(canvas: _Canvas, character: str, size: float) -> float:
+    """How far right of its pen position a character of the title face draws."""
+
+    import uharfbuzz as hb
+    from flexo.fonts import hb_font, load_face
+    from flexo.text import FontStack
+
+    face = FontStack(canvas.deck.typography(size, title=True)).face(400, False)
+    font = hb_font(face, 400)
+    buffer = hb.Buffer()
+    buffer.add_str(character)
+    buffer.guess_segment_properties()
+    hb.shape(font, buffer)
+    extents = font.get_glyph_extents(buffer.glyph_infos[0].codepoint)
+    if extents is None:
+        return 0.0
+    return (extents.x_bearing + extents.width) * size / load_face(face).upem
 
 
 def _stats_size(block: _Stats, style) -> float:
@@ -896,7 +967,8 @@ def _callout(canvas: _Canvas, identifier: str, block: _Callout, box: Box, *, dra
     rtl = _rtl(block.runs)
     inner = Box(box.x + pad if rtl else box.x + bar + pad, box.y + pad, box.width - bar - 2 * pad, 0.0)
     heading = canvas.measure(block.title, size, inner.width).height + size * 0.2 if block.title else 0.0
-    height = 2 * pad + heading + canvas.measure(block.runs, size, inner.width).height
+    # The words fill the panel line by line; balanced lines would leave it ragged.
+    height = 2 * pad + heading + canvas.measure(block.runs, size, inner.width, balance=False).height
     if not draw:
         return height
     role = f"tone-{block.colour[6:] or 1}-stroke"
@@ -914,7 +986,7 @@ def _callout(canvas: _Canvas, identifier: str, block: _Callout, box: Box, *, dra
     if block.title:
         top += canvas.words(f"{identifier}.title", block.title, inner, size=size, role=role, parent=group)
         top += size * 0.2
-    canvas.words(f"{identifier}.words", block.runs, replace(inner, y=top), size=size, parent=group)
+    canvas.words(f"{identifier}.words", block.runs, replace(inner, y=top), size=size, parent=group, balance=False)
     return height
 
 
@@ -1256,7 +1328,7 @@ class _Prepared:
     width: float
     height: float
     most: float
-    """The largest scale: words no larger than the body text."""
+    """The largest scale: words no larger than the body text (or the figures' beside it)."""
     size: float
     """The size of its words, unscaled."""
     id: str
@@ -1266,11 +1338,12 @@ LEGIBLE = 7.0
 """Words on a slide smaller than this (points) are reported: they will not read."""
 
 
-def _prepare(canvas: _Canvas, block: _Figure, box: Box) -> _Prepared:
+def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
     """A figure laid out for ``box`` by flexo (``flexo.fit_in_box``): at the width
     that sets its words at the deck's figure size, as written or turned, spaced
     as the theme says or closer -- whichever lets its words be largest there,
-    though never larger than the body text."""
+    though never larger than ``largest`` (the body text, or the words of the
+    figures beside it)."""
 
     deck = canvas.deck
     figure = made(block.figure)
@@ -1286,12 +1359,12 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box) -> _Prepared:
     # The palette is in the key too: a theme file's colours can change under the same name.
     key = (
         spec, style, repr(figure_palette(spec)), box.width, box.height, deck.style.figure_size,
-        deck.style.body_size, block.turn,
+        largest, block.turn,
     )
     laid = _cached_fit(key)
     if laid is None:
         fit = flexo.fit_in_box(
-            spec, box.width, box.height, words=deck.style.figure_size, largest=deck.style.body_size,
+            spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
             turn=block.turn,
         )
         codes = [
@@ -1307,7 +1380,7 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box) -> _Prepared:
     if laid["layout"] != "as written":
         canvas.notes.append(f"{canvas.slide.id} {spec.id}: laid out {laid['layout']} to fit the slide")
     left, top, width, height = laid["ink"]
-    return _Prepared(laid["svg"], left, top, width, height, deck.style.body_size / base, base, spec.id)
+    return _Prepared(laid["svg"], left, top, width, height, largest / base, base, spec.id)
 
 
 # -- the figure cache --------------------------------------------------------------------

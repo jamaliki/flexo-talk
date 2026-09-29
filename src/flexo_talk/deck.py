@@ -483,7 +483,8 @@ class Region:
             body = [list(row) for row in rows[1 if header else 0 :]]
             aligned = tuple(
                 "end"
-                if body and all(_numeric(row[index]) for row in body if index < len(row))
+                if any(_numeric(row[index]) for row in body if index < len(row))
+                and all(_numeric(row[index]) or _blank(row[index]) for row in body if index < len(row))
                 else "start"
                 for index in range(columns)
             )
@@ -523,6 +524,13 @@ def _plain(items: object) -> object:
     if isinstance(items, list | tuple):
         return [_plain(item) for item in items]
     return items
+
+
+def _blank(cell: object) -> bool:
+    """A cell that stands for no value: empty, a dash, or n/a. A column of numbers
+    with gaps in it is still a column of numbers."""
+
+    return str(cell).strip().lower() in {"", "-", "--", "\u2013", "\u2014", "n/a", "na"}
 
 
 def _numeric(cell: object) -> bool:
