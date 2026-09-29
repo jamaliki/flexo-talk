@@ -283,3 +283,23 @@ def test_a_theme_file_says_where_its_slides_section_is_wrong(tmp_path: Path) -> 
     )
     with pytest.raises(DeckDocumentError, match="sideways"):
         deck_from_document({"deck": {"theme": "wrong.yaml"}, "slides": []}, tmp_path)
+
+
+def test_a_table_alone_on_its_slide_is_centred(tmp_path: Path) -> None:
+    rows = [["Model", "Active"], ["Ours", "38"]]
+    alone = {"deck": {}, "slides": [{"title": "T", "body": [{"table": rows}]}]}
+    beside = {"deck": {}, "slides": [{"title": "T", "body": [{"text": "Words above"}, {"table": rows}]}]}
+    tables = []
+    for document in (alone, beside):
+        deck = deck_from_document(document, tmp_path)
+        from flexo_talk.compose import render_slide as render
+
+        (table,) = render(deck, deck.slides[0]).tables
+        tables.append(table)
+    style = deck.style
+    body_middle = style.width / 2.0
+    # Alone: across the slide and down it.
+    assert abs(tables[0].x + sum(tables[0].widths) / 2.0 - body_middle) < 1.0
+    assert tables[0].y > tables[1].y + 40
+    # Under words, a table stands flush with them.
+    assert abs(tables[1].x - style.margin) < 1.0
