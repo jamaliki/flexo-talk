@@ -9,6 +9,8 @@ description = "Slide decks in flexo's language: one theme, exported to PPTX, PDF
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Kiarash Jamali" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
   "flexo",
   "python-pptx>=1.0",
