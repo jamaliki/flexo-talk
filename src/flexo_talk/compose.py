@@ -13,13 +13,14 @@ decides where it goes and how large.
 
 from __future__ import annotations
 
+import functools
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import flexo
-from flexo.artwork import load_artwork
+from flexo.artwork import load_artwork, picture_href, picture_link
 from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
 from flexo.lint import lint_compilation
@@ -1081,14 +1082,14 @@ def _fitted_picture(
         _place_svg(canvas, identifier, art.markup, x, y, scale * units)
         return
     if crop and art.format != "svg":
-        href, natural_w, natural_h = _cropped(source, crop)
+        href, natural_w, natural_h = _cropped(source, crop, Path(source).stat().st_mtime_ns)
     elif art.format == "svg":
         import base64
 
         href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
         natural_w, natural_h = art.width or box.width, art.height or box.height
     else:
-        href, natural_w, natural_h = art.data_uri, art.width or box.width, art.height or box.height
+        href, natural_w, natural_h = picture_href(art), art.width or box.width, art.height or box.height
     scale = min(box.width / natural_w, box.height / natural_h)
     width, height = natural_w * scale, natural_h * scale
     element(
@@ -1097,8 +1098,10 @@ def _fitted_picture(
     )
 
 
-def _cropped(source: str, crop: str) -> tuple[str, float, float]:
-    """A photograph cut to a centred square, and to a circle within it: a PNG data URI."""
+@functools.lru_cache(maxsize=32)
+def _cropped(source: str, crop: str, stamp: int = 0) -> tuple[str, float, float]:
+    """A photograph cut to a centred square, and to a circle within it: a PNG data URI
+    (made once for each version of the file, not each time the slide is drawn)."""
 
     import base64
     import io
@@ -1167,7 +1170,7 @@ def _is_picture(page: object) -> bool:
     return isinstance(page, str) and bool(page) and not page.startswith("#")
 
 
-_PAGE_PICTURES: dict[tuple[str, int], tuple[str, float]] = {}
+_PAGE_PICTURES: dict[tuple[str, int, bool], tuple[str, float]] = {}
 
 
 def _picture(source: str) -> tuple[str, float]:
@@ -1175,7 +1178,8 @@ def _picture(source: str) -> tuple[str, float]:
 
     path = Path(source)
     stamp = path.stat().st_mtime_ns if path.is_file() else 0
-    known = _PAGE_PICTURES.get((source, stamp))
+    key = (source, stamp, picture_link.get() is not None)
+    known = _PAGE_PICTURES.get(key)
     if known:
         return known
     art = load_artwork("picture", source)
@@ -1188,11 +1192,12 @@ def _picture(source: str) -> tuple[str, float]:
         from PIL import Image, ImageStat
 
         with Image.open(path) as image:
+            image.draft("L", (64, 64))  # a JPEG is decoded small, not whole
             lightness = ImageStat.Stat(image.convert("L").resize((32, 32))).mean[0] / 255
-        href = art.data_uri
+        href = picture_href(art)
     if len(_PAGE_PICTURES) > 64:
         _PAGE_PICTURES.clear()
-    _PAGE_PICTURES[(source, stamp)] = (href, lightness)
+    _PAGE_PICTURES[key] = (href, lightness)
     return href, lightness
 
 
@@ -1656,7 +1661,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
 
         href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
     else:
-        href = art.data_uri
+        href = picture_href(art)
     element(
         canvas.layer, "image", id=identifier, x=box.x + (box.width - width) / 2.0, y=box.y,
         width=width, height=height, href=href,
