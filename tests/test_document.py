@@ -382,3 +382,31 @@ def test_a_picture_in_a_figure_written_in_the_deck_is_found_beside_the_deck(tmp_
     document = {"schema_version": 1, "deck": {"id": "t"}, "slides": [{"title": "Logo", "body": [{"figure": figure}]}]}
     deck = deck_from_document(document, tmp_path)
     assert render_slide(deck, deck.slides[0]).svg
+
+
+def test_one_theme_file_is_put_to_use_in_a_deck_and_a_figure_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flexo.studio import theming
+    from flexo.studio.figure_kind import NEW_FIGURE
+    from flexo.studio.workspace import Workspace
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    (tmp_path / "themes").mkdir()
+    (tmp_path / "themes" / "lab.theme.yaml").write_text(
+        "theme: {name: lab-put-to-use, base: paper, palette: ['#8b1e3f']}\n", encoding="utf-8")
+    (tmp_path / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [{"title": "A"}]}))
+    (tmp_path / "figure.yaml").write_text(NEW_FIGURE, encoding="utf-8")
+    workspace = Workspace(tmp_path)
+    try:
+        after = theming.use(workspace, "themes/lab.theme.yaml", ["talk.yaml", "figure.yaml"],
+                            {"id": "page", "name": "Ada", "kind": "person"})
+        cards = theming.cards(workspace, "talk.yaml")
+        drawn = workspace.open("talk.yaml").kind.draw(workspace.open("talk.yaml").document, tmp_path, {})
+    finally:
+        workspace.close()
+    assert {entry["file"]: entry["uses"] for entry in after} == {"figure.yaml": True, "talk.yaml": True}
+    assert yaml.safe_load((tmp_path / "talk.yaml").read_text())["deck"]["theme"] == "themes/lab.theme.yaml"
+    assert yaml.safe_load((tmp_path / "figure.yaml").read_text())["figure"]["style"] == "themes/lab.theme.yaml"
+    assert cards[0]["value"] == "themes/lab.theme.yaml"
+    assert drawn.info["tones"]["colours"][0]["stroke"].startswith("#")
