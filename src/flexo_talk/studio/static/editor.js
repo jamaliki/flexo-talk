@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
 import { figureParts, widenLines } from "/static/kinds/figure/parts.js";
 
 const BLOCKS = {
@@ -113,11 +113,7 @@ function setOption(target, key, value, fallback = undefined) {
 }
 
 function plain(markup) {
-  // Maths loses its dollars as flexo reads them: not a price ($5), not an escaped \$.
-  return String(markup ?? "").replace(/\\\$/g, "\u0000")
-    .replace(/\$\$([\s\S]+?)\$\$/g, "$1").replace(/\$(?!\s)([^$]+?)(?<!\s)\$(?!\d)/g, "$1").replace(/\u0000/g, "$")
-    .replace(/\[([^\]]+)\]\{[^}]+\}/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/\*\*|\*|`/g, "").split("\n")[0];
+  return readable(String(markup ?? "")).split("\n")[0];
 }
 
 function summary(block) {
@@ -131,7 +127,7 @@ function summary(block) {
     case "figure": return typeof value === "string" ? value : `Drawn here · ${(value?.nodes || []).length} parts`;
     case "image": case "plot": return value || "Not chosen yet";
     case "callout": return plain(block.title) || plain(value);
-    case "math": return String(value ?? "").trim().split("\n")[0] || "An empty equation";
+    case "math": return mathWords(value) || "An empty equation";
     default: return plain(value);
   }
 }
