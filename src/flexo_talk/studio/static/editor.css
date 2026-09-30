@@ -173,7 +173,7 @@ button.crumb:hover { background: var(--sunken); color: var(--ink); }
 .math-notes:empty { display: none; }
 .math-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .math-chip { min-width: 30px; height: 26px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--panel); color: var(--ink-2); font: 13px "Latin Modern Math", "STIX Two Math", Georgia, serif; cursor: pointer; }
+  background: var(--panel); color: var(--ink-2); font: 13px "Fira Math", "Latin Modern Math", Georgia, serif; cursor: pointer; }
 .math-chip:hover { background: var(--sunken); color: var(--ink); border-color: var(--line-strong, var(--line)); }
 .block-error.soft { color: var(--ink-2); background: color-mix(in srgb, var(--warn, #b45309) 10%, transparent); }
 .hint-line code, .hint-line kbd { font: 11px var(--mono); background: var(--sunken); border-radius: 3px; padding: 0 3px; }

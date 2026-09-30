@@ -125,11 +125,11 @@ def ask(folder: Path, request: dict[str, Any], seconds: float | None = None) -> 
 class RemotePlot:
     """A plot a worker makes: drawn there at the size and in the face asked for."""
 
-    def __init__(self, draw: Callable[[float, float, str, str], str]) -> None:
+    def __init__(self, draw: Callable[[float, float, str, str, str], str]) -> None:
         self._draw = draw
 
-    def svg(self, width: float, height: float, family: str, identifier: str) -> str:
-        return self._draw(width, height, family, identifier)
+    def svg(self, width: float, height: float, family: str, identifier: str, *, maths: str) -> str:
+        return self._draw(width, height, family, identifier, maths)
 
 
 def deck_view(deck: Any) -> dict[str, Any]:
@@ -270,7 +270,7 @@ def _answer(request: dict[str, Any]) -> dict[str, Any]:
             if not hasattr(figure, "savefig"):
                 return {"error": f"{name} did not return a matplotlib figure"}
             return {"svg": plot_svg(figure, request["width"], request["height"], request["family"],
-                                    request["identifier"])}
+                                    request["identifier"], maths=request.get("maths", "Latin Modern Math"))}
     if request["do"] == "figure":
         import flexo
         from flexo.ir.semantic import FigureSpec

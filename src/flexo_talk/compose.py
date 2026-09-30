@@ -1596,18 +1596,26 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
     figure = made(block.figure)
     width = box.width
     height = min(box.height, width / block.aspect) if block.aspect else box.height
-    family = canvas.deck.layout_style.typography.family
+    from flexo.text import maths_family
+
+    typography = canvas.deck.layout_style.typography
+    family, maths = typography.family, maths_family(typography)
     if isinstance(figure, RemotePlot):
-        svg = figure.svg(width, height, family, identifier)
+        svg = figure.svg(width, height, family, identifier, maths=maths)
     else:
-        svg = plot_svg(figure, width, height, family, identifier)
+        svg = plot_svg(figure, width, height, family, identifier, maths=maths)
     _place_svg(canvas, identifier, svg, box.x, box.y, 1.0)
     return height
 
 
-def plot_svg(figure: Any, width: float, height: float, family: str, identifier: str) -> str:
+def plot_svg(
+    figure: Any, width: float, height: float, family: str, identifier: str, *,
+    maths: str = "Latin Modern Math",
+) -> str:
     """A matplotlib figure as SVG, laid out again at ``width`` by ``height`` points, its
-    words set in ``family`` and kept as text; the figure is closed after."""
+    words set in ``family`` and kept as text; the figure is closed after. Its maths is
+    set as the deck's is: letters in ``family``, and Greek, signs and script capitals
+    in the deck's maths font (``maths``) rather than matplotlib's STIX."""
 
     import io
 
@@ -1633,6 +1641,9 @@ def plot_svg(figure: Any, width: float, height: float, family: str, identifier: 
     families = [family, covering] if covering else [family]
     for text in texts:
         text.set_fontfamily(families)
+        words = text.get_text()
+        if "$" in words:
+            text.set_text(_matplotlib_maths(words))
     settings = {
         "svg.fonttype": "none",
         "svg.hashsalt": identifier,
@@ -1666,7 +1677,71 @@ def plot_svg(figure: Any, width: float, height: float, family: str, identifier: 
     import matplotlib.pyplot as plt
 
     plt.close(figure)
-    return buffer.getvalue()
+    return _maths_fonts(buffer.getvalue(), maths)
+
+
+_MATPLOTLIB_NAMES = {
+    "le": "leq", "ge": "geq", "gets": "leftarrow", "implies": "Longrightarrow",
+    "impliedby": "Longleftarrow", "iff": "Longleftrightarrow", "land": "wedge", "lor": "vee",
+    "lnot": "neg", "lVert": "Vert", "rVert": "Vert", "lvert": "vert", "rvert": "vert",
+    "tfrac": "frac", "bm": "boldsymbol", "coloneqq": ":=",
+}
+"""LaTeX's names matplotlib's maths knows by others."""
+
+
+def _matplotlib_maths(words: str) -> str:
+    """Maths in a plot's words, said in terms matplotlib's maths reads: its names for
+    ``\\le`` and the like, no ``\\big`` sizes, and script, blackboard and fraktur
+    capitals as the letters themselves (so they are drawn in the deck's maths font)."""
+
+    from flexo.texmath import alphabet
+
+    def renamed(match: re.Match[str]) -> str:
+        name = _MATPLOTLIB_NAMES.get(match.group(1))
+        if name is None:
+            return match.group(0)
+        return "\\" + name if name.isalpha() else name
+
+    def lettered(match: re.Match[str]) -> str:
+        font = {"mathscr": "cal"}.get(match.group(1), match.group(1).removeprefix("math"))
+        return alphabet(match.group(2), font)
+
+    def maths(match: re.Match[str]) -> str:
+        source = re.sub(r"\\(?:big|Big|bigg|Bigg)[lrm]?(?![A-Za-z])", "", match.group(0))
+        source = re.sub(r"\\(mathcal|mathscr|mathbb|mathfrak)\s*\{([A-Za-z])\}", lettered, source)
+        return re.sub(r"\\([A-Za-z]+)(?![A-Za-z])", renamed, source)
+
+    return re.sub(r"(?<!\\)\$[^$]+\$", maths, words)
+
+
+_FALLBACK_FAMILY = re.compile(r"font-family: '(STIX[^']*|DejaVu Sans|DejaVu Serif|cm[a-z]+10|Apple Chancery)'")
+
+
+def _maths_fonts(svg: str, maths: str) -> str:
+    """matplotlib draws the maths its words' family lacks in STIX (and script capitals in
+    whatever cursive face it finds): each such glyph is set in the deck's maths font
+    instead, lower-case Greek as TeX's italic, so a plot's maths matches its slide's."""
+
+    from flexo.fonts import family_faces, load_face, select_face
+    from flexo.markup import _MATH_ITALIC
+
+    faces = [load_face(select_face(family_faces(name), 400, False))
+             for name in dict.fromkeys((maths, "Latin Modern Math")) if family_faces(name)]
+
+    def glyph(match: re.Match[str]) -> str:
+        attributes, char = match.group(1), match.group(2)
+        found = _FALLBACK_FAMILY.search(attributes)
+        if not found:
+            return match.group(0)
+        italic = _MATH_ITALIC.get(char, char)
+        face = next((face for face in faces if face.has(italic)), None)
+        if face is None:
+            return match.group(0)
+        attributes = attributes.replace(found.group(0), f"font-family: '{face.face.family}'")
+        attributes = re.sub(r"font-style: italic;\s*|font-weight: 0;\s*", "", attributes)
+        return f"<tspan{attributes}>{italic}</tspan>"
+
+    return re.sub(r"<tspan([^>]*)>([^<])</tspan>", glyph, svg)
 
 
 def _plot_maths(figure: Any, error: Exception) -> str | None:

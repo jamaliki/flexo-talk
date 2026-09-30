@@ -210,9 +210,11 @@ lines aligned at `&` and broken at `\\` (in `aligned`, or without it), chemistry
 In words, `$...$` or `\(...\)` sets maths in the line, and a formula too long for its
 line breaks after a relation or an operator, as TeX breaks it. Dollars are read as
 pandoc reads them, so "it costs $5 and $10" stays two prices, and `\$` is a dollar.
-Simple maths (`$x_t$`) is set as words; the rest is laid out by TeX's rules from the
-bundled Latin Modern Math. Its letters and signs are the deck's own face, so a
-formula reads with the words around it. Maths that cannot be read is drawn in red
+Simple maths (`$x_t$`) is set as words; the rest is laid out by TeX's rules. Its
+letters are the deck's own face, and its Greek, signs and brackets come from a maths
+font that suits it -- Fira Math beside a sans face, Latin Modern Math beside a serif
+one -- in formulas, in words and in plots alike, so a formula reads with the words
+around it. Code is set in the bundled IBM Plex Mono unless a theme names another. Maths that cannot be read is drawn in red
 and said in the build summary (and beside the equation in the studio), with the
 command a typo probably meant. In the PowerPoint a formula is drawn as shapes, and
 native lists and tables leave room for it in their words.
