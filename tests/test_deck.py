@@ -97,13 +97,12 @@ def test_a_matplotlib_plot_is_native_shapes_and_text(tmp_path: Path) -> None:
         slide.plot(figure)
     result = deck.build(tmp_path, formats=("pptx", "pdf"))
     slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
-    # Tick labels and the axis label are live text in the deck's font, the label turned.
-    assert 'typeface="Figtree"' in slide and ">Loss" in slide and 'rot="16200000"' in slide
+    # Tick labels are live text in the deck's font.
+    assert 'typeface="Figtree"' in slide and ">0.00<" in slide
     # Lines are freeforms; the image is a picture, flipped as matplotlib stores it.
     assert "<a:custGeom>" in slide and "<p:pic>" in slide and 'flipV="1"' in slide
-    # Its maths is the deck's: θ is the maths font's italic letter, as on a slide.
-    assert "\U0001d703" in "".join(re.findall(r"<a:t>([^<]*)</a:t>", slide))
-    assert 'typeface="Fira Math"' in slide
+    # Words with maths in them are set by flexo, as on a slide, and drawn as outlines.
+    assert ">Loss" not in slide and "STIX" not in slide
 
 
 def test_an_overfull_slide_is_set_smaller_and_reported(tmp_path: Path) -> None:
@@ -588,7 +587,7 @@ def test_prices_are_prices_and_escaped_dollars_are_dollars() -> None:
     assert [run.text for run in runs if run.italic] == ["x"]
 
 
-def test_a_plot_whose_words_are_maths_matplotlib_cannot_set_is_said_plainly() -> None:
+def test_a_plot_sets_its_maths_as_a_slide_does_and_says_what_it_cannot_read() -> None:
     pytest.importorskip("matplotlib")
     import matplotlib
 
@@ -597,8 +596,13 @@ def test_a_plot_whose_words_are_maths_matplotlib_cannot_set_is_said_plainly() ->
 
     from flexo_talk.compose import plot_svg
 
+    # Maths matplotlib cannot set at all: a matrix, \le, a fraction in a legend.
     figure, axes = plt.subplots()
-    axes.set_title(r"$\frac{1}{$")
-    with pytest.raises(ValueError, match="maths matplotlib cannot set: a \\{ is not closed") as caught:
-        plot_svg(figure, 300.0, 200.0, "Figtree", "p")
-    assert "Parse" not in str(caught.value) and "Exception" not in str(caught.value)
+    axes.plot([0, 1], [0, 1], label=r"$\beta = \frac{1}{2}$")
+    axes.set_title(r"$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$ and $x \le y$")
+    axes.set_ylabel(r"$\frac{1}{$")
+    axes.legend()
+    said: list[tuple[str, str]] = []
+    svg = plot_svg(figure, 300.0, 200.0, "Figtree", "p", maths="Fira Math", said=said)
+    assert said == [(r"$\frac{1}{$", "a { is not closed")]
+    assert "STIX" not in svg and "<path" in svg

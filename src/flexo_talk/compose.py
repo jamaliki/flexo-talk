@@ -1600,17 +1600,21 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
 
     typography = canvas.deck.layout_style.typography
     family, maths = typography.family, maths_family(typography)
+    said: list[tuple[str, str]] = []
     if isinstance(figure, RemotePlot):
         svg = figure.svg(width, height, family, identifier, maths=maths)
+        said = figure.said
     else:
-        svg = plot_svg(figure, width, height, family, identifier, maths=maths)
+        svg = plot_svg(figure, width, height, family, identifier, maths=maths, said=said)
+    for words, problem in said:
+        canvas.say_maths(words, [problem])
     _place_svg(canvas, identifier, svg, box.x, box.y, 1.0)
     return height
 
 
 def plot_svg(
     figure: Any, width: float, height: float, family: str, identifier: str, *,
-    maths: str = "Latin Modern Math",
+    maths: str = "Latin Modern Math", said: list[tuple[str, str]] | None = None,
 ) -> str:
     """A matplotlib figure as SVG, laid out again at ``width`` by ``height`` points, its
     words set in ``family`` and kept as text; the figure is closed after. Its maths is
@@ -1639,10 +1643,18 @@ def plot_svg(
     }
     covering = family_covering(missing) if missing else None
     families = [family, covering] if covering else [family]
+    from flexo_talk.plotmaths import problems, set_by_flexo
+
     for text in texts:
         text.set_fontfamily(families)
+    # Maths in its words is set by flexo, as on a slide; what matplotlib still sets
+    # (tick labels, made as it draws) is said in its terms.
+    set_by_flexo(figure, family, maths)
+    if said is not None:
+        said.extend(problems(figure))
+    for text in texts:
         words = text.get_text()
-        if "$" in words:
+        if "$" in words and not hasattr(text, "_flexo_problems"):
             text.set_text(_matplotlib_maths(words))
     settings = {
         "svg.fonttype": "none",
