@@ -417,7 +417,7 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
     if not isinstance(value, str) or not value:
         raise DeckDocumentError(where, "a figure is a figure file, file.py:function, or a flexo figure document")
     if _is_code(value):
-        return Reference(value, _maker(base, value, where, lambda made: _as_figure(made, value, where)))
+        return Reference(value, _maker(base, value, where, lambda made: _as_figure(made, value, where), kind="figure"))
     try:
         return load_figure(_file(base, value, where))
     except DeckDocumentError:
@@ -462,7 +462,7 @@ def _plot(base: Path, value: object, where: str, region: Region) -> Reference:
 
     # The file is read inside the deck's plotting look too: a style it sets as it is
     # imported is then the deck's for that plot, not the whole app's from then on.
-    return Reference(value, _maker(base, value, where, lambda made: made, call=call, around=deck.plotting))
+    return Reference(value, _maker(base, value, where, lambda made: made, call=call, around=deck.plotting, deck=deck))
 
 
 def _is_code(value: str) -> bool:
@@ -477,6 +477,8 @@ def _maker(
     *,
     call: Callable[[Callable[..., object]], object] | None = None,
     around: Callable[[], contextlib.AbstractContextManager] | None = None,
+    deck: Deck | None = None,
+    kind: str = "plot",
 ) -> Callable[[], object]:
     file, _, name = target.rpartition(":")
     path = _file(base, file, where)
@@ -484,8 +486,13 @@ def _maker(
     def make() -> object:
         from flexo.studio import code_allowed
 
+        from flexo_talk import worker
+
         if not code_allowed.get():
             raise UntrustedCode(where, f"{target} was not run: this folder's Python runs once you trust the folder")
+        root = worker.root()
+        if root is not None:
+            return _made_apart(root, path.resolve(), name, target, where, kind, deck, check)
         with around() if around else contextlib.nullcontext(), _own_code(target, where):
             module = import_file(path)
             function = getattr(module, name, None)
@@ -495,6 +502,45 @@ def _maker(
         return check(made)
 
     return make
+
+
+def _made_apart(
+    root: Path, path: Path, name: str, target: str, where: str, kind: str, deck: Deck | None,
+    check: Callable[[object], object],
+) -> object:
+    """A figure or plot made by the studio's worker for ``root`` (``flexo_talk.worker``):
+    a plot that hangs or crashes is said on its slide, and the app goes on."""
+
+    from flexo_talk import worker
+
+    request: dict[str, Any] = {"do": kind, "file": str(path), "function": name}
+
+    def asked(extra: dict[str, Any]) -> dict[str, Any]:
+        try:
+            answer = worker.ask(root, {**request, **extra})
+        except worker.Stopped as stopped:
+            raise DeckDocumentError(where, f"{target} {stopped}") from None
+        if "error" in answer:
+            raise DeckDocumentError(where, f"{target}: {answer['error']}")
+        return answer
+
+    if kind == "plot":
+        view = worker.deck_view(deck) if deck is not None else {}
+
+        def draw(width: float, height: float, family: str, identifier: str) -> str:
+            return asked({"deck": view, "width": width, "height": height, "family": family,
+                          "identifier": identifier})["svg"]
+
+        return worker.RemotePlot(draw)
+    from flexo.serialization import parse_figure
+
+    document = asked({})["document"]
+    try:
+        return check(parse_figure(_beside(path.parent, document)))
+    except DeckDocumentError:
+        raise
+    except Exception as error:
+        raise DeckDocumentError(where, f"{target} made a figure flexo cannot read: {error}") from error
 
 
 @contextlib.contextmanager

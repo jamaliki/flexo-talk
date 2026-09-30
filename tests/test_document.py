@@ -496,3 +496,76 @@ def test_a_folder_not_trusted_runs_none_of_its_python_and_reads_only_itself(
     assert ran.read_text() == "ran"
     assert "code.untrusted" not in {message["code"] for message in second["messages"]}
     assert any("outside the folder" in message["text"] for message in second["messages"])
+
+
+def test_in_the_studio_a_decks_python_runs_apart_and_cannot_hang_or_take_down_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("matplotlib")
+    import os
+
+    from flexo.studio.workspace import Workspace
+
+    from flexo_talk import worker
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.setattr(worker, "TIMEOUT", 3.0)
+    folder = tmp_path / "talk"
+    folder.mkdir()
+    (folder / "numbers.txt").write_text("3 1 2")
+    (folder / "plots.py").write_text(
+        "import os, sys, time\n"
+        "from pathlib import Path\n"
+        "import flexo\n"
+        "import matplotlib.pyplot as plt\n"
+        "def good(deck):\n"
+        "    print('printed words go to the log, not among the answers')\n"
+        "    numbers = [float(n) for n in Path('numbers.txt').read_text().split()]\n"
+        "    figure, axes = plt.subplots()\n"
+        "    axes.plot(numbers, color=deck.palette.get('tone-1-stroke'))\n"
+        "    axes.set_title(f'pid {os.getpid()}')\n"
+        "    return figure\n"
+        "def model():\n"
+        "    figure = flexo.Figure('model')\n"
+        "    figure.root.block('f', label='Made apart')\n"
+        "    return figure\n"
+        "def forever():\n"
+        "    while True:\n"
+        "        time.sleep(0.05)\n"
+        "def crash():\n"
+        "    os._exit(3)\n"
+        "def leave():\n"
+        "    sys.exit(2)\n"
+        "def nothing():\n"
+        "    return 7\n"
+        "def fault():\n"
+        "    import ctypes\n"
+        "    ctypes.string_at(0)\n"
+        "def typo():\n"
+        "    return figur\n"
+    )
+    slides = [{"title": name, "body": [{kind: f"plots.py:{name}"}]} for kind, name in (
+        ("plot", "good"), ("figure", "model"), ("plot", "forever"), ("plot", "crash"), ("plot", "leave"),
+        ("plot", "nothing"), ("plot", "good"), ("plot", "fault"), ("figure", "typo"),
+    )]
+    (folder / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": slides}))
+    workspace = Workspace(folder, trusted=True)
+    try:
+        started = __import__("time").monotonic()
+        drawing = workspace.drawing_of("talk.yaml")
+        seconds = __import__("time").monotonic() - started
+    finally:
+        workspace.close()
+        worker.stop_all()
+    said = {message.page: message.text for message in drawing.messages if message.severity == "error"}
+    pages = {page.id: page for page in drawing.pages}
+    assert f"pid {os.getpid()}" not in pages["slide1"].svg and "pid " in pages["slide1"].svg
+    assert "Made apart" in pages["slide2"].svg
+    assert said["slide3"] == "plots.py:forever took longer than 3 s, and was stopped"
+    assert said["slide4"] == "plots.py:crash quit the Python it ran in (exit code 3)"
+    assert said["slide5"] == "plots.py:leave: it called sys.exit(2) (line 22)"
+    assert said["slide6"] == "plots.py:nothing: nothing did not return a matplotlib figure"
+    assert said["slide8"] == "plots.py:fault crashed the Python it ran in (signal 11)"
+    assert said["slide9"] == "plots.py:typo: name 'figur' is not defined (line 29)"
+    assert "slide1" not in said and "slide7" not in said and "pid " in pages["slide7"].svg
+    assert seconds < 30

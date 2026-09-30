@@ -293,6 +293,9 @@ class DeckKind:
                                              "held": rendered.held}
             except UntrustedCode as error:
                 self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
+            except DeckDocumentError as error:
+                # Said on its slide, where it is: the message need not name the place again.
+                self._slides[keys[index]] = {"error": _plain_message(error), "where": error.where}
             except Exception as error:
                 self._slides[keys[index]] = {"error": explain(error)}
             drawn_one = True
@@ -315,8 +318,9 @@ class DeckKind:
             elif "error" in done:
                 # Python held back until the folder is trusted is not a mistake in the deck.
                 held = done.get("code") == "code.untrusted"
-                messages.append(Message(done["error"], "warning" if held else "error", f"slides[{index}]",
-                                        identifier, done.get("code", "deck.draw")))
+                messages.append(Message(done["error"], "warning" if held else "error",
+                                        done.get("where") or f"slides[{index}]", identifier,
+                                        done.get("code", "deck.draw")))
                 pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=not held)))
             else:
                 self._slides.move_to_end(keys[index])

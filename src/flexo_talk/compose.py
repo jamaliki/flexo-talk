@@ -18,6 +18,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import flexo
 from flexo.artwork import load_artwork, picture_href, picture_link
@@ -1535,19 +1536,33 @@ def register_fonts_with_matplotlib() -> None:
 def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
     """A matplotlib figure, laid out again at the size of its place, placed as vectors."""
 
+    from flexo_talk.worker import RemotePlot
+
+    figure = made(block.figure)
+    width = box.width
+    height = min(box.height, width / block.aspect) if block.aspect else box.height
+    family = canvas.deck.layout_style.typography.family
+    if isinstance(figure, RemotePlot):
+        svg = figure.svg(width, height, family, identifier)
+    else:
+        svg = plot_svg(figure, width, height, family, identifier)
+    _place_svg(canvas, identifier, svg, box.x, box.y, 1.0)
+    return height
+
+
+def plot_svg(figure: Any, width: float, height: float, family: str, identifier: str) -> str:
+    """A matplotlib figure as SVG, laid out again at ``width`` by ``height`` points, its
+    words set in ``family`` and kept as text; the figure is closed after."""
+
     import io
 
     import matplotlib
     import matplotlib.text
 
     register_fonts_with_matplotlib()
-    figure = made(block.figure)
-    width = box.width
-    height = min(box.height, width / block.aspect) if block.aspect else box.height
     figure.set_size_inches(width / 72.0, height / 72.0)
     if figure.get_layout_engine() is None:
         figure.set_layout_engine("constrained")
-    family = canvas.deck.layout_style.typography.family
     texts = figure.findobj(matplotlib.text.Text)
     # Characters the deck's face lacks (a plot labelled in Persian) get an installed
     # family that has them, so matplotlib measures the words it lays out.
@@ -1590,8 +1605,7 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
     import matplotlib.pyplot as plt
 
     plt.close(figure)
-    _place_svg(canvas, identifier, buffer.getvalue(), box.x, box.y, 1.0)
-    return height
+    return buffer.getvalue()
 
 
 def _ink(svg: str) -> tuple[float, float, float, float]:
