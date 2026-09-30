@@ -459,3 +459,40 @@ def test_a_deck_s_python_is_kept_to_itself(tmp_path: Path) -> None:
     time.sleep(0.01)
     (tmp_path / "one" / "utils.py").write_text("WORD = 'edited'\n")
     assert "edited" in draw("one")
+
+
+def test_a_folder_not_trusted_runs_none_of_its_python_and_reads_only_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flexo.studio.workspace import Workspace
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    folder = tmp_path / "sent"
+    folder.mkdir()
+    ran = tmp_path / "ran.txt"
+    (folder / "plots.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(ran)!r}).write_text('ran')\n"
+        "import matplotlib.pyplot as plt\n"
+        "def loss():\n    figure, axes = plt.subplots()\n    axes.plot([1, 2])\n    return figure\n"
+    )
+    (tmp_path / "private.png").write_bytes(b"not for the deck")
+    (folder / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [
+        {"title": "Plot", "body": [{"plot": "plots.py:loss"}]},
+        {"title": "Private", "body": [{"image": "../private.png"}]},
+    ]}))
+    workspace = Workspace(folder, trusted=False)
+    try:
+        doc = workspace.open("talk.yaml")
+        first = workspace.draw("talk.yaml", doc.document, 1, {}, {})
+        ran_before_trust = ran.exists()
+        workspace.trust()
+        second = workspace.draw("talk.yaml", doc.document, 2, {}, {})
+    finally:
+        workspace.close()
+    codes = {message["code"] for message in first["messages"]}
+    assert "code.untrusted" in codes and not ran_before_trust
+    assert any("outside the folder" in message["text"] for message in first["messages"])
+    assert ran.read_text() == "ran"
+    assert "code.untrusted" not in {message["code"] for message in second["messages"]}
+    assert any("outside the folder" in message["text"] for message in second["messages"])

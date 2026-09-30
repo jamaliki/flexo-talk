@@ -26,6 +26,7 @@ from flexo_talk.document import (
     SCHEMA_VERSION,
     SLIDE_KEYS,
     DeckDocumentError,
+    UntrustedCode,
     deck_from_document,
     dump_document,
     is_deck_document,
@@ -248,8 +249,10 @@ class DeckKind:
         slides = document.get("slides") or []
         failed = {_slide_of(error.where): error for error in errors}
         deck_data = document.get("deck") or {}
+        from flexo.studio import code_allowed
+
         head = _stable({
-            "deck": deck_data, "base": str(base), "count": len(slides),
+            "deck": deck_data, "base": str(base), "count": len(slides), "trusted": code_allowed.get(),
             # A theme file edited in the studio changes every slide without changing the deck.
             "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
         })
@@ -286,6 +289,8 @@ class DeckKind:
                 rendered = render_slide(deck, slide)
                 self._slides[keys[index]] = {"svg": rendered.svg, "steps": rendered.steps,
                                              "diagnostics": rendered.diagnostics, "notes": rendered.notes}
+            except UntrustedCode as error:
+                self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
             except Exception as error:
                 self._slides[keys[index]] = {"error": f"{type(error).__name__}: {error}"}
             drawn_one = True
@@ -306,8 +311,11 @@ class DeckKind:
             elif done is None:
                 pages.append(Page(identifier, "", _label(data), extra=_extra(data), pending=True))
             elif "error" in done:
-                messages.append(Message(done["error"], "error", f"slides[{index}]", identifier, "deck.draw"))
-                pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=True)))
+                # Python held back until the folder is trusted is not a mistake in the deck.
+                held = done.get("code") == "code.untrusted"
+                messages.append(Message(done["error"], "warning" if held else "error", f"slides[{index}]",
+                                        identifier, done.get("code", "deck.draw")))
+                pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=not held)))
             else:
                 self._slides.move_to_end(keys[index])
                 for text in done["diagnostics"]:
