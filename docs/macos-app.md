@@ -88,7 +88,7 @@ spike, not before.
 - Tests with pytest; ruff with line length 100 in flexo and 120 in flexo-talk.
 - Plain English in identifiers and comments; match the surrounding code.
 - The browser studio must keep working; the app is another way to open it.
-- App packaging code probably belongs in its own folder or repository; ask.
+- App packaging code lives in the `flexo-studio` repository.
 
 ## Checking it works
 
@@ -97,10 +97,17 @@ Open the app from Finder on a user account with no Python or Homebrew. Then
 `spctl -a -vv "Flexo Studio.app"` must pass, and a figure, a deck and a theme must each
 edit, undo and export.
 
-## Questions for the owner
+## Decisions
 
-- Is there an Apple Developer ID (needed to sign and notarize)?
-- The app's name and icon.
-- Direct download (DMG) or the App Store? Direct is simpler; the sandbox would get in
-  the way of folder-wide editing and the agent registry.
-- Oldest macOS to support, and Apple Silicon only or Intel too?
+Answered by the owner on 30 September 2026:
+
+- No Apple Developer ID yet: builds stay ad-hoc signed until there is one.
+- The app is Flexo Studio, with a placeholder icon for now.
+- It ships as a direct download (DMG), not through the App Store.
+- macOS 13 and later, Apple Silicon only.
+- The packaging code lives in its own repository, `flexo-studio`, beside these two.
+
+Step 1, the spike, is done: see `flexo-studio/docs/spike.md`. Both PyInstaller and
+Briefcase builds open a folder, edit, undo and export a figure, a deck and a theme, with
+every native library loading from inside the bundle. The recommendation is to stay with
+pywebview in one Python process (not the Swift shell) and package with Briefcase.
