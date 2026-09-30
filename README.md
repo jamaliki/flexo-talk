@@ -216,8 +216,15 @@ font that suits it -- Fira Math beside a sans face, Latin Modern Math beside a s
 one -- in formulas, in words and in plots alike, so a formula reads with the words
 around it. Code is set in the bundled IBM Plex Mono unless a theme names another. Maths that cannot be read is drawn in red
 and said in the build summary (and beside the equation in the studio), with the
-command a typo probably meant. In the PowerPoint a formula is drawn as shapes, and
-native lists and tables leave room for it in their words.
+command a typo probably meant.
+
+In the PowerPoint, maths is PowerPoint's own: each equation, and each passage, list and
+table cell with maths in it, opens in PowerPoint's equation editor (in Cambria Math,
+PowerPoint's maths font). A program that does not read PowerPoint's equations is
+shown Flexo's drawing of it instead, which is in the file beside it (as the file
+format provides): formulas as shapes, over native lists and tables that leave room for
+them. `deck.build(..., editable_maths=False)` writes only the drawing, so PowerPoint
+shows the maths in the deck's own maths font as well.
 
 ## Plots
 
@@ -236,7 +243,8 @@ with deck.slide("Training curves") as slide:
 (constrained layout), so its words are set at the deck's size rather than
 scaled, in the deck's font. It is placed as vectors: in the PowerPoint every
 line is a freeform and every tick label live text; in the PDF it is vectors and
-real text. `deck.plotting()` gives matplotlib the deck's look (`deck.plot_style()`
+real text. A label or title with maths in it is set by flexo, as a slide's maths is --
+all of LaTeX that flexo reads, in the deck's maths font -- and drawn as shapes. `deck.plotting()` gives matplotlib the deck's look (`deck.plot_style()`
 is the same settings as a dict). An SVG saved by any program --
 `slide.image("plot.svg")` -- is placed as vectors the same way when it holds
 only what flexo draws exactly (paths, text, clips, pictures); otherwise, and for
