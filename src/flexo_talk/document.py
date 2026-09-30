@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from flexo.diagnostics import described
 
 from flexo_talk.deck import LAYOUTS, LOOKS, Deck, DeckStyle, Reference, Region, Slide, _Figure, _Plot
 
@@ -159,7 +160,9 @@ def deck_from_document(
     _only(document, ("schema_version", "deck", "slides"), "")
     version = document.get("schema_version", SCHEMA_VERSION)
     if version != SCHEMA_VERSION:
-        raise DeckDocumentError("schema_version", f"this flexo-talk reads version {SCHEMA_VERSION}, not {version}")
+        raise DeckDocumentError(
+            "schema_version", f"this flexo-talk reads version {SCHEMA_VERSION}, not {described(version)}"
+        )
     deck = make_deck(document.get("deck") or {}, base)
     slides = document.get("slides") or []
     if not isinstance(slides, list):
@@ -308,7 +311,7 @@ def _text_of(data: dict[str, Any], where: str) -> Callable[[str], str]:
         if value is None:
             return ""
         if isinstance(value, dict | list):
-            raise DeckDocumentError(f"{where}.{key}", f"{key} is words, not a {type(value).__name__}")
+            raise DeckDocumentError(f"{where}.{key}", f"{key} is words, not {described(value)}")
         return str(value)
 
     return text
@@ -445,7 +448,7 @@ def _as_figure(made: object, target: str, where: str) -> object:
     from flexo.ir.semantic import FigureSpec
 
     if not isinstance(made, flexo.Figure | FigureSpec):
-        raise DeckDocumentError(where, f"{target} returned {type(made).__name__}, not a flexo figure")
+        raise DeckDocumentError(where, f"{target} did not return a flexo figure")
     return made
 
 

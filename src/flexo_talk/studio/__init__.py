@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from flexo.studio import Drawing, Message, Page
+from flexo.studio.plain import explain
 
 from flexo_talk.deck import LAYOUTS, LOOKS, DeckStyle
 from flexo_talk.document import (
@@ -243,9 +244,9 @@ class DeckKind:
         try:
             deck = deck_from_document(document, base, errors=errors)
         except DeckDocumentError as error:
-            return Drawing([], [Message(error.message, "error", error.where)])
+            return Drawing([], [Message(_plain_message(error), "error", error.where)])
         except Exception as error:
-            return Drawing([], [Message(f"{type(error).__name__}: {error}", "error", "deck")])
+            return Drawing([], [Message(explain(error), "error", "deck")])
         slides = document.get("slides") or []
         failed = {_slide_of(error.where): error for error in errors}
         deck_data = document.get("deck") or {}
@@ -293,7 +294,7 @@ class DeckKind:
             except UntrustedCode as error:
                 self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
             except Exception as error:
-                self._slides[keys[index]] = {"error": f"{type(error).__name__}: {error}"}
+                self._slides[keys[index]] = {"error": explain(error)}
             drawn_one = True
         # Slides with photos carry them inside: the cache is held to a size in bytes too.
         while len(self._slides) > CACHE_SIZE or (
@@ -307,7 +308,7 @@ class DeckKind:
             done = self._slides.get(keys[index])
             if index in failed:
                 error = failed[index]
-                messages.append(Message(error.message, "error", error.where, identifier, "deck.document"))
+                messages.append(Message(_plain_message(error), "error", error.where, identifier, "deck.document"))
                 pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=True)))
             elif done is None:
                 pages.append(Page(identifier, "", _label(data), extra=_extra(data), pending=True))
@@ -599,3 +600,9 @@ def _palette(deck) -> dict[str, str]:
 
 
 kind = DeckKind
+
+
+def _plain_message(error: DeckDocumentError) -> str:
+    """A deck document's error in words: its own message, rid of any of Python's."""
+
+    return explain(ValueError(error.message))
