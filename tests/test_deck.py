@@ -143,7 +143,8 @@ def test_a_table_is_a_native_table_ruled_as_in_a_paper(tmp_path: Path) -> None:
     assert "<a:tbl>" in slide and slide.count("<a:tr ") == 3 and slide.count("<a:gridCol ") == 2
     # Booktabs: a rule above, one under the header, one below; nothing else.
     assert slide.count("<a:lnT w=\"13970\"") + slide.count("<a:lnB w=\"13970\"") >= 2
-    assert 'algn="r"' in slide and "λ" in slide
+    # Italic Greek the words' face lacks is the maths font's (TeX's) letter.
+    assert 'algn="r"' in slide and "\U0001d706" in slide
     # The drawn copy of the table is not also in the PowerPoint.
     assert slide.count(">Model<") == 1
 
@@ -505,3 +506,97 @@ def test_a_callout_fills_its_panel_line_by_line(tmp_path: Path) -> None:
     first = "".join(run.text for run in text.lines[0].runs)
     # Greedy: the first line takes all it can, as a paragraph does; balanced lines leave the panel ragged.
     assert len(first) > len(words) / len(text.lines) + 5
+
+
+def test_an_equation_is_displayed_on_its_own_line_and_fits_its_place(tmp_path: Path) -> None:
+    from flexo_talk.document import deck_document, deck_from_document
+
+    long = r" + ".join(rf"\frac{{a_{i}}}{{b_{i}}}" for i in range(40))
+    document = {"deck": {"id": "maths"}, "slides": [
+        {"title": "Loss", "body": [
+            {"text": "We minimise"},
+            {"math": r"\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log p(y_i \mid x_i)"},
+            {"text": r"$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$"},
+            {"math": long},
+        ]},
+    ]}
+    deck = deck_from_document(document, tmp_path)
+    kinds = [type(block).__name__ for block in deck.slides[0].regions["body"].blocks]
+    assert kinds == ["_Words", "_Math", "_Math", "_Math"]
+    # The document keeps what was written.
+    assert deck_document(deck)["slides"][0]["body"][2] == {"text": r"$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$"}
+    result = deck.build(tmp_path / "out", formats=("svg", "pptx"))
+    assert not result.diagnostics, result.summary()
+    svg = result.svgs[0].read_text()
+    groups = re.findall(r'<g [^>]*data-flexo-math="[^"]*"[^>]*>', svg)
+    assert len(groups) == 3 and all('data-flexo-talk="math"' in group for group in groups)
+    # The long one is set smaller to fit the slide, not run off it.
+    from flexo.drawing import read_drawing
+
+    def formulas(group):
+        for item in group.items:
+            if hasattr(item, "items"):
+                if "data-flexo-math" in item.data:
+                    yield item
+                else:
+                    yield from formulas(item)
+
+    def shapes(group):
+        for item in group.items:
+            yield from shapes(item) if hasattr(item, "items") else [item]
+
+    last = list(formulas(read_drawing(svg).root))[-1]
+    right = max(item.x + item.width for item in shapes(last))
+    assert right <= deck.style.width - deck.style.margin + 1.0
+    slide = _slides(result.pptx)[0]
+    assert slide.count("<a:custGeom>") > 50  # formulas are native shapes, glyph by glyph
+
+
+def test_maths_in_a_list_leaves_room_in_the_native_words_and_is_drawn_over_it(tmp_path: Path) -> None:
+    deck = Deck("maths")
+    deck.slide("Rates").bullets(
+        r"The rate $k = A e^{-E_a/RT}$ rises with temperature",
+        r"A plain one: $x_t$",
+    )
+    deck.slide("Table").table([["what", "value"], ["half", r"$\frac{1}{2}$"]])
+    result = deck.build(tmp_path, formats=("pptx",))
+    listing, table = _slides(result.pptx)
+    # One space, spaced out to the formula's width, keeps its place in the words...
+    gaps = re.findall(r'<a:rPr [^>]*spc="(\d+)"[^>]*>.*?</a:rPr><a:t> </a:t>', listing)
+    assert len(gaps) == 1 and int(gaps[0]) > 1000
+    assert "rises with temperature" in listing and "<a:t>t</a:t>" in listing
+    # ...and the formula is drawn as shapes where it was set.
+    assert listing.count("<a:custGeom>") > 5
+    assert re.search(r'spc="\d+"', table) and table.count("<a:custGeom>") >= 2
+
+
+def test_maths_that_cannot_be_read_is_reported_on_its_slide(tmp_path: Path) -> None:
+    deck = Deck("broken")
+    deck.slide("Oops").text(r"Here: $\frac{1}{2} + \foo{x}$").math(r"\sqrt{x")
+    result = deck.build(tmp_path, formats=("svg",))
+    said = " ".join(result.diagnostics)
+    assert r"\foo is not a maths command flexo knows" in said
+    assert "a { is not closed" in said and "slide1" in said
+    assert "Traceback" not in said and "Error" not in said
+
+
+def test_prices_are_prices_and_escaped_dollars_are_dollars() -> None:
+    runs = inline(r"It costs $5 and $10, a sample is \$20, and $x^2$ is maths.")
+    assert "".join(run.text for run in runs if not run.italic).startswith("It costs $5 and $10, a sample is $20")
+    assert [run.text for run in runs if run.italic] == ["x"]
+
+
+def test_a_plot_whose_words_are_maths_matplotlib_cannot_set_is_said_plainly() -> None:
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from flexo_talk.compose import plot_svg
+
+    figure, axes = plt.subplots()
+    axes.set_title(r"$\frac{1}{$")
+    with pytest.raises(ValueError, match="maths matplotlib cannot set: a \\{ is not closed") as caught:
+        plot_svg(figure, 300.0, 200.0, "Figtree", "p")
+    assert "Parse" not in str(caught.value) and "Exception" not in str(caught.value)

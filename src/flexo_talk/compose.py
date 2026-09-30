@@ -46,6 +46,7 @@ from flexo_talk.deck import (
     _Figure,
     _Gallery,
     _Image,
+    _Math,
     _Plot,
     _Quote,
     _Stats,
@@ -143,10 +144,25 @@ class _Canvas:
         ``title`` sets them in the deck's title font."""
 
         typography = self.deck.typography(size, title=title)
+        for run in runs:
+            if run.math:
+                from flexo.texmath import problems_in
+
+                self.say_maths(run.math, problems_in(run.math))
         # A word wider than the slide (a URL) breaks rather than running off it.
         return TextMeasurer(typography).measure(
             runs, max_width=width, weight=weight, balance=balance, break_words=True
         )
+
+    def say_maths(self, source: str, problems: tuple[str, ...] | list[str]) -> None:
+        """What could not be read in a formula, said once for the slide."""
+
+        shown = source.removeprefix("\\displaystyle ").strip()
+        shown = shown if len(shown) <= 40 else shown[:39] + "…"
+        for problem in problems:
+            said = f"{self.slide.id}: {problem}, in the maths \u201c{shown}\u201d"
+            if said not in self.diagnostics:
+                self.diagnostics.append(said)
 
     def words(
         self,
@@ -724,6 +740,8 @@ def _region(canvas: _Canvas, region: Region, box: Box, *, words: float | None = 
             top += _stats(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Callout):
             top += _callout(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+        elif isinstance(block, _Math):
+            top += _equation(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         top += style.block_gap
     return max(top - box.y - style.block_gap, 0.0)
 
@@ -763,7 +781,9 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
 
 
 def _sized(block, scale: float, style):
-    if scale == 1.0 or not isinstance(block, _Bullets | _Words | _Table | _Code | _Quote | _Stats | _Callout):
+    if scale == 1.0 or not isinstance(
+        block, _Bullets | _Words | _Table | _Code | _Quote | _Stats | _Callout | _Math
+    ):
         return block
     if isinstance(block, _Table):
         base = _table_size(block, style)
@@ -1150,6 +1170,38 @@ def _cropped(source: str, crop: str, stamp: int = 0) -> tuple[str, float, float]
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(), 100.0, 100.0
 
 
+def _equation(canvas: _Canvas, identifier: str, block: _Math, box: Box, *, draw: bool = True) -> float:
+    """An equation on its own line, in display style: at the words' size, or as much
+    smaller as it takes to fit its place."""
+
+    from flexo.render_common import paint_attributes, run_colour, run_role
+    from flexo.texmath import draw as draw_formula
+    from flexo.texmath import typeset
+
+    style = canvas.deck.style
+    size = block.size or style.body_size
+    formula = typeset(block.source, canvas.deck.typography(size), size, display=True)
+    if formula.width > box.width > 0:
+        size *= box.width / formula.width
+        formula = typeset(block.source, canvas.deck.typography(size), size, display=True)
+    canvas.say_maths(block.source, formula.problems)
+    if draw:
+        x = {"start": box.x, "middle": box.x + (box.width - formula.width) / 2.0,
+             "end": box.x + box.width - formula.width}.get(block.align, box.x)
+        role, fill = _paint_of(block.colour, "ink")
+
+        def paint(colour: str) -> tuple[str | None, str | None]:
+            run = TextRun("", color=colour)
+            return run_colour(run, canvas.palette) or colour, run_role(run)
+
+        draw_formula(
+            canvas.layer, formula, x, box.y + formula.height, colour=paint,
+            attributes={"id": identifier, "data__flexo__talk": "math",
+                        **paint_attributes(palette=canvas.palette, fill_role=role, fill=fill)},
+        )
+    return formula.height + formula.depth
+
+
 def _height(canvas: _Canvas, block, width: float) -> float:
     style = canvas.deck.style
     if isinstance(block, _Gallery):
@@ -1162,6 +1214,8 @@ def _height(canvas: _Canvas, block, width: float) -> float:
         return _stats(canvas, "", block, Box(0.0, 0.0, width, 0.0), draw=False)
     if isinstance(block, _Callout):
         return _callout(canvas, "", block, Box(0.0, 0.0, width, 0.0), draw=False)
+    if isinstance(block, _Math):
+        return _equation(canvas, "", block, Box(0.0, 0.0, width, 0.0), draw=False)
     if isinstance(block, _Table):
         return sum(_table_plan(canvas, block, width).heights)
     if isinstance(block, _Words):
@@ -1348,6 +1402,7 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
             anchor="end" if rtl else None,
         )
         layout.items.append((level, runs, baseline))
+        layout.steps.append(metrics.line_height)
         layout.id = identifier
         top += metrics.height + style.paragraph_gap * size
     canvas.lists.append(layout)
@@ -1595,7 +1650,13 @@ def plot_svg(figure: Any, width: float, height: float, family: str, identifier: 
     with matplotlib.rc_context(settings):
         try:
             figure.savefig(buffer, format="svg", transparent=True, metadata={"Date": None})
-        except (ZeroDivisionError, ValueError):
+        except (ZeroDivisionError, ValueError) as error:
+            said = _plot_maths(figure, error)
+            if said:
+                import matplotlib.pyplot as plt
+
+                plt.close(figure)
+                raise ValueError(said) from None
             # Constrained layout cannot take over a figure built without it
             # (a colour bar made first): lay it out tightly instead.
             figure.set_layout_engine("tight")
@@ -1606,6 +1667,33 @@ def plot_svg(figure: Any, width: float, height: float, family: str, identifier: 
 
     plt.close(figure)
     return buffer.getvalue()
+
+
+def _plot_maths(figure: Any, error: Exception) -> str | None:
+    """A plot's words matplotlib could not set as maths, said plainly: which words, and
+    why, as flexo reads the formula -- not matplotlib's parser's own report."""
+
+    import matplotlib.text
+
+    message = str(error)
+    if "Parse" not in message and "Unknown symbol" not in message:
+        return None
+    formula = next((line.strip() for line in message.splitlines() if line.strip()), "")
+    words = next(
+        (text.get_text() for text in figure.findobj(matplotlib.text.Text) if formula and formula in text.get_text()),
+        f"${formula}$",
+    )
+    from flexo.texmath import problems_in
+
+    problems = problems_in(formula)
+    if problems:
+        reason = problems[0]
+    elif "\\begin" in formula:
+        reason = "matplotlib's maths has no environments (matrices, cases): set the formula on the slide instead"
+    else:
+        reason = "matplotlib's maths does not know all of it: set the formula on the slide instead"
+    shown = words if len(words) <= 60 else words[:59] + "\u2026"
+    return f"the plot's words \u201c{shown}\u201d are maths matplotlib cannot set: {reason}"
 
 
 def _ink(svg: str) -> tuple[float, float, float, float]:

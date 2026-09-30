@@ -62,7 +62,18 @@ from typing import Any
 import yaml
 from flexo.diagnostics import described
 
-from flexo_talk.deck import LAYOUTS, LOOKS, Deck, DeckStyle, Reference, Region, Slide, _Figure, _Plot
+from flexo_talk.deck import (
+    LAYOUTS,
+    LOOKS,
+    Deck,
+    DeckStyle,
+    Reference,
+    Region,
+    Slide,
+    _Figure,
+    _Plot,
+    displayed,
+)
 
 SCHEMA_VERSION = 1
 
@@ -78,6 +89,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "quote": ("by", "size"),
     "stats": ("colour", "size"),
     "callout": ("title", "colour", "size"),
+    "math": ("size", "align", "colour"),
 }
 """Each block kind and the options it takes beside its value."""
 
@@ -336,6 +348,16 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
             items = value if isinstance(value, list) else [value]
             _check_items(items, here)
             region.bullets(*items, **options)
+        elif kind == "text" and isinstance(value, str) and displayed(value):
+            # A paragraph that is one equation ($$...$$) is displayed, as LaTeX displays it.
+            muted = options.pop("muted", False)
+            if muted and not options.get("colour"):
+                options["colour"] = "muted"
+            region.math(value, **{"align": "middle", **options})
+        elif kind == "math":
+            if not isinstance(value, str | int | float) or not str(value).strip():
+                raise DeckDocumentError(here, "math is an equation in LaTeX, as math: E = mc^2")
+            region.math(str(value), **options)
         elif kind in {"text", "code", "quote", "callout"}:
             if not isinstance(value, str | int | float):
                 raise DeckDocumentError(here, f"{kind} is words")
