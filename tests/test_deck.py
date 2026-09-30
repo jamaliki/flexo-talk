@@ -101,7 +101,9 @@ def test_a_matplotlib_plot_is_native_shapes_and_text(tmp_path: Path) -> None:
     assert 'typeface="Figtree"' in slide and ">Loss" in slide and 'rot="16200000"' in slide
     # Lines are freeforms; the image is a picture, flipped as matplotlib stores it.
     assert "<a:custGeom>" in slide and "<p:pic>" in slide and 'flipV="1"' in slide
-    assert "θ" in "".join(re.findall(r"<a:t>([^<]*)</a:t>", slide))
+    # Its maths is the deck's: θ is the maths font's italic letter, as on a slide.
+    assert "\U0001d703" in "".join(re.findall(r"<a:t>([^<]*)</a:t>", slide))
+    assert 'typeface="Fira Math"' in slide
 
 
 def test_an_overfull_slide_is_set_smaller_and_reported(tmp_path: Path) -> None:

@@ -549,9 +549,9 @@ def _made_apart(
     if kind == "plot":
         view = worker.deck_view(deck) if deck is not None else {}
 
-        def draw(width: float, height: float, family: str, identifier: str) -> str:
+        def draw(width: float, height: float, family: str, identifier: str, maths: str) -> str:
             return asked({"deck": view, "width": width, "height": height, "family": family,
-                          "identifier": identifier})["svg"]
+                          "identifier": identifier, "maths": maths})["svg"]
 
         return worker.RemotePlot(draw)
     from flexo.serialization import parse_figure
