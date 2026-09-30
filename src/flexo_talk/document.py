@@ -111,6 +111,10 @@ class DeckDocumentError(ValueError):
         self.message = message
 
 
+class UntrustedCode(DeckDocumentError):
+    """Python a deck names, in a folder the studio has not been told to trust: not run."""
+
+
 # -- reading ------------------------------------------------------------------------------
 
 
@@ -475,6 +479,10 @@ def _maker(
     path = _file(base, file, where)
 
     def make() -> object:
+        from flexo.studio import code_allowed
+
+        if not code_allowed.get():
+            raise UntrustedCode(where, f"{target} was not run: this folder's Python runs once you trust the folder")
         with around() if around else contextlib.nullcontext(), _own_code(target, where):
             module = import_file(path)
             function = getattr(module, name, None)
@@ -569,8 +577,15 @@ def _takes_argument(function: Callable[..., object]) -> bool:
 
 
 def _file(base: Path, name: str, where: str = "") -> Path:
+    from flexo.studio import folder_root
+
     path = Path(name).expanduser()
     path = path if path.is_absolute() else base / path
+    root = folder_root.get()
+    if root is not None and root != path.resolve() and root not in path.resolve().parents:
+        # In the studio a deck reads only its own folder: a deck someone sends cannot
+        # carry a file of yours into its slides.
+        raise DeckDocumentError(where, f"{name} is outside the folder")
     if not path.exists():
         raise DeckDocumentError(where, f"no file {name} (looked in {path.parent})")
     return path
