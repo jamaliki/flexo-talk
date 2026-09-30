@@ -1507,6 +1507,8 @@ export function mount(studio, container) {
   });
 
   // -- the palette's commands, and following --
+  studio.exports = [{ format: "pdf", label: "PDF" }, { format: "pptx", label: "PowerPoint" }, { format: "png", label: "PNG, a slide each" }];
+  studio.present = () => present();
   studio.commands = () => [
     ...slides().map((slide, index) => ({ icon: "slide", label: `Slide ${index + 1}: ${slideTitle(slide)}`, run: () => select(index) })),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name].toLowerCase()} slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
