@@ -303,3 +303,269 @@ def test_a_table_alone_on_its_slide_is_centred(tmp_path: Path) -> None:
     assert tables[0].y > tables[1].y + 40
     # Under words, a table stands flush with them.
     assert abs(tables[1].x - style.margin) < 1.0
+
+
+def _deck_with_figures() -> dict:
+    figure = {
+        "figure": {"id": "inline"},
+        "nodes": [{"id": "x", "kind": "text", "label": "x"}, {"id": "m", "label": "Model"}],
+        "edges": [{"from": "x", "to": "m"}],
+    }
+    return {
+        "schema_version": 1,
+        "deck": {"id": "talk"},
+        "slides": [
+            {"title": "Here", "layout": "two-columns", "left": [{"text": "Words"}], "right": [{"figure": figure}]},
+            {"title": "A file", "layout": "figure", "body": [{"figure": "model.yaml"}]},
+            {"title": "Python", "body": [{"figure": "figures.py:model"}]},
+        ],
+    }
+
+
+def test_a_figure_written_in_the_deck_is_edited_where_it_is_written(tmp_path: Path) -> None:
+    kind = DeckKind()
+    document = _deck_with_figures()
+    at = {"slide": 0, "region": "right", "index": 0}
+    read = kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+    assert [node["id"] for node in read["model"]["nodes"]] == ["x", "m"] and read["document"] == document
+    edit = {"do": "add", "kind": "mlp", "after": "m", "source": "m"}
+    made = kind.act(document, {"do": "figure", "at": at, "edit": edit}, tmp_path)
+    assert made["select"] == ["mlp"]
+    figure = made["document"]["slides"][0]["right"][0]["figure"]
+    assert {"from": "m", "to": "mlp"} in figure["edges"] and len(figure["nodes"]) == 3
+    assert len(document["slides"][0]["right"][0]["figure"]["nodes"]) == 2  # the one given is left alone
+    deck = deck_from_document({**made["document"], "slides": made["document"]["slides"][:1]}, tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
+
+
+def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
+    from flexo.studio.figure_kind import NEW_FIGURE
+
+    (tmp_path / "model.yaml").write_text(NEW_FIGURE, encoding="utf-8")
+    kind = DeckKind()
+    document = _deck_with_figures()
+    at = {"slide": 1, "region": "body", "index": 0}
+    kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+    assert (tmp_path / "model.yaml").read_text() == NEW_FIGURE  # reading writes nothing
+    rename = {"do": "rename", "id": "encoder", "to": "backbone"}
+    result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
+    assert result["file"] == "model.yaml" and result["document"] is document
+    text = (tmp_path / "model.yaml").read_text()
+    assert text.startswith("# A flexo figure") and "id: backbone" in text and "to: backbone" in text
+
+
+def test_a_figure_made_in_python_or_gone_is_not_edited_on_its_slide(tmp_path: Path) -> None:
+    from flexo.studio.figure_edit import EditError
+
+    kind = DeckKind()
+    document = _deck_with_figures()
+    def read(slide: int, region: str, index: int) -> None:
+        at = {"slide": slide, "region": region, "index": index}
+        kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+
+    with pytest.raises(EditError, match="Python file"):
+        read(2, "body", 0)
+    with pytest.raises(EditError, match="gone"):
+        read(0, "right", 5)
+
+
+def test_the_studio_offers_the_figure_editor_for_figures_on_slides() -> None:
+    parts = DeckKind().catalog()["figure_editor"]["parts"]
+    assert {"block", "protein", "plasmid", "attention"} <= set(parts)
+
+
+def test_a_picture_in_a_figure_written_in_the_deck_is_found_beside_the_deck(tmp_path: Path) -> None:
+    (tmp_path / "logo.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>'
+    )
+    figure = {"figure": {"id": "pic"}, "nodes": [{"id": "logo", "kind": "image", "properties": {"source": "logo.svg"}}]}
+    document = {"schema_version": 1, "deck": {"id": "t"}, "slides": [{"title": "Logo", "body": [{"figure": figure}]}]}
+    deck = deck_from_document(document, tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
+
+
+def test_one_theme_file_is_put_to_use_in_a_deck_and_a_figure_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flexo.studio import theming
+    from flexo.studio.figure_kind import NEW_FIGURE
+    from flexo.studio.workspace import Workspace
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    (tmp_path / "themes").mkdir()
+    (tmp_path / "themes" / "lab.theme.yaml").write_text(
+        "theme: {name: lab-put-to-use, base: paper, palette: ['#8b1e3f']}\n", encoding="utf-8")
+    (tmp_path / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [{"title": "A"}]}))
+    (tmp_path / "figure.yaml").write_text(NEW_FIGURE, encoding="utf-8")
+    workspace = Workspace(tmp_path)
+    try:
+        after = theming.use(workspace, "themes/lab.theme.yaml", ["talk.yaml", "figure.yaml"],
+                            {"id": "page", "name": "Ada", "kind": "person"})
+        cards = theming.cards(workspace, "talk.yaml")
+        drawn = workspace.open("talk.yaml").kind.draw(workspace.open("talk.yaml").document, tmp_path, {})
+    finally:
+        workspace.close()
+    assert {entry["file"]: entry["uses"] for entry in after} == {"figure.yaml": True, "talk.yaml": True}
+    assert yaml.safe_load((tmp_path / "talk.yaml").read_text())["deck"]["theme"] == "themes/lab.theme.yaml"
+    assert yaml.safe_load((tmp_path / "figure.yaml").read_text())["figure"]["style"] == "themes/lab.theme.yaml"
+    assert cards[0]["value"] == "themes/lab.theme.yaml"
+    assert drawn.info["tones"]["colours"][0]["stroke"].startswith("#")
+
+
+def test_a_deck_s_python_is_kept_to_itself(tmp_path: Path) -> None:
+    import os
+    import time
+
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    matplotlib.use("Agg")
+    for folder, word in (("one", "first"), ("two", "second")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "utils.py").write_text(f"WORD = {word!r}\n")
+        (tmp_path / folder / "plots.py").write_text(
+            "from dataclasses import dataclass\n"
+            "import matplotlib.pyplot as plt\n"
+            "from utils import WORD\n"
+            "plt.rcParams['lines.linewidth'] = 9\n"
+            "@dataclass\n"
+            "class Point:\n"
+            "    x: float\n"
+            "def plot():\n"
+            "    figure, axes = plt.subplots()\n"
+            "    axes.plot([Point(0).x, 1])\n"
+            "    axes.set_title(WORD)\n"
+            "    return figure\n"
+            "def leaves():\n"
+            "    os.chdir('/')\n"
+            "    return plot()\n"
+            "def quits():\n"
+            "    raise SystemExit(3)\n"
+            "import os\n"
+        )
+    kind = DeckKind()
+    width, figures, here = plt.rcParams["lines.linewidth"], len(plt.get_fignums()), os.getcwd()
+
+    def draw(folder: str, function: str = "plot") -> str:
+        document = {"slides": [{"title": "A", "body": [{"plot": f"plots.py:{function}"}]}]}
+        drawing = kind.draw(document, tmp_path / folder, {})
+        return drawing.pages[0].svg + " ".join(message.text for message in drawing.messages)
+
+    assert "first" in draw("one") and "second" in draw("two")
+    assert "stopped: SystemExit 3" in draw("one", "quits")
+    draw("two", "leaves")
+    assert os.getcwd() == here
+    assert plt.rcParams["lines.linewidth"] == width and len(plt.get_fignums()) == figures
+    time.sleep(0.01)
+    (tmp_path / "one" / "utils.py").write_text("WORD = 'edited'\n")
+    assert "edited" in draw("one")
+
+
+def test_a_folder_not_trusted_runs_none_of_its_python_and_reads_only_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from flexo.studio.workspace import Workspace
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    folder = tmp_path / "sent"
+    folder.mkdir()
+    ran = tmp_path / "ran.txt"
+    (folder / "plots.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(ran)!r}).write_text('ran')\n"
+        "import matplotlib.pyplot as plt\n"
+        "def loss():\n    figure, axes = plt.subplots()\n    axes.plot([1, 2])\n    return figure\n"
+    )
+    (tmp_path / "private.png").write_bytes(b"not for the deck")
+    (folder / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [
+        {"title": "Plot", "body": [{"plot": "plots.py:loss"}]},
+        {"title": "Private", "body": [{"image": "../private.png"}]},
+    ]}))
+    workspace = Workspace(folder, trusted=False)
+    try:
+        doc = workspace.open("talk.yaml")
+        first = workspace.draw("talk.yaml", doc.document, 1, {}, {})
+        ran_before_trust = ran.exists()
+        workspace.trust()
+        second = workspace.draw("talk.yaml", doc.document, 2, {}, {})
+    finally:
+        workspace.close()
+    codes = {message["code"] for message in first["messages"]}
+    assert "code.untrusted" in codes and not ran_before_trust
+    assert any("outside the folder" in message["text"] for message in first["messages"])
+    assert ran.read_text() == "ran"
+    assert "code.untrusted" not in {message["code"] for message in second["messages"]}
+    assert any("outside the folder" in message["text"] for message in second["messages"])
+
+
+def test_in_the_studio_a_decks_python_runs_apart_and_cannot_hang_or_take_down_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("matplotlib")
+    import os
+
+    from flexo.studio.workspace import Workspace
+
+    from flexo_talk import worker
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.setattr(worker, "TIMEOUT", 3.0)
+    folder = tmp_path / "talk"
+    folder.mkdir()
+    (folder / "numbers.txt").write_text("3 1 2")
+    (folder / "plots.py").write_text(
+        "import os, sys, time\n"
+        "from pathlib import Path\n"
+        "import flexo\n"
+        "import matplotlib.pyplot as plt\n"
+        "def good(deck):\n"
+        "    print('printed words go to the log, not among the answers')\n"
+        "    numbers = [float(n) for n in Path('numbers.txt').read_text().split()]\n"
+        "    figure, axes = plt.subplots()\n"
+        "    axes.plot(numbers, color=deck.palette.get('tone-1-stroke'))\n"
+        "    axes.set_title(f'pid {os.getpid()}')\n"
+        "    return figure\n"
+        "def model():\n"
+        "    figure = flexo.Figure('model')\n"
+        "    figure.root.block('f', label='Made apart')\n"
+        "    return figure\n"
+        "def forever():\n"
+        "    while True:\n"
+        "        time.sleep(0.05)\n"
+        "def crash():\n"
+        "    os._exit(3)\n"
+        "def leave():\n"
+        "    sys.exit(2)\n"
+        "def nothing():\n"
+        "    return 7\n"
+        "def fault():\n"
+        "    import ctypes\n"
+        "    ctypes.string_at(0)\n"
+        "def typo():\n"
+        "    return figur\n"
+    )
+    slides = [{"title": name, "body": [{kind: f"plots.py:{name}"}]} for kind, name in (
+        ("plot", "good"), ("figure", "model"), ("plot", "forever"), ("plot", "crash"), ("plot", "leave"),
+        ("plot", "nothing"), ("plot", "good"), ("plot", "fault"), ("figure", "typo"),
+    )]
+    (folder / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": slides}))
+    workspace = Workspace(folder, trusted=True)
+    try:
+        started = __import__("time").monotonic()
+        drawing = workspace.drawing_of("talk.yaml")
+        seconds = __import__("time").monotonic() - started
+    finally:
+        workspace.close()
+        worker.stop_all()
+    said = {message.page: message.text for message in drawing.messages if message.severity == "error"}
+    pages = {page.id: page for page in drawing.pages}
+    assert f"pid {os.getpid()}" not in pages["slide1"].svg and "pid " in pages["slide1"].svg
+    assert "Made apart" in pages["slide2"].svg
+    assert said["slide3"] == "plots.py:forever took longer than 3 s, and was stopped"
+    assert said["slide4"] == "plots.py:crash quit the Python it ran in (exit code 3)"
+    assert said["slide5"] == "plots.py:leave: it called sys.exit(2) (line 22)"
+    assert said["slide6"] == "plots.py:nothing: nothing did not return a matplotlib figure"
+    assert said["slide8"] == "plots.py:fault crashed the Python it ran in (signal 11)"
+    assert said["slide9"] == "plots.py:typo: name 'figur' is not defined (line 29)"
+    assert "slide1" not in said and "slide7" not in said and "pid " in pages["slide7"].svg
+    assert seconds < 30

@@ -698,6 +698,27 @@ class _ListRun:
     link: str = ""
 
 
+def _room_for(run, typography, face, size: float, weight: int) -> str:
+    """Room in native words for a formula (``TextRun.math``): one space, spaced out to
+    the formula's width. The formula itself is drawn over it, as outlines, where Flexo
+    set it -- a slide program's words cannot hold a fraction or a matrix."""
+
+    from flexo.fonts import hb_font
+    from flexo.text import formula_of
+
+    width = formula_of(run, typography, weight).width
+    font = hb_font(face, weight)
+    gid = font.get_nominal_glyph(ord(" ")) or 0
+    space = font.get_glyph_h_advance(gid) / font.scale[0] * size
+    spacing = max(-400000, min(400000, round((width - space) * 100)))
+    name = escape(_family_name(_ListRun(" ", size, weight, False, face, "#000000")), {'"': "&quot;"})
+    return (
+        f'<a:r><a:rPr lang="en-GB" sz="{round(size * 100)}" spc="{spacing}" dirty="0">'
+        f'<a:latin typeface="{name}"/><a:ea typeface="{name}"/><a:cs typeface="{name}"/>'
+        f"</a:rPr><a:t> </a:t></a:r>"
+    )
+
+
 def add_list(tree: etree._Element, deck, layout) -> int:
     """A bulleted list as one text box of bulleted paragraphs, wrapped by the slide program.
 
@@ -723,6 +744,9 @@ def add_list(tree: etree._Element, deck, layout) -> int:
         pieces = []
         for run in runs:
             weight = drawn_weight(run, None)
+            if run.math:
+                pieces.append(_room_for(run, typography, stack.face(weight, False), layout.size, weight))
+                continue
             for face, text in stack.segments(run.text, weight, run.italic, code=run.code):
                 script = run.baseline_shift != "normal"
                 size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
@@ -747,15 +771,15 @@ def add_list(tree: etree._Element, deck, layout) -> int:
             f'<a:p><a:pPr marL="{round(offset * EMU_PER_POINT)}" '
             f'indent="{round((mark_at - offset) * EMU_PER_POINT)}" lvl="{min(level, 8)}"'
             f'{" rtl=\"1\" algn=\"r\"" if rtl else ""}>'
-            f'<a:lnSpc><a:spcPts val="{round(layout.line_height * 100)}"/></a:lnSpc>'
+            f'<a:lnSpc><a:spcPts val="{round(layout.step(position) * 100)}"/></a:lnSpc>'
             f'<a:spcBef><a:spcPts val="{before}"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft>'
             f'<a:buClr><a:srgbClr val="{colour}"/></a:buClr><a:buSzPct val="{100000 if level == 0 else 85000}"/>'
             f"{mark}</a:pPr>{''.join(pieces)}</a:p>"
         )
     first = layout.items[0][2] if layout.items else layout.y
     last = layout.items[-1][2] if layout.items else layout.y
-    top = first - ascent(stack.face(400, False)) * layout.line_height
-    height = last - top + layout.line_height
+    top = first - ascent(stack.face(400, False)) * layout.step(0)
+    height = last - top + layout.step(len(layout.items) - 1)
     shape_id = ids()
     element = etree.fromstring(
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{shape_id}\" name=\"{escape(layout.id)}\"/>"
@@ -821,7 +845,8 @@ def add_table(tree: etree._Element, deck, layout) -> None:
 
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
     ids = _Ids(max(existing, default=1))
-    stack = font_stack(deck.typography(layout.size))
+    typography = deck.typography(layout.size)
+    stack = font_stack(typography)
     palette = layout.palette or deck.palette
     ink = palette.get("ink")
     colour = _colour(ink)
@@ -835,6 +860,9 @@ def add_table(tree: etree._Element, deck, layout) -> None:
             pieces = []
             for run in cell:
                 weight = 700 if heading and run.weight == 400 else drawn_weight(run, None)
+                if run.math:
+                    pieces.append(_room_for(run, typography, stack.face(weight, False), layout.size, weight))
+                    continue
                 for face, text in stack.segments(run.text, weight, run.italic, code=run.code):
                     script = run.baseline_shift != "normal"
                     size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size

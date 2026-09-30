@@ -9,6 +9,8 @@ description = "Slide decks in flexo's language: one theme, exported to PPTX, PDF
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Kiarash Jamali" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
   "flexo",
   "python-pptx>=1.0",
@@ -30,6 +32,7 @@ slides = "flexo_talk.studio:SlideSamples"
 
 [dependency-groups]
 dev = [
+  "flexo[structures,molecules]",
   "matplotlib>=3.8",
   "pypdfium2>=4.0",
   "pytest>=8.4",

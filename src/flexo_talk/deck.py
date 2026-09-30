@@ -32,7 +32,7 @@ from typing import Literal
 
 import flexo
 from flexo.ir.semantic import FigureSpec, TextRun
-from flexo.markup import parse_label
+from flexo.markup import math_spans, parse_label
 from flexo.style import LayoutStyle, Palette, TypographyStyle
 from flexo.themes import resolve_palette, resolve_style, with_tone_roles
 from flexo.units import pt
@@ -69,7 +69,7 @@ class DeckStyle:
     column_gap: float = 36.0
     block_gap: float = 18.0
     """Space between two blocks placed one under the other in a region."""
-    title_gap: float = 22.0
+    title_gap: float = 32.0
     """Space between a slide's title and its body."""
     header: Literal["rule", "band", "line", "none"] = "rule"
     """What marks a slide's title: a short accent rule under it, a band of the
@@ -84,9 +84,9 @@ class DeckStyle:
     align: Literal["auto", "top", "middle"] = "auto"
     """Where a slide's content sits in its body, top to bottom: ``auto`` keeps
     words at the top, centres pictures standing alone in the room they have, and
-    centres a column of pictures against a column of words beside it (and the
-    words against the pictures when those are taller); ``top`` sets everything at
-    the top; ``middle`` centres the whole content in the body."""
+    centres a column of pictures against a taller column of words beside it (a
+    taller column of pictures starts level with the words); ``top`` sets
+    everything at the top; ``middle`` centres the whole content in the body."""
     numbers: bool = True
     """A slide number in the bottom-right corner."""
     title_weight: int | None = None
@@ -209,6 +209,15 @@ class _Callout:
     size: float | None = None
 
 
+@dataclass(slots=True)
+class _Math:
+    source: str
+    """LaTeX maths, without its ``$$``."""
+    size: float | None = None
+    align: Literal["start", "middle", "end"] = "middle"
+    colour: str | None = None
+
+
 class Reference:
     """A figure or plot named by where it is made (``plots.py:loss``), made only when drawn."""
 
@@ -234,6 +243,7 @@ def made(value: object) -> object:
 
 type _Block = (
     _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery | _Quote | _Stats | _Callout
+    | _Math
 )
 
 
@@ -247,6 +257,27 @@ def accent_field(palette: Palette) -> str:
     return accent if is_dark(accent) else with_lightness(accent, 0.45)
 
 
+_INLINE = r"(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\*\*|\*)"
+
+
+_DISPLAYED = re.compile(r"\s*(?:\$\$(?P<dollars>.+?)\$\$|\\\[(?P<brackets>.+?)\\\])\s*", re.DOTALL)
+
+
+def display_source(source: str) -> str:
+    """An equation's LaTeX without the ``$$`` or ``\\[ \\]`` it may be written in."""
+
+    whole = _DISPLAYED.fullmatch(source)
+    if whole:
+        return (whole.group("dollars") or whole.group("brackets") or "").strip()
+    return source.strip()
+
+
+def displayed(words: str) -> bool:
+    """Whether ``words`` are one equation and nothing else: ``$$...$$`` or ``\\[...\\]``."""
+
+    return bool(_DISPLAYED.fullmatch(words))
+
+
 def inline(words: str) -> tuple[TextRun, ...]:
     """Slide text as runs: ``*emphasis*`` is italic, ``**strong**`` bold, ``$...$``
     math, ``code`` between backticks is set in the monospace family,
@@ -257,10 +288,15 @@ def inline(words: str) -> tuple[TextRun, ...]:
     """
 
     runs: list[TextRun] = []
-    # Split on links, code, maths, ** and *; each piece takes the styles open around it.
-    tokens = re.split(
-        r"(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\$[^$]*\$|\*\*|\*)", words
-    )
+    # Split on maths (read as flexo reads it), then links, code, ** and *; each piece
+    # takes the styles open around it.
+    tokens: list[str] = []
+    at = 0
+    for start, end in math_spans(words):
+        tokens += re.split(_INLINE, words[at:start])
+        tokens.append(words[start:end])
+        at = end
+    tokens += re.split(_INLINE, words[at:])
     bold = italic = False
     for token in tokens:
         if token == "**":
@@ -347,6 +383,24 @@ class Region:
         self._record(
             "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
         )
+        return self
+
+    def math(
+        self,
+        source: str,
+        *,
+        size: float | None = None,
+        align: Literal["start", "middle", "end"] = "middle",
+        colour: str | None = None,
+    ) -> Region:
+        """An equation on a line of its own, as LaTeX displays one: ``\\frac``, ``\\sum``
+        with its limits, matrices, ``cases``, and lines aligned at ``&`` and broken at
+        ``\\\\``. Centred (``align`` to set it at the start or end), at the words' size
+        (``size``) or smaller if that is wider than its place."""
+
+        source = display_source(source)
+        self.blocks.append(_Math(source, size, align, colour))
+        self._record("math", source, size=size, align=None if align == "middle" else align, colour=colour)
         return self
 
     def gallery(
@@ -483,7 +537,8 @@ class Region:
             body = [list(row) for row in rows[1 if header else 0 :]]
             aligned = tuple(
                 "end"
-                if body and all(_numeric(row[index]) for row in body if index < len(row))
+                if any(_numeric(row[index]) for row in body if index < len(row))
+                and all(_numeric(row[index]) or _blank(row[index]) for row in body if index < len(row))
                 else "start"
                 for index in range(columns)
             )
@@ -523,6 +578,13 @@ def _plain(items: object) -> object:
     if isinstance(items, list | tuple):
         return [_plain(item) for item in items]
     return items
+
+
+def _blank(cell: object) -> bool:
+    """A cell that stands for no value: empty, a dash, or n/a. A column of numbers
+    with gaps in it is still a column of numbers."""
+
+    return str(cell).strip().lower() in {"", "-", "--", "\u2013", "\u2014", "n/a", "na"}
 
 
 def _numeric(cell: object) -> bool:
@@ -685,6 +747,10 @@ class Slide:
 
     def callout(self, words: str, **options: object) -> Slide:
         next(iter(self.regions.values())).callout(words, **options)  # type: ignore[arg-type]
+        return self
+
+    def math(self, source: str, **options: object) -> Slide:
+        next(iter(self.regions.values())).math(source, **options)  # type: ignore[arg-type]
         return self
 
     def notes(self, text: str) -> Slide:
@@ -1061,6 +1127,13 @@ class ListLayout:
     """How far an outer item's words start from its number's left edge, when numbered."""
     palette: Palette | None = None
     """The slide's paints (light words on a dark slide); the deck's when unset."""
+    steps: list[float] = field(default_factory=list)
+    """Each item's line height: a formula taller than the words opens its item's lines."""
+
+    def step(self, index: int) -> float:
+        """The line height of item ``index``."""
+
+        return self.steps[index] if 0 <= index < len(self.steps) else self.line_height
 
     def offset(self, level: int) -> float:
         """Where an item's words start, from the list's left edge."""
@@ -1110,6 +1183,9 @@ class RenderedSlide:
     notes: list[str] = field(default_factory=list)
     steps: int = 1
     """How many states the slide shows in turn (revealed lists); 1 for most."""
+    held: list[str] = field(default_factory=list)
+    """Python the slide names that was not run (its folder not yet trusted): a quiet line
+    stands in its place."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

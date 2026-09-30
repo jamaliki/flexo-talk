@@ -53,11 +53,13 @@ height (`flexo.fit_in_box`) -- at a size where its words read at the deck's
 figure size: as written, or **turned** (a stack that reads upward laid out left
 to right, rows as columns, Q/K/V glyphs lying down), or spaced closer, whichever
 lets its words be largest there, never larger than the body text; a figure
-still too small is **folded**, its long rows set on two lines (the full
-transformer on one slide: encoder above, decoder folded, 7pt words instead of
-4pt). The build summary notes a figure it turned or folded;
-`slide.add(figure, turn=False)` keeps one as written. Figures sharing a region
-take one scale, so their words match. A figure whose words still end up under
+still smaller than that is **folded** when that sets its words clearly larger,
+its long rows set on two lines (the full transformer on one slide: encoder
+above, decoder folded, 7pt words instead of 4pt). The build summary notes a
+figure it turned or folded; `slide.add(figure, turn=False)` keeps one as
+written. Figures on one slide -- in one region or side by side -- set their
+words at one size: the largest at which every one fits its place, each laid out
+as written where that reaches it. A figure whose words still end up under
 7pt is reported with what to do. Laying a figure out can take a while for a large one (the
 full transformer, about half a minute), so each is kept in a cache between builds
 (`~/Library/Caches/flexo-talk` or `$XDG_CACHE_HOME/flexo-talk`), keyed by the figure,
@@ -116,11 +118,11 @@ by flexo-talk, measuring every word with flexo's own measurer, so wrapping and
 sizes agree in every output. Each region is set from its top and then aligned
 as a whole (`DeckStyle.align`, or `deck.slide(..., align=)`):
 
-- `auto` (the default): words stay at the top; a figure, plot, picture, gallery,
-  quotation, table, code listing, or row of numbers standing alone is centred in
-  the room it has (a table narrower than its place across it too); a column of
-  pictures is centred against the column of words beside it -- and the words
-  against the pictures when those are taller. Columns of words share one top.
+- `auto` (the default): words start at the top of the body, on every slide; a
+  figure, plot, picture, gallery, quotation, table, code listing, or row of
+  numbers standing alone is centred in the room it has (a table narrower than
+  its place across it too); a column of pictures is centred against a taller
+  column of words beside it, and a taller one starts level with the words.
 - `top`: everything at the top. `middle`: the content centred in the body.
 
 A single-column gallery (a column of logos) stands flush with the words above
@@ -189,6 +191,31 @@ no grid -- with its header bold and each column as wide as its widest cell.
 Columns of numbers are set flush right (`align="lrr"` or a list of
 `start`/`middle`/`end` to choose); `header=False` drops the header. In the
 PowerPoint it is a native table with the same columns, rows, and rules.
+
+## Maths
+
+```python
+slide.math(r"\mathcal{L}(\theta) = -\frac{1}{N}\sum_{i=1}^{N} \log p_\theta(y_i \mid x_i)")
+slide.text(r"The rate $k = A e^{-E_a/RT}$ rises with temperature.")
+```
+
+Maths is LaTeX. `math(...)` -- a `math:` block in a document, or a paragraph that is
+only `$$...$$` or `\[...\]` -- displays an equation on its own line, centred, at the
+words' size or smaller if it is wider than its place: fractions, roots, sums and
+integrals with their limits, brackets that grow (`\left( ... \right)`, `\big`),
+accents, braces over and under, matrices (`pmatrix`, `bmatrix`, `vmatrix`...), `cases`,
+lines aligned at `&` and broken at `\\` (in `aligned`, or without it), chemistry
+(`\ce{2H2 + O2 -> 2H2O}`) and units (`\SI{9.81}{\metre\per\second\squared}`).
+
+In words, `$...$` or `\(...\)` sets maths in the line, and a formula too long for its
+line breaks after a relation or an operator, as TeX breaks it. Dollars are read as
+pandoc reads them, so "it costs $5 and $10" stays two prices, and `\$` is a dollar.
+Simple maths (`$x_t$`) is set as words; the rest is laid out by TeX's rules from the
+bundled Latin Modern Math. Its letters and signs are the deck's own face, so a
+formula reads with the words around it. Maths that cannot be read is drawn in red
+and said in the build summary (and beside the equation in the studio), with the
+command a typo probably meant. In the PowerPoint a formula is drawn as shapes, and
+native lists and tables leave room for it in their words.
 
 ## Plots
 
@@ -284,6 +311,13 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
   a figure, a picture, a table, and more -- after the one chosen. Pictures dropped
   on the slide are added to it.
+- **Figures are edited on their slides.** Choose a figure and its parts can be
+  chosen, typed on (double-click), connected, and gathered where they are drawn,
+  as in flexo's figure editor: a bar above the figure adds parts (A) and draws
+  lines (C), and the inspector shows the part chosen. A figure written in the deck
+  changes in the deck, and undoes with it; a figure file changes in its file,
+  comments and all. Esc steps out, a part at a time. A figure made in Python is
+  changed in its Python.
 - **The inspector shows what is chosen**: a part's own settings, or, with nothing
   chosen, the slide's title, its parts in order (drag to reorder), its layout,
   background, and footnotes. **Design** holds the look, theme, palette, type, and
@@ -316,6 +350,11 @@ uv run pytest
 uv run python examples/demo.py
 ```
 
+`examples/journal_club.py` is a real talk -- a journal club on the Vision
+Transformer, with its figures, a table and plots from the paper, code, and a
+picture -- built in any theme (`python examples/journal_club.py
+../design-corner/talks/themes/night.yaml`).
+
 `examples/stress/` holds decks that push at the edges: `results.py` (matplotlib
 plots, a saved SVG and a PNG, a table, maths, an overfull slide), `variety.py`
 (`sketchy`, hand-drawn with literature figures; `lab`, a YAML theme file),
@@ -324,3 +363,7 @@ Arabic, unbreakable words, deep lists, a JPEG, a gradient SVG). Each is checked
 by rendering its PowerPoint file in ONLYOFFICE (its `x2t` converter, to PDF) and
 comparing every page with flexo-talk's own PDF of the same deck; they agree to
 within antialiasing.
+
+## License
+
+flexo-talk is licensed under the [Apache License 2.0](LICENSE).

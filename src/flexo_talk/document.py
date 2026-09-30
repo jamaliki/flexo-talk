@@ -46,9 +46,11 @@ back as a document.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import inspect
 import json
+import os
 import sys
 import threading
 from collections import OrderedDict
@@ -58,8 +60,20 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from flexo.diagnostics import described
 
-from flexo_talk.deck import LAYOUTS, LOOKS, Deck, DeckStyle, Reference, Region, Slide, _Figure, _Plot
+from flexo_talk.deck import (
+    LAYOUTS,
+    LOOKS,
+    Deck,
+    DeckStyle,
+    Reference,
+    Region,
+    Slide,
+    _Figure,
+    _Plot,
+    displayed,
+)
 
 SCHEMA_VERSION = 1
 
@@ -75,6 +89,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "quote": ("by", "size"),
     "stats": ("colour", "size"),
     "callout": ("title", "colour", "size"),
+    "math": ("size", "align", "colour"),
 }
 """Each block kind and the options it takes beside its value."""
 
@@ -107,6 +122,10 @@ class DeckDocumentError(ValueError):
         super().__init__(f"{where}: {message}" if where else message)
         self.where = where
         self.message = message
+
+
+class UntrustedCode(DeckDocumentError):
+    """Python a deck names, in a folder the studio has not been told to trust: not run."""
 
 
 # -- reading ------------------------------------------------------------------------------
@@ -153,7 +172,9 @@ def deck_from_document(
     _only(document, ("schema_version", "deck", "slides"), "")
     version = document.get("schema_version", SCHEMA_VERSION)
     if version != SCHEMA_VERSION:
-        raise DeckDocumentError("schema_version", f"this flexo-talk reads version {SCHEMA_VERSION}, not {version}")
+        raise DeckDocumentError(
+            "schema_version", f"this flexo-talk reads version {SCHEMA_VERSION}, not {described(version)}"
+        )
     deck = make_deck(document.get("deck") or {}, base)
     slides = document.get("slides") or []
     if not isinstance(slides, list):
@@ -302,7 +323,7 @@ def _text_of(data: dict[str, Any], where: str) -> Callable[[str], str]:
         if value is None:
             return ""
         if isinstance(value, dict | list):
-            raise DeckDocumentError(f"{where}.{key}", f"{key} is words, not a {type(value).__name__}")
+            raise DeckDocumentError(f"{where}.{key}", f"{key} is words, not {described(value)}")
         return str(value)
 
     return text
@@ -327,6 +348,16 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
             items = value if isinstance(value, list) else [value]
             _check_items(items, here)
             region.bullets(*items, **options)
+        elif kind == "text" and isinstance(value, str) and displayed(value):
+            # A paragraph that is one equation ($$...$$) is displayed, as LaTeX displays it.
+            muted = options.pop("muted", False)
+            if muted and not options.get("colour"):
+                options["colour"] = "muted"
+            region.math(value, **{"align": "middle", **options})
+        elif kind == "math":
+            if not isinstance(value, str | int | float) or not str(value).strip():
+                raise DeckDocumentError(here, "math is an equation in LaTeX, as math: E = mc^2")
+            region.math(str(value), **options)
         elif kind in {"text", "code", "quote", "callout"}:
             if not isinstance(value, str | int | float):
                 raise DeckDocumentError(here, f"{kind} is words")
@@ -391,13 +422,13 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
 
     if isinstance(value, dict):
         # A figure is read once for each version of it: the studio reads the deck on every edit.
-        key = json.dumps(value, sort_keys=True, default=str)
+        key = json.dumps([str(base), value], sort_keys=True, default=str)
         with _FIGURES_LOCK:
             if key in _FIGURES:
                 _FIGURES.move_to_end(key)
                 return _FIGURES[key]
         try:
-            figure = parse_figure(value)
+            figure = parse_figure(_beside(base, value))
         except Exception as error:
             raise DeckDocumentError(where, f"the figure is not a flexo figure document: {error}") from error
         with _FIGURES_LOCK:
@@ -408,7 +439,7 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
     if not isinstance(value, str) or not value:
         raise DeckDocumentError(where, "a figure is a figure file, file.py:function, or a flexo figure document")
     if _is_code(value):
-        return Reference(value, _maker(base, value, where, lambda made: _as_figure(made, value, where)))
+        return Reference(value, _maker(base, value, where, lambda made: _as_figure(made, value, where), kind="figure"))
     try:
         return load_figure(_file(base, value, where))
     except DeckDocumentError:
@@ -417,12 +448,29 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
         raise DeckDocumentError(where, f"{value}: {error}") from error
 
 
+def _beside(base: Path, figure: dict) -> dict:
+    """A figure written in the deck, the pictures and structures its parts draw found
+    beside the deck."""
+
+    nodes = figure.get("nodes")
+    if not isinstance(nodes, list):
+        return figure
+    found = []
+    for node in nodes:
+        properties = node.get("properties") if isinstance(node, dict) else None
+        source = properties.get("source") if isinstance(properties, dict) else None
+        if isinstance(source, str) and source and (base / source).is_file():
+            node = {**node, "properties": {**properties, "source": str((base / source).resolve())}}
+        found.append(node)
+    return {**figure, "nodes": found}
+
+
 def _as_figure(made: object, target: str, where: str) -> object:
     import flexo
     from flexo.ir.semantic import FigureSpec
 
     if not isinstance(made, flexo.Figure | FigureSpec):
-        raise DeckDocumentError(where, f"{target} returned {type(made).__name__}, not a flexo figure")
+        raise DeckDocumentError(where, f"{target} did not return a flexo figure")
     return made
 
 
@@ -432,10 +480,11 @@ def _plot(base: Path, value: object, where: str, region: Region) -> Reference:
     deck = region._slide.deck
 
     def call(function: Callable[..., object]) -> object:
-        with deck.plotting():
-            return function(deck) if _takes_argument(function) else function()
+        return function(deck) if _takes_argument(function) else function()
 
-    return Reference(value, _maker(base, value, where, lambda made: made, call=call))
+    # The file is read inside the deck's plotting look too: a style it sets as it is
+    # imported is then the deck's for that plot, not the whole app's from then on.
+    return Reference(value, _maker(base, value, where, lambda made: made, call=call, around=deck.plotting, deck=deck))
 
 
 def _is_code(value: str) -> bool:
@@ -449,39 +498,142 @@ def _maker(
     check: Callable[[object], object],
     *,
     call: Callable[[Callable[..., object]], object] | None = None,
+    around: Callable[[], contextlib.AbstractContextManager] | None = None,
+    deck: Deck | None = None,
+    kind: str = "plot",
 ) -> Callable[[], object]:
     file, _, name = target.rpartition(":")
     path = _file(base, file, where)
 
     def make() -> object:
-        module = import_file(path)
-        function = getattr(module, name, None)
-        if not callable(function):
-            raise DeckDocumentError(where, f"{file} has no function {name}")
-        return check(call(function) if call else function())
+        from flexo.studio import code_allowed
+
+        from flexo_talk import worker
+
+        if not code_allowed.get():
+            raise UntrustedCode(where, f"{target} was not run: this folder's Python runs once you trust the folder")
+        root = worker.root()
+        if root is not None:
+            return _made_apart(root, path.resolve(), name, target, where, kind, deck, check)
+        with around() if around else contextlib.nullcontext(), _own_code(target, where):
+            module = import_file(path)
+            function = getattr(module, name, None)
+            if not callable(function):
+                raise DeckDocumentError(where, f"{file} has no function {name}")
+            made = call(function) if call else function()
+        return check(made)
 
     return make
 
 
+def _made_apart(
+    root: Path, path: Path, name: str, target: str, where: str, kind: str, deck: Deck | None,
+    check: Callable[[object], object],
+) -> object:
+    """A figure or plot made by the studio's worker for ``root`` (``flexo_talk.worker``):
+    a plot that hangs or crashes is said on its slide, and the app goes on."""
+
+    from flexo_talk import worker
+
+    request: dict[str, Any] = {"do": kind, "file": str(path), "function": name}
+
+    def asked(extra: dict[str, Any]) -> dict[str, Any]:
+        try:
+            answer = worker.ask(root, {**request, **extra})
+        except worker.Stopped as stopped:
+            raise DeckDocumentError(where, f"{target} {stopped}") from None
+        if "error" in answer:
+            raise DeckDocumentError(where, f"{target}: {answer['error']}")
+        return answer
+
+    if kind == "plot":
+        view = worker.deck_view(deck) if deck is not None else {}
+
+        def draw(width: float, height: float, family: str, identifier: str) -> str:
+            return asked({"deck": view, "width": width, "height": height, "family": family,
+                          "identifier": identifier})["svg"]
+
+        return worker.RemotePlot(draw)
+    from flexo.serialization import parse_figure
+
+    document = asked({})["document"]
+    try:
+        return check(parse_figure(_beside(path.parent, document)))
+    except DeckDocumentError:
+        raise
+    except Exception as error:
+        raise DeckDocumentError(where, f"{target} made a figure flexo cannot read: {error}") from error
+
+
+@contextlib.contextmanager
+def _own_code(target: str, where: str):
+    """Around a deck's own Python: whatever it does to stop (``sys.exit()``) is said on
+    its slide, and the folder it may have moved into is left again."""
+
+    folder = os.getcwd()
+    try:
+        yield
+    except (DeckDocumentError, KeyboardInterrupt):
+        raise
+    except BaseException as error:
+        if isinstance(error, Exception) and not isinstance(error, SystemExit):
+            raise
+        raise DeckDocumentError(where, f"{target} stopped: {type(error).__name__} {error}".strip()) from None
+    finally:
+        if os.getcwd() != folder:
+            os.chdir(folder)
+
+
 _MODULES: dict[Path, tuple[float, object]] = {}
+_IMPORTING = threading.Lock()
 
 
 def import_file(path: Path) -> object:
-    """The module a Python file makes, imported again when the file has changed."""
+    """The module a Python file makes, imported again when it, or any Python file beside
+    it (a helper it imports), has changed.
 
-    stamp = path.stat().st_mtime
+    Its folder is on the import path only while it is imported, and the modules it
+    imports from there are forgotten after: so an edited helper is read again, and a
+    helper of the same name in another deck's folder is never taken for this one's.
+    """
+
+    stamp = _stamp(path)
     known = _MODULES.get(path)
     if known and known[0] == stamp:
         return known[1]
-    spec = importlib.util.spec_from_file_location(f"_flexo_talk_{path.stem}_{abs(hash(path))}", path)
+    name = f"_flexo_talk_{path.stem}_{abs(hash(path))}"
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise DeckDocumentError("", f"cannot read {path}")
     module = importlib.util.module_from_spec(spec)
-    if str(path.parent) not in sys.path:
-        sys.path.insert(0, str(path.parent))
-    spec.loader.exec_module(module)
+    folder = path.parent.resolve()
+    with _IMPORTING:
+        before = set(sys.modules)
+        sys.path.insert(0, str(folder))
+        sys.modules[name] = module  # a dataclass in the file looks its module up
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+        finally:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(str(folder))
+            for key in set(sys.modules) - before - {name}:
+                source = getattr(sys.modules.get(key), "__file__", None)
+                if source and folder in Path(source).resolve().parents:
+                    del sys.modules[key]
     _MODULES[path] = (stamp, module)
     return module
+
+
+def _stamp(path: Path) -> float:
+    """When the file, or the latest Python file beside it, last changed."""
+
+    stamps = [path.stat().st_mtime]
+    with contextlib.suppress(OSError):
+        stamps += [item.stat().st_mtime for item in list(path.parent.glob("*.py"))[:200]]
+    return max(stamps)
 
 
 def _takes_argument(function: Callable[..., object]) -> bool:
@@ -496,8 +648,15 @@ def _takes_argument(function: Callable[..., object]) -> bool:
 
 
 def _file(base: Path, name: str, where: str = "") -> Path:
+    from flexo.studio import folder_root
+
     path = Path(name).expanduser()
     path = path if path.is_absolute() else base / path
+    root = folder_root.get()
+    if root is not None and root != path.resolve() and root not in path.resolve().parents:
+        # In the studio a deck reads only its own folder: a deck someone sends cannot
+        # carry a file of yours into its slides.
+        raise DeckDocumentError(where, f"{name} is outside the folder")
     if not path.exists():
         raise DeckDocumentError(where, f"no file {name} (looked in {path.parent})")
     return path

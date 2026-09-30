@@ -7,6 +7,7 @@ and files are as they were is not drawn again.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from flexo.studio import Drawing, Message, Page
+from flexo.studio.plain import explain
 
 from flexo_talk.deck import LAYOUTS, LOOKS, DeckStyle
 from flexo_talk.document import (
@@ -25,6 +27,7 @@ from flexo_talk.document import (
     SCHEMA_VERSION,
     SLIDE_KEYS,
     DeckDocumentError,
+    UntrustedCode,
     deck_from_document,
     dump_document,
     is_deck_document,
@@ -77,6 +80,7 @@ STYLE_NOTES = {
 }
 
 CACHE_SIZE = 600
+CACHE_BYTES = 200_000_000
 BUDGET = 0.4
 """Seconds a drawing spends on slides beyond the first before it returns what it has."""
 
@@ -112,6 +116,15 @@ class DeckKind:
 
     def dump(self, document: dict[str, Any]) -> str:
         return dump_document(document)
+
+    def theme_of(self, document: dict[str, Any]) -> str | None:
+        theme = (document.get("deck") or {}).get("theme")
+        return str(theme) if theme else None
+
+    def with_theme(self, document: dict[str, Any], theme: str, base: Path) -> dict[str, Any]:
+        changed = copy.deepcopy(document)
+        changed.setdefault("deck", {})["theme"] = theme
+        return changed
 
     def parse(self, text: str) -> Any:
         import yaml
@@ -215,6 +228,8 @@ class DeckKind:
             "layouts": [{"name": name, "note": LAYOUT_NOTES[name]} for name in LAYOUTS],
             "slide_keys": {layout: [*COMMON_KEYS, *keys] for layout, keys in SLIDE_KEYS.items()},
             "blocks": {kind: list(options) for kind, options in BLOCKS.items()},
+            # What the figure editor offers, for figures edited on their slides.
+            "figure_editor": _figure_editor(),
         }
 
     # -- drawing --
@@ -229,14 +244,16 @@ class DeckKind:
         try:
             deck = deck_from_document(document, base, errors=errors)
         except DeckDocumentError as error:
-            return Drawing([], [Message(error.message, "error", error.where)])
+            return Drawing([], [Message(_plain_message(error), "error", error.where)])
         except Exception as error:
-            return Drawing([], [Message(f"{type(error).__name__}: {error}", "error", "deck")])
+            return Drawing([], [Message(explain(error), "error", "deck")])
         slides = document.get("slides") or []
         failed = {_slide_of(error.where): error for error in errors}
         deck_data = document.get("deck") or {}
+        from flexo.studio import code_allowed
+
         head = _stable({
-            "deck": deck_data, "base": str(base), "count": len(slides),
+            "deck": deck_data, "base": str(base), "count": len(slides), "trusted": code_allowed.get(),
             # A theme file edited in the studio changes every slide without changing the deck.
             "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
         })
@@ -272,11 +289,20 @@ class DeckKind:
             try:
                 rendered = render_slide(deck, slide)
                 self._slides[keys[index]] = {"svg": rendered.svg, "steps": rendered.steps,
-                                             "diagnostics": rendered.diagnostics, "notes": rendered.notes}
+                                             "diagnostics": rendered.diagnostics, "notes": rendered.notes,
+                                             "held": rendered.held}
+            except UntrustedCode as error:
+                self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
+            except DeckDocumentError as error:
+                # Said on its slide, where it is: the message need not name the place again.
+                self._slides[keys[index]] = {"error": _plain_message(error), "where": error.where}
             except Exception as error:
-                self._slides[keys[index]] = {"error": f"{type(error).__name__}: {error}"}
+                self._slides[keys[index]] = {"error": explain(error)}
             drawn_one = True
-        while len(self._slides) > CACHE_SIZE:
+        # Slides with photos carry them inside: the cache is held to a size in bytes too.
+        while len(self._slides) > CACHE_SIZE or (
+            len(self._slides) > 1 and sum(len(item.get("svg", "")) for item in self._slides.values()) > CACHE_BYTES
+        ):
             self._slides.popitem(last=False)
         pages: list[Page] = []
         messages: list[Message] = []
@@ -285,21 +311,58 @@ class DeckKind:
             done = self._slides.get(keys[index])
             if index in failed:
                 error = failed[index]
-                messages.append(Message(error.message, "error", error.where, identifier, "deck.document"))
+                messages.append(Message(_plain_message(error), "error", error.where, identifier, "deck.document"))
                 pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=True)))
             elif done is None:
                 pages.append(Page(identifier, "", _label(data), extra=_extra(data), pending=True))
             elif "error" in done:
-                messages.append(Message(done["error"], "error", f"slides[{index}]", identifier, "deck.draw"))
-                pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=True)))
+                # Python held back until the folder is trusted is not a mistake in the deck.
+                held = done.get("code") == "code.untrusted"
+                messages.append(Message(done["error"], "warning" if held else "error",
+                                        done.get("where") or f"slides[{index}]", identifier,
+                                        done.get("code", "deck.draw")))
+                pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=not held)))
             else:
                 self._slides.move_to_end(keys[index])
                 for text in done["diagnostics"]:
                     messages.append(_diagnostic(text, identifier, index, "warning"))
                 for text in done["notes"]:
                     messages.append(_diagnostic(text, identifier, index, "note"))
+                for text in done.get("held", []):
+                    messages.append(Message(text, "warning", f"slides[{index}]", identifier, "code.untrusted"))
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
-        return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck)})
+        return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck), "tones": _tones(deck)})
+
+    def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+        """An edit to a figure on a slide, made where the figure is written: in the deck
+        (a figure written inline) or in its own file. ``action`` is ``{"do": "figure",
+        "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}``."""
+
+        import copy
+
+        from flexo.studio.figure_edit import EditError, apply, apply_to_data, model
+
+        if action.get("do") != "figure":
+            raise EditError(f'unknown deck edit "{action.get("do")}"')
+        at = action.get("at") or {}
+        edit = action.get("edit") or {}
+        changed = copy.deepcopy(document)
+        block = _block_at(changed, at)
+        value = block.get("figure") if isinstance(block, dict) else None
+        if isinstance(value, dict):
+            made = apply_to_data(value, edit, base=base)
+            block["figure"] = made["data"]
+            return {"document": changed, "select": made["select"], "model": made["model"]}
+        if isinstance(value, str) and value and ".py:" not in value:
+            path = (base / value).resolve()
+            if not path.is_file() or not path.is_relative_to(base.resolve()):
+                raise EditError(f"no figure file {value} beside the deck")
+            result = apply(path.read_text(encoding="utf-8"), edit, suffix=path.suffix, base=path.parent)
+            if edit.get("do") != "read":
+                path.write_text(result["text"], encoding="utf-8")
+            return {"document": document, "select": result["select"],
+                    "model": model(result["text"], suffix=path.suffix), "file": value}
+        raise EditError("a figure made in Python is changed in its Python file")
 
     def export(self, document: dict[str, Any], base: Path, stem: str, formats: list[str]) -> list[Path]:
         deck = deck_from_document(document, base)
@@ -309,6 +372,28 @@ class DeckKind:
 
     def text(self, document: dict[str, Any]) -> str:
         return dump_document(document)
+
+
+def _figure_editor() -> dict[str, Any]:
+    from flexo.studio.figure_parts import catalogue
+
+    return catalogue()
+
+
+def _block_at(document: dict[str, Any], at: dict[str, Any]) -> Any:
+    """The block at ``{"slide", "region", "index"}``: a region is ``body``, ``left``,
+    ``right``, or ``columns.N``."""
+
+    from flexo.studio.figure_edit import EditError
+
+    try:
+        slide = (document.get("slides") or [])[int(at["slide"])]
+        region = str(at["region"])
+        column = region.startswith("columns.")
+        blocks = slide["columns"][int(region.split(".", 1)[1])] if column else slide[region]
+        return blocks[int(at["index"])]
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise EditError("that part of the slide is gone: someone changed it meanwhile") from error
 
 
 def _order(count: int, focus: int) -> list[int]:
@@ -437,6 +522,9 @@ def _files(data: object, base: Path) -> set[Path]:
                     path = (base / name).resolve()
                     if path.is_file():
                         found.add(path)
+                        if path.suffix == ".py":
+                            # Python beside it may be what it imports: a change there counts.
+                            found.update(sorted(path.parent.glob("*.py"))[:50])
             elif isinstance(value, dict | list) and not (key == "figure" and isinstance(value, dict)):
                 found |= _files(value, base)
             elif key == "gallery" and isinstance(value, list):
@@ -491,6 +579,19 @@ def _blank(deck, slide) -> str:
     )
 
 
+def _tones(deck) -> dict[str, Any]:
+    """The deck's tone colours, for the colour chips of a figure on a slide."""
+
+    colours = []
+    for index in range(1, 9):
+        try:
+            colours.append({"fill": deck.palette.get(f"tone-{index}-fill"),
+                            "stroke": deck.palette.get(f"tone-{index}-stroke")})
+        except (KeyError, ValueError):
+            break
+    return {"colours": colours, "used": {}}
+
+
 def _palette(deck) -> dict[str, str]:
     palette = deck.palette
     colours = {"ink": palette.get("ink"), "muted": palette.get("muted-ink"), "canvas": palette.get("canvas")}
@@ -503,3 +604,9 @@ def _palette(deck) -> dict[str, str]:
 
 
 kind = DeckKind
+
+
+def _plain_message(error: DeckDocumentError) -> str:
+    """A deck document's error in words: its own message, rid of any of Python's."""
+
+    return explain(ValueError(error.message))

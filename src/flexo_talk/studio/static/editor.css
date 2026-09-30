@@ -1,6 +1,7 @@
 /* The deck editor: slides on the left, the slide in the middle, what is chosen on the right. */
 
 .deck { position: absolute; inset: 0; display: grid; grid-template-columns: 184px 1fr 340px; }
+.deck.wide { grid-template-columns: 184px 1fr 468px; }
 
 /* -- the bar -- */
 .layout-button { gap: 7px; }
@@ -32,7 +33,9 @@
 .thumb.drop-before::before, .thumb.drop-after::after { content: ""; position: absolute; left: 24px; right: 0; height: 3px; background: var(--accent); border-radius: 2px; }
 .thumb.drop-before::before { top: -7px; }
 .thumb.drop-after::after { bottom: -7px; }
-.insert-after { position: absolute; left: 50%; bottom: -9px; transform: translateX(-30%); width: 18px; height: 18px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; cursor: pointer; opacity: 0; z-index: 2; transition: opacity 0.1s; box-shadow: var(--shadow-1); }
+/* Centred on the slide, right of the number column (20px and a 4px gap); no padding, or WebKit's
+   puts the plus off centre. */
+.insert-after { position: absolute; left: calc(50% + 12px); bottom: -9px; transform: translateX(-50%); width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; cursor: pointer; opacity: 0; z-index: 2; transition: opacity 0.1s; box-shadow: var(--shadow-1); }
 .thumb:hover .insert-after { opacity: 1; }
 .insert-after svg { width: 11px; height: 11px; }
 .rail-add { margin: 4px 0 0 24px; display: flex; align-items: center; justify-content: center; gap: 6px; aspect-ratio: 16 / 9; border-radius: 5px; border: 1.5px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font-size: 12px; }
@@ -166,6 +169,13 @@ button.crumb:hover { background: var(--sunken); color: var(--ink); }
 
 .preview-pic { width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); }
 .hint-line { font-size: 11.5px; color: var(--ink-3); }
+.math-notes { display: grid; gap: 6px; }
+.math-notes:empty { display: none; }
+.math-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.math-chip { min-width: 30px; height: 26px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink-2); font: 13px "Latin Modern Math", "STIX Two Math", Georgia, serif; cursor: pointer; }
+.math-chip:hover { background: var(--sunken); color: var(--ink); border-color: var(--line-strong, var(--line)); }
+.block-error.soft { color: var(--ink-2); background: color-mix(in srgb, var(--warn, #b45309) 10%, transparent); }
 .hint-line code, .hint-line kbd { font: 11px var(--mono); background: var(--sunken); border-radius: 3px; padding: 0 3px; }
 .slider { display: flex; align-items: center; gap: 10px; }
 .slider input[type=range] { flex: 1; accent-color: var(--accent); }
@@ -222,3 +232,10 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .deck-stage { container-type: inline-size; }
 @container (max-width: 820px) { .stage-hint { display: none; } }
 @media (max-width: 1500px) { body.side-open .deck { grid-template-columns: 120px 1fr 280px; } }
+
+/* -- a figure edited on its slide -- */
+.figure-bar { position: absolute; z-index: 12; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 9px; background: var(--raised); border: 1px solid var(--line-strong); box-shadow: var(--shadow-2); line-height: normal; white-space: nowrap; }
+.figure-bar[hidden] { display: none; }
+.figure-hint { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-size: 12px; color: var(--ink-2); }
+.figure-hint svg { width: 13px; height: 13px; }
+.deck-stage.connecting .slide-page { cursor: crosshair; }

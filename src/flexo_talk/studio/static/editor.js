@@ -4,7 +4,8 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
+import { figureParts, widenLines } from "/static/kinds/figure/parts.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph" },
@@ -18,9 +19,27 @@ const BLOCKS = {
   code: { icon: "code", label: "Code", hint: "A monospace listing" },
   gallery: { icon: "gallery", label: "Gallery", hint: "Logos or people in a grid" },
   plot: { icon: "plot", label: "Plot", hint: "A matplotlib figure made in Python" },
+  math: { icon: "math", label: "Equation", hint: "LaTeX, on a line of its own" },
 };
 const MAIN_BLOCKS = ["text", "bullets", "figure", "image", "table"];
-const MORE_BLOCKS = ["stats", "quote", "callout", "code", "gallery", "plot"];
+const MORE_BLOCKS = ["math", "stats", "quote", "callout", "code", "gallery", "plot"];
+
+// What an equation's snippet buttons put in: [label, title, LaTeX]; "|" is where the cursor goes.
+const MATH_SNIPPETS = [
+  ["a⁄b", "Fraction", "\\frac{|}{}"],
+  ["√", "Square root", "\\sqrt{|}"],
+  ["xⁿ", "Superscript", "^{|}"],
+  ["xᵢ", "Subscript", "_{|}"],
+  ["Σ", "Sum with limits", "\\sum_{i=1}^{n} |"],
+  ["∫", "Integral", "\\int_{a}^{b} | \\, dx"],
+  ["( )", "Brackets that grow", "\\left( | \\right)"],
+  ["[ ]", "Matrix", "\\begin{bmatrix} | & b \\\\ c & d \\end{bmatrix}"],
+  ["{", "Cases", "\\begin{cases} | & x \\ge 0 \\\\ -x & x < 0 \\end{cases}"],
+  ["=", "Aligned lines", "|a &= b \\\\\n  &= c"],
+  ["α", "Greek", "\\alpha|"],
+  ["x̂", "Hat", "\\hat{|}"],
+  ["Tt", "Words", "\\text{|}"],
+];
 const INLINE = new Set(["text", "bullets", "quote", "callout", "code"]);
 
 const LAYOUT_NAMES = {
@@ -59,6 +78,7 @@ const NEW_BLOCKS = {
   code: () => ({ code: "def model(x):\n    # the whole idea\n    return head(encoder(x))" }),
   gallery: () => ({ gallery: [] }),
   plot: () => ({ plot: "" }),
+  math: () => ({ math: "\\mathcal{L}(\\theta) = -\\frac{1}{N} \\sum_{i=1}^{N} \\log p_\\theta(y_i \\mid x_i)" }),
 };
 
 // -- the document ---------------------------------------------------------------------
@@ -93,8 +113,7 @@ function setOption(target, key, value, fallback = undefined) {
 }
 
 function plain(markup) {
-  return String(markup ?? "").replace(/\[([^\]]+)\]\{[^}]+\}/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/\*\*|\*|`/g, "").replace(/\$([^$]*)\$/g, "$1").split("\n")[0];
+  return readable(String(markup ?? "")).split("\n")[0];
 }
 
 function summary(block) {
@@ -108,6 +127,7 @@ function summary(block) {
     case "figure": return typeof value === "string" ? value : `Drawn here · ${(value?.nodes || []).length} parts`;
     case "image": case "plot": return value || "Not chosen yet";
     case "callout": return plain(block.title) || plain(value);
+    case "math": return mathWords(value) || "An empty equation";
     default: return plain(value);
   }
 }
@@ -214,6 +234,7 @@ export function mount(studio, container) {
   const state = { slide: 0, focus: null, tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
+  let mathNotes = null;
   let pending = false;
   let inline = null;
 
@@ -321,6 +342,7 @@ export function mount(studio, container) {
 
   function select(index, focus = null) {
     closeInline();
+    leaveFigure(false);
     state.slide = Math.max(0, Math.min(index, slides().length - 1));
     state.focus = focus;
     renderRail();
@@ -454,6 +476,7 @@ export function mount(studio, container) {
       else pageNode.append(h("div.placeholder", {}, h("div.spinner")));
       const svg = pageNode.querySelector("svg");
       if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
+      if (svg) widenLines(svg);
       pageNode.append(hover, chosen);
       pageNode.addEventListener("mousemove", onHover);
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
@@ -477,6 +500,9 @@ export function mount(studio, container) {
     fitStage();
     placeChosen();
     if (inline) positionInline();
+    if (figureMarks.parentNode !== pageNode) pageNode.append(figureMarks, figureBar);
+    placeFigure();
+    figure?.parts.placeInline();
   }
 
   function messageView(message) {
@@ -492,7 +518,7 @@ export function mount(studio, container) {
     const width = Math.max(320, Math.min(room.width - 80, (room.height - 110) * 16 / 9));
     stage.style.setProperty("--slide-max", `${width}px`);
   }
-  new ResizeObserver(() => { fitStage(); placeChosen(); if (inline) positionInline(); }).observe(stage);
+  new ResizeObserver(() => { fitStage(); placeChosen(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline(); }).observe(stage);
 
   const PART = /^slide(\d+)\.(body|left|right|column(\d+))\.(\d+)(?:\.|$)/;
   const WORDS = /^slide(\d+)\.(title|subtitle|byline)$/;
@@ -545,11 +571,19 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
+    if (inFigure(event)) {
+      const id = figure.parts.idAt(event);
+      const box = id && figure.parts.model ? boxOf(figurePrefix() + id) : null;
+      place(hover, box, id ? figure.parts.nameOf(id) : "");
+      return;
+    }
     const part = partAt(event);
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
   function onPick(event) {
+    if (event.target.closest(".fig-inline, .figure-bar")) return;
+    if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
     if (!part) { state.focus = null; placeChosen(); renderInspector(); reportFocus(); return; }
     if (part.kind === "block") focusBlock(part.region, part.index);
@@ -561,6 +595,8 @@ export function mount(studio, container) {
   }
 
   function onEdit(event) {
+    if (event.target.closest(".fig-inline, .figure-bar")) return;
+    if (inFigure(event)) { figure.parts.dblclick(event); return; }
     const part = partAt(event);
     if (!part) return;
     if (part.kind === "field") openInline({ kind: "field", field: part.field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : part.field });
@@ -583,9 +619,116 @@ export function mount(studio, container) {
     closeInline();
     state.tab = "slide";
     state.focus = { region, index };
+    const block = blocksAt(slideAt(), region)[index];
+    if (block && kindOf(block) === "figure") enterFigure(region, index);
+    else leaveFigure(false);
     renderInspector();
     placeChosen();
     reportFocus();
+  }
+
+  // -- a figure's parts, edited on the slide --
+  // A figure chosen on the slide is edited in place: clicks inside it choose its
+  // parts, a bar above it adds and connects them, and the inspector shows the part
+  // (parts.js, as in the figure editor). Edits go to where the figure is written --
+  // the deck, for a figure written in it, so they undo with the deck's; or the
+  // figure's own file.
+  const figureMarks = h("div.fig-marks");
+  const figureBar = h("div.figure-bar", { hidden: true });
+  let figure = null;
+
+  function figureBlock() {
+    if (!figure || figure.slide !== state.slide) return null;
+    const block = blocksAt(slideAt() || {}, figure.region)[figure.index];
+    return block && kindOf(block) === "figure" ? block : null;
+  }
+  const editable = (block) => {
+    const value = block?.figure;
+    return Boolean(value) && (typeof value === "object" || (typeof value === "string" && !value.includes(".py:")));
+  };
+  function figurePrefix() {
+    const region = figure && regionsOf(slideAt()).find((r) => r.key === figure.region);
+    return region ? `slide${state.slide + 1}.${region.svg}.${figure.index}.` : null;
+  }
+  function inFigure(event) {
+    if (!figureBlock()) return false;
+    const part = partAt(event);
+    return part?.kind === "block" && part.region === figure.region && part.index === figure.index;
+  }
+
+  function enterFigure(region, index) {
+    const block = blocksAt(slideAt(), region)[index];
+    if (!editable(block)) { leaveFigure(false); return; }
+    if (figure && figure.slide === state.slide && figure.region === region && figure.index === index) return;
+    leaveFigure(false);
+    figure = { slide: state.slide, region, index };
+    figure.parts = figureParts({
+      catalog: catalog.figure_editor,
+      get overlay() { return pageNode; },
+      element: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
+      idOf: (id) => { const prefix = figurePrefix(); return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : null; },
+      box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
+      changed: () => { renderInspector(); placeFigure(); },
+      chooseFile,
+      tones: () => studio.info?.tones,
+      addAnchor: () => figureBar.querySelector(".add") || figureBar,
+      groupAnchor: () => figureBar.querySelector(".group") || figureBar,
+      crumbs: () => h("button.crumb", { type: "button", onclick: () => { state.focus = null; renderInspector(); placeChosen(); reportFocus(); } }, `Slide ${state.slide + 1}`),
+      nothing: () => [...blockPanel(slideAt(), figureBlock()), figure.parts.howTo()],
+      run: runFigure,
+    });
+    figure.parts.act({ do: "read" }, { select: false });
+  }
+
+  function leaveFigure(render = true) {
+    if (!figure) return;
+    figure.parts.closeInline(false);
+    figure = null;
+    clear(figureMarks);
+    figureBar.hidden = true;
+    root.classList.remove("wide");
+    if (render) renderInspector();
+  }
+
+  // The server makes the edit where the figure is written; if the deck changed while
+  // it did, the edit is made again on the deck as it is now.
+  async function runFigure(action, { merge }) {
+    if (!figure) return null;
+    const at = { slide: figure.slide, region: figure.region, index: figure.index };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const sent = studio.doc;
+      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } });
+      if (!same(studio.doc, sent)) continue;
+      if (result.file) { if (action.do !== "read") studio.requestDraw(0); }
+      else if (!same(result.document, sent)) studio.change(() => result.document, { merge, quiet: true });
+      return result;
+    }
+    return null;
+  }
+
+  function placeFigure() {
+    const block = figureBlock();
+    if (!block || !figure.parts.model || !pageNode) { clear(figureMarks); figureBar.hidden = true; return; }
+    clear(figureMarks, figure.parts.marks().map(({ box, group, name }) => h(`div.fig-mark${group ? ".group" : ""}`, { style: {
+      left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` } },
+    group ? h("span.fig-mark-label", {}, name) : null)));
+    const region = regionsOf(slideAt()).find((r) => r.key === figure.region);
+    const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${figure.index}`);
+    figureBar.hidden = !box;
+    if (!box) return;
+    const words = figure.parts.hint();
+    clear(figureBar, words ? h("span.figure-hint", {}, words) : [
+      ui.button("Add part", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add a part to the figure (A)", id: undefined }),
+      ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one part to another (C)" }),
+      ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Gather the chosen parts (G)" }),
+      figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete the chosen parts (⌫)" }) : null,
+    ]);
+    figureBar.querySelector(".btn.primary")?.classList.add("add");
+    figureBar.querySelectorAll(".btn")[2]?.classList.add("group");
+    // Over the figure's right end: its left end carries the part's own tag.
+    const left = Math.max(4, Math.min(box.left + box.width - figureBar.offsetWidth, pageNode.clientWidth - figureBar.offsetWidth - 4));
+    Object.assign(figureBar.style, { left: `${left}px`, top: `${box.top > 44 ? box.top - 40 : box.top + 6}px` });
+    stage.classList.toggle("connecting", Boolean(words));
   }
 
   // -- editing words in place --
@@ -735,6 +878,10 @@ export function mount(studio, container) {
 
   // -- the inspector --
   function renderInspector() {
+    // A figure is edited while it is the part chosen on the slide shown.
+    const focus = state.focus;
+    if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
+    root.classList.toggle("wide", Boolean(figure && figureBlock() && figure.parts.wantsRoom()));
     keepFocus(inspectorBody, () => {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
@@ -744,6 +891,7 @@ export function mount(studio, container) {
         h(`button.insp-tab${state.tab === "design" ? ".on" : ""}`, { type: "button", onclick: () => { state.tab = "design"; renderInspector(); } }, icon("palette"), "Design")));
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides yet."));
+      else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, figure.parts.panel());
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
@@ -977,7 +1125,8 @@ export function mount(studio, container) {
     const toneSwatches = (name, { none = true, extra = [], fallback } = {}) => {
       const palette = studio.info?.palette || {};
       const colours = [...TONES.map((tone, i) => ({ value: tone, colour: palette[tone] || "#888", title: i === 0 ? "Accent" : `Accent ${i + 1}` })), ...extra];
-      return ui.swatches({ value: block[name] ?? fallback ?? null, colours, none, onChange: (value) => editBlock(at, (b) => setOption(b, name, value, fallback)) });
+      return ui.swatches({ value: block[name] ?? fallback ?? null, colours, none, custom: true,
+        onChange: (value) => editBlock(at, (b) => setOption(b, name, value, fallback), { merge: merge(name) }) });
     };
     switch (kind) {
       case "bullets":
@@ -1013,9 +1162,47 @@ export function mount(studio, container) {
         return [ui.field("Made by", functionInput(block.plot, (value) => edit((b) => { b.plot = value; }, "plot")), { hint: "file.py:function" }),
           h("div.hint-line", {}, "A function returning a matplotlib figure; it runs inside ", h("code", {}, "deck.plotting()"), " and is given the deck if it takes an argument."),
           ui.field("Shape", ui.number({ value: block.aspect, placeholder: "fill the room", min: 0.2, step: 0.1, key: key("aspect"), onChange: set("aspect") }), { hint: "width ÷ height" })];
+      case "math": return mathForm(block, at, edit, toneSwatches, size);
       default:
         return [h("div.hint-line", {}, "This part has no form yet.")];
     }
+  }
+
+  function mathForm(block, at, edit, toneSwatches, size) {
+    const area = ui.textarea({ value: block.math, rows: 3, mono: true, grow: true, key: "block.math",
+      placeholder: "E = mc^2", onInput: (text) => edit((b) => { b.math = text; }, "math") });
+    const insert = (snippet) => {
+      const [before, after = ""] = snippet.split("|");
+      const start = area.selectionStart, end = area.selectionEnd;
+      const chosen = area.value.slice(start, end);
+      area.value = area.value.slice(0, start) + before + chosen + after + area.value.slice(end);
+      const at = start + before.length + chosen.length;
+      area.focus();
+      area.setSelectionRange(at, at);
+      area.dispatchEvent(new Event("input"));
+    };
+    const chips = MATH_SNIPPETS.map(([label, title, snippet]) => h("button.math-chip", { type: "button", title,
+      onmousedown: (event) => { event.preventDefault(); insert(snippet); } }, label));
+    // What could not be read in it, said beside it (the slide shows it in red), and said
+    // afresh with each drawing as it is typed.
+    const notes = h("div.math-notes");
+    const note = () => {
+      const source = area.value.trim().slice(0, 20);
+      const said = messages.filter((m) => m.page === `slide${state.slide + 1}` && m.text.includes(", in the maths “")
+        && source && m.text.includes(source));
+      clear(notes);
+      notes.append(...said.map((m) => h("div.block-error.soft", {}, icon("warning"), m.text.replace(/, in the maths “[\s\S]*”$/, ""))));
+    };
+    note();
+    mathNotes = note;
+    return [area, h("div.math-chips", {}, chips), notes,
+      h("div.hint-line", {}, "LaTeX, as in a paper. ", h("code", {}, "\\\\"), " starts a line; ", h("code", {}, "&"),
+        " lines them up. In words, put maths between ", h("code", {}, "$"), "s, or ", h("code", {}, "$$"), " for a line of its own."),
+      ui.field("Align", ui.segmented({ value: block.align || "middle", options: [
+        { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
+      onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "middle")) })),
+      ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
+      size()];
   }
 
   function statsForm(block, at, edit, toneSwatches, size) {
@@ -1182,7 +1369,7 @@ export function mount(studio, container) {
       let done = false;
       const finish = (value) => { if (!done) { done = true; resolve(value); box.close(); } };
       const list = h("div.list-rows", {}, h("div.empty", {}, h("div.spinner")));
-      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg" : ".yaml,.yml,.json", hidden: true,
+      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
         onchange: async () => { const file = upload.files[0]; if (file) finish(await studio.upload(file)); } });
       const actions = [];
       if (types.includes("image") || types.includes("figure")) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });
@@ -1268,14 +1455,15 @@ export function mount(studio, container) {
     });
     const changed = Object.keys(changes).length;
     return [
-      h("div.section", {}, h("div.section-title", {}, "Look"), looks),
       h("div.section", {}, h("div.section-title", {}, "Theme"),
-        themeIsFile
-          ? h("div.theme-file", {}, icon("theme"), h("span", {}, deck.theme), ui.button("Edit", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" }))
-          : h("div.row", {}, ui.select({ value: deck.theme || "paper", options: catalog.themes, onChange: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); } }),
-            h("div.fixed", {}, ui.button("Customise", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Start a theme file from this one: edit its colours, type, and lines" }))),
-        themeIsFile ? h("div", {}, ui.button("Use a built-in theme instead", () => { editDeck((d) => { delete d.theme; }); renderInspector(); }, { kind: "ghost", small: true, icon: "undo" })) : null,
+        themeField(studio, { value: deck.theme, fallback: "paper",
+          onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); },
+          onCustomise: () => themeIsFile ? studio.workspace.open(studio.folder() + deck.theme) : customiseTheme(deck) }),
+        h("div.row", {},
+          themeIsFile ? ui.button("Edit the theme", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" })
+            : ui.button("Customise", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Start a theme file from this one: edit its colours, type, and lines" })),
         ui.field("Palette", paletteList)),
+      h("div.section", {}, h("div.section-title", {}, "Look"), looks),
       h("div.section", {}, h("div.section-title", {}, "Type"),
         fonts("font", "Words", "the theme's"), fonts("title_font", "Titles and headings", "as the words"), fonts("figure_font", "Figures", "as the words")),
       h("div.section", {}, h("div.section-title", {}, "Deck"),
@@ -1361,12 +1549,13 @@ export function mount(studio, container) {
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key === "Enter") { event.preventDefault(); present(); return; }
     if (typing) return;
+    if (figure && figureBlock() && figure.parts.key(event)) return;
     const key = event.key;
     if (mod && key.toLowerCase() === "d") { event.preventDefault(); if (slides().length) duplicateSlide(state.slide); }
     else if (mod) return;
     else if (["ArrowDown", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
     else if (["ArrowUp", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
-    else if (key === "Escape" && state.focus) { state.focus = null; renderInspector(); placeChosen(); reportFocus(); }
+    else if (key === "Escape" && state.focus) { state.focus = null; leaveFigure(false); renderInspector(); placeChosen(); reportFocus(); }
     else if (key === "Enter" && state.focus) {
       event.preventDefault();
       const block = blocksAt(slideAt(), state.focus.region)[state.focus.index];
@@ -1376,6 +1565,8 @@ export function mount(studio, container) {
   });
 
   // -- the palette's commands, and following --
+  studio.exports = [{ format: "pdf", label: "PDF" }, { format: "pptx", label: "PowerPoint" }, { format: "png", label: "PNG, a slide each" }];
+  studio.present = () => present();
   studio.commands = () => [
     ...slides().map((slide, index) => ({ icon: "slide", label: `Slide ${index + 1}: ${slideTitle(slide)}`, run: () => select(index) })),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name].toLowerCase()} slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
@@ -1399,6 +1590,10 @@ export function mount(studio, container) {
     pending = true;
     if (source === "remote" && before) flash(before, who);
     if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
+    if (figure && source !== "edit") {
+      if (figureBlock() && editable(figureBlock())) figure.parts.act({ do: "read" }, { select: false });
+      else leaveFigure();
+    }
     pageNode?.classList.add("pending");
   });
   studio.on("drawing", () => { pending = true; });
@@ -1408,6 +1603,8 @@ export function mount(studio, container) {
     messages = result.messages || [];
     renderRail();
     renderStage();
+    if (mathNotes && document.contains(inspectorBody.querySelector(".math-notes"))) mathNotes();
+    if (figure && typeof figureBlock()?.figure === "string") figure.parts.act({ do: "read" }, { select: false });
     const key = JSON.stringify(studio.info?.palette || {});
     if (key !== lastKey) { lastKey = key; renderInspector(); } else markBlockErrors();
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));

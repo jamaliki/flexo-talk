@@ -1,6 +1,6 @@
 ---
 name: flexo-talk
-description: Make slide decks with flexo-talk -- titles, bullets, tables, plots, quotes, big numbers, people, and real flexo figures in one theme and one look -- exported to editable PowerPoint (PPTX), PDF, and SVG/PNG per slide. Use when asked for a talk, presentation, slides, a lab-meeting or conference deck, or an acknowledgements slide, especially one that should match a paper's figures.
+description: Make slide decks with flexo-talk -- titles, bullets, tables, plots, quotes, big numbers, people, and real flexo figures in one theme and one look -- written in Python or as a YAML deck document, edited in flexo studio, and exported to editable PowerPoint (PPTX), PDF, and SVG/PNG per slide. Use when asked for a talk, presentation, slides, a lab-meeting, journal-club or conference deck, or an acknowledgements slide, especially one that should match a paper's figures.
 ---
 
 # Making slide decks with flexo-talk
@@ -14,13 +14,17 @@ PDF with embedded fonts, and an SVG and PNG per slide.
 
 ## Setup
 
-flexo-talk lives next to flexo (`../flexo`, installed editable by uv).
+flexo-talk lives next to flexo (`../flexo`, installed editable by uv); keep
+both checkouts on the same branch. Python 3.12 to 3.14.
 
 ```bash
 uv sync --all-groups                 # in the flexo-talk checkout
 uv run python talk.py                # a script that builds its deck
 uv run flexo-talk build talk.py      # or: build the deck that talk() returns
 uv run flexo-talk build talk.py:results -o out --formats pptx,pdf --theme dark
+uv run flexo-talk build talk.yaml    # a deck document (below)
+uv run flexo-talk convert talk.py    # talk.py's deck as talk.yaml
+uv run flexo-talk studio talk.yaml   # edit it in the browser (made if missing)
 ```
 
 matplotlib is needed only for `slide.plot` (the `plots` extra); Pillow only for
@@ -70,6 +74,39 @@ def talk(theme: str = "paper") -> Deck:
 if __name__ == "__main__":
     print(talk().build("build").summary())
 ```
+
+## A deck as a document (YAML)
+
+The same deck can be a YAML (or JSON) document: what a person or an agent in
+flexo studio edits. Prefer it when the deck will be edited in the studio.
+
+```yaml
+schema_version: 1
+deck: {id: results, theme: paper, look: band, footer: Group meeting}
+slides:
+- layout: title
+  title: Folding with diffusion
+  author: Ada
+- title: The gap
+  body:
+  - bullets: [Prediction is cheap, [only 0.1% solved]]   # nested list = level below
+  notes: Say the number slowly.
+- title: The model
+  layout: two-columns
+  left: [{text: Write what the model *is*}]
+  right: [{figure: model.yaml}]        # a flexo figure file, an inline figure, or model.py:figure
+- title: Training
+  body: [{plot: plots.py:loss}]        # a function returning a matplotlib figure
+```
+
+A slide takes `layout` (`content` when left out), the options its `Deck` call
+takes, and its regions (`body`, `left`/`right`, or `columns`, a list of block
+lists); each block is named by its kind with that call's options beside it.
+Files are found next to the document. A wrong document says where
+(`slides[3].left[1] (table): a table is a list of rows`). Python a document
+names (plots, `file.py:function` figures) runs only in a folder its person has
+trusted in the studio, in a process of its own. `flexo_talk.document` reads and
+writes documents from Python.
 
 ## Slides
 
@@ -139,6 +176,16 @@ with English words, numbers, and maths inside it kept in order.
   (960x540 pt is 16:9; 720x540 is 4:3). `from flexo_talk import DeckStyle`.
 - **Type by role**: `Deck(font=, title_font=, figure_font=)`; each falls back to
   `font`, then to the theme's family.
+- **A theme file can carry the slides' look**: beside `theme:`, a `slides:`
+  section gives the deck's `look`, `style` (any `DeckStyle` field), `background`
+  (a colour, or a picture such as a paper texture under every slide), and fonts
+  by role. A deck takes each unless it says otherwise:
+
+  ```yaml
+  theme: {name: notebook, base: sketch, font: Kalam}
+  fonts: [fonts/]
+  slides: {look: margin, background: papers/notebook.jpg, title_font: Caveat}
+  ```
 
 ## Alignment (the layout does it; never position by hand)
 
@@ -146,11 +193,13 @@ flexo lays out each figure; flexo-talk lays out the slide, measuring every word
 with flexo's own measurer so every output wraps identically.
 
 - Words that don't fit are set smaller together (down to `small_size`) and
-  reported. Figures in one region share one scale, so their words match.
-- `align="auto"` (default): words at the top; a figure, plot, picture, gallery,
-  or quote standing alone is centred in its room; a column of pictures is
-  centred against the words beside it (and the words against taller
-  pictures); columns of words share one top. `align="top"` or `"middle"` per
+  reported. Figures on one slide -- in one region or side by side -- set their
+  words at one size: the largest at which every one fits its place.
+- `align="auto"` (default): words start at the top of the body on every slide,
+  the same distance under the title; a figure, plot, picture, gallery, quote,
+  table, code listing or row of numbers standing alone is centred in its room;
+  a picture beside words is centred against them only when it is shorter, and a
+  taller one starts level with them; columns of words share one top. `align="top"` or `"middle"` per
   slide (`deck.slide(..., align=)`) or for the deck (`DeckStyle.align`).
 - A one-column gallery (logos) sits flush with the words above it; a grid is centred.
 - A figure is laid out for its place's width *and* height: as written, turned
@@ -193,6 +242,23 @@ again at the size of its place.
 - People: `gallery(..., crop="circle")`; a title over a photograph:
   `background=photo, shade=0.4`.
 
+## The studio, and working in it as an agent
+
+`flexo-talk studio talk.yaml` (or `flexo studio` in the folder) opens the deck in
+flexo studio: the slide is where you work (click to choose, double-click words to
+type on the slide), figures are edited on their slides part by part, the
+inspector holds a part's settings or, with nothing chosen, the slide's, and
+**Design** holds look, theme, palette and type. It presents full screen and
+exports PPTX, PDF, SVG and PNG. People and agents edit the same document live.
+
+As an agent: `claude mcp add flexo-studio -- flexo studio mcp` (once, in the
+folder) gives `list_documents`, `open_document`, `read_document`,
+`edit_document`, `write_document`, `look`, and `status`. Work the loop on the
+YAML: `read_document`, `edit_document` a few lines, `look` at the slides you
+changed (pictures plus the same warnings as `summary()`), fix, and say what you
+are doing with `status`. A figure written inline in the deck is edited in the
+deck; a figure file in its own file.
+
 ## Output notes
 
 - PPTX: every rectangle, line (exact arrowheads), and word is a native, editable
@@ -223,6 +289,8 @@ again at the size of its place.
 
 ## Reference
 
-`README.md` (the full API), `examples/demo.py` (short), `examples/showcase.py`
-(every slide and block, in every look), flexo's `SKILL.md` and
-`docs/tutorial.md` (everything about figures).
+`README.md` (the full API, documents, the studio), `examples/demo.py` (short),
+`examples/showcase.py` (every slide and block, in every look),
+`examples/journal_club.py` (a journal-club talk on a paper: figures, a picture
+cut into patches, code, plots), flexo's `SKILL.md` and `docs/tutorial.md`
+(everything about figures).
