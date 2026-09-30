@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField } from "/static/studio/studio.js";
 import { figureParts, widenLines } from "/static/kinds/figure/parts.js";
 
 const BLOCKS = {
@@ -650,6 +650,7 @@ export function mount(studio, container) {
       box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
       changed: () => { renderInspector(); placeFigure(); },
       chooseFile,
+      tones: () => studio.info?.tones,
       addAnchor: () => figureBar.querySelector(".add") || figureBar,
       groupAnchor: () => figureBar.querySelector(".group") || figureBar,
       crumbs: () => h("button.crumb", { type: "button", onclick: () => { state.focus = null; renderInspector(); placeChosen(); reportFocus(); } }, `Slide ${state.slide + 1}`),
@@ -1104,7 +1105,8 @@ export function mount(studio, container) {
     const toneSwatches = (name, { none = true, extra = [], fallback } = {}) => {
       const palette = studio.info?.palette || {};
       const colours = [...TONES.map((tone, i) => ({ value: tone, colour: palette[tone] || "#888", title: i === 0 ? "Accent" : `Accent ${i + 1}` })), ...extra];
-      return ui.swatches({ value: block[name] ?? fallback ?? null, colours, none, onChange: (value) => editBlock(at, (b) => setOption(b, name, value, fallback)) });
+      return ui.swatches({ value: block[name] ?? fallback ?? null, colours, none, custom: true,
+        onChange: (value) => editBlock(at, (b) => setOption(b, name, value, fallback), { merge: merge(name) }) });
     };
     switch (kind) {
       case "bullets":
@@ -1395,14 +1397,15 @@ export function mount(studio, container) {
     });
     const changed = Object.keys(changes).length;
     return [
-      h("div.section", {}, h("div.section-title", {}, "Look"), looks),
       h("div.section", {}, h("div.section-title", {}, "Theme"),
-        themeIsFile
-          ? h("div.theme-file", {}, icon("theme"), h("span", {}, deck.theme), ui.button("Edit", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" }))
-          : h("div.row", {}, ui.select({ value: deck.theme || "paper", options: catalog.themes, onChange: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); } }),
-            h("div.fixed", {}, ui.button("Customise", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Start a theme file from this one: edit its colours, type, and lines" }))),
-        themeIsFile ? h("div", {}, ui.button("Use a built-in theme instead", () => { editDeck((d) => { delete d.theme; }); renderInspector(); }, { kind: "ghost", small: true, icon: "undo" })) : null,
+        themeField(studio, { value: deck.theme, fallback: "paper",
+          onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); },
+          onCustomise: () => themeIsFile ? studio.workspace.open(studio.folder() + deck.theme) : customiseTheme(deck) }),
+        h("div.row", {},
+          themeIsFile ? ui.button("Edit the theme", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" })
+            : ui.button("Customise", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Start a theme file from this one: edit its colours, type, and lines" })),
         ui.field("Palette", paletteList)),
+      h("div.section", {}, h("div.section-title", {}, "Look"), looks),
       h("div.section", {}, h("div.section-title", {}, "Type"),
         fonts("font", "Words", "the theme's"), fonts("title_font", "Titles and headings", "as the words"), fonts("figure_font", "Figures", "as the words")),
       h("div.section", {}, h("div.section-title", {}, "Deck"),

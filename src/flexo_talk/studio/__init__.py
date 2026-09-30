@@ -7,6 +7,7 @@ and files are as they were is not drawn again.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -112,6 +113,15 @@ class DeckKind:
 
     def dump(self, document: dict[str, Any]) -> str:
         return dump_document(document)
+
+    def theme_of(self, document: dict[str, Any]) -> str | None:
+        theme = (document.get("deck") or {}).get("theme")
+        return str(theme) if theme else None
+
+    def with_theme(self, document: dict[str, Any], theme: str, base: Path) -> dict[str, Any]:
+        changed = copy.deepcopy(document)
+        changed.setdefault("deck", {})["theme"] = theme
+        return changed
 
     def parse(self, text: str) -> Any:
         import yaml
@@ -301,7 +311,7 @@ class DeckKind:
                 for text in done["notes"]:
                     messages.append(_diagnostic(text, identifier, index, "note"))
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
-        return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck)})
+        return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck), "tones": _tones(deck)})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck
@@ -544,6 +554,19 @@ def _blank(deck, slide) -> str:
         f'stroke-width="3.5" stroke-linejoin="round"/><path d="M{x:g} {y - 10:g}V{y + 4:g}M{x:g} {y + 12:g}v0.5" '
         f'stroke="#c53030" stroke-width="4" stroke-linecap="round"/></svg>'
     )
+
+
+def _tones(deck) -> dict[str, Any]:
+    """The deck's tone colours, for the colour chips of a figure on a slide."""
+
+    colours = []
+    for index in range(1, 9):
+        try:
+            colours.append({"fill": deck.palette.get(f"tone-{index}-fill"),
+                            "stroke": deck.palette.get(f"tone-{index}-stroke")})
+        except (KeyError, ValueError):
+            break
+    return {"colours": colours, "used": {}}
 
 
 def _palette(deck) -> dict[str, str]:
