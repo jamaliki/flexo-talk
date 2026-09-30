@@ -338,3 +338,7 @@ Arabic, unbreakable words, deep lists, a JPEG, a gradient SVG). Each is checked
 by rendering its PowerPoint file in ONLYOFFICE (its `x2t` converter, to PDF) and
 comparing every page with flexo-talk's own PDF of the same deck; they agree to
 within antialiasing.
+
+## License
+
+flexo-talk is licensed under the [Apache License 2.0](LICENSE).
