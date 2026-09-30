@@ -46,9 +46,11 @@ back as a document.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import inspect
 import json
+import os
 import sys
 import threading
 from collections import OrderedDict
@@ -449,10 +451,11 @@ def _plot(base: Path, value: object, where: str, region: Region) -> Reference:
     deck = region._slide.deck
 
     def call(function: Callable[..., object]) -> object:
-        with deck.plotting():
-            return function(deck) if _takes_argument(function) else function()
+        return function(deck) if _takes_argument(function) else function()
 
-    return Reference(value, _maker(base, value, where, lambda made: made, call=call))
+    # The file is read inside the deck's plotting look too: a style it sets as it is
+    # imported is then the deck's for that plot, not the whole app's from then on.
+    return Reference(value, _maker(base, value, where, lambda made: made, call=call, around=deck.plotting))
 
 
 def _is_code(value: str) -> bool:
@@ -466,39 +469,92 @@ def _maker(
     check: Callable[[object], object],
     *,
     call: Callable[[Callable[..., object]], object] | None = None,
+    around: Callable[[], contextlib.AbstractContextManager] | None = None,
 ) -> Callable[[], object]:
     file, _, name = target.rpartition(":")
     path = _file(base, file, where)
 
     def make() -> object:
-        module = import_file(path)
-        function = getattr(module, name, None)
-        if not callable(function):
-            raise DeckDocumentError(where, f"{file} has no function {name}")
-        return check(call(function) if call else function())
+        with around() if around else contextlib.nullcontext(), _own_code(target, where):
+            module = import_file(path)
+            function = getattr(module, name, None)
+            if not callable(function):
+                raise DeckDocumentError(where, f"{file} has no function {name}")
+            made = call(function) if call else function()
+        return check(made)
 
     return make
 
 
+@contextlib.contextmanager
+def _own_code(target: str, where: str):
+    """Around a deck's own Python: whatever it does to stop (``sys.exit()``) is said on
+    its slide, and the folder it may have moved into is left again."""
+
+    folder = os.getcwd()
+    try:
+        yield
+    except (DeckDocumentError, KeyboardInterrupt):
+        raise
+    except BaseException as error:
+        if isinstance(error, Exception) and not isinstance(error, SystemExit):
+            raise
+        raise DeckDocumentError(where, f"{target} stopped: {type(error).__name__} {error}".strip()) from None
+    finally:
+        if os.getcwd() != folder:
+            os.chdir(folder)
+
+
 _MODULES: dict[Path, tuple[float, object]] = {}
+_IMPORTING = threading.Lock()
 
 
 def import_file(path: Path) -> object:
-    """The module a Python file makes, imported again when the file has changed."""
+    """The module a Python file makes, imported again when it, or any Python file beside
+    it (a helper it imports), has changed.
 
-    stamp = path.stat().st_mtime
+    Its folder is on the import path only while it is imported, and the modules it
+    imports from there are forgotten after: so an edited helper is read again, and a
+    helper of the same name in another deck's folder is never taken for this one's.
+    """
+
+    stamp = _stamp(path)
     known = _MODULES.get(path)
     if known and known[0] == stamp:
         return known[1]
-    spec = importlib.util.spec_from_file_location(f"_flexo_talk_{path.stem}_{abs(hash(path))}", path)
+    name = f"_flexo_talk_{path.stem}_{abs(hash(path))}"
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise DeckDocumentError("", f"cannot read {path}")
     module = importlib.util.module_from_spec(spec)
-    if str(path.parent) not in sys.path:
-        sys.path.insert(0, str(path.parent))
-    spec.loader.exec_module(module)
+    folder = path.parent.resolve()
+    with _IMPORTING:
+        before = set(sys.modules)
+        sys.path.insert(0, str(folder))
+        sys.modules[name] = module  # a dataclass in the file looks its module up
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+        finally:
+            with contextlib.suppress(ValueError):
+                sys.path.remove(str(folder))
+            for key in set(sys.modules) - before - {name}:
+                source = getattr(sys.modules.get(key), "__file__", None)
+                if source and folder in Path(source).resolve().parents:
+                    del sys.modules[key]
     _MODULES[path] = (stamp, module)
     return module
+
+
+def _stamp(path: Path) -> float:
+    """When the file, or the latest Python file beside it, last changed."""
+
+    stamps = [path.stat().st_mtime]
+    with contextlib.suppress(OSError):
+        stamps += [item.stat().st_mtime for item in list(path.parent.glob("*.py"))[:200]]
+    return max(stamps)
 
 
 def _takes_argument(function: Callable[..., object]) -> bool:

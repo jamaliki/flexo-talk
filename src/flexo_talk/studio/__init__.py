@@ -78,6 +78,7 @@ STYLE_NOTES = {
 }
 
 CACHE_SIZE = 600
+CACHE_BYTES = 200_000_000
 BUDGET = 0.4
 """Seconds a drawing spends on slides beyond the first before it returns what it has."""
 
@@ -288,7 +289,10 @@ class DeckKind:
             except Exception as error:
                 self._slides[keys[index]] = {"error": f"{type(error).__name__}: {error}"}
             drawn_one = True
-        while len(self._slides) > CACHE_SIZE:
+        # Slides with photos carry them inside: the cache is held to a size in bytes too.
+        while len(self._slides) > CACHE_SIZE or (
+            len(self._slides) > 1 and sum(len(item.get("svg", "")) for item in self._slides.values()) > CACHE_BYTES
+        ):
             self._slides.popitem(last=False)
         pages: list[Page] = []
         messages: list[Message] = []
@@ -502,6 +506,9 @@ def _files(data: object, base: Path) -> set[Path]:
                     path = (base / name).resolve()
                     if path.is_file():
                         found.add(path)
+                        if path.suffix == ".py":
+                            # Python beside it may be what it imports: a change there counts.
+                            found.update(sorted(path.parent.glob("*.py"))[:50])
             elif isinstance(value, dict | list) and not (key == "figure" and isinstance(value, dict)):
                 found |= _files(value, base)
             elif key == "gallery" and isinstance(value, list):
