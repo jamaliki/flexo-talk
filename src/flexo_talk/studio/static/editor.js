@@ -19,9 +19,27 @@ const BLOCKS = {
   code: { icon: "code", label: "Code", hint: "A monospace listing" },
   gallery: { icon: "gallery", label: "Gallery", hint: "Logos or people in a grid" },
   plot: { icon: "plot", label: "Plot", hint: "A matplotlib figure made in Python" },
+  math: { icon: "math", label: "Equation", hint: "LaTeX, on a line of its own" },
 };
 const MAIN_BLOCKS = ["text", "bullets", "figure", "image", "table"];
-const MORE_BLOCKS = ["stats", "quote", "callout", "code", "gallery", "plot"];
+const MORE_BLOCKS = ["math", "stats", "quote", "callout", "code", "gallery", "plot"];
+
+// What an equation's snippet buttons put in: [label, title, LaTeX]; "|" is where the cursor goes.
+const MATH_SNIPPETS = [
+  ["a⁄b", "Fraction", "\\frac{|}{}"],
+  ["√", "Square root", "\\sqrt{|}"],
+  ["xⁿ", "Superscript", "^{|}"],
+  ["xᵢ", "Subscript", "_{|}"],
+  ["Σ", "Sum with limits", "\\sum_{i=1}^{n} |"],
+  ["∫", "Integral", "\\int_{a}^{b} | \\, dx"],
+  ["( )", "Brackets that grow", "\\left( | \\right)"],
+  ["[ ]", "Matrix", "\\begin{bmatrix} | & b \\\\ c & d \\end{bmatrix}"],
+  ["{", "Cases", "\\begin{cases} | & x \\ge 0 \\\\ -x & x < 0 \\end{cases}"],
+  ["=", "Aligned lines", "|a &= b \\\\\n  &= c"],
+  ["α", "Greek", "\\alpha|"],
+  ["x̂", "Hat", "\\hat{|}"],
+  ["Tt", "Words", "\\text{|}"],
+];
 const INLINE = new Set(["text", "bullets", "quote", "callout", "code"]);
 
 const LAYOUT_NAMES = {
@@ -60,6 +78,7 @@ const NEW_BLOCKS = {
   code: () => ({ code: "def model(x):\n    # the whole idea\n    return head(encoder(x))" }),
   gallery: () => ({ gallery: [] }),
   plot: () => ({ plot: "" }),
+  math: () => ({ math: "\\mathcal{L}(\\theta) = -\\frac{1}{N} \\sum_{i=1}^{N} \\log p_\\theta(y_i \\mid x_i)" }),
 };
 
 // -- the document ---------------------------------------------------------------------
@@ -94,8 +113,11 @@ function setOption(target, key, value, fallback = undefined) {
 }
 
 function plain(markup) {
-  return String(markup ?? "").replace(/\[([^\]]+)\]\{[^}]+\}/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/\*\*|\*|`/g, "").replace(/\$([^$]*)\$/g, "$1").split("\n")[0];
+  // Maths loses its dollars as flexo reads them: not a price ($5), not an escaped \$.
+  return String(markup ?? "").replace(/\\\$/g, "\u0000")
+    .replace(/\$\$([\s\S]+?)\$\$/g, "$1").replace(/\$(?!\s)([^$]+?)(?<!\s)\$(?!\d)/g, "$1").replace(/\u0000/g, "$")
+    .replace(/\[([^\]]+)\]\{[^}]+\}/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\*\*|\*|`/g, "").split("\n")[0];
 }
 
 function summary(block) {
@@ -109,6 +131,7 @@ function summary(block) {
     case "figure": return typeof value === "string" ? value : `Drawn here · ${(value?.nodes || []).length} parts`;
     case "image": case "plot": return value || "Not chosen yet";
     case "callout": return plain(block.title) || plain(value);
+    case "math": return String(value ?? "").trim().split("\n")[0] || "An empty equation";
     default: return plain(value);
   }
 }
@@ -215,6 +238,7 @@ export function mount(studio, container) {
   const state = { slide: 0, focus: null, tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
+  let mathNotes = null;
   let pending = false;
   let inline = null;
 
@@ -1142,9 +1166,47 @@ export function mount(studio, container) {
         return [ui.field("Made by", functionInput(block.plot, (value) => edit((b) => { b.plot = value; }, "plot")), { hint: "file.py:function" }),
           h("div.hint-line", {}, "A function returning a matplotlib figure; it runs inside ", h("code", {}, "deck.plotting()"), " and is given the deck if it takes an argument."),
           ui.field("Shape", ui.number({ value: block.aspect, placeholder: "fill the room", min: 0.2, step: 0.1, key: key("aspect"), onChange: set("aspect") }), { hint: "width ÷ height" })];
+      case "math": return mathForm(block, at, edit, toneSwatches, size);
       default:
         return [h("div.hint-line", {}, "This part has no form yet.")];
     }
+  }
+
+  function mathForm(block, at, edit, toneSwatches, size) {
+    const area = ui.textarea({ value: block.math, rows: 3, mono: true, grow: true, key: "block.math",
+      placeholder: "E = mc^2", onInput: (text) => edit((b) => { b.math = text; }, "math") });
+    const insert = (snippet) => {
+      const [before, after = ""] = snippet.split("|");
+      const start = area.selectionStart, end = area.selectionEnd;
+      const chosen = area.value.slice(start, end);
+      area.value = area.value.slice(0, start) + before + chosen + after + area.value.slice(end);
+      const at = start + before.length + chosen.length;
+      area.focus();
+      area.setSelectionRange(at, at);
+      area.dispatchEvent(new Event("input"));
+    };
+    const chips = MATH_SNIPPETS.map(([label, title, snippet]) => h("button.math-chip", { type: "button", title,
+      onmousedown: (event) => { event.preventDefault(); insert(snippet); } }, label));
+    // What could not be read in it, said beside it (the slide shows it in red), and said
+    // afresh with each drawing as it is typed.
+    const notes = h("div.math-notes");
+    const note = () => {
+      const source = area.value.trim().slice(0, 20);
+      const said = messages.filter((m) => m.page === `slide${state.slide + 1}` && m.text.includes(", in the maths “")
+        && source && m.text.includes(source));
+      clear(notes);
+      notes.append(...said.map((m) => h("div.block-error.soft", {}, icon("warning"), m.text.replace(/, in the maths “[\s\S]*”$/, ""))));
+    };
+    note();
+    mathNotes = note;
+    return [area, h("div.math-chips", {}, chips), notes,
+      h("div.hint-line", {}, "LaTeX, as in a paper. ", h("code", {}, "\\\\"), " starts a line; ", h("code", {}, "&"),
+        " lines them up. In words, put maths between ", h("code", {}, "$"), "s, or ", h("code", {}, "$$"), " for a line of its own."),
+      ui.field("Align", ui.segmented({ value: block.align || "middle", options: [
+        { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
+      onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "middle")) })),
+      ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
+      size()];
   }
 
   function statsForm(block, at, edit, toneSwatches, size) {
@@ -1545,6 +1607,7 @@ export function mount(studio, container) {
     messages = result.messages || [];
     renderRail();
     renderStage();
+    if (mathNotes && document.contains(inspectorBody.querySelector(".math-notes"))) mathNotes();
     if (figure && typeof figureBlock()?.figure === "string") figure.parts.act({ do: "read" }, { select: false });
     const key = JSON.stringify(studio.info?.palette || {});
     if (key !== lastKey) { lastKey = key; renderInspector(); } else markBlockErrors();

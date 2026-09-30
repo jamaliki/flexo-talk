@@ -113,16 +113,30 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
 
 def _drop_lists(group: Group) -> None:
     """Bulleted lists and tables are set natively (``add_list``, ``add_table``), so
-    their drawn copies go."""
+    their drawn copies go -- all but their formulas, which native words leave room for
+    and cannot draw."""
 
-    group.items = [
-        item
-        for item in group.items
-        if not (isinstance(item, Group) and item.data.get("data-flexo-talk") in {"bullets", "table"})
-    ]
+    kept: list = []
+    for item in group.items:
+        if isinstance(item, Group) and item.data.get("data-flexo-talk") in {"bullets", "table"}:
+            kept.extend(_formulas(item))
+        else:
+            kept.append(item)
+    group.items = kept
     for item in group.items:
         if isinstance(item, Group):
             _drop_lists(item)
+
+
+def _formulas(group: Group) -> list[Group]:
+    found: list[Group] = []
+    for item in group.items:
+        if isinstance(item, Group):
+            if "data-flexo-math" in item.data:
+                found.append(item)
+            else:
+                found.extend(_formulas(item))
+    return found
 
 
 def _dissolve_regions(group: Group) -> None:
