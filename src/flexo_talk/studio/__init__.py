@@ -288,7 +288,8 @@ class DeckKind:
             try:
                 rendered = render_slide(deck, slide)
                 self._slides[keys[index]] = {"svg": rendered.svg, "steps": rendered.steps,
-                                             "diagnostics": rendered.diagnostics, "notes": rendered.notes}
+                                             "diagnostics": rendered.diagnostics, "notes": rendered.notes,
+                                             "held": rendered.held}
             except UntrustedCode as error:
                 self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
             except Exception as error:
@@ -322,6 +323,8 @@ class DeckKind:
                     messages.append(_diagnostic(text, identifier, index, "warning"))
                 for text in done["notes"]:
                     messages.append(_diagnostic(text, identifier, index, "note"))
+                for text in done.get("held", []):
+                    messages.append(Message(text, "warning", f"slides[{index}]", identifier, "code.untrusted"))
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
         return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck), "tones": _tones(deck)})
 
