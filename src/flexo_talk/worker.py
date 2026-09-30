@@ -146,6 +146,16 @@ def deck_view(deck: Any) -> dict[str, Any]:
     }
 
 
+def stop(folder: Path) -> None:
+    """Stop ``folder``'s worker, if it has one: the studio on it has closed."""
+
+    with _WORKERS_LOCK:
+        worker = _WORKERS.pop(folder.resolve(), None)
+    if worker is not None:
+        # Not waiting for its lock: a drawing it is busy with ends now, said as stopped.
+        worker.stop()
+
+
 @atexit.register
 def stop_all() -> None:
     with _WORKERS_LOCK:
