@@ -410,3 +410,52 @@ def test_one_theme_file_is_put_to_use_in_a_deck_and_a_figure_at_once(
     assert yaml.safe_load((tmp_path / "figure.yaml").read_text())["figure"]["style"] == "themes/lab.theme.yaml"
     assert cards[0]["value"] == "themes/lab.theme.yaml"
     assert drawn.info["tones"]["colours"][0]["stroke"].startswith("#")
+
+
+def test_a_deck_s_python_is_kept_to_itself(tmp_path: Path) -> None:
+    import os
+    import time
+
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    matplotlib.use("Agg")
+    for folder, word in (("one", "first"), ("two", "second")):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "utils.py").write_text(f"WORD = {word!r}\n")
+        (tmp_path / folder / "plots.py").write_text(
+            "from dataclasses import dataclass\n"
+            "import matplotlib.pyplot as plt\n"
+            "from utils import WORD\n"
+            "plt.rcParams['lines.linewidth'] = 9\n"
+            "@dataclass\n"
+            "class Point:\n"
+            "    x: float\n"
+            "def plot():\n"
+            "    figure, axes = plt.subplots()\n"
+            "    axes.plot([Point(0).x, 1])\n"
+            "    axes.set_title(WORD)\n"
+            "    return figure\n"
+            "def leaves():\n"
+            "    os.chdir('/')\n"
+            "    return plot()\n"
+            "def quits():\n"
+            "    raise SystemExit(3)\n"
+            "import os\n"
+        )
+    kind = DeckKind()
+    width, figures, here = plt.rcParams["lines.linewidth"], len(plt.get_fignums()), os.getcwd()
+
+    def draw(folder: str, function: str = "plot") -> str:
+        document = {"slides": [{"title": "A", "body": [{"plot": f"plots.py:{function}"}]}]}
+        drawing = kind.draw(document, tmp_path / folder, {})
+        return drawing.pages[0].svg + " ".join(message.text for message in drawing.messages)
+
+    assert "first" in draw("one") and "second" in draw("two")
+    assert "stopped: SystemExit 3" in draw("one", "quits")
+    draw("two", "leaves")
+    assert os.getcwd() == here
+    assert plt.rcParams["lines.linewidth"] == width and len(plt.get_fignums()) == figures
+    time.sleep(0.01)
+    (tmp_path / "one" / "utils.py").write_text("WORD = 'edited'\n")
+    assert "edited" in draw("one")

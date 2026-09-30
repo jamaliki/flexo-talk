@@ -1556,6 +1556,10 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
             figure.set_layout_engine("tight")
             buffer = io.StringIO()
             figure.savefig(buffer, format="svg", transparent=True, metadata={"Date": None})
+    # Drawn: pyplot need not keep it open (each redraw makes the plot afresh).
+    import matplotlib.pyplot as plt
+
+    plt.close(figure)
     _place_svg(canvas, identifier, buffer.getvalue(), box.x, box.y, 1.0)
     return height
 
