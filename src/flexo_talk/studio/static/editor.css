@@ -33,7 +33,9 @@
 .thumb.drop-before::before, .thumb.drop-after::after { content: ""; position: absolute; left: 24px; right: 0; height: 3px; background: var(--accent); border-radius: 2px; }
 .thumb.drop-before::before { top: -7px; }
 .thumb.drop-after::after { bottom: -7px; }
-.insert-after { position: absolute; left: 50%; bottom: -9px; transform: translateX(-30%); width: 18px; height: 18px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; cursor: pointer; opacity: 0; z-index: 2; transition: opacity 0.1s; box-shadow: var(--shadow-1); }
+/* Centred on the slide, right of the number column (20px and a 4px gap); no padding, or WebKit's
+   puts the plus off centre. */
+.insert-after { position: absolute; left: calc(50% + 12px); bottom: -9px; transform: translateX(-50%); width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; cursor: pointer; opacity: 0; z-index: 2; transition: opacity 0.1s; box-shadow: var(--shadow-1); }
 .thumb:hover .insert-after { opacity: 1; }
 .insert-after svg { width: 11px; height: 11px; }
 .rail-add { margin: 4px 0 0 24px; display: flex; align-items: center; justify-content: center; gap: 6px; aspect-ratio: 16 / 9; border-radius: 5px; border: 1.5px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font-size: 12px; }
