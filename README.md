@@ -192,6 +192,31 @@ Columns of numbers are set flush right (`align="lrr"` or a list of
 `start`/`middle`/`end` to choose); `header=False` drops the header. In the
 PowerPoint it is a native table with the same columns, rows, and rules.
 
+## Maths
+
+```python
+slide.math(r"\mathcal{L}(\theta) = -\frac{1}{N}\sum_{i=1}^{N} \log p_\theta(y_i \mid x_i)")
+slide.text(r"The rate $k = A e^{-E_a/RT}$ rises with temperature.")
+```
+
+Maths is LaTeX. `math(...)` -- a `math:` block in a document, or a paragraph that is
+only `$$...$$` or `\[...\]` -- displays an equation on its own line, centred, at the
+words' size or smaller if it is wider than its place: fractions, roots, sums and
+integrals with their limits, brackets that grow (`\left( ... \right)`, `\big`),
+accents, braces over and under, matrices (`pmatrix`, `bmatrix`, `vmatrix`...), `cases`,
+lines aligned at `&` and broken at `\\` (in `aligned`, or without it), chemistry
+(`\ce{2H2 + O2 -> 2H2O}`) and units (`\SI{9.81}{\metre\per\second\squared}`).
+
+In words, `$...$` or `\(...\)` sets maths in the line, and a formula too long for its
+line breaks after a relation or an operator, as TeX breaks it. Dollars are read as
+pandoc reads them, so "it costs $5 and $10" stays two prices, and `\$` is a dollar.
+Simple maths (`$x_t$`) is set as words; the rest is laid out by TeX's rules from the
+bundled Latin Modern Math. Its letters and signs are the deck's own face, so a
+formula reads with the words around it. Maths that cannot be read is drawn in red
+and said in the build summary (and beside the equation in the studio), with the
+command a typo probably meant. In the PowerPoint a formula is drawn as shapes, and
+native lists and tables leave room for it in their words.
+
 ## Plots
 
 ```python
