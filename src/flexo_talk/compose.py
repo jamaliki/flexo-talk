@@ -34,6 +34,7 @@ from flexo.units import MILLIMETRES_PER_INCH, POINTS_PER_INCH
 from flexo_talk.deck import (
     Deck,
     ListLayout,
+    Reference,
     Region,
     RenderedSlide,
     Slide,
@@ -50,6 +51,7 @@ from flexo_talk.deck import (
     _Table,
     _Words,
     accent_field,
+    inline,
     made,
 )
 
@@ -116,6 +118,7 @@ class _Canvas:
         self.diagnostics: list[str] = []
         self.tables: list[TableLayout] = []
         self.notes: list[str] = []
+        self.held: list[str] = []
         self.steps = 1
         self.alone = False
         """Whether the block being set has its region to itself."""
@@ -189,6 +192,7 @@ class _Canvas:
 
 def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
     canvas = _Canvas(deck, slide)
+    _held_back(canvas, slide)
     style = deck.style
     width, height, margin = style.width, style.height, style.margin
     if style.edge and slide.layout != "title":
@@ -227,8 +231,29 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
         embed_fonts(headings, canvas.root, replace(deck.layout_style, typography=deck.typography(12, title=True)))
     return RenderedSlide(
         slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics, canvas.tables, canvas.notes,
-        canvas.steps,
+        canvas.steps, canvas.held,
     )
+
+
+def _held_back(canvas: _Canvas, slide: Slide) -> None:
+    """Python a slide names, in a folder not yet trusted, stands aside for a quiet line in
+    its place: the rest of the slide is drawn as usual, and the page is told what waits."""
+
+    from flexo_talk.document import UntrustedCode
+
+    for region in slide.regions.values():
+        for index, block in enumerate(region.blocks):
+            reference = getattr(block, "figure", None)
+            if not isinstance(reference, Reference):
+                continue
+            try:
+                reference.resolve()
+            except UntrustedCode as error:
+                canvas.held.append(error.message)
+                region.blocks[index] = _Words(
+                    inline(f"*{reference.target}* is drawn once you trust this folder"),
+                    align="middle", muted=True,
+                )
 
 
 def _paint_rect(canvas: _Canvas, identifier: str, box: Box, role: str | None, *, opacity: float = 1.0) -> None:

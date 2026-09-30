@@ -1118,6 +1118,9 @@ class RenderedSlide:
     notes: list[str] = field(default_factory=list)
     steps: int = 1
     """How many states the slide shows in turn (revealed lists); 1 for most."""
+    held: list[str] = field(default_factory=list)
+    """Python the slide names that was not run (its folder not yet trusted): a quiet line
+    stands in its place."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""
