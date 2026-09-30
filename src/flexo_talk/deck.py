@@ -1098,12 +1098,17 @@ class Deck:
         *,
         formats: Sequence[str] = ("pptx", "pdf", "svg", "png"),
         handout: bool = False,
+        editable_maths: bool = True,
     ) -> DeckBuild:
-        """Write the deck: ``pptx`` and ``pdf`` (one file each), ``svg`` and ``png`` per slide."""
+        """Write the deck: ``pptx`` and ``pdf`` (one file each), ``svg`` and ``png`` per slide.
+
+        ``editable_maths`` writes the PowerPoint's maths as its own equations, editable
+        there (set in PowerPoint's maths font), with flexo's drawing for other programs;
+        ``False`` keeps only the drawing, set in the deck's fonts everywhere."""
 
         from flexo_talk.export import build_deck
 
-        return build_deck(self, Path(directory), tuple(formats), handout=handout)
+        return build_deck(self, Path(directory), tuple(formats), handout=handout, editable_maths=editable_maths)
 
 
 @dataclass(slots=True)
@@ -1129,6 +1134,8 @@ class ListLayout:
     """The slide's paints (light words on a dark slide); the deck's when unset."""
     steps: list[float] = field(default_factory=list)
     """Each item's line height: a formula taller than the words opens its item's lines."""
+    opened: list[tuple[float, float, int]] = field(default_factory=list)
+    """Each item's room for a formula above and below its words, and its line count."""
 
     def step(self, index: int) -> float:
         """The line height of item ``index``."""
@@ -1174,6 +1181,26 @@ class TableLayout:
 
 
 @dataclass(slots=True)
+class WordsLayout:
+    """Words with maths in them, as they were set -- a paragraph, a title, a caption --
+    for writers that set them natively (PowerPoint, its equations its own)."""
+
+    id: str
+    x: float
+    """Where the lines are aligned: their left edge, middle, or right edge (``align``)."""
+    baseline: float
+    """The first line's baseline."""
+    width: float
+    line_height: float
+    lines: list[tuple[TextRun, ...]]
+    size: float
+    align: str = "start"
+    family: str = ""
+    weight: int | None = None
+    fill: str = "#000000"
+
+
+@dataclass(slots=True)
 class RenderedSlide:
     slide: Slide
     svg: str
@@ -1186,6 +1213,8 @@ class RenderedSlide:
     held: list[str] = field(default_factory=list)
     """Python the slide names that was not run (its folder not yet trusted): a quiet line
     stands in its place."""
+    worded: list[WordsLayout] = field(default_factory=list)
+    """Words with maths in them, where they were set (see ``WordsLayout``)."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

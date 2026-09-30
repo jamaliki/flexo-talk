@@ -571,6 +571,56 @@ def test_maths_in_a_list_leaves_room_in_the_native_words_and_is_drawn_over_it(tm
     assert re.search(r'spc="\d+"', table) and table.count("<a:custGeom>") >= 2
 
 
+@pytest.mark.parametrize("editable", [False, True])
+def test_a_list_opened_for_tall_maths_keeps_its_baselines_in_powerpoint(tmp_path: Path, editable: bool) -> None:
+    from flexo.text import font_stack
+
+    from flexo_talk.pptx import LOOSE, ascent
+
+    deck = Deck("tall")
+    deck.slide("Tall").bullets(
+        r"First: $\frac{\partial \mathcal{L}}{\partial \theta} = \sum_i \frac{1}{p_i}$ is tall",
+        "A plain second item",
+        r"A long item that wraps onto a second line because it goes on and on, with $\frac{a}{b}$ in "
+        "the middle of it and more words after",
+    )
+    (rendered,) = deck.render()
+    (layout,) = rendered.lists
+    assert [count for _, _, count in layout.opened] == [1, 1, 2]
+    xml = _slides(deck.build(tmp_path, formats=("pptx",), editable_maths=editable).pptx)[0]
+    share = ascent(font_stack(deck.typography(layout.size)).face(400, False))
+    shapes = re.findall(rf'<p:sp>(?:(?!</p:sp>).)*name="{re.escape(layout.id)}".*?</p:sp>', xml, re.S)
+    assert len(shapes) == (2 if editable else 1)
+    for shape in shapes:
+        # PowerPoint sets an exactly spaced line's baseline at the face's share of single
+        # spacing, and at LOOSE of any wider spacing: replayed, each item's first baseline
+        # lands where Flexo set it.
+        y = int(re.search(r'<a:off x="\d+" y="(\d+)"/>', shape).group(1)) / 12700
+        spacings = [int(v) / 100 for v in re.findall(r'<a:lnSpc><a:spcPts val="(\d+)"/>', shape)]
+        befores = [int(v) / 100 for v in re.findall(r'<a:spcBef><a:spcPts val="(\d+)"/>', shape)]
+        for index, ((_, _, baseline), (rise, fall, count), spacing, before) in enumerate(
+            zip(layout.items, layout.opened, spacings, befores, strict=True)
+        ):
+            y += before
+            plain = layout.step(index) - rise - fall
+            down = LOOSE * spacing if spacing > plain + 0.01 else share * spacing
+            assert y + down == pytest.approx(baseline, abs=0.02)
+            y += spacing * count
+
+
+def test_a_text_box_starts_where_its_words_were_set(tmp_path: Path) -> None:
+    deck = Deck("edges", footer="A footer")
+    deck.slide("A title").text("Words.")
+    xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]
+    for words in ("A title", "Words.", "A footer"):
+        shape = re.search(rf'<p:sp>(?:(?!</p:sp>).)*<a:t>{re.escape(words)}</a:t>', xml, re.S).group(0)
+        # Left-aligned words start at the margin; the room to spare is on their right.
+        assert int(re.search(r'<a:off x="(\d+)"', shape).group(1)) / 12700 == pytest.approx(48.0, abs=0.01)
+    number = re.search(r'<p:sp>(?:(?!</p:sp>).)*algn="r"(?:(?!</p:sp>).)*<a:t>1</a:t>', xml, re.S).group(0)
+    left, width = (int(v) / 12700 for v in re.search(r'<a:off x="(\d+)".*?<a:ext cx="(\d+)"', number, re.S).groups())
+    assert left + width == pytest.approx(960.0 - 48.0, abs=0.5)
+
+
 def test_maths_that_cannot_be_read_is_reported_on_its_slide(tmp_path: Path) -> None:
     deck = Deck("broken")
     deck.slide("Oops").text(r"Here: $\frac{1}{2} + \foo{x}$").math(r"\sqrt{x")
@@ -606,3 +656,78 @@ def test_a_plot_sets_its_maths_as_a_slide_does_and_says_what_it_cannot_read() ->
     svg = plot_svg(figure, 300.0, 200.0, "Figtree", "p", maths="Fira Math", said=said)
     assert said == [(r"$\frac{1}{$", "a { is not closed")]
     assert "STIX" not in svg and "<path" in svg
+
+
+@pytest.mark.parametrize(
+    ("source", "elements"),
+    [
+        (r"\frac{a}{b}", ["m:f", "m:num", "m:den"]),
+        (r"\sqrt{x} + \sqrt[3]{y}", ["m:rad", "m:degHide", "m:deg"]),
+        (r"\sum_{i=1}^{n} x_i", ["m:nary", 'm:chr m:val="∑"', 'm:limLoc m:val="undOvr"', "m:sSub"]),
+        (r"\sum_{i=1}^{n}", ["m:nary", "<m:e><m:r>", "\u200b"]),
+        (r"\int_0^1 f\,dx", ['m:chr m:val="∫"', 'm:limLoc m:val="subSup"']),
+        (r"\left( \frac{a}{b} \right)", ["m:d", 'm:begChr m:val="("', 'm:endChr m:val=")"']),
+        (r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", ["m:m", "m:mr", 'm:begChr m:val="("']),
+        (r"\begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}", ['m:begChr m:val="{"', 'm:endChr m:val=""']),
+        (r"a &= b \\ &= c", ["m:eqArr", "m:aln"]),
+        (r"\begin{gathered} a \\ b \end{gathered}", ["m:eqArr"]),
+        (r"\log p(x) + \sin x", ["m:func", "m:fName"]),
+        (r"\hat{x} + \overline{AB}", ["m:acc", "m:bar", 'm:pos m:val="top"']),
+        (r"\overbrace{a+b}^{n} \xrightarrow{k}", ["m:limUpp", "m:groupChr", 'm:chr m:val="⏞"']),
+        (r"\mathcal{L} + \mathbb{R} + \mathbf{x} + \text{if}", ['m:scr m:val="script"', 'm:scr m:val="double-struck"',
+                                                               'm:sty m:val="b"', "m:nor"]),
+        (r"\lim_{n \to \infty} a_n", ["m:limLow"]),
+        (r"\binom{n}{k}", ['m:type m:val="noBar"']),
+        (r"\foo{x}", ['val="C0392B"']),
+    ],
+)
+def test_maths_is_written_as_powerpoints_own_equations(source: str, elements: list[str]) -> None:
+    from lxml import etree
+
+    from flexo_talk.omml import omml
+
+    written = omml(source, size=20.0, colour="242126", display=True)
+    root = etree.fromstring(written)
+    assert root.tag == "{http://schemas.microsoft.com/office/drawing/2010/main}m"
+    for element in elements:
+        assert f"<{element}" in written or element in written, element
+
+
+def test_the_powerpoint_has_editable_equations_and_the_drawing_for_other_programs(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    deck = Deck("equations")
+    slide = deck.slide("Maths")
+    slide.text(r"We minimise $\frac{1}{N}\sum_i \ell_i$ here.")
+    slide.math(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}")
+    slide.bullets(r"A rate $k = A e^{-E_a/RT}$")
+    deck.slide("Table").table([["what", "value"], ["half", r"$\frac{1}{2}$"]])
+    result = deck.build(tmp_path / "editable", formats=("pptx",))
+    first, second = _slides(result.pptx)
+    for xml, count in ((first, 3), (second, 1)):
+        blocks = re.findall(r"<mc:AlternateContent.*?</mc:AlternateContent>", xml, re.S)
+        assert len(blocks) == count
+        for block in blocks:
+            choice, fallback = block.split("<mc:Fallback>")
+            assert 'Requires="a14"' in choice and "<a14:m" in choice and "<a14:m" not in fallback
+            assert "<a:custGeom>" in fallback  # the formula, drawn
+    Presentation(str(result.pptx))  # python-pptx still reads it
+    # Without editable maths, only the drawing, and no Office Math anywhere.
+    drawn = deck.build(tmp_path / "drawn", formats=("pptx",), editable_maths=False)
+    assert all("<a14:m" not in xml and "AlternateContent" not in xml for xml in _slides(drawn.pptx))
+
+
+def test_no_formula_however_broken_makes_office_math_powerpoint_cannot_read() -> None:
+    import random
+
+    from lxml import etree
+
+    from flexo_talk.omml import omml
+
+    pieces = [r"\frac", r"\sqrt", "{", "}", "^", "_", "&", r"\\", r"\left(", r"\right)", r"\begin{pmatrix}",
+              r"\end{pmatrix}", "x", "2", r"\alpha", r"\sum", r"\middle|", r"\over", "'", r"\hat", r"\ce{",
+              r"\text{", "<", ">", "&amp;", r"\color{red}", r"\overbrace", r"\not", r"\big", r"\mathbb", " "]
+    rng = random.Random(9)
+    for _ in range(500):
+        source = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 14)))
+        etree.fromstring(omml(source, size=18.0, colour="000000", display=rng.random() < 0.5))
