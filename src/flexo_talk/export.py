@@ -24,11 +24,14 @@ from flexo_talk.pptx import (
     linking,
     slide_pictures,
 )
+from flexo_talk.pptx import editable_maths as editable_maths_of
 
 FORMATS = ("pptx", "pdf", "svg", "png")
 
 
-def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...], *, handout: bool = False) -> DeckBuild:
+def build_deck(
+    deck: Deck, directory: Path, formats: tuple[str, ...], *, handout: bool = False, editable_maths: bool = True
+) -> DeckBuild:
     unknown = set(formats) - set(FORMATS)
     if unknown:
         raise ValueError(f"unknown format(s) {', '.join(sorted(unknown))}; use {', '.join(FORMATS)}")
@@ -60,13 +63,20 @@ def build_deck(deck: Deck, directory: Path, formats: tuple[str, ...], *, handout
     pptx = None
     if "pptx" in formats:
         pptx = directory / f"{deck.id}.pptx"
-        write_pptx(deck, rendered, pptx)
+        write_pptx(deck, rendered, pptx, editable_maths=editable_maths)
     notes = tuple(note for item in rendered for note in item.notes)
     return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics), notes)
 
 
-def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, groups: bool = True) -> Path:
-    """The deck as PowerPoint: every shape native, lists as lists, notes as notes."""
+def write_pptx(
+    deck: Deck, rendered: list[RenderedSlide], target: Path, *, groups: bool = True, editable_maths: bool = True
+) -> Path:
+    """The deck as PowerPoint: every shape native, lists as lists, notes as notes.
+
+    With ``editable_maths``, its maths is PowerPoint's own equations -- editable in its
+    equation editor, set in its maths font -- over flexo's drawing of each, which
+    other slide programs show instead (see ``pptx.alternate``).
+    """
 
     presentation = Presentation()
     presentation.slide_width = Pt(deck.style.width)
@@ -85,23 +95,29 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
                 slide.background.fill.solid()
                 slide.background.fill.fore_color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
             drawing = read_drawing(item.svg)
-            _drop_lists(drawing.root)
+            formulas = _drop_lists(drawing.root)
             _dissolve_regions(drawing.root)
             add_drawing(
                 slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False,
                 groups=groups, pictures=slide_pictures(slide),
                 backdrop=deck.palette.get("canvas"),
             )
+            if editable_maths:
+                editable_maths_of(slide.shapes._spTree, drawing, item.worded, deck, deck.palette)
             reveals = []
             for layout in item.lists:
-                shape_id = add_list(slide.shapes._spTree, deck, layout)
+                shape_id = add_list(
+                    slide.shapes._spTree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths
+                )
                 if layout.reveal:
                     outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
                     ends = [*outer[1:], len(layout.items)]
                     ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
                     reveals.append((shape_id, ranges))
             for layout in item.tables:
-                add_table(slide.shapes._spTree, deck, layout)
+                add_table(
+                    slide.shapes._spTree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths
+                )
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
             add_reveals(slide._element, reveals)
@@ -111,21 +127,24 @@ def write_pptx(deck: Deck, rendered: list[RenderedSlide], target: Path, *, group
     return target
 
 
-def _drop_lists(group: Group) -> None:
+def _drop_lists(group: Group, found: dict[str, list] | None = None) -> dict[str, list]:
     """Bulleted lists and tables are set natively (``add_list``, ``add_table``), so
     their drawn copies go -- all but their formulas, which native words leave room for
-    and cannot draw."""
+    and cannot draw: each list's and table's, by its id, for its writer."""
 
+    found = {} if found is None else found
     kept: list = []
     for item in group.items:
         if isinstance(item, Group) and item.data.get("data-flexo-talk") in {"bullets", "table"}:
-            kept.extend(_formulas(item))
+            if item.id:
+                found[item.id] = _formulas(item)
         else:
             kept.append(item)
     group.items = kept
     for item in group.items:
         if isinstance(item, Group):
-            _drop_lists(item)
+            _drop_lists(item, found)
+    return found
 
 
 def _formulas(group: Group) -> list[Group]:

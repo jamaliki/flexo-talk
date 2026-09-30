@@ -40,6 +40,7 @@ from flexo_talk.deck import (
     RenderedSlide,
     Slide,
     TableLayout,
+    WordsLayout,
     _Bullets,
     _Callout,
     _Code,
@@ -117,6 +118,7 @@ class _Canvas:
         if slide.backdrop:
             _slide_background(self, slide)
         self.lists: list[ListLayout] = []
+        self.worded: list[WordsLayout] = []
         self.diagnostics: list[str] = []
         self.tables: list[TableLayout] = []
         self.notes: list[str] = []
@@ -191,6 +193,13 @@ class _Canvas:
             align = "end"
         metrics = self.measure(runs, size, box.width if wrap else None, weight, title=title, balance=balance)
         x = {"start": box.x, "middle": box.x + box.width / 2.0, "end": box.x + box.width}[align]
+        if any(run.math for run in runs):
+            typography = self.deck.typography(size, title=title)
+            colour = fill or self.palette.get(role)
+            self.worded.append(WordsLayout(
+                identifier, x, box.y + metrics.baseline, metrics.width, metrics.line_height,
+                [line.runs for line in metrics.lines], size, align, typography.family, weight, colour,
+            ))
         render_runs(
             parent if parent is not None else self.layer,
             identifier,
@@ -248,7 +257,7 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
         embed_fonts(headings, canvas.root, replace(deck.layout_style, typography=deck.typography(12, title=True)))
     return RenderedSlide(
         slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics, canvas.tables, canvas.notes,
-        canvas.steps, canvas.held,
+        canvas.steps, canvas.held, canvas.worded,
     )
 
 
@@ -563,7 +572,7 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     for name, box in zip(names, boxes, strict=True):
         region = slide.regions[name]
         group = element(outer, "g", id=f"{slide.id}.{name}", data__flexo__talk="region")
-        lists, tables = len(canvas.lists), len(canvas.tables)
+        lists, tables = len(canvas.lists), (len(canvas.tables), len(canvas.worded))
         canvas.layer = group
         try:
             used = _region(canvas, region, box, words=shared)
@@ -603,15 +612,17 @@ _PICTURES = (_Figure, _Image, _Plot, _Gallery, _Quote, _Table, _Code, _Stats)
 a listing, a row of numbers -- centred in the room they have when nothing else shares it."""
 
 
-def _shift(canvas: _Canvas, group: ET.Element, down: float, lists: int, tables: int) -> None:
-    """Move a drawn region down, with the native lists and tables set in it."""
+def _shift(canvas: _Canvas, group: ET.Element, down: float, lists: int, tables: tuple[int, int]) -> None:
+    """Move a drawn region down, with the native lists, tables and words set in it."""
 
     group.set("transform", f"translate(0 {number(down)})")
     for layout in canvas.lists[lists:]:
         layout.y += down
         layout.items = [(level, runs, baseline + down) for level, runs, baseline in layout.items]
-    for table in canvas.tables[tables:]:
+    for table in canvas.tables[tables[0]:]:
         table.y += down
+    for words in canvas.worded[tables[1]:]:
+        words.baseline += down
 
 
 def _furniture(canvas: _Canvas, slide: Slide) -> None:
@@ -1196,7 +1207,8 @@ def _equation(canvas: _Canvas, identifier: str, block: _Math, box: Box, *, draw:
 
         draw_formula(
             canvas.layer, formula, x, box.y + formula.height, colour=paint,
-            attributes={"id": identifier, "data__flexo__talk": "math",
+            attributes={"id": identifier, "data__flexo__talk": "math", "data__flexo__size": number(size),
+                        "data__flexo__align": block.align,
                         **paint_attributes(palette=canvas.palette, fill_role=role, fill=fill)},
         )
     return formula.height + formula.depth
@@ -1403,6 +1415,7 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
         )
         layout.items.append((level, runs, baseline))
         layout.steps.append(metrics.line_height)
+        layout.opened.append((metrics.rise, metrics.fall, len(metrics.lines)))
         layout.id = identifier
         top += metrics.height + style.paragraph_gap * size
     canvas.lists.append(layout)

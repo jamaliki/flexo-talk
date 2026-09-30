@@ -40,6 +40,11 @@ ASCENT = 0.8
 line spacing, when the spacing is set exactly -- for a face whose metrics are
 unknown. A known face uses its own share (``ascent``)."""
 
+LOOSE = 0.75
+"""Where PowerPoint sets the first baseline of lines spaced wider than single (lines
+opened for a tall formula), as a fraction of the spacing, whatever the face -- as
+measured against PowerPoint 16 for Mac, to the nearest point."""
+
 
 def ascent(face) -> float:
     """Where a slide program puts the first baseline of exactly spaced lines in
@@ -53,6 +58,13 @@ def ascent(face) -> float:
     loaded = load_face(face)
     total = loaded.ascent + loaded.descent
     return loaded.ascent / total if total > 0 else ASCENT
+
+
+def baseline_down(face, spacing: float, plain: float) -> float:
+    """How far below the top of an exactly spaced line a slide program sets its baseline:
+    ``spacing`` as the words alone are spaced (``plain``), or opened for a formula."""
+
+    return LOOSE * spacing if spacing > plain + 0.01 else ascent(face) * spacing
 
 SCRIPT_SCALE = 0.65
 """How much smaller a slide program draws a raised or lowered run than its size
@@ -647,7 +659,10 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
             f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
             f"{''.join(runs)}</a:p>"
         )
-    x, y = placement.point(left - slack, top)
+    # Room to spare on the side the words are not set against, so they start (or end)
+    # where Flexo set them.
+    spare = {"start": 0.0, "middle": slack, "end": 2 * slack}[text.anchor]
+    x, y = placement.point(left - spare, top)
     width = placement.length(right - left + 2 * slack)
     box = placement.length(height)
     label = escape(name or "text", {'"': "&quot;"})
@@ -719,14 +734,19 @@ def _room_for(run, typography, face, size: float, weight: int) -> str:
     )
 
 
-def add_list(tree: etree._Element, deck, layout) -> int:
+def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None, editable: bool = False) -> int:
     """A bulleted list as one text box of bulleted paragraphs, wrapped by the slide program.
 
     The box is as wide as the list was set, so the words break where Flexo broke
     them when the fonts are the same, and reflow like any list when edited.
+
+    Maths in it (``formulas``, the drawn formulas set over it) is written one of two
+    ways: ``editable`` -- PowerPoint's own equations, in the words, with the drawn ones
+    and words that leave room for them as the fallback for other slide programs --
+    or else only the drawn ones over the words.
     """
 
-    from flexo.text import drawn_weight, font_stack
+    from flexo.text import font_stack
 
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
     ids = _Ids(max(existing, default=1))
@@ -737,61 +757,278 @@ def add_list(tree: etree._Element, deck, layout) -> int:
     ink = palette.get("ink")
     accent = _colour(palette.get("tone-1-stroke"))
     muted = _colour(palette.get("muted-ink"))
-    paragraphs = []
-    for position, (level, runs, _baseline) in enumerate(layout.items):
-        offset = layout.offset(level)
-        mark_at = layout.mark_at(level)
-        pieces = []
-        for run in runs:
-            weight = drawn_weight(run, None)
-            if run.math:
-                pieces.append(_room_for(run, typography, stack.face(weight, False), layout.size, weight))
-                continue
-            for face, text in stack.segments(run.text, weight, run.italic, code=run.code):
-                script = run.baseline_shift != "normal"
-                size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
-                shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
-                pieces.append(
-                    _run_xml(
-                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, palette, ink), link=run.link),
-                        baseline=shift,
-                    )
-                )
-        before = 0 if position == 0 else round(layout.gap * 100)
-        if layout.numbered and level == 0:
-            # A native numbered list: the program numbers it, in the words' face.
-            face = escape(_family_name(_ListRun("1", layout.size, 400, False, stack.face(400, False), ink)))
-            mark = f'<a:buFont typeface="{face}"/><a:buAutoNum type="arabicPeriod"/>'
-        else:
-            mark = '<a:buFont typeface="Arial"/><a:buChar char="\u2022"/>'
 
-        colour = accent if level == 0 else muted
-        rtl = _rtl_text("".join(run.text for run in runs))
-        paragraphs.append(
-            f'<a:p><a:pPr marL="{round(offset * EMU_PER_POINT)}" '
-            f'indent="{round((mark_at - offset) * EMU_PER_POINT)}" lvl="{min(level, 8)}"'
-            f'{" rtl=\"1\" algn=\"r\"" if rtl else ""}>'
-            f'<a:lnSpc><a:spcPts val="{round(layout.step(position) * 100)}"/></a:lnSpc>'
-            f'<a:spcBef><a:spcPts val="{before}"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft>'
-            f'<a:buClr><a:srgbClr val="{colour}"/></a:buClr><a:buSzPct val="{100000 if level == 0 else 85000}"/>'
-            f"{mark}</a:pPr>{''.join(pieces)}</a:p>"
+    face = stack.face(400, False)
+
+    def placed(native: bool) -> tuple[list[tuple[float, float]], float, float]:
+        """Each item's line spacing and the room before it, and the box's top and height:
+        each item's first baseline where Flexo set it."""
+
+        rows: list[tuple[float, float]] = []
+        top = end = 0.0
+        for position, (_level, _runs, baseline) in enumerate(layout.items):
+            rise, fall, count = layout.opened[position] if position < len(layout.opened) else (0.0, 0.0, 1)
+            spacing = plain = layout.step(position) - rise - fall
+            if rise + fall > 0.01 and (count > 1 or native):
+                # Lines opened for a formula, set loosely (and lower) by the slide program.
+                spacing += rise + fall
+            # A single line opened for a drawn formula keeps its words' spacing, the room
+            # the formula needs going before and after it.
+            down = baseline_down(face, spacing, plain)
+            if position == 0:
+                top = end = baseline - down
+            before = max(0.0, baseline - down - end)
+            end += before + spacing * count
+            rows.append((spacing, before))
+        return rows, top, end - top
+
+    def paragraphs(native: bool) -> str:
+        written = []
+        rows, _, _ = placed(native)
+        for position, (level, runs, _baseline) in enumerate(layout.items):
+            offset = layout.offset(level)
+            mark_at = layout.mark_at(level)
+            pieces = _runs_xml(runs, typography, stack, layout.size, palette, ink, native=native)
+            spacing, before = rows[position]
+            if layout.numbered and level == 0:
+                # A native numbered list: the program numbers it, in the words' face.
+                face = escape(_family_name(_ListRun("1", layout.size, 400, False, stack.face(400, False), ink)))
+                mark = f'<a:buFont typeface="{face}"/><a:buAutoNum type="arabicPeriod"/>'
+            else:
+                mark = '<a:buFont typeface="Arial"/><a:buChar char="\u2022"/>'
+            colour = accent if level == 0 else muted
+            rtl = _rtl_text("".join(run.text for run in runs))
+            written.append(
+                f'<a:p><a:pPr marL="{round(offset * EMU_PER_POINT)}" '
+                f'indent="{round((mark_at - offset) * EMU_PER_POINT)}" lvl="{min(level, 8)}"'
+                f'{" rtl=\"1\" algn=\"r\"" if rtl else ""}>'
+                f'<a:lnSpc><a:spcPts val="{round(spacing * 100)}"/></a:lnSpc>'
+                f'<a:spcBef><a:spcPts val="{round(before * 100)}"/></a:spcBef>'
+                f'<a:spcAft><a:spcPts val="0"/></a:spcAft>'
+                f'<a:buClr><a:srgbClr val="{colour}"/></a:buClr><a:buSzPct val="{100000 if level == 0 else 85000}"/>'
+                f"{mark}</a:pPr>{pieces}</a:p>"
+            )
+        return "".join(written)
+
+    def shape(shape_id: int, native: bool) -> etree._Element:
+        _, top, height = placed(native) if layout.items else ([], layout.y, layout.line_height)
+        return etree.fromstring(
+            f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{shape_id}\" name=\"{escape(layout.id)}\"/>"
+            f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
+            f'<p:spPr><a:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
+            f'<a:ext cx="{round((layout.width + 0.25) * EMU_PER_POINT)}" '
+            f'cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
+            f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+            f'<p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
+            f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{paragraphs(native)}</p:txBody></p:sp>"
         )
-    first = layout.items[0][2] if layout.items else layout.y
-    last = layout.items[-1][2] if layout.items else layout.y
-    top = first - ascent(stack.face(400, False)) * layout.step(0)
-    height = last - top + layout.step(len(layout.items) - 1)
+
+    maths = any(run.math for _, runs, _ in layout.items for run in runs)
     shape_id = ids()
-    element = etree.fromstring(
-        f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{shape_id}\" name=\"{escape(layout.id)}\"/>"
-        f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
-        f'<p:spPr><a:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
-        f'<a:ext cx="{round((layout.width + 0.25) * EMU_PER_POINT)}" cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
-        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
-        f'<p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
-        f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{''.join(paragraphs)}</p:txBody></p:sp>"
-    )
-    tree.append(element)
+    drawn = _group(Group(None, list(formulas or [])), Placement(), ids) if formulas else None
+    if maths and editable:
+        fallback = [shape(ids(), native=False), *([drawn] if drawn is not None else [])]
+        tree.append(alternate(shape(shape_id, native=True), _together(fallback, ids)))
+        return shape_id
+    tree.append(shape(shape_id, native=False))
+    if drawn is not None:
+        tree.append(drawn)
     return shape_id
+
+
+def _runs_xml(runs, typography, stack, size: float, palette, ink: str, *, native: bool, bold: bool = False) -> str:
+    """Runs of words as DrawingML runs: maths as PowerPoint's equations (``native``), or
+    as room for a drawn formula."""
+
+    from flexo.text import drawn_weight
+
+    from flexo_talk.omml import omml
+
+    pieces = []
+    for run in runs:
+        weight = 700 if bold and run.weight == 400 else drawn_weight(run, None)
+        if run.math:
+            if native:
+                pieces.append(omml(run.math, size=size, colour=_colour(_ink_of(run, palette, ink)),
+                                   resolve=_resolver(palette)))
+            else:
+                pieces.append(_room_for(run, typography, stack.face(weight, False), size, weight))
+            continue
+        for face, text in stack.segments(run.text, weight, run.italic, code=run.code):
+            script = run.baseline_shift != "normal"
+            run_size = size * 0.72 / SCRIPT_SCALE if script else size
+            shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
+            pieces.append(
+                _run_xml(
+                    _ListRun(text, run_size, weight, run.italic, face, _ink_of(run, palette, ink), link=run.link),
+                    baseline=shift,
+                )
+            )
+    if native and runs and all(run.math for run in runs) and not any(
+        run.math.startswith("\\displaystyle") for run in runs
+    ):
+        # A formula alone in its paragraph is displayed (full size) by PowerPoint; beside
+        # a word -- a zero-width one -- it is set within the line, as flexo set it.
+        face = stack.face(400, False)
+        pieces.append(_run_xml(_ListRun("\u200b", size, 400, False, face, ink)))
+    return "".join(pieces)
+
+
+_NAMED_COLOURS = {
+    "red": "FF0000", "green": "008000", "blue": "0000FF", "black": "000000", "white": "FFFFFF",
+    "gray": "808080", "grey": "808080", "orange": "FFA500", "purple": "800080", "cyan": "00FFFF",
+    "magenta": "FF00FF", "yellow": "FFFF00", "brown": "A52A2A", "teal": "008080",
+}
+
+
+def _resolver(palette):
+    """A colour a formula names (``\\color{accent}``, ``red``, ``#c0392b``) as ``rrggbb``."""
+
+    from flexo.ir.semantic import TextRun
+    from flexo.render_common import run_colour
+
+    def resolve(colour: str) -> str | None:
+        if colour.lower() in _NAMED_COLOURS:
+            return _NAMED_COLOURS[colour.lower()]
+        found = run_colour(TextRun("", color=colour), palette)
+        return _colour(found) if found else None
+
+    return resolve
+
+
+_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_A14 = "http://schemas.microsoft.com/office/drawing/2010/main"
+
+
+def alternate(choice: etree._Element, fallback: etree._Element) -> etree._Element:
+    """``choice`` for PowerPoint (2010 on, which reads its own equations), ``fallback``
+    for every other slide program -- as PowerPoint itself saves an equation."""
+
+    element = etree.Element(f"{{{_MC}}}AlternateContent", nsmap={"mc": _MC})
+    first = etree.SubElement(element, f"{{{_MC}}}Choice", nsmap={"a14": _A14})
+    first.set("Requires", "a14")
+    first.append(choice)
+    etree.SubElement(element, f"{{{_MC}}}Fallback").append(fallback)
+    return element
+
+
+def _together(elements: list[etree._Element], ids: _Ids) -> etree._Element:
+    """Shapes as one group (or the shape itself, when there is one)."""
+
+    if len(elements) == 1:
+        return elements[0]
+    boxes = [_extent(child) for child in elements]
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[0] + box[2] for box in boxes)
+    bottom = max(box[1] + box[3] for box in boxes)
+    group = etree.fromstring(
+        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"group\"/>"
+        f"<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>"
+        f'<a:off x="{left}" y="{top}"/><a:ext cx="{right - left}" cy="{bottom - top}"/>'
+        f'<a:chOff x="{left}" y="{top}"/><a:chExt cx="{right - left}" cy="{bottom - top}"/>'
+        f"</a:xfrm></p:grpSpPr></p:grpSp>"
+    )
+    for child in elements:
+        group.append(child)
+    return group
+
+
+def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, palette) -> int:
+    """Each displayed equation, and each passage of words with maths in it, written as
+    PowerPoint's own -- its equations editable in its equation editor -- with the drawing
+    of it as the fallback for other slide programs. How many were written."""
+
+    from flexo.text import font_stack
+
+    from flexo_talk.omml import omml
+
+    equations: dict[str, Group] = {}
+
+    def find(group: Group) -> None:
+        for item in group.items:
+            if isinstance(item, Group):
+                if item.id and item.data.get("data-flexo-talk") == "math":
+                    equations[item.id] = item
+                else:
+                    find(item)
+
+    find(drawing.root)
+    passages = {words.id: words for words in worded}
+    existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
+    ids = _Ids(max(existing, default=1))
+    count = 0
+    for drawn in list(tree.iter(f"{{{_P}}}grpSp")):
+        name_element = drawn.find(f"{{{_P}}}nvGrpSpPr/{{{_P}}}cNvPr")
+        name = name_element.get("name") if name_element is not None else None
+        if name in equations:
+            group = equations[name]
+            size = float(group.data.get("data-flexo-size", "20"))
+            align = group.data.get("data-flexo-align", "middle")
+            fill = _first_fill(group) or deck.palette.get("ink")
+            maths = omml(group.data.get("data-flexo-math", ""), size=size, colour=_colour(fill), display=True,
+                         align=align, resolve=_resolver(palette))
+            left, top, width, height = _extent(drawn)
+            algn = {"start": "l", "end": "r"}.get(align, "ctr")
+            choice = etree.fromstring(
+                f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(name)}\"/>"
+                f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
+                f'<p:spPr><a:xfrm><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm>'
+                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+                f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr" rtlCol="0">'
+                f'<a:noAutofit/></a:bodyPr><a:lstStyle/><a:p><a:pPr algn="{algn}"/>{maths}'
+                f'<a:endParaRPr lang="en-GB" sz="{round(size * 100)}" dirty="0"/></a:p></p:txBody></p:sp>'
+            )
+        elif name in passages:
+            words = passages[name]
+            typography = deck.typography(words.size)
+            if words.family:
+                typography = typography.with_family(words.family)
+            bold = (words.weight or 400) >= 600
+            stack = font_stack(typography)
+            ink = words.fill
+            lines = "".join(
+                f'<a:p><a:pPr algn="{ {"start": "l", "middle": "ctr", "end": "r"}.get(words.align, "l") }">'
+                f'<a:lnSpc><a:spcPts val="{round(words.line_height * 100)}"/></a:lnSpc>'
+                f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
+                f"{_runs_xml(line, typography, stack, words.size, palette, ink, native=True, bold=bold)}"
+                f'<a:endParaRPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:p>'
+                for line in words.lines
+            )
+            left = {"start": words.x, "middle": words.x - words.width / 2.0, "end": words.x - words.width}.get(
+                words.align, words.x)
+            top = words.baseline - baseline_down(stack.face(400, False), words.line_height,
+                                                 words.size * typography.line_height)
+            height = words.line_height * len(words.lines)
+            choice = etree.fromstring(
+                f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(name)}\"/>"
+                f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
+                f'<p:spPr><a:xfrm><a:off x="{round(left * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
+                f'<a:ext cx="{round((words.width + 0.5) * EMU_PER_POINT)}" '
+                f'cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
+                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+                f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
+                f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{lines}</p:txBody></p:sp>"
+            )
+        else:
+            continue
+        parent = drawn.getparent()
+        index = parent.index(drawn)
+        parent.remove(drawn)
+        parent.insert(index, alternate(choice, drawn))
+        count += 1
+    return count
+
+
+def _first_fill(group: Group) -> str | None:
+    for item in group.items:
+        if isinstance(item, Group):
+            found = _first_fill(item)
+            if found:
+                return found
+        elif isinstance(item, Shape) and item.paint.fill:
+            return item.paint.fill
+    return None
 
 
 def add_reveals(slide_element: etree._Element, reveals: list[tuple[int, list[tuple[int, int]]]]) -> None:
@@ -833,15 +1070,16 @@ def add_reveals(slide_element: etree._Element, reveals: list[tuple[int, list[tup
 # -- tables ----------------------------------------------------------------------------
 
 
-def add_table(tree: etree._Element, deck, layout) -> None:
+def add_table(tree: etree._Element, deck, layout, *, formulas: list | None = None, editable: bool = False) -> None:
     """A table as a native PowerPoint table: its columns, rows, rules, and words as set.
 
     Column widths and row heights are Flexo's; each cell's margins put its first
     baseline where Flexo put it; the rules are cell borders (booktabs: above,
-    under the header, below), and every other border is off.
+    under the header, below), and every other border is off. Maths in its cells is
+    written as in ``add_list``.
     """
 
-    from flexo.text import drawn_weight, font_stack
+    from flexo.text import font_stack
 
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
     ids = _Ids(max(existing, default=1))
@@ -850,6 +1088,37 @@ def add_table(tree: etree._Element, deck, layout) -> None:
     palette = layout.palette or deck.palette
     ink = palette.get("ink")
     colour = _colour(ink)
+
+    def table(frame_id: int, native: bool) -> etree._Element:
+        rows = _table_rows(layout, typography, stack, palette, ink, colour, native)
+        widths = list(reversed(layout.widths)) if layout.rtl else layout.widths
+        grid = "".join(f'<a:gridCol w="{round(width * EMU_PER_POINT)}"/>' for width in widths)
+        width = round(sum(layout.widths) * EMU_PER_POINT)
+        height = round(sum(layout.heights) * EMU_PER_POINT)
+        return etree.fromstring(
+            f'<p:graphicFrame {_NS}><p:nvGraphicFramePr><p:cNvPr id="{frame_id}" name="{escape(layout.id)}"/>'
+            f'<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/>'
+            f'</p:nvGraphicFramePr>'
+            f'<p:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(layout.y * EMU_PER_POINT)}"/>'
+            f'<a:ext cx="{width}" cy="{height}"/></p:xfrm>'
+            f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
+            f'<a:tbl><a:tblPr firstRow="{1 if layout.header else 0}" bandRow="0"/><a:tblGrid>{grid}</a:tblGrid>'
+            f"{''.join(rows)}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+        )
+
+    maths = any(run.math for row in layout.cells for cell in row for run in cell)
+    frame_id = ids()
+    drawn = _group(Group(None, list(formulas or [])), Placement(), ids) if formulas else None
+    if maths and editable:
+        fallback = [table(ids(), native=False), *([drawn] if drawn is not None else [])]
+        tree.append(alternate(table(frame_id, native=True), _together(fallback, ids)))
+        return
+    tree.append(table(frame_id, native=False))
+    if drawn is not None:
+        tree.append(drawn)
+
+
+def _table_rows(layout, typography, stack, palette, ink: str, colour: str, native: bool) -> list[str]:
     top_rule, mid_rule, bottom_rule = layout.rules
     rows = []
     last = len(layout.cells) - 1
@@ -857,22 +1126,7 @@ def add_table(tree: etree._Element, deck, layout) -> None:
         heading = layout.header and r == 0
         cells = []
         for c, cell in enumerate(row):
-            pieces = []
-            for run in cell:
-                weight = 700 if heading and run.weight == 400 else drawn_weight(run, None)
-                if run.math:
-                    pieces.append(_room_for(run, typography, stack.face(weight, False), layout.size, weight))
-                    continue
-                for face, text in stack.segments(run.text, weight, run.italic, code=run.code):
-                    script = run.baseline_shift != "normal"
-                    size = layout.size * 0.72 / SCRIPT_SCALE if script else layout.size
-                    shift = {"super": 33000, "sub": -20000}.get(run.baseline_shift)
-                    pieces.append(
-                        _run_xml(
-                        _ListRun(text, size, weight, run.italic, face, _ink_of(run, palette, ink), link=run.link),
-                        baseline=shift,
-                    )
-                    )
+            pieces = [_runs_xml(cell, typography, stack, layout.size, palette, ink, native=native, bold=heading)]
             mirrored = {"start": "r", "middle": "ctr", "end": "l"}
             algn = (mirrored if layout.rtl else {"start": "l", "middle": "ctr", "end": "r"})[layout.align[c]]
             direction = ' rtl="1"' if _rtl_text("".join(run.text for run in cell)) else ""
@@ -904,17 +1158,4 @@ def add_table(tree: etree._Element, deck, layout) -> None:
         # rather than flagged rtl: not every slide program honours the flag.
         order = reversed(cells) if layout.rtl else cells
         rows.append(f'<a:tr h="{round(layout.heights[r] * EMU_PER_POINT)}">{"".join(order)}</a:tr>')
-    widths = list(reversed(layout.widths)) if layout.rtl else layout.widths
-    grid = "".join(f'<a:gridCol w="{round(width * EMU_PER_POINT)}"/>' for width in widths)
-    width = round(sum(layout.widths) * EMU_PER_POINT)
-    height = round(sum(layout.heights) * EMU_PER_POINT)
-    element = etree.fromstring(
-        f'<p:graphicFrame {_NS}><p:nvGraphicFramePr><p:cNvPr id="{ids()}" name="{escape(layout.id)}"/>'
-        f'<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>'
-        f'<p:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(layout.y * EMU_PER_POINT)}"/>'
-        f'<a:ext cx="{width}" cy="{height}"/></p:xfrm>'
-        f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
-        f'<a:tbl><a:tblPr firstRow="{1 if layout.header else 0}" bandRow="0"/><a:tblGrid>{grid}</a:tblGrid>'
-        f"{''.join(rows)}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
-    )
-    tree.append(element)
+    return rows
