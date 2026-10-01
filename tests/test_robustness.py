@@ -484,4 +484,5 @@ def test_the_powerpoint_names_faces_in_english_and_tags_runs_by_script() -> None
     if faces:  # a Mac font: named in Persian, Hindi and Arabic only, on Windows
         face = select_face(faces, 400, False)
         assert _legacy_family(face.source, face.index) == "Geeza Pro"
-    assert [_lang(text) for text in ("hello", "گفتگو", "日本語のテキスト", "한국어")] == ["en-GB", "fa-IR", "ja-JP", "ko-KR"]
+    tags = [_lang(text) for text in ("hello", "گفتگو", "日本語のテキスト", "한국어")]
+    assert tags == ["en-GB", "fa-IR", "ja-JP", "ko-KR"]
