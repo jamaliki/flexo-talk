@@ -120,8 +120,9 @@ as a whole (`DeckStyle.align`, or `deck.slide(..., align=)`):
 
 - `auto` (the default): words start at the top of the body, on every slide; a
   figure, plot, picture, gallery, quotation, table, code listing, or row of
-  numbers standing alone is centred in the room it has (a table narrower than
-  its place across it too); a column of pictures is centred against a taller
+  numbers standing alone stands a little above the middle of the room it has,
+  where the eye takes the middle to be (a table narrower than its place is
+  centred across it); a column of pictures is centred against a taller
   column of words beside it, and a taller one starts level with the words.
 - `top`: everything at the top. `middle`: the content centred in the body.
 
