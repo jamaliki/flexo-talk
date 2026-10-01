@@ -300,3 +300,10 @@ def test_a_phone_photograph_stands_upright_and_cmyk_reads(tmp_path: Path) -> Non
     Image.new("CMYK", (40, 40), (0, 255, 255, 0)).save(cmyk)
     shown = Image.open(io.BytesIO(base64.b64decode(load_artwork("c", str(cmyk)).data_uri.split(",", 1)[1])))
     assert shown.mode == "RGB"
+
+
+def test_a_displayed_equation_in_python_words_is_centred_as_in_a_document() -> None:
+    slide = Deck("m").slide("D")
+    slide.text(r"$$E = mc^2$$")
+    (block,) = slide.body.blocks
+    assert type(block).__name__ == "_Math" and block.align == "middle"
