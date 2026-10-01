@@ -239,3 +239,8 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .figure-hint { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-size: 12px; color: var(--ink-2); }
 .figure-hint svg { width: 13px; height: 13px; }
 .deck-stage.connecting .slide-page { cursor: crosshair; }
+
+/* A mechanism's steps, each on a card of its own. */
+.step-cards { display: flex; flex-direction: column; gap: 10px; }
+.step-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 8px; }
+.step-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 12px; }

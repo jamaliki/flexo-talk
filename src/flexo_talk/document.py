@@ -93,6 +93,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "stats": ("colour", "size"),
     "callout": ("title", "colour", "size"),
     "math": ("size", "align", "colour"),
+    "mechanism": ("lone_pairs", "charges", "per_row"),
 }
 """Each block kind and the options it takes beside its value."""
 
@@ -547,11 +548,40 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
             region.add(_figure(base, value, here, region), **options)
         elif kind == "plot":
             region.plot(_plot(base, value, here, region), **options)
+        elif kind == "mechanism":
+            region.mechanism(_steps(value, here), **options)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError, OSError) as error:
         raise DeckDocumentError(here, str(error)) from error
     region.sources[-1] = dict(block)
+
+
+def _steps(value: object, where: str) -> str | list[str | dict[str, object]]:
+    """A mechanism's steps as a document writes them: a SMILES, or a list of SMILES and
+    of steps ({smiles, arrows, label, reagents, conditions, arrow})."""
+
+    if isinstance(value, str) and value.strip():
+        return value
+    if not isinstance(value, list) or not value:
+        raise DeckDocumentError(where, "a mechanism is a SMILES, or a list of steps, each {smiles, arrows}")
+    steps: list[str | dict[str, object]] = []
+    for number, step in enumerate(value, start=1):
+        here = f"{where}[{number - 1}]"
+        if isinstance(step, str):
+            steps.append(step)
+            continue
+        if not isinstance(step, dict):
+            raise DeckDocumentError(here, "a step is a SMILES, or a mapping with smiles and arrows")
+        _only(step, ("smiles", "arrows", "label", "reagents", "conditions", "arrow"), here)
+        arrows = step.get("arrows")
+        if arrows is not None and not isinstance(arrows, str | list):
+            raise DeckDocumentError(here, 'arrows are a list, such as ["5 -> 2", "2=3 -> 3"]')
+        for key in ("smiles", "label", "reagents", "conditions", "arrow"):
+            if key in step and step[key] is not None and not _is_words(step[key]):
+                raise DeckDocumentError(f"{here}.{key}", f"{key} is words")
+        steps.append({key: item for key, item in step.items() if item is not None})
+    return steps
 
 
 def _check_items(items: list, where: str) -> None:

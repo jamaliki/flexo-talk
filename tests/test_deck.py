@@ -874,3 +874,20 @@ def test_no_formula_however_broken_makes_office_math_powerpoint_cannot_read() ->
     for _ in range(500):
         source = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 14)))
         etree.fromstring(omml(source, size=18.0, colour="000000", display=rng.random() < 0.5))
+
+
+def test_a_mechanism_is_drawn_as_shapes_with_its_arrows_and_a_wrong_one_is_said(tmp_path: Path) -> None:
+    deck = Deck("chemistry")
+    with deck.slide("Acyl substitution") as slide:
+        slide.mechanism([
+            {"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2", "2=3 -> 3"],
+             "reagents": "NaOH"},
+            {"arrows": ["3 -> 2", "2-4 -> 4"], "label": "tetrahedral intermediate"},
+        ])
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "<p:pic>" not in xml
+    assert xml.count("<a:cubicBezTo>") >= 4  # the curly arrows, as curves
+    assert ">tetrahedral intermediate<" in xml and ">NaOH<" in xml
+    with pytest.raises(ValueError, match="C2 would have 10 electrons"):
+        deck.slide("Wrong").mechanism([{"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2"]}])
