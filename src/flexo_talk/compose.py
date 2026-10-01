@@ -2029,6 +2029,7 @@ def plot_svg(
         words = text.get_text()
         if "$" in words and not hasattr(text, "_flexo_problems"):
             text.set_text(_matplotlib_maths(words))
+    clear_backgrounds(figure)
     settings = {
         "svg.fonttype": "none",
         "svg.hashsalt": identifier,
@@ -2045,7 +2046,7 @@ def plot_svg(
     buffer = io.StringIO()
     with matplotlib.rc_context(settings):
         try:
-            figure.savefig(buffer, format="svg", transparent=True, metadata={"Date": None})
+            figure.savefig(buffer, format="svg", metadata={"Date": None})
         except (ZeroDivisionError, ValueError) as error:
             said = _plot_maths(figure, error)
             if said:
@@ -2057,12 +2058,27 @@ def plot_svg(
             # (a colour bar made first): lay it out tightly instead.
             figure.set_layout_engine("tight")
             buffer = io.StringIO()
-            figure.savefig(buffer, format="svg", transparent=True, metadata={"Date": None})
+            figure.savefig(buffer, format="svg", metadata={"Date": None})
     # Drawn: pyplot need not keep it open (each redraw makes the plot afresh).
     import matplotlib.pyplot as plt
 
     plt.close(figure)
     return _maths_fonts(buffer.getvalue(), maths)
+
+
+def clear_backgrounds(figure: Any) -> None:
+    """The figure's background, and each plot's white one, cleared so the plot sits on
+    the slide; a background chosen for a plot (set_facecolor, a style's grey panel) is
+    kept, as is an inset's, which hides what is under it."""
+
+    from matplotlib.colors import to_rgba
+
+    figure.patch.set_alpha(0.0)
+    insets = {id(child) for axes in figure.get_axes() for child in getattr(axes, "child_axes", [])}
+    for axes in figure.get_axes():
+        red, green, blue, alpha = to_rgba(axes.get_facecolor())
+        if id(axes) not in insets and (alpha == 0.0 or min(red, green, blue) > 0.995):
+            axes.patch.set_alpha(0.0)
 
 
 _MATPLOTLIB_NAMES = {

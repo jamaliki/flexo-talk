@@ -393,3 +393,20 @@ def test_title_section_and_statement_slides_fit_their_words_or_say_so() -> None:
         ys = [float(y) for y in re.findall(r'<text [^>]*\by="([\d.-]+)"', slide.svg)]
         assert min(ys) > 0 and max(ys) < deck.style.height, slide.slide.layout
         assert any("to fit" in line for line in slide.diagnostics)
+
+
+def test_a_plot_keeps_a_background_chosen_for_it_and_clears_the_default() -> None:
+    import matplotlib.pyplot as plt
+
+    from flexo_talk.compose import plot_svg
+
+    figure, axes = plt.subplots()
+    axes.plot([0, 1], [0, 1])
+    axes.set_facecolor("#e5e5e5")
+    inset = axes.inset_axes([0.5, 0.5, 0.4, 0.4])
+    inset.plot([0, 1], [1, 0])
+    svg = plot_svg(figure, 300.0, 200.0, "Figtree", "p")
+    assert "#e5e5e5" in svg.lower() and "#ffffff" in svg.lower()  # the panel, and the inset's white
+    plain, axes = plt.subplots()
+    axes.plot([0, 1], [0, 1])
+    assert "#ffffff" not in plot_svg(plain, 300.0, 200.0, "Figtree", "q").lower()
