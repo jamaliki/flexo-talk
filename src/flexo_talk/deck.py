@@ -149,6 +149,23 @@ OKABE_ITO = ("#E69F00", "#56B4E9", "#009E73", "#D55E00", "#0072B2", "#CC79A7")
 own tones are too few to tell apart."""
 
 
+def link_colour(palette: Palette, ground: str | None = None) -> str | None:
+    """What a link is painted in where the accent cannot tell it from the words -- a
+    theme of greys (print, swiss, bauhaus) -- Okabe and Ito's blue, as links are blue,
+    made to read on ``ground`` (what the words are set on); ``None`` where a link is the
+    accent, as in every other theme."""
+
+    from flexo.colour import chroma, contrast, is_dark, with_contrast
+
+    if chroma(palette.get("tone-1-stroke")) >= 0.03:
+        return None
+    if ground is None:
+        ink, page = palette.get("ink"), palette.get("canvas")
+        # The page, unless the words are set over something else (a photograph).
+        ground = page if contrast(ink, page) >= 3.0 else ("#ffffff" if is_dark(ink) else "#000000")
+    return with_contrast(OKABE_ITO[4], ground, 4.5)
+
+
 def data_colours(palette: Palette, dark: bool) -> list[str]:
     """Six colours for a plot's series, set to one lightness so they read as a set: the
     theme's tones, each kept only if it can be told from those before it, then Okabe and

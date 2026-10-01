@@ -686,3 +686,37 @@ def _body_top(svg: str) -> float:
 
     rule = re.search(r'id="slide1\.rule"[^>]*\by="([\d.]+)"[^>]*height="([\d.]+)"', svg)
     return float(rule.group(1)) + float(rule.group(2)) + Deck("x").style.title_gap
+
+
+def test_slide_files_are_numbered_as_wide_as_the_count_needs(tmp_path: Path) -> None:
+    deck = Deck("big")
+    for index in range(100):
+        deck.slide(f"Slide {index + 1}")
+    names = [path.name for path in deck.build(tmp_path, formats=("svg",)).svgs]
+    assert names[0] == "big-001.svg" and names[-1] == "big-100.svg" and names == sorted(names)
+    small = Deck("small")
+    small.slide("One")
+    assert [path.name for path in small.build(tmp_path, formats=("svg",)).svgs] == ["small-01.svg"]
+
+
+@pytest.mark.parametrize("theme", ["print", "swiss", "bauhaus", "paper"])
+def test_a_link_is_told_from_the_words_in_every_theme(theme: str) -> None:
+    import re
+
+    from flexo.colour import contrast
+
+    from flexo_talk.pptx import _ink_of
+
+    deck = Deck("l", theme=theme)
+    slide = deck.slide("Links")
+    slide.text("Read [the paper](https://example.org) first.").bullets("See [the code](https://example.org)")
+    (rendered,) = deck.render()
+    palette = deck.palette
+    ink, page = palette.get("ink"), palette.get("canvas")
+    fills = re.findall(r'<a href="https://example.org"><tspan[^>]*fill="(#[0-9a-fA-F]{6})"', rendered.svg)
+    assert fills and all(fill.lower() != ink.lower() and contrast(fill, page) >= 4.5 for fill in fills)
+    if theme == "paper":
+        assert all(fill.lower() == palette.get("tone-1-stroke").lower() for fill in fills)  # the accent, as before
+    (listed,) = rendered.lists
+    link = next(run for _, runs, _ in listed.items for run in runs if run.link)
+    assert _ink_of(link, palette, ink).lower() != ink.lower()  # the PowerPoint's list too
