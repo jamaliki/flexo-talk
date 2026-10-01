@@ -53,16 +53,24 @@ def _text(words: str) -> str:
 def set_by_flexo(figure: Any, family: str, maths: str) -> int:
     """Hand every text of ``figure`` with maths in its words to flexo; how many.
 
-    Tick labels are left to matplotlib: they are made afresh as the figure is drawn.
+    Tick labels and an axis's offset (``1e3``) are left to matplotlib: they are made
+    afresh as the figure is drawn (a log axis's as ``$\\mathdefault{10^{2}}$``), and
+    ticks out of view keep the words of the last drawing.
     """
 
     import matplotlib.text
 
+    every = [*figure.get_axes()]
+    every += [child for axes in every for child in getattr(axes, "child_axes", [])]  # secondary axes
     ticks = {
         id(label)
-        for axes in figure.get_axes()
-        for axis in (axes.xaxis, axes.yaxis)
-        for label in (*axis.get_ticklabels(), *axis.get_ticklabels(minor=True))
+        for axes in every
+        for axis in getattr(axes, "_axis_map", {"x": axes.xaxis, "y": axes.yaxis}).values()
+        for label in (
+            *axis.get_ticklabels(), *axis.get_ticklabels(minor=True), axis.offsetText,
+            *(tick.label1 for tick in (*axis.majorTicks, *axis.minorTicks)),
+            *(tick.label2 for tick in (*axis.majorTicks, *axis.minorTicks)),
+        )
     }
     count = 0
     for text in figure.findobj(matplotlib.text.Text):
@@ -141,24 +149,43 @@ def _layout(lines: list[Typeset]):
         from matplotlib.transforms import Bbox
 
         scale = renderer.points_to_pixels(1.0)
-        placed, (box, width, _, _) = _placed(self, lines, scale)
+        placed, (box, width, top, depth) = _placed(self, lines, scale)
         xs, ys = [x for x, _ in box], [y for _, y in box]
         bbox = Bbox.from_extents(min(xs), min(ys), max(xs), max(ys))
         info = [
             ("", (line.width * scale, line.height * scale, line.depth * scale), xy)
             for line, xy in zip(lines, placed, strict=True)
         ]
-        return bbox, info, (placed[0], width)
+        # As matplotlib's: the turned lower-left corner of the box as written, and its size.
+        return bbox, info, (box[0], (width, top + depth))
 
     return layout
 
 
 def _draw(lines: list[Typeset]):
     def draw(self, renderer):
+        from matplotlib.text import Annotation
+
         if renderer is not None:
             self._renderer = renderer
-        if not self.get_visible() or not self.get_text():
+        if not self.get_visible():
             return
+        if isinstance(self, Annotation):
+            # An annotation's arrow, drawn as matplotlib draws it, to the box of these words.
+            if not self._check_xy(renderer):
+                return
+            self.update_positions(renderer)
+            self.update_bbox_position_size(renderer)
+            if self.arrow_patch is not None:
+                if self.arrow_patch.figure is None and self.figure is not None:
+                    self.arrow_patch.figure = self.figure
+                self.arrow_patch.draw(renderer)
+        if not self.get_text():
+            return
+        if self.get_bbox_patch() is not None:
+            # A box behind the words (``bbox=dict(...)``), sized to flexo's measure.
+            self.update_bbox_position_size(renderer)
+            self.get_bbox_patch().draw(renderer)
         from matplotlib.colors import to_rgba
         from matplotlib.path import Path
         from matplotlib.transforms import Affine2D

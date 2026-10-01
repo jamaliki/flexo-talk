@@ -658,6 +658,43 @@ def test_a_plot_sets_its_maths_as_a_slide_does_and_says_what_it_cannot_read() ->
     assert "STIX" not in svg and "<path" in svg
 
 
+def test_a_plot_annotation_with_maths_keeps_its_arrow_and_box() -> None:
+    import matplotlib.pyplot as plt
+
+    from flexo_talk.compose import plot_svg
+
+    def drawn(maths: bool) -> str:
+        figure, axes = plt.subplots()
+        label = r"peak $\alpha$" if maths else "peak"
+        axes.annotate(label, xy=(0.5, 0.5), xytext=(0.1, 0.8), arrowprops={"arrowstyle": "->"})
+        axes.text(0.6, 0.2, r"box $\beta$" if maths else "box", bbox={"boxstyle": "round", "fc": "#ffff00"})
+        return plot_svg(figure, 300.0, 200.0, "Figtree", "a", maths="Fira Math")
+
+    with_maths, without = drawn(True), drawn(False)
+    assert "#ffff00" in with_maths.lower()
+    # The arrow is there as it is for plain words (one path more for the formula's glyphs at most).
+    assert with_maths.count("stroke-linecap") >= without.count("stroke-linecap")
+
+
+def test_a_log_axis_ticks_are_matplotlibs_and_say_nothing() -> None:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    from flexo_talk.compose import plot_svg
+
+    figure, (left, right) = plt.subplots(1, 2)
+    left.loglog(np.logspace(-2, 4, 20), np.logspace(-2, 4, 20), label=r"$\kappa \le 1$")
+    left.set_xlim(1e-3, 1e5)
+    figure.canvas.draw()  # ticks made once (as tight_layout would), some then out of view
+    left.set_xlim(1e-2, 1e3)
+    left.legend()
+    right.semilogy([1, 2], [1, 1e5])
+    right.secondary_yaxis("right")
+    said: list[tuple[str, str]] = []
+    plot_svg(figure, 300.0, 200.0, "Figtree", "p", maths="Fira Math", said=said)
+    assert said == []
+
+
 @pytest.mark.parametrize(
     ("source", "elements"),
     [

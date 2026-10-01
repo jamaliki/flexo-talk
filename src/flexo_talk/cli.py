@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,10 @@ from flexo_talk.export import FORMATS
 def load_deck(target: str, theme: str | None = None) -> Deck:
     path, _, name = target.partition(":")
     source = Path(path).resolve()
+    if not source.exists():
+        raise SystemExit(f"{path}: no such file")
+    if source.is_dir():
+        raise SystemExit(f"{path} is a folder: name a deck.py or a deck document in it")
     if source.suffix.lower() in {".yaml", ".yml", ".json"}:
         from flexo_talk.document import DeckDocumentError, read_deck
 
@@ -59,17 +64,50 @@ def main(argv: list[str] | None = None) -> int:
     studio.add_argument("--port", type=int, default=0, help="the port to serve on (default: any free one)")
     studio.add_argument("--no-browser", action="store_true", help="do not open a browser")
     arguments = parser.parse_args(argv)
-    if arguments.command == "convert":
-        return _convert(arguments)
     if arguments.command == "studio":
         from flexo.studio.server import main as studio_main
 
         options = [*([arguments.deck] if arguments.deck else []), "--port", str(arguments.port)]
         return studio_main([*options, *(["--no-browser"] if arguments.no_browser else [])], kind="deck")
-    deck = load_deck(arguments.deck, arguments.theme)
-    result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
+    try:
+        if arguments.command == "convert":
+            return _convert(arguments)
+        deck = load_deck(arguments.deck, arguments.theme)
+        result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
+    except KeyboardInterrupt:
+        return 130
+    except Exception as error:
+        if os.environ.get("FLEXO_TRACEBACK"):
+            raise
+        print(f"flexo-talk: {_said(error, arguments.deck)}", file=sys.stderr)
+        print("(FLEXO_TRACEBACK=1 shows the whole traceback)", file=sys.stderr)
+        return 1
     print(result.summary())
     return 0
+
+
+def _said(error: BaseException, target: str) -> str:
+    """An error as one line: where in the deck's own code it was raised, if there, and
+    what it says (with its kind, when the words are Python's rather than flexo's)."""
+
+    import traceback
+
+    from flexo.diagnostics import FlexoError
+
+    words = str(error).strip() or type(error).__name__
+    if isinstance(error, FlexoError):
+        words = str(error).splitlines()[0]
+    elif not isinstance(error, ValueError):
+        words = f"{type(error).__name__}: {words}"
+    folder = Path(target.partition(":")[0]).resolve().parent
+    own = [
+        frame for frame in traceback.extract_tb(error.__traceback__)
+        if Path(frame.filename).resolve().is_relative_to(folder) and "site-packages" not in frame.filename
+    ]
+    if own:
+        frame = own[-1]
+        return f"{Path(frame.filename).name}, line {frame.lineno}, in {frame.name}: {words}"
+    return words
 
 
 def _convert(arguments: argparse.Namespace) -> int:

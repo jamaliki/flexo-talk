@@ -900,15 +900,18 @@ _MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _A14 = "http://schemas.microsoft.com/office/drawing/2010/main"
 
 
-def alternate(choice: etree._Element, fallback: etree._Element) -> etree._Element:
+def alternate(choice: etree._Element, fallback: etree._Element | None) -> etree._Element:
     """``choice`` for PowerPoint (2010 on, which reads its own equations), ``fallback``
-    for every other slide program -- as PowerPoint itself saves an equation."""
+    for every other slide program -- as PowerPoint itself saves an equation. With no
+    ``fallback``, its place (the last child) is left empty for one to be moved into."""
 
     element = etree.Element(f"{{{_MC}}}AlternateContent", nsmap={"mc": _MC})
     first = etree.SubElement(element, f"{{{_MC}}}Choice", nsmap={"a14": _A14})
     first.set("Requires", "a14")
     first.append(choice)
-    etree.SubElement(element, f"{{{_MC}}}Fallback").append(fallback)
+    second = etree.SubElement(element, f"{{{_MC}}}Fallback")
+    if fallback is not None:
+        second.append(fallback)
     return element
 
 
@@ -1012,10 +1015,11 @@ def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, p
             )
         else:
             continue
-        parent = drawn.getparent()
-        index = parent.index(drawn)
-        parent.remove(drawn)
-        parent.insert(index, alternate(choice, drawn))
+        # The wrapper goes in first, and the drawing moves into it within the slide: a
+        # drawing taken out of the slide alone is copied about (seconds, for a long one).
+        wrapper = alternate(choice, None)
+        drawn.addprevious(wrapper)
+        wrapper[-1].append(drawn)
         count += 1
     return count
 

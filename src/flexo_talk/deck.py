@@ -96,6 +96,32 @@ class DeckStyle:
     title_role: str = "ink"
     """The palette role that paints slide titles: ``ink``, or ``tone-1-stroke`` for the accent."""
 
+    def __post_init__(self) -> None:
+        # Proportions come from documents and the studio as well as Python: each is
+        # checked here, and said in words, before a slide is drawn at that size.
+        import math
+
+        for name, (low, high) in _STYLE_NUMBERS.items():
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+                raise ValueError(f"{name} is {value!r}: it is a number from {_said(low)} to {_said(high)}")
+            if not low <= value <= high:
+                raise ValueError(f"{name} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+        if self.margin * 2 >= min(self.width, self.height):
+            raise ValueError(f"a margin of {_said(self.margin)} leaves no room on a "
+                             f"{_said(self.width)} by {_said(self.height)} slide")
+        for name, allowed in _STYLE_CHOICES.items():
+            if getattr(self, name) not in allowed:
+                raise ValueError(f"{name} is {getattr(self, name)!r}: it is one of {', '.join(allowed)}")
+        for name in ("edge", "numbers"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} is {getattr(self, name)!r}: it is true or false")
+        weight = self.title_weight
+        if weight is not None and (isinstance(weight, bool) or not isinstance(weight, int) or not 1 <= weight <= 1000):
+            raise ValueError(f"title_weight is {weight!r}: it is a font weight from 100 to 900, such as 700")
+        if not isinstance(self.title_role, str):
+            raise ValueError(f"title_role is {self.title_role!r}: it names a palette role, such as ink")
+
     @classmethod
     def look(cls, name: str, **changes: object) -> DeckStyle:
         """A named look (see ``LOOKS``), with any field changed: ``DeckStyle.look("band", body_size=22)``."""
@@ -103,6 +129,81 @@ class DeckStyle:
         if name not in LOOKS:
             raise ValueError(f'unknown look "{name}"; looks are {", ".join(LOOKS)}')
         return cls(**{**LOOKS[name], **changes})  # type: ignore[arg-type]
+
+
+_STYLE_NUMBERS: dict[str, tuple[float, float]] = {
+    # PowerPoint's slides are 1 to 56 inches each way.
+    "width": (72.0, 4032.0), "height": (72.0, 4032.0), "margin": (0.0, 2016.0),
+    **{name: (1.0, 400.0) for name in ("title_size", "subtitle_size", "body_size", "small_size", "figure_size")},
+    "line_height": (0.5, 5.0), "paragraph_gap": (0.0, 20.0),
+    **{name: (0.0, 2016.0) for name in ("indent", "column_gap", "block_gap", "title_gap")},
+}
+"""DeckStyle's numbers, and the range each may take (points, or a share of a size)."""
+
+_STYLE_CHOICES: dict[str, tuple[str, ...]] = {
+    "header": ("rule", "band", "line", "none"),
+    "opening": ("centred", "left", "band"),
+    "sections": ("rule", "fill", "number"),
+    "align": ("auto", "top", "middle"),
+    "title_align": ("start", "middle"),
+}
+
+
+def _said(value: float) -> str:
+    return f"{value:g}"
+
+
+# -- settings, checked as they are given (from Python, documents and the studio alike) --
+
+
+def _number(value: object, what: str, low: float, high: float, example: str) -> float:
+    import math
+
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"{what} is {value!r}: it is a number, such as {example}")
+    if not low <= value <= high:
+        raise ValueError(f"{what} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+    return float(value)
+
+
+def _size(value: object, what: str = "size") -> float | None:
+    """A size in points, or None for the size the place sets."""
+
+    return None if value is None else _number(value, what, 4.0, 400.0, "20 (points)")
+
+
+def _flag(value: object, what: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{what} is {value!r}: it is true or false")
+    return value
+
+
+def _choice(value: object, what: str, allowed: tuple[str, ...]) -> str:
+    # "centre" is what a British hand writes for "middle".
+    value = {"centre": "middle", "center": "middle"}.get(value, value) if isinstance(value, str) else value
+    if value not in allowed:
+        raise ValueError(f"{what} is {value!r}: it is one of {', '.join(allowed)}")
+    return value
+
+
+def _words(value: object, what: str) -> str:
+    """Words: a string, or a number written as one; never a list, mapping or nothing."""
+
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        raise ValueError(f"{what} is {value!r}: it is words")
+    return str(value)
+
+
+def _colour(value: object, what: str = "colour") -> str | None:
+    """A colour: a palette role (accent, muted, ink...) or #rgb / #rrggbb."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{what} is {value!r}: it is a palette role (accent, muted) or a #rrggbb colour")
+    if value.startswith("#") and not re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", value):
+        raise ValueError(f"{what} is {value!r}: a colour is written #rgb or #rrggbb, in hex digits")
+    return value
 
 
 LOOKS: dict[str, dict[str, object]] = {
@@ -352,14 +453,16 @@ class Region:
         ``reveal=True`` shows the outer items one at a time: a click each in the
         PowerPoint, a page each in the PDF (the SVG and PNG show them all)."""
 
+        size, numbered, reveal = _size(size), _flag(numbered, "numbered"), _flag(reveal, "reveal")
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
 
         def add(entries: Iterable[str | Sequence[str]], level: int) -> None:
             for entry in entries:
-                if isinstance(entry, str):
-                    flattened.append((level, inline(entry)))
-                else:
+                if isinstance(entry, list | tuple):
                     add(entry, level + 1)
+                else:
+                    # A number is an item too (a year); anything else is not words.
+                    flattened.append((level, inline(_words(entry, "a bullet"))))
 
         add(items, 0)
         self.blocks.append(_Bullets(flattened, size, numbered, reveal))
@@ -379,6 +482,9 @@ class Region:
         ``colour`` paints it: ``accent`` (``accent2``...), ``muted``, a palette role,
         or ``#rrggbb``; ``[words]{colour}`` paints only some words."""
 
+        words, size = _words(words, "text"), _size(size)
+        align = _choice(align, "align", ("start", "middle", "end"))
+        muted, colour = _flag(muted, "muted"), _colour(colour)
         self.blocks.append(_Words(inline(words), size, align, muted, colour))
         self._record(
             "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
@@ -398,7 +504,9 @@ class Region:
         ``\\\\``. Centred (``align`` to set it at the start or end), at the words' size
         (``size``) or smaller if that is wider than its place."""
 
-        source = display_source(source)
+        source = display_source(_words(source, "math"))
+        size, colour = _size(size), _colour(colour)
+        align = _choice(align, "align", ("start", "middle", "end"))
         self.blocks.append(_Math(source, size, align, colour))
         self._record("math", source, size=size, align=None if align == "middle" else align, colour=colour)
         return self
@@ -423,10 +531,25 @@ class Region:
         or centred; a grid of several columns is centred.
         """
 
+        if isinstance(items, str | Path) or not items:
+            raise ValueError("a gallery is a list of at least one picture (a file, or a file and its caption)")
+        if columns is not None and (
+            isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= 12
+        ):
+            raise ValueError(f"columns is {columns!r}: it is a whole number from 1 to 12")
+        height = None if height is None else _number(height, "height", 8.0, 4032.0, "120 (points)")
+        crop = None if crop is None else _choice(crop, "crop", ("circle", "square"))
+        size = _size(size)
+        align = None if align is None else _choice(align, "align", ("start", "middle"))
         cells = []
         for item in items:
-            source, caption = (item, "") if isinstance(item, str | Path) else item
-            cells.append((str(source), inline(caption) if caption else ()))
+            if isinstance(item, str | Path):
+                source, caption = item, ""
+            elif isinstance(item, list | tuple) and len(item) == 2:
+                source, caption = item
+            else:
+                raise ValueError(f"a gallery picture is a file, or a file and its caption, not {item!r}")
+            cells.append((str(source), inline(_words(caption, "a caption")) if caption else ()))
         self.blocks.append(_Gallery(cells, columns, height, crop, size, align))
         pictures = [str(item) if isinstance(item, str | Path) else {"picture": str(item[0]), "caption": item[1]}
                     for item in items]
@@ -437,6 +560,7 @@ class Region:
         """A quotation set large in the title face, an accent quotation mark hung in
         the margin beside it, and who said it (``by``) under it, muted."""
 
+        words, by, size = _words(words, "quote"), _words(by, "by"), _size(size)
         self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size))
         self._record("quote", words, by=by or None, size=size)
         return self
@@ -454,6 +578,11 @@ class Region:
 
         if not items:
             raise ValueError("stats needs at least one (value, label) pair")
+        for item in items:
+            if isinstance(item, str) or not isinstance(item, list | tuple) or len(item) != 2:
+                raise ValueError(f'each of stats is a (value, label) pair, such as ("93%", "accuracy"), not {item!r}')
+        items = tuple((_words(value, "a stat's value"), _words(label, "a stat's label")) for value, label in items)
+        colour, size = _colour(colour), _size(size)
         self.blocks.append(
             _Stats([(inline(str(value)), inline(label)) for value, label in items], colour, size)
         )
@@ -468,7 +597,9 @@ class Region:
         """A key point on a panel tinted in a tone, a bar of the tone along its edge:
         ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words."""
 
-        if not (colour.startswith("accent") and colour[6:] in {"", *map(str, range(1, 13))}):
+        words, title, size = _words(words, "callout"), _words(title, "title"), _size(size)
+        tones = {"", *map(str, range(1, 13))}
+        if not (isinstance(colour, str) and colour.startswith("accent") and colour[6:] in tones):
             raise ValueError(f'a callout\'s colour is "accent", "accent2", ... not "{colour}"')
         self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
         self._record(
@@ -481,6 +612,7 @@ class Region:
         ``with`` block. ``turn=False`` keeps it as written (see ``add``)."""
 
         deck = self._slide.deck
+        turn = _flag(turn, "turn")
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
         self.blocks.append(_Figure(figure, turn))
@@ -495,7 +627,7 @@ class Region:
         be larger -- ``turn=False`` keeps it as written.
         """
 
-        self.blocks.append(_Figure(figure, turn))
+        self.blocks.append(_Figure(figure, _flag(turn, "turn")))
         self._record("figure", None, turn=None if turn else False)
         return self
 
@@ -503,6 +635,7 @@ class Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture."""
 
+        width = None if width is None else _number(width, "width", 1.0, 4032.0, "300 (points)")
         self.blocks.append(_Image(str(source), width))
         self._record("image", str(source), width=width)
         return self
@@ -523,7 +656,10 @@ class Region:
         default a column of numbers is set flush right and any other flush left.
         """
 
-        cells = [[inline(str(cell)) for cell in row] for row in rows]
+        if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
+            raise ValueError("a table is a list of rows, each a list of cells")
+        header, size = _flag(header, "header"), _size(size)
+        cells = [[inline("" if cell is None else str(cell)) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
         cells = [row + [()] * (columns - len(row)) for row in cells]
         names = {"l": "start", "c": "middle", "r": "end"}
@@ -532,7 +668,7 @@ class Region:
         elif isinstance(align, str):
             aligned = ()
         else:
-            aligned = tuple(align)
+            aligned = tuple(_choice(item, "a column's align", ("start", "middle", "end")) for item in align)
         if len(aligned) != columns:
             body = [list(row) for row in rows[1 if header else 0 :]]
             aligned = tuple(
@@ -553,6 +689,7 @@ class Region:
 
         import textwrap
 
+        source, size = _words(source, "code"), _size(size)
         text = textwrap.dedent(source.expandtabs(4)).strip("\n")
         self.blocks.append(_Code(text.splitlines() or [""], size))
         self._record("code", text, size=size)
@@ -567,6 +704,7 @@ class Region:
         ``with deck.plotting():`` for the deck's colours as well.
         """
 
+        aspect = None if aspect is None else _number(aspect, "aspect", 0.1, 10.0, "1.6 (width over height)")
         self.blocks.append(_Plot(figure, aspect))
         self._record("plot", None, aspect=aspect)
         return self
@@ -615,6 +753,15 @@ class Slide:
     ) -> None:
         if layout not in LAYOUTS:
             raise ValueError(f'unknown layout "{layout}"; layouts are {", ".join(LAYOUTS)}')
+        title, subtitle = _words(title or "", "title"), _words(subtitle or "", "subtitle")
+        split = _number(split, "split", 0.15, 0.85, "0.5 (the left column's share of the width)")
+        shade = _number(shade, "shade", 0.0, 1.0, "0.4 (how much a picture is darkened)")
+        if dark is not None:
+            dark = _flag(dark, "dark")
+        if widths is not None:
+            widths = [_number(share, "a column's width", 0.01, 100.0, "1 (shares of the width)") for share in widths]
+        if isinstance(background, str) and background.startswith("#"):
+            _colour(background, "background")
         self.deck = deck
         self.index = index
         self.id = f"slide{index}"
@@ -931,8 +1078,9 @@ class Deck:
         dark background the slide's words are set light (``dark`` overrides).
         ``align`` places the content in the body (see ``DeckStyle.align``)."""
 
-        if not 0.15 <= split <= 0.85:
-            raise ValueError("split is the left column's share of the width, between 0.15 and 0.85")
+        split = _number(split, "split", 0.15, 0.85, "0.5 (the left column's share of the width)")
+        if isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= 12:
+            raise ValueError(f"columns is {columns!r}: it is a whole number from 1 to 12")
         made = Slide(
             self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
             background, shade, dark, align,
