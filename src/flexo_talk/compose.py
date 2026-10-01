@@ -2086,6 +2086,17 @@ def _slide_inks(svg: str, deck: Palette, slide: Palette, *, black: bool = True) 
     (matplotlib's error bars) is the slide's ink, unless ``black`` is False. Words a
     plot set on its cells keep the paint chosen for the cell (``_words_on_cells``)."""
 
+    swaps = _ink_swaps(deck, slide, black=black)
+    if not swaps:
+        return svg
+    kept = rf'(<g id="{_ON_CELL}-\d+">.*?</g>)|'
+    pattern = re.compile(kept + "|".join(re.escape(colour) for colour in swaps), re.IGNORECASE | re.DOTALL)
+    return pattern.sub(lambda match: match.group(1) or swaps[match.group(0).lower()], svg)
+
+
+def _ink_swaps(deck: Palette, slide: Palette, *, black: bool = True) -> dict[str, str]:
+    """Each paint of the deck the slide shows otherwise, and how it shows it."""
+
     from flexo.colour import is_dark
 
     swaps: dict[str, str] = {}
@@ -2095,11 +2106,7 @@ def _slide_inks(svg: str, deck: Palette, slide: Palette, *, black: bool = True) 
             swaps.setdefault(made, shown)
     if black and is_dark(slide.get("canvas")):
         swaps.setdefault("#000000", slide.get("ink").lower())
-    if not swaps:
-        return svg
-    kept = rf'(<g id="{_ON_CELL}-\d+">.*?</g>)|'
-    pattern = re.compile(kept + "|".join(re.escape(colour) for colour in swaps), re.IGNORECASE | re.DOTALL)
-    return pattern.sub(lambda match: match.group(1) or swaps[match.group(0).lower()], svg)
+    return swaps
 
 
 class PlotInks(NamedTuple):
@@ -2112,6 +2119,9 @@ class PlotInks(NamedTuple):
     """The slide's dark and light inks: words on a plot's cells take the one that reads."""
     canvas: str
     """The slide's page, seen through a cell that is not opaque."""
+    swaps: dict[str, str]
+    """Each paint of the deck the slide shows otherwise (``_ink_swaps``), for what a plot
+    draws as a picture: its shapes are given the slide's paints as an SVG."""
 
 
 def plot_inks(deck: Palette, slide: Palette) -> PlotInks:
@@ -2120,7 +2130,7 @@ def plot_inks(deck: Palette, slide: Palette) -> PlotInks:
     ink, page = slide.get("ink"), slide.get("canvas")
     dark = next(colour for colour in (ink, page, "#1c1c1e") if is_dark(colour))
     light = next(colour for colour in (ink, page, "#f7f5f0") if not is_dark(colour))
-    return PlotInks(deck.get("ink"), dark, light, page)
+    return PlotInks(deck.get("ink"), dark, light, page, _ink_swaps(deck, slide))
 
 
 _ON_CELL = "flexo-cell"
@@ -2264,6 +2274,10 @@ def plot_svg(
         if "$" in words and not hasattr(text, "_flexo_problems"):
             text.set_text(_matplotlib_maths(words))
     clear_backgrounds(figure)
+    marks = _rasterised(figure, inks.swaps if inks is not None else {})
+    if marks and said is not None:
+        said.append(("", f"the plot's {marks:,} marks are drawn as a picture, not as shapes -- "
+                         "plot them with rasterized=True to choose so yourself"))
     if inks is not None:
         _words_on_cells(figure, inks)
     settings = {
@@ -2282,7 +2296,7 @@ def plot_svg(
     buffer = io.StringIO()
     with matplotlib.rc_context(settings):
         try:
-            figure.savefig(buffer, format="svg", metadata={"Date": None})
+            figure.savefig(buffer, format="svg", metadata={"Date": None}, dpi=RASTER_DPI)
         except (ZeroDivisionError, ValueError) as error:
             said = _plot_maths(figure, error)
             if said:
@@ -2294,12 +2308,90 @@ def plot_svg(
             # (a colour bar made first): lay it out tightly instead.
             figure.set_layout_engine("tight")
             buffer = io.StringIO()
-            figure.savefig(buffer, format="svg", metadata={"Date": None})
+            figure.savefig(buffer, format="svg", metadata={"Date": None}, dpi=RASTER_DPI)
     # Drawn: pyplot need not keep it open (each redraw makes the plot afresh).
     import matplotlib.pyplot as plt
 
     plt.close(figure)
     return _maths_fonts(buffer.getvalue(), maths)
+
+
+MANY_MARKS = 5_000
+"""Marks (points, cells, segments) beyond which one artist of a plot is drawn as a picture:
+so many shapes make a slide slow to draw and to open, and are too small to edit one by one."""
+
+RASTER_DPI = 200.0
+"""The resolution of a plot's pictures (its images, and its artists of very many marks):
+sharp on a slide shown full screen."""
+
+
+def _rasterised(figure: Any, swaps: dict[str, str]) -> int:
+    """Artists of very many marks (a scatter of 100,000 points, a fine mesh) drawn as one
+    picture each, as ``rasterized=True`` draws them, not as so many shapes; how many marks
+    were turned so. A picture is given the slide's paints (``swaps``) as the shapes are."""
+
+    turned = 0
+    for axes in figure.get_axes():
+        for artist in (*axes.collections, *axes.lines):
+            if not artist.get_rasterized():
+                marks = _marks(artist)
+                if marks <= MANY_MARKS:
+                    continue
+                artist.set_rasterized(True)
+                turned += marks
+            _recolour(artist, swaps)
+    return turned
+
+
+def _marks(artist: Any) -> int:
+    """How many marks an artist draws: a line's markers, a mesh's cells, a collection's
+    points or shapes."""
+
+    from matplotlib.lines import Line2D
+
+    if isinstance(artist, Line2D):
+        marked = artist.get_marker() not in {None, "", " ", "None", "none"}
+        return len(artist.get_xdata()) if marked else 0
+    if hasattr(artist, "get_coordinates"):
+        rows, columns = artist.get_coordinates().shape[:2]
+        return (rows - 1) * (columns - 1)
+    return max(len(artist.get_offsets()), len(artist.get_paths()))
+
+
+def _recolour(artist: Any, swaps: dict[str, str]) -> None:
+    """An artist drawn as a picture in the slide's paints, as its shapes would be given
+    them (``_slide_inks``); colours from a colour map are the data's, and stay."""
+
+    if not swaps:
+        return
+    from matplotlib.lines import Line2D
+
+    parts = ("color", "markerfacecolor", "markeredgecolor") if isinstance(artist, Line2D) else (
+        ("edgecolor",) if artist.get_array() is not None else ("facecolor", "edgecolor"))
+    for part in parts:
+        colours = _swapped(getattr(artist, f"get_{part}")(), swaps)
+        if colours is not None:
+            getattr(artist, f"set_{part}")(colours if len(colours) > 1 else colours[0])
+
+
+def _swapped(colours: Any, swaps: dict[str, str]) -> Any:
+    """``colours`` with each the slide shows otherwise as it shows it; None if none is."""
+
+    import numpy as np
+    from matplotlib.colors import to_hex, to_rgb, to_rgba_array
+
+    try:
+        colours = to_rgba_array(colours)
+    except ValueError:
+        return None
+    unique, where = np.unique(colours[:, :3], axis=0, return_inverse=True)
+    changed = False
+    for index, colour in enumerate(unique):
+        shown = swaps.get(to_hex(colour))
+        if shown is not None:
+            colours[where.ravel() == index, :3] = to_rgb(shown)
+            changed = True
+    return colours if changed else None
 
 
 def clear_backgrounds(figure: Any) -> None:
