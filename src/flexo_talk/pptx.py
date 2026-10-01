@@ -490,6 +490,9 @@ def _run_xml(run, *, size: float | None = None, baseline: int | None = None) -> 
 
     size = size if size is not None else run.size
     face = escape(_family_name(run), {'"': "&quot;"})
+    # A monospace face says so: where it is not installed, a slide program puts another
+    # monospace face in its place, and code keeps its columns.
+    pitch = ' pitchFamily="49"' if run.face is not None and _fixed_pitch(run.face.source, run.face.index) else ""
     bold = ' b="1"' if _bold(run) else ""
     italic = ' i="1"' if run.italic else ""
     raise_ = f' baseline="{baseline}"' if baseline else ""
@@ -506,7 +509,7 @@ def _run_xml(run, *, size: float | None = None, baseline: int | None = None) -> 
     return (
         f'<a:r><a:rPr lang="{_lang(run.text)}" sz="{round(size * 100)}"{bold}{italic}{raise_} dirty="0">'
         f"{_fill(run.fill, 1.0)}"
-        f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/><a:cs typeface="{face}"/>{link}'
+        f'<a:latin typeface="{face}"{pitch}/><a:ea typeface="{face}"{pitch}/><a:cs typeface="{face}"{pitch}/>{link}'
         f"</a:rPr><a:t>{escape(run.text)}</a:t></a:r>"
     )
 
@@ -547,6 +550,18 @@ def _family_name(run) -> str:
     """
 
     return _legacy_family(run.face.source, run.face.index) or run.face.family
+
+
+@cache
+def _fixed_pitch(source: str, index: int) -> bool:
+    from fontTools.ttLib import TTCollection, TTFont
+
+    font = (
+        TTCollection(source, lazy=True).fonts[index]
+        if source.lower().endswith((".ttc", ".otc"))
+        else TTFont(source, lazy=True)
+    )
+    return bool(font["post"].isFixedPitch) or (font["OS/2"].panose.bProportion == 9 if "OS/2" in font else False)
 
 
 @cache
