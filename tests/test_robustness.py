@@ -307,3 +307,36 @@ def test_a_displayed_equation_in_python_words_is_centred_as_in_a_document() -> N
     slide.text(r"$$E = mc^2$$")
     (block,) = slide.body.blocks
     assert type(block).__name__ == "_Math" and block.align == "middle"
+
+
+def test_emphasis_pairs_as_markdown_pairs_it() -> None:
+    from flexo_talk.deck import inline
+
+    def styled(words: str) -> list[tuple[str, bool, int]]:
+        return [(run.text, run.italic, run.weight) for run in inline(words)]
+
+    assert "".join(text for text, _, _ in styled("2 * 3 * 4")) == "2 * 3 * 4"
+    assert styled(r"a \*literal\* b") == [("a *literal* b", False, 400)]
+    assert styled("***both***") == [("both", True, 700)]
+    assert styled("*a* b") == [("a", True, 400), (" b", False, 400)]
+
+
+def test_a_footer_takes_markup_and_a_right_to_left_one_stands_at_the_right() -> None:
+    import re
+
+    deck = Deck("f", footer="**Lab** meeting")
+    deck.slide("S").text("x")
+    (slide,) = deck.render()
+    assert 'font-weight="700"' in re.search(r'id="slide1\.footer".*?</text>', slide.svg, re.S).group(0)
+    persian = Deck("fa", footer="سمینار گروه")
+    persian.slide("S").text("x")
+    (slide,) = persian.render()
+    footer = re.search(r'id="slide1\.footer"[^>]*x="([\d.]+)"[^>]*text-anchor="end"', slide.svg)
+    assert footer and float(footer.group(1)) > persian.style.width / 2
+
+
+def test_a_tab_in_words_is_a_space(tmp_path: Path) -> None:
+    deck = Deck("t")
+    deck.slide("S").text("a\tb").bullets("c\td")
+    (slide,) = deck.render()
+    assert "\t" not in slide.svg

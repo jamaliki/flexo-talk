@@ -421,23 +421,23 @@ def inline(words: str) -> tuple[TextRun, ...]:
 
     runs: list[TextRun] = []
     # Split on maths (read as flexo reads it), then links, code, ** and *; each piece
-    # takes the styles open around it.
+    # takes the styles open around it. \* is an asterisk, kept out of the split.
     tokens: list[str] = []
     at = 0
     for start, end in math_spans(words):
-        tokens += re.split(_INLINE, words[at:start])
+        tokens += re.split(_INLINE, words[at:start].replace("\\*", _ASTERISK))
         tokens.append(words[start:end])
         at = end
-    tokens += re.split(_INLINE, words[at:])
+    tokens += re.split(_INLINE, words[at:].replace("\\*", _ASTERISK))
+    tokens = [token for token in tokens if token]
+    paired = _emphasis(tokens)
     bold = italic = False
-    for token in tokens:
-        if token == "**":
+    for index, token in enumerate(tokens):
+        if token == "**" and index in paired:
             bold = not bold
             continue
-        if token == "*":
+        if token == "*" and index in paired:
             italic = not italic
-            continue
-        if not token:
             continue
         link = re.fullmatch(r"\[([^\]\n]+)\]\(([^)\s]+)\)", token)
         coloured = re.fullmatch(r"\[([^\]\n]+)\]\{([^}\s]+)\}", token)
@@ -452,11 +452,40 @@ def inline(words: str) -> tuple[TextRun, ...]:
             runs.append(
                 replace(
                     run,
+                    text=run.text.replace(_ASTERISK, "*"),
                     weight=700 if bold else run.weight,
                     italic=run.italic or italic,
                 )
             )
     return tuple(runs)
+
+
+_ASTERISK = "\ue000"
+"""Where an escaped asterisk (\\*) waits while emphasis is read."""
+
+
+def _emphasis(tokens: list[str]) -> set[int]:
+    """The indices of the ``*`` and ``**`` that open or close emphasis, as Markdown pairs
+    them: an opener touches the word after it, a closer the word before, and one with
+    no partner (2 * 3 * 4, a footnote's lone *) is an asterisk."""
+
+    paired: set[int] = set()
+    open_at: list[int] = []
+    for index, token in enumerate(tokens):
+        if token not in ("*", "**"):
+            continue
+        before = tokens[index - 1][-1:] if index > 0 else ""
+        after = tokens[index + 1][:1] if index + 1 < len(tokens) else ""
+        can_close = bool(before) and not before.isspace()
+        can_open = bool(after) and not after.isspace()
+        same = [at for at in open_at if tokens[at] == token]
+        if can_close and same:
+            # The nearest one open of its kind: ***both*** is bold and italic both.
+            open_at.remove(same[-1])
+            paired |= {same[-1], index}
+        elif can_open:
+            open_at.append(index)
+    return paired
 
 
 class Region:

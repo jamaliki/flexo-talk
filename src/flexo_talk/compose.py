@@ -711,16 +711,20 @@ def _furniture(canvas: _Canvas, slide: Slide) -> None:
         return
     size = style.small_size * 0.8
     y = style.height - style.margin + size * 0.2
+    footer = inline(deck.footer) if deck.footer else ()
+    # A footer in a right-to-left script stands at the right, the number at the left.
+    rtl = bool(footer) and _rtl(footer)
     if style.numbers:
+        x = style.margin if rtl else style.width - style.margin - 60.0
         canvas.words(
             f"{slide.id}.number", (TextRun(str(slide.index)),),
-            Box(style.width - style.margin - 60.0, y, 60.0, 0.0), size=size, align="end",
-            role="muted-ink",
+            Box(x, y, 60.0, 0.0), size=size, align="start" if rtl else "end", role="muted-ink",
         )
-    if deck.footer:
+    if footer:
+        half = style.width / 2.0
+        place = Box(half, y, half - style.margin, 0.0) if rtl else Box(style.margin, y, half, 0.0)
         canvas.words(
-            f"{slide.id}.footer", flexo.markup.parse_label(deck.footer),
-            Box(style.margin, y, style.width / 2.0, 0.0), size=size, role="muted-ink",
+            f"{slide.id}.footer", footer, place, size=size, role="muted-ink", align="end" if rtl else "start",
         )
 
 
