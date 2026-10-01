@@ -131,7 +131,7 @@ class RemotePlot:
         """What the worker found to say of the plot (maths it could not read), once drawn."""
 
     def svg(self, width: float, height: float, family: str, identifier: str, *, maths: str, **options: Any) -> str:
-        """The plot as ``plot_svg`` draws it; ``options`` (its ``inks``) are passed on as given."""
+        """The plot as ``plot_svg`` draws it; ``options`` (its ``inks``, ``faces``) are passed on as given."""
 
         svg, self.said = self._draw(width, height, family, identifier, maths, options)
         return svg

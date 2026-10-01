@@ -28,7 +28,7 @@ from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
 from flexo.lint import lint_compilation
 from flexo.render_common import render_runs
-from flexo.style import Palette
+from flexo.style import Palette, TypographyStyle
 from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, xml_document
 from flexo.svg_resources import embed_fonts
 from flexo.text import TextMeasurer
@@ -2062,7 +2062,7 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
     typography = canvas.deck.layout_style.typography
     family, maths = typography.family, maths_family(typography)
     said: list[tuple[str, str]] = []
-    options = {"inks": plot_inks(canvas.deck.palette, canvas.palette)}
+    options = {"inks": plot_inks(canvas.deck.palette, canvas.palette), "faces": plot_faces(typography)}
     if isinstance(figure, RemotePlot):
         svg = figure.svg(width, height, family, identifier, maths=maths, **options)
         said = figure.said
@@ -2230,13 +2230,14 @@ def _between(edges: Any, value: float) -> int | None:
 def plot_svg(
     figure: Any, width: float, height: float, family: str, identifier: str, *,
     maths: str = "Latin Modern Math", said: list[tuple[str, str]] | None = None,
-    inks: PlotInks | None = None,
+    inks: PlotInks | None = None, faces: dict[str, str] | None = None,
 ) -> str:
     """A matplotlib figure as SVG, laid out again at ``width`` by ``height`` points, its
     words set in ``family`` and kept as text; the figure is closed after. Its maths is
     set as the deck's is: letters in ``family``, and Greek, signs and script capitals
     in the deck's maths font (``maths``) rather than matplotlib's STIX. ``inks`` tell
-    it the slide it is put on, so words on its cells read there."""
+    it the slide it is put on, so words on its cells read there; words that ask for
+    monospace or serif are set in the deck's ``faces`` for them (``plot_faces``)."""
 
     import io
 
@@ -2252,8 +2253,8 @@ def plot_svg(
     # family that has them, so matplotlib measures the words it lays out.
     from flexo.fonts import family_covering, family_faces, load_face, select_face
 
-    faces = family_faces(family)
-    primary = load_face(select_face(faces, 400, False)) if faces else None
+    own = family_faces(family)
+    primary = load_face(select_face(own, 400, False)) if own else None
     missing = {
         ch for text in texts for ch in text.get_text() if not ch.isspace() and ch.isalpha()
         and (primary is None or not primary.has(ch))
@@ -2262,8 +2263,10 @@ def plot_svg(
     families = [family, covering] if covering else [family]
     from flexo_talk.plotmaths import problems, set_by_flexo
 
+    kinds = faces or plot_faces(TypographyStyle(family=family))
     for text in texts:
-        text.set_fontfamily(families)
+        asked = _asked_face(text)
+        text.set_fontfamily(list(dict.fromkeys([kinds[asked], *families])) if asked else families)
     # Maths in its words is set by flexo, as on a slide; what matplotlib still sets
     # (tick labels, made as it draws) is said in its terms.
     set_by_flexo(figure, family, maths)
@@ -2315,6 +2318,32 @@ def plot_svg(
 
     plt.close(figure)
     return _maths_fonts(buffer.getvalue(), maths)
+
+
+def plot_faces(typography: TypographyStyle) -> dict[str, str]:
+    """The families a plot's words that ask for a kind of face are set in: monospace in the
+    deck's code face, serif in its own face when that is a serif, else in Latin Modern
+    Roman (flexo's serif, the face of its maths)."""
+
+    from flexo.text import FontStack
+
+    mono = FontStack(typography).mono()
+    return {
+        "monospace": mono[0].family if mono else typography.family,
+        "serif": typography.family if typography.generic == "serif" else "Latin Modern Roman",
+    }
+
+
+def _asked_face(text: Any) -> str | None:
+    """The kind of face a plot's text asks for: ``monospace`` (by that name, or a monospace
+    family's), ``serif``, or None -- the deck's face, for its words in any other."""
+
+    from flexo.text import MONO_FAMILIES
+
+    asked = next(iter(text.get_fontfamily()), "").casefold()
+    if asked == "monospace" or asked in {name.casefold() for name in MONO_FAMILIES}:
+        return "monospace"
+    return "serif" if asked == "serif" else None
 
 
 MANY_MARKS = 5_000

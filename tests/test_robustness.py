@@ -820,3 +820,21 @@ def test_a_mesh_shows_no_hairlines_of_the_slide_between_its_cells_in_the_png(kin
     rows, columns = np.nonzero(away < 8)
     inside = away[rows.min() + 6 : rows.max() - 6, columns.min() + 6 : columns.max() - 6]
     assert inside.max() < 16  # a seam lets the slide through by 30 or more
+
+
+def test_a_plots_words_that_ask_for_monospace_or_serif_are_set_in_the_decks_faces_for_them() -> None:
+    import re
+
+    import matplotlib.pyplot as plt
+
+    from flexo_talk.compose import plot_faces, plot_svg
+
+    figure, axes = plt.subplots()
+    axes.text(0.1, 0.8, "code", family="monospace")
+    axes.text(0.1, 0.6, "typed", family="Courier New")
+    axes.text(0.1, 0.4, "roman", family="serif")
+    axes.text(0.1, 0.2, "plain", family="Comic Sans MS")
+    svg = plot_svg(figure, 300.0, 200.0, "Figtree", "f", faces=plot_faces(Deck("faces").layout_style.typography))
+    set_in = {words: family for family, words in re.findall(r"font-family: '([^']+)'[^>]*>(\w+)<", svg)}
+    assert set_in == {"code": "IBM Plex Mono", "typed": "IBM Plex Mono", "roman": "Latin Modern Roman",
+                      "plain": "Figtree"}
