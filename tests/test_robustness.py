@@ -546,3 +546,66 @@ def test_a_list_far_longer_than_any_slide_is_cut_and_said_quickly() -> None:
     (slide,) = deck.render()
     assert time.monotonic() - start < 30
     assert any("a list of 5,000 items cut" in line for line in slide.diagnostics)
+
+
+def test_convert_names_files_beside_the_document_and_makes_its_folder(tmp_path: Path) -> None:
+    import json
+
+    from PIL import Image
+
+    from flexo_talk.document import read_deck
+
+    source = tmp_path / "talk"
+    source.mkdir()
+    Image.new("RGB", (16, 16), "#336699").save(source / "photo.png")
+    (source / "lab.yaml").write_text("theme:\n  name: lab\n  base: paper\n")
+    (source / "deck.py").write_text(
+        "from pathlib import Path\n"
+        "from flexo_talk import Deck\n"
+        "HERE = Path(__file__).resolve().parent\n"
+        "def talk():\n"
+        "    deck = Deck('lab', theme=str(HERE / 'lab.yaml'))\n"
+        "    slide = deck.slide('S', background=str(HERE / 'photo.png'), shade=0.5)\n"
+        "    with slide.figure() as figure:\n"
+        "        figure.image('p', HERE / 'photo.png', label='P')\n"
+        "    return deck\n"
+    )
+    target = tmp_path / "out" / "new" / "deck.json"
+    assert main(["convert", str(source / "deck.py"), "-o", str(target)]) == 0
+    text = target.read_text()
+    assert str(tmp_path) not in text  # nothing named by where it happens to be
+    document = json.loads(text)
+    assert document["deck"]["theme"] == "../../talk/lab.yaml"
+    assert document["slides"][0]["background"] == "../../talk/photo.png"
+    assert read_deck(target).render()[0].diagnostics == []
+
+
+def test_a_date_is_written_as_a_document_writes_one() -> None:
+    import datetime
+    import json
+
+    from flexo_talk.document import deck_document, dump_document
+    from flexo_talk.studio import DeckKind
+
+    deck = Deck("d")
+    title = deck.title("T", author="Ada", date=datetime.date(2026, 10, 1))
+    assert "".join(run.text for run in title.byline_runs) == "Ada · 2026-10-01"
+    document = deck_document(deck)
+    document["slides"][0]["notes"] = datetime.date(2026, 10, 2)  # as yaml.safe_load gives one
+    written = json.loads(dump_document(document, format="json"))["slides"][0]
+    assert (written["date"], written["notes"]) == ("2026-10-01", "2026-10-02")
+    assert DeckKind().parse("title: yes\ndate: 2026-10-01\n") == {"title": "yes", "date": "2026-10-01"}
+
+
+def test_a_document_nested_past_any_deck_is_refused_in_words(tmp_path: Path) -> None:
+    deep: list = ["x"]
+    for _ in range(3000):
+        deep = ["x", deep]
+    with pytest.raises(DeckDocumentError, match="more than 100 levels deep"):
+        deck_from_document({"deck": {}, "slides": [{"body": [{"bullets": deep}]}]}, tmp_path)
+    path = tmp_path / "deep.yaml"
+    path.write_text("slides:\n- body:\n  - bullets: " + "[x, " * 3000 + "x" + "]" * 3000 + "\n")
+    with pytest.raises(DeckDocumentError, match="levels deep"):
+        load_document(path)
+    with pytest.raises(ValueError, match="nested more than 100 levels"):
+        Deck("d").slide("S").bullets(*deep[:2])

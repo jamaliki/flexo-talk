@@ -32,6 +32,7 @@ from flexo_talk.document import (
     dump_document,
     is_deck_document,
     load_document,
+    parse_document,
     save_document,
 )
 
@@ -127,9 +128,7 @@ class DeckKind:
         return changed
 
     def parse(self, text: str) -> Any:
-        import yaml
-
-        return yaml.safe_load(text)
+        return parse_document(text)
 
     def guide(self) -> str:
         import flexo_talk.document as module

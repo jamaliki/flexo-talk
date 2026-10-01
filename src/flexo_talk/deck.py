@@ -174,6 +174,9 @@ def data_colours(palette: Palette, dark: bool) -> list[str]:
     return colours
 
 
+MOST_LEVELS = 100
+"""More levels than a list on any slide nests."""
+
 _STYLE_NUMBERS: dict[str, tuple[float, float]] = {
     # PowerPoint's slides are 1 to 56 inches each way.
     "width": (72.0, 4032.0), "height": (72.0, 4032.0), "margin": (0.0, 2016.0),
@@ -627,6 +630,9 @@ class Region:
         def add(entries: Iterable[str | Sequence[str]], level: int) -> None:
             for entry in entries:
                 if isinstance(entry, list | tuple):
+                    if level + 1 >= MOST_LEVELS:
+                        # A slide shows a few levels; this many would outrun Python's own.
+                        raise ValueError(f"a list nested more than {MOST_LEVELS} levels deep")
                     add(entry, level + 1)
                 elif str(_words(entry, "a bullet")).strip():
                     # A number is an item too (a year); anything else is not words. An
@@ -1304,8 +1310,14 @@ class Deck:
         shade: float = 0.0,
     ) -> Slide:
         """The opening slide: the talk's title, a subtitle, who and when (and, if
-        given, a background colour or picture: see ``slide``)."""
+        given, a background colour or picture: see ``slide``). A ``date`` object is
+        written as a document writes one: 2026-10-01."""
 
+        import datetime
+
+        if isinstance(date, datetime.date):
+            date = date.isoformat()
+        author, date = _words(author, "author"), _words(date, "date")
         made = self.slide(title, layout="title", subtitle=subtitle, background=background, shade=shade)
         made.source.update(author=author, date=date)
         parts = [part for part in (author, date) if part]
@@ -1330,6 +1342,7 @@ class Deck:
         """A slide that says one thing, large, in the middle: a claim, a question, a
         quotation (``by`` says whose). ``[words]{accent}`` paints the words that matter."""
 
+        by = _words(by, "by")
         made = self.slide(words, layout="statement", background=background, shade=shade)
         made.source.update(by=by)
         made.byline_runs = inline(f"\u2014 {by}") if by else ()

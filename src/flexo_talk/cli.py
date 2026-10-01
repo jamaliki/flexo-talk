@@ -114,8 +114,6 @@ def _convert(arguments: argparse.Namespace) -> int:
     """Write a Python deck as a document. Its plots are saved as SVG files beside
     it (named in the document as images), since a matplotlib figure has no document."""
 
-    import os
-
     from flexo_talk.deck import made
     from flexo_talk.document import deck_document, save_document
 
@@ -143,43 +141,53 @@ def _convert(arguments: argparse.Namespace) -> int:
         path.write_text(svg, encoding="utf-8")
         saved.append(path)
         print(f"{where}: a matplotlib plot, saved as {path.name} and placed as an image")
-        return {"image": path.name}
+        return {"image": str(path)}  # named beside the document, as every file is, below
 
     document = deck_document(deck, plots=plot)
-    here = Path.cwd()
-    for slide in document["slides"]:
-        _relocate(slide, here, target.parent, os)
+    _relocate(document, Path.cwd(), target.parent)
     print(save_document(document, target))
     return 0
 
 
-_FILE_KEYS = ("image", "background", "picture")
+_FILE_KEYS = ("image", "background", "picture", "theme", "palette")
 
 
-def _relocate(data: object, origin: Path, destination: Path, os) -> None:
-    """Rewrite file names written relative to where the deck ran so they are found
-    beside the document."""
+def _relocate(data: object, origin: Path, destination: Path) -> None:
+    """Rewrite the files a document names -- relative to where the deck ran, or whole
+    paths -- relative to the document, so they are found beside it wherever it goes."""
 
     if isinstance(data, list):
         for item in data:
-            _relocate(item, origin, destination, os)
+            _relocate(item, origin, destination)
         return
     if not isinstance(data, dict):
         return
     for key, value in list(data.items()):
         if key in _FILE_KEYS and isinstance(value, str) and not value.startswith("#"):
-            path = Path(value) if Path(value).is_absolute() else origin / value
-            if path.exists():
-                data[key] = os.path.relpath(path, destination)
+            # A theme or palette is a file only when it is named as one; else it is a name.
+            if key not in {"theme", "palette"} or value.lower().endswith((".yaml", ".yml", ".json")):
+                data[key] = _beside(value, origin, destination)
         elif key == "gallery" and isinstance(value, list):
-            data[key] = [
-                os.path.relpath(origin / item, destination)
-                if isinstance(item, str) and (origin / item).exists() else item
-                for item in value
-            ]
-            _relocate(data[key], origin, destination, os)
-        elif isinstance(value, dict | list) and key != "figure":
-            _relocate(value, origin, destination, os)
+            data[key] = [_beside(item, origin, destination) if isinstance(item, str) else item for item in value]
+            _relocate(data[key], origin, destination)
+        elif key == "figure" and isinstance(value, dict):
+            # A figure written in the deck names the pictures its parts draw as their sources.
+            for node in value.get("nodes") or []:
+                properties = node.get("properties") if isinstance(node, dict) else None
+                if isinstance(properties, dict) and isinstance(properties.get("source"), str):
+                    properties["source"] = _beside(properties["source"], origin, destination)
+        elif isinstance(value, dict | list):
+            _relocate(value, origin, destination)
+
+
+def _beside(name: str, origin: Path, destination: Path) -> str:
+    path = Path(name) if Path(name).is_absolute() else origin / name
+    if not path.exists():
+        return name
+    try:
+        return os.path.relpath(path, destination)
+    except ValueError:  # on another drive: only the whole path reaches it
+        return str(path)
 
 
 if __name__ == "__main__":
