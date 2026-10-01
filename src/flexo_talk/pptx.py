@@ -874,11 +874,6 @@ def _runs_xml(runs, typography, stack, size: float, palette, ink: str, *, native
     return "".join(pieces)
 
 
-_NAMED_COLOURS = {
-    "red": "FF0000", "green": "008000", "blue": "0000FF", "black": "000000", "white": "FFFFFF",
-    "gray": "808080", "grey": "808080", "orange": "FFA500", "purple": "800080", "cyan": "00FFFF",
-    "magenta": "FF00FF", "yellow": "FFFF00", "brown": "A52A2A", "teal": "008080",
-}
 
 
 def _resolver(palette):
@@ -888,8 +883,7 @@ def _resolver(palette):
     from flexo.render_common import run_colour
 
     def resolve(colour: str) -> str | None:
-        if colour.lower() in _NAMED_COLOURS:
-            return _NAMED_COLOURS[colour.lower()]
+        # A palette role, or a colour LaTeX names (as the drawing has it).
         found = run_colour(TextRun("", color=colour), palette)
         return _colour(found) if found else None
 

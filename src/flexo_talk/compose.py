@@ -1393,7 +1393,7 @@ def _equation(canvas: _Canvas, identifier: str, block: _Math, box: Box, *, draw:
     """An equation on its own line, in display style: at the words' size, or as much
     smaller as it takes to fit its place."""
 
-    from flexo.render_common import paint_attributes, run_colour, run_role
+    from flexo.render_common import formula_paint, paint_attributes
     from flexo.texmath import draw as draw_formula
     from flexo.texmath import typeset
 
@@ -1409,12 +1409,8 @@ def _equation(canvas: _Canvas, identifier: str, block: _Math, box: Box, *, draw:
              "end": box.x + box.width - formula.width}.get(block.align, box.x)
         role, fill = _paint_of(block.colour, "ink")
 
-        def paint(colour: str) -> tuple[str | None, str | None]:
-            run = TextRun("", color=colour)
-            return run_colour(run, canvas.palette) or colour, run_role(run)
-
         draw_formula(
-            canvas.layer, formula, x, box.y + formula.height, colour=paint,
+            canvas.layer, formula, x, box.y + formula.height, colour=formula_paint(canvas.palette),
             attributes={"id": identifier, "data__flexo__talk": "math", "data__flexo__size": number(size),
                         "data__flexo__align": block.align,
                         **paint_attributes(palette=canvas.palette, fill_role=role, fill=fill)},
