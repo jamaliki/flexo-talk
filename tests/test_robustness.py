@@ -734,3 +734,32 @@ def test_a_table_that_fits_breaks_none_of_its_words() -> None:
     slide.right.table([["Source", "Where"], ["Code", "GitHub"]])
     (rendered,) = deck.render()
     assert "Source" in re.findall(r">([^<>]+)</tspan>", rendered.svg)  # not Sourc, then e
+
+
+@pytest.mark.parametrize(("theme", "background"), [("dark", None), ("paper", None), ("dark", "#f4f1ea")])
+def test_words_on_a_plots_cells_read_on_them_and_coloured_words_keep_their_colour(
+    theme: str, background: str | None
+) -> None:
+    import re
+
+    import matplotlib.pyplot as plt
+    from flexo.colour import contrast
+
+    deck = Deck("cells", theme=theme)
+    with deck.plotting():
+        figure, (image, mesh) = plt.subplots(1, 2)
+        image.imshow([[0.0, 1.0]], cmap="Blues")  # a pale cell, then a deep one
+        mesh.pcolormesh([[0.0, 1.0]], cmap="Blues")
+        for axes, at in ((image, 0.0), (mesh, 0.5)):
+            axes.text(at, at, "pale", ha="center")
+            axes.text(at + 1, at, "deep", ha="center")
+            axes.text(at + 1, at, "mine", color="#ff0000")
+    deck.slide("Cells", background=background).plot(figure)
+    (slide,) = deck.render()
+
+    def fills(words: str) -> list[str]:
+        return re.findall(rf"fill: (#[0-9a-f]{{6}})[^>]*>{words}<", slide.svg)
+
+    assert len(fills("pale")) == 2 and all(contrast(fill, "#f7fbff") >= 4.5 for fill in fills("pale"))
+    assert len(fills("deep")) == 2 and all(contrast(fill, "#08306b") >= 4.5 for fill in fills("deep"))
+    assert fills("mine") == ["#ff0000", "#ff0000"]
