@@ -455,10 +455,18 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
         left = width - left - width * 0.72
     box = Box(margin * 2, 0.0, width - 4 * margin, 0.0) if opening == "centred" else Box(left, 0.0, width * 0.72, 0.0)
     align = "middle" if opening == "centred" else "start"
-    title = canvas.measure(slide.title_runs, size, box.width, bold, title=True)
-    subtitle = canvas.measure(slide.subtitle_runs, subtitle_size, box.width) if slide.subtitle_runs else None
-    byline = canvas.measure(slide.byline_runs, style.subtitle_size, box.width) if slide.byline_runs else None
-    block = title.height + (subtitle.height + 14.0 if subtitle else 0.0)
+    for scale in _SHRINK:
+        title = canvas.measure(slide.title_runs, size * scale, box.width, bold, title=True)
+        subtitle = (canvas.measure(slide.subtitle_runs, subtitle_size * scale, box.width)
+                    if slide.subtitle_runs else None)
+        byline = (canvas.measure(slide.byline_runs, style.subtitle_size * scale, box.width)
+                  if slide.byline_runs else None)
+        block = title.height + (subtitle.height + 14.0 if subtitle else 0.0)
+        needed = block + (byline.height + 34.0 if byline else 0.0) + (margin * 1.6 if opening == "band" else 0.0)
+        if needed <= height - 2 * margin:
+            break
+    _said_shrunk(canvas, slide, scale)
+    size, subtitle_size = size * scale, subtitle_size * scale
     role, subtitle_role = style.title_role, "muted-ink"
     if opening == "band":
         # Title and subtitle on a band of the accent, the byline under it.
@@ -491,7 +499,7 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
         _paint_rect(canvas, f"{slide.id}.rule", rule, "tone-1-stroke")
     if byline is not None:
         canvas.words(
-            f"{slide.id}.byline", slide.byline_runs, replace(box, y=after), size=style.subtitle_size,
+            f"{slide.id}.byline", slide.byline_runs, replace(box, y=after), size=style.subtitle_size * scale,
             align=align, role="muted-ink",
         )
         after += byline.height + 20.0
@@ -509,9 +517,16 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
     left = width / 2.0 - 30.0 if align == "middle" else (box.x + box.width - 60.0 if rtl else box.x)
     figure_align = "end" if rtl else align
     bold = deck.title_weight
-    size = style.title_size * 1.25
-    title = canvas.measure(slide.title_runs, size, box.width, bold, title=True)
-    subtitle = canvas.measure(slide.subtitle_runs, style.subtitle_size, box.width) if slide.subtitle_runs else None
+    for scale in _SHRINK:
+        size = style.title_size * 1.25 * scale
+        title = canvas.measure(slide.title_runs, size, box.width, bold, title=True)
+        subtitle = (canvas.measure(slide.subtitle_runs, style.subtitle_size, box.width)
+                    if slide.subtitle_runs else None)
+        # Set about the middle of the slide, with the number or rule above it.
+        needed = 2 * title.height + (subtitle.height + 10.0 if subtitle else 0.0) + style.title_size * 2.6
+        if needed <= height - 2 * margin:
+            break
+    _said_shrunk(canvas, slide, scale)
     number = (TextRun(f"{_section_number(slide):02d}"),)
     sections = style.sections
     if sections == "number":
@@ -537,7 +552,7 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
         _paint_rect(canvas, f"{slide.id}.rule", Box(left, top + figure.height + 6.0, 60.0, 3.0), "ink")
         top += figure.height + 16.0
     else:
-        top = height / 2.0 - title.height
+        top = max(height / 2.0 - title.height, margin + 22.0)
         _paint_rect(canvas, f"{slide.id}.rule", Box(left, top - 18.0, 60.0, 4.0), "tone-1-stroke")
     used = canvas.words(
         f"{slide.id}.title", slide.title_runs, replace(box, y=top), size=size, weight=bold,
@@ -550,15 +565,30 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
         )
 
 
+_SHRINK = (1.0, 0.9, 0.8, 0.7, 0.6, 0.5)
+"""The sizes a title, section or statement slide tries, of its own, to fit its words."""
+
+
+def _said_shrunk(canvas: _Canvas, slide: Slide, scale: float) -> None:
+    if scale < 1.0:
+        canvas.diagnostics.append(f"{slide.id}: words set at {round(scale * 100)}% to fit")
+    if scale == _SHRINK[-1]:
+        canvas.diagnostics.append(f"{slide.id}: the words do not fit even at half their size -- shorten them")
+
+
 def _statement_slide(canvas: _Canvas, slide: Slide) -> None:
     """One sentence, large, in the middle of the slide; who said it under it."""
 
     deck, style = canvas.deck, canvas.deck.style
     width, height = style.width, style.height
     box = Box(width * 0.14, 0.0, width * 0.72, 0.0)
-    size = style.title_size * 1.3
-    words = canvas.measure(slide.title_runs, size, box.width, deck.title_weight, title=True)
-    byline = canvas.measure(slide.byline_runs, style.subtitle_size, box.width) if slide.byline_runs else None
+    for scale in _SHRINK:
+        size = style.title_size * 1.3 * scale
+        words = canvas.measure(slide.title_runs, size, box.width, deck.title_weight, title=True)
+        byline = canvas.measure(slide.byline_runs, style.subtitle_size, box.width) if slide.byline_runs else None
+        if words.height + (byline.height + 24.0 if byline else 0.0) <= height - 2 * style.margin:
+            break
+    _said_shrunk(canvas, slide, scale)
     top = (height - words.height - (byline.height + 24.0 if byline else 0.0)) / 2.0
     top += canvas.words(
         f"{slide.id}.title", slide.title_runs, replace(box, y=top), size=size, align="middle",

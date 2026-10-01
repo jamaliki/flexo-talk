@@ -379,3 +379,17 @@ def test_right_to_left_slides_set_their_furniture_from_the_right() -> None:
     assert x_of(agenda.svg, "slide2.agenda0.number") > middle
     assert x_of(stats.svg, "slide4.body.0.0") > middle  # the figure over its label, at the right
     assert listing.svg.count('text-anchor="end"') >= 3  # every item, the English-led one too
+
+
+def test_title_section_and_statement_slides_fit_their_words_or_say_so() -> None:
+    import re
+
+    long = "A very long sentence that goes on and on " * 8
+    deck = Deck("o")
+    deck.title(long, subtitle=long[:200], author="Me")
+    deck.section(long)
+    deck.statement(long, by="Someone")
+    for slide in deck.render():
+        ys = [float(y) for y in re.findall(r'<text [^>]*\by="([\d.-]+)"', slide.svg)]
+        assert 0 < min(ys) and max(ys) < deck.style.height, slide.slide.layout
+        assert any("to fit" in line for line in slide.diagnostics)
