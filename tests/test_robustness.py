@@ -720,3 +720,14 @@ def test_a_link_is_told_from_the_words_in_every_theme(theme: str) -> None:
     (listed,) = rendered.lists
     link = next(run for _, runs, _ in listed.items for run in runs if run.link)
     assert _ink_of(link, palette, ink).lower() != ink.lower()  # the PowerPoint's list too
+
+
+def test_a_table_that_fits_breaks_none_of_its_words() -> None:
+    import re
+
+    deck = Deck("t", look="band")
+    slide = deck.slide("Links", layout="two-columns")
+    slide.left.bullets("A bullet")
+    slide.right.table([["Source", "Where"], ["Code", "GitHub"]])
+    (rendered,) = deck.render()
+    assert "Source" in re.findall(r">([^<>]+)</tspan>", rendered.svg)  # not Sourc, then e
