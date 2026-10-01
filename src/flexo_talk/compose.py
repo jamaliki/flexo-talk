@@ -279,7 +279,9 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
     style = deck.style
     width, height, margin = style.width, style.height, style.margin
     if style.edge and slide.layout != "title":
-        _paint_rect(canvas, f"{slide.id}.edge", Box(0.0, 0.0, 6.0, height), "tone-1-stroke")
+        # Down the edge the slide's words start from: the right, for a right-to-left title.
+        x = width - 6.0 if slide.title_runs and _rtl(slide.title_runs) else 0.0
+        _paint_rect(canvas, f"{slide.id}.edge", Box(x, 0.0, 6.0, height), "tone-1-stroke")
     bottom = height - margin - (style.small_size if style.numbers or deck.footer else 0.0)
     if slide.footnotes:
         # Footnotes sit at the foot of the body, above the footer; the body ends above them.
@@ -447,6 +449,10 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
     opening = style.opening
     size, subtitle_size = style.title_size * 1.4, style.subtitle_size * 1.15
     left = margin * 1.5 + (18.0 if opening == "left" else 0.0)
+    # A right-to-left title stands flush right, its accent bar to its right.
+    rtl = opening != "centred" and _rtl(slide.title_runs)
+    if rtl:
+        left = width - left - width * 0.72
     box = Box(margin * 2, 0.0, width - 4 * margin, 0.0) if opening == "centred" else Box(left, 0.0, width * 0.72, 0.0)
     align = "middle" if opening == "centred" else "start"
     title = canvas.measure(slide.title_runs, size, box.width, bold, title=True)
@@ -467,7 +473,8 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
         top = (height - total) / 2.0 - (height * 0.04 if opening == "left" else 0.0)
         after = top + block + 34.0
         if opening == "left":
-            _paint_rect(canvas, f"{slide.id}.bar", Box(margin * 1.5, top + 4.0, 5.0, block - 4.0), "tone-1-stroke")
+            bar = width - margin * 1.5 - 5.0 if rtl else margin * 1.5
+            _paint_rect(canvas, f"{slide.id}.bar", Box(bar, top + 4.0, 5.0, block - 4.0), "tone-1-stroke")
     first = top
     with _on_field(canvas) if opening == "band" else contextlib.nullcontext():
         top += canvas.words(
@@ -497,7 +504,10 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
     box = Box(margin * 1.5, 0.0, width - 3 * margin, 0.0)
     # Sections sit flush left, or centred with the titles of a deck that centres them.
     align = "middle" if style.title_align == "middle" else "start"
-    left = width / 2.0 - 30.0 if align == "middle" else box.x
+    # A right-to-left title stands at the right: its rule and its number with it.
+    rtl = align == "start" and _rtl(slide.title_runs)
+    left = width / 2.0 - 30.0 if align == "middle" else (box.x + box.width - 60.0 if rtl else box.x)
+    figure_align = "end" if rtl else align
     bold = deck.title_weight
     size = style.title_size * 1.25
     title = canvas.measure(slide.title_runs, size, box.width, bold, title=True)
@@ -512,7 +522,7 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
         top = (height - total) / 2.0
         canvas.words(
             f"{slide.id}.number", number, replace(box, y=top), size=big, role="tone-1-stroke", title=True,
-            align=align,
+            align=figure_align,
         )
         top += figure.height + 6.0
     elif sections == "fill":
@@ -522,7 +532,7 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
         top = (height - total) / 2.0
         canvas.words(
             f"{slide.id}.number", number, replace(box, y=top), size=small, weight=700, role="muted-ink",
-            align=align,
+            align=figure_align,
         )
         _paint_rect(canvas, f"{slide.id}.rule", Box(left, top + figure.height + 6.0, 60.0, 3.0), "ink")
         top += figure.height + 16.0
@@ -562,7 +572,8 @@ def _statement_slide(canvas: _Canvas, slide: Slide) -> None:
 
 
 def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
-    """The deck's sections, numbered, one to a row with hairlines between them."""
+    """The deck's sections, numbered, one to a row with hairlines between them: in two
+    columns when one would run past the slide even set smaller."""
 
     style = canvas.deck.style
     sections = [other for other in slide.deck.slides if other.layout == "section"]
@@ -570,39 +581,61 @@ def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
         canvas.diagnostics.append(f"{slide.id}: the agenda lists section slides, and the deck has none")
         return
     size = style.body_size * 1.1
-    for scale in (1.0, 0.9, 0.8, 0.7):
-        rows, total = _agenda_rows(canvas, sections, size * scale, body.width)
+    gap = style.column_gap
+    for columns in (1, 2):
+        width = (body.width - gap * (columns - 1)) / columns
+        per = -(-len(sections) // columns)
+        for scale in (1.0, 0.9, 0.8, 0.7):
+            parts = [_agenda_rows(canvas, sections[at : at + per], size * scale, width)
+                     for at in range(0, len(sections), per)]
+            total = max(part_total for _, part_total in parts)
+            if total <= body.height:
+                break
         if total <= body.height:
             break
+    else:
+        canvas.diagnostics.append(
+            f"{slide.id}: the agenda's {len(sections)} sections do not fit even in two columns -- "
+            "fewer sections, or shorter titles"
+        )
     size *= scale
-    top = body.y
+    first = body.y
     if (slide.align or style.align) == "middle":
-        top += max(body.height - total, 0.0) / 2.0
-    numbers = rows[0][0]
-    for index, (_, height, other) in enumerate(rows):
-        identifier = f"{slide.id}.agenda{index}"
-        number = (TextRun(f"{index + 1:02d}"),)
-        canvas.words(
-            f"{identifier}.number", number, Box(body.x, top, numbers, 0.0), size=size,
-            weight=canvas.deck.title_weight, role="tone-1-stroke", title=True,
-        )
-        used = canvas.words(
-            identifier, other.title_runs, Box(body.x + numbers, top, body.width - numbers, 0.0), size=size,
-            weight=canvas.deck.title_weight, title=True,
-        )
-        if other.subtitle_runs:
+        first += max(body.height - total, 0.0) / 2.0
+    index = 0
+    for column, (rows, _) in enumerate(parts):
+        left = body.x + column * (width + gap)
+        top = first
+        for position, (numbers, height, other) in enumerate(rows):
+            identifier = f"{slide.id}.agenda{index}"
+            number = (TextRun(f"{index + 1:02d}"),)
+            # A right-to-left section's number stands at the right of its row.
+            rtl = _rtl(other.title_runs)
+            at = left + width - numbers if rtl else left
+            words_at = left if rtl else left + numbers
             canvas.words(
-                f"{identifier}.subtitle", other.subtitle_runs,
-                Box(body.x + numbers, top + used + 2.0, body.width - numbers, 0.0),
-                size=size * 0.72, role="muted-ink",
+                f"{identifier}.number", number, Box(at, top, numbers, 0.0), size=size,
+                weight=canvas.deck.title_weight, role="tone-1-stroke", title=True,
+                align="end" if rtl else "start",
             )
-        top += height
-        if index < len(rows) - 1:
-            _paint_rect(
-                canvas, f"{identifier}.rule", Box(body.x, top + size * 0.45, body.width, 0.75), "muted-ink",
-                opacity=0.35,
+            used = canvas.words(
+                identifier, other.title_runs, Box(words_at, top, width - numbers, 0.0), size=size,
+                weight=canvas.deck.title_weight, title=True,
             )
-            top += size * 0.9 + 0.75
+            if other.subtitle_runs:
+                canvas.words(
+                    f"{identifier}.subtitle", other.subtitle_runs,
+                    Box(words_at, top + used + 2.0, width - numbers, 0.0),
+                    size=size * 0.72, role="muted-ink",
+                )
+            top += height
+            index += 1
+            if position < len(rows) - 1:
+                _paint_rect(
+                    canvas, f"{identifier}.rule", Box(left, top + size * 0.45, width, 0.75), "muted-ink",
+                    opacity=0.35,
+                )
+                top += size * 0.9 + 0.75
 
 
 def _agenda_rows(canvas: _Canvas, sections: list[Slide], size: float, width: float):
@@ -1211,13 +1244,16 @@ def _stats(canvas: _Canvas, identifier: str, block: _Stats, box: Box, *, draw: b
     role, fill = _paint_of(block.colour, "tone-1-stroke")
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="stats")
     rtl = any(_rtl(label) for _, label in block.items)
+    # A figure has no direction of its own (۹۳٪): over a right-to-left label it stands
+    # at the right, as the label does.
+    value_align = "end" if rtl and align == "start" else align
     for index, (value, label) in enumerate(block.items):
         # Right-to-left labels read their figures from the right.
         slot = count - 1 - index if rtl else index
         x = box.x + slot * (cell + gap)
         canvas.words(
             f"{identifier}.{index}", value, Box(x, box.y, cell, 0.0), size=size, weight=weight, role=role,
-            fill=fill, title=True, align=align, parent=group,
+            fill=fill, title=True, align=value_align, parent=group,
         )
         canvas.words(
             f"{identifier}.{index}.label", label, Box(x, box.y + tall + size * 0.06, cell, 0.0),
@@ -1641,7 +1677,13 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     top = box.y
     number = 0
     step = 0
+    # A list reads one way, as most of its items do: an item that starts otherwise (an
+    # English name leading a Persian line) takes the list's direction, by an invisible mark.
+    leaning = sum(1 if _rtl(runs) else -1 for _, runs in block.items if any(run.text.strip() for run in runs))
+    mark = "\u200f" if leaning > 0 else "\u200e"
     for index, (level, runs) in enumerate(block.items):
+        if leaning and _rtl(runs) != (leaning > 0) and any(run.text.strip() for run in runs):
+            runs = (TextRun(mark), *runs)
         if level == 0:
             step += 1
         # A revealed item (with the items under it) is its own group, tagged with its step.

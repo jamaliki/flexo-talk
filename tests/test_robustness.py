@@ -356,3 +356,26 @@ def test_a_right_to_left_quote_is_written_to_powerpoint_as_it_reads(tmp_path: Pa
     date = "\u06f1\u06f5 مهر \u06f1\u06f4\u06f0\u06f5"
     title = deck.title("T", author="بیمارستان شریعتی", date=date)
     assert "\u2013" in "".join(run.text for run in title.byline_runs)  # a dot would read as a zero
+
+
+def test_right_to_left_slides_set_their_furniture_from_the_right() -> None:
+    import re
+
+    deck = Deck("fa", look="editorial")
+    deck.title("عنوان ارائه", subtitle="زیرعنوان")
+    deck.agenda("فهرست")
+    deck.section("بخش اول")
+    deck.slide("آمار").stats(("۹۳٪", "دقت"))
+    deck.slide("فهرست").bullets("مورد اول", "GPT-4 در این مورد", "مورد سوم")
+    title, agenda, _section, stats, listing = deck.render()
+    middle = deck.style.width / 2
+
+    def x_of(svg: str, element: str) -> float:
+        found = re.search(rf'id="{re.escape(element)}"[^>]*\bx="([\d.]+)"', svg)
+        assert found, element
+        return float(found.group(1))
+
+    assert x_of(title.svg, "slide1.bar") > middle
+    assert x_of(agenda.svg, "slide2.agenda0.number") > middle
+    assert x_of(stats.svg, "slide4.body.0.0") > middle  # the figure over its label, at the right
+    assert listing.svg.count('text-anchor="end"') >= 3  # every item, the English-led one too
