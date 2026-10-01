@@ -581,6 +581,32 @@ def test_a_mechanism_block_is_read_and_its_mistakes_said_at_their_place(tmp_path
     deck = deck_from_document(document, tmp_path)
     (rendered,) = deck.render()
     assert "backside attack" in rendered.svg
+    # Half drawn, the step cannot be: it is drawn as far as it goes, and why is said.
     document["slides"][0]["body"][0]["mechanism"][0]["arrows"] = ["1 -> 2"]
-    with pytest.raises(DeckDocumentError, match=r"slides\[0\]\.body\[0\] \(mechanism\).*10 electrons"):
+    (rendered,) = deck_from_document(document, tmp_path).render()
+    assert "backside attack" in rendered.svg
+    assert any("C2 would have 10 electrons" in said for said in rendered.diagnostics)
+    document["slides"][0]["body"][0]["mechanism"][0]["smiles"] = "[OH-:1].[CH3:2][Br:3"
+    with pytest.raises(DeckDocumentError, match=r"slides\[0\]\.body\[0\] \(mechanism\).*\[ is never closed"):
         deck_from_document(document, tmp_path)
+
+
+def test_the_studio_draws_a_mechanisms_arrows_from_two_clicks(tmp_path: Path) -> None:
+    kind = DeckKind()
+    document = {"deck": {"id": "c"}, "slides": [{"title": "SN2", "body": [
+        {"mechanism": [{"smiles": "[OH-:1].[CH3:2][Br:3]"}]}]}]}
+    at = {"slide": 0, "region": "body", "index": 0}
+    seen = kind.act(document, {"do": "mechanism", "at": at, "step": 0, "holding": []}, tmp_path)
+    assert seen["document"] is document and seen["sheet"]["arrows"] == [] and seen["sheet"]["svg"]
+    # The hydroxide's lone pair to the carbon: drawn, and the five-bonded carbon said, not refused.
+    made = kind.act(document, {"do": "mechanism", "at": at, "step": 0, "holding": [],
+                               "add": {"tail": {"atom": 0}, "head": {"atom": 1}}}, tmp_path)
+    assert made["arrow"] == "1 -> 2"
+    assert made["document"]["slides"][0]["body"][0]["mechanism"] == [
+        {"smiles": "[OH-:1].[CH3:2][Br:3]", "arrows": ["1 -> 2"]}]
+    assert "10 electrons" in made["sheet"]["problem"]["message"]
+    asked = kind.act(made["document"], {"do": "mechanism", "at": at, "step": 0,
+                                        "add": {"tail": {"bond": [1, 2]}, "head": {"atom": 0}}}, tmp_path)
+    assert [end["name"] for end in asked["ends"]] == ["C2", "Br3"]
+    gone = kind.act(made["document"], {"do": "mechanism", "at": at, "step": 0, "remove": 0}, tmp_path)
+    assert gone["document"]["slides"][0]["body"][0]["mechanism"] == [{"smiles": "[OH-:1].[CH3:2][Br:3]"}]

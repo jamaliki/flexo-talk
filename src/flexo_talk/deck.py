@@ -333,6 +333,8 @@ class _Figure:
     figure: flexo.Figure | FigureSpec
     turn: bool = True
     """Whether flexo may lay the figure out turned when that fits its place better."""
+    said: tuple[str, ...] = ()
+    """What is wrong with it that it is drawn despite: said when the slide is drawn."""
 
 
 @dataclass(slots=True)
@@ -729,9 +731,10 @@ class Region:
         Atoms are named by their atom maps (``[O-:5]``). An arrow from a lone pair is
         ``"5 -> 2"``, from a bond ``"2=3 -> 3"``, a bond moved ``"1=2 -> 2-6"``, a
         fishhook ``"~>"``. A step with no SMILES is drawn from the arrows before it;
-        one written out is checked against them -- and an arrow that cannot be (carbon
-        with ten electrons) is said here, in words. The curly arrows are magenta, or
-        ``arrow_colour`` (#rrggbb)."""
+        one written out is checked against them. A step that cannot be (carbon with ten
+        electrons) is drawn as far as it goes, its arrows on it, and what is wrong said
+        when the slide is drawn -- as it is between one arrow and the next while a step
+        is written. The curly arrows are magenta, or ``arrow_colour`` (#rrggbb)."""
 
         lone_pairs = _choice(lone_pairs, "lone_pairs", ("used", "all", "none"))
         if arrow_colour is not None and not (
@@ -752,17 +755,19 @@ class Region:
         figure = flexo.Figure(identifier, **deck.figure_options())
         node = figure.root.mechanism(
             "mechanism", written, lone_pairs=lone_pairs, charges=charges, per_row=per_row,
-            arrow_colour=arrow_colour,
+            arrow_colour=arrow_colour, partial=True,
         )
         from flexo.diagnostics import FlexoError
-        from flexo.mechanism import mechanism_panels
+        from flexo.mechanism import mechanism_states
 
         try:
-            mechanism_panels(next(item for item in figure.spec.nodes if item.id == node.id))
+            _, problem = mechanism_states(next(item for item in figure.spec.nodes if item.id == node.id))
         except FlexoError as error:
+            # Nothing to draw: the first structure itself, or the steps, are not written right.
             said = error.diagnostics[0]
             raise ValueError(f"{said.message}{' ' + said.hint if said.hint else ''}") from None
-        self.blocks.append(_Figure(figure, False))
+        wrong = () if problem is None else (f"{problem.message}{' ' + problem.hint if problem.hint else ''}",)
+        self.blocks.append(_Figure(figure, False, wrong))
         self._record(
             "mechanism", steps if isinstance(steps, str) else [dict(step) if isinstance(step, dict) else step
                                                                for step in written],

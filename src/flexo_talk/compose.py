@@ -1894,6 +1894,8 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         _store_fit(key, laid)
     for code in laid["codes"]:
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {code}")
+    for text in block.said:
+        canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {text}")
     if laid["layout"] != "as written":
         canvas.notes.append(f"{canvas.slide.id} {spec.id}: laid out {laid['layout']} to fit the slide")
     left, top, width, height = laid["ink"]
