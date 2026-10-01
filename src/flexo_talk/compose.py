@@ -2274,6 +2274,7 @@ def plot_svg(
         if "$" in words and not hasattr(text, "_flexo_problems"):
             text.set_text(_matplotlib_maths(words))
     clear_backgrounds(figure)
+    _seamless(figure)
     marks = _rasterised(figure, inks.swaps if inks is not None else {})
     if marks and said is not None:
         said.append(("", f"the plot's {marks:,} marks are drawn as a picture, not as shapes -- "
@@ -2323,6 +2324,22 @@ so many shapes make a slide slow to draw and to open, and are too small to edit 
 RASTER_DPI = 200.0
 """The resolution of a plot's pictures (its images, and its artists of very many marks):
 sharp on a slide shown full screen."""
+
+
+def _seamless(figure: Any) -> None:
+    """Each cell of a mesh (``pcolormesh``, ``pcolor``, ``contourf``) edged in its own colour,
+    half a point wide: two cells side by side, each smoothed at its edge, otherwise let a
+    hairline of the slide through between them in the PNG. A mesh given edges of its own,
+    or seen through, is left as it is."""
+
+    from matplotlib.contour import ContourSet
+
+    for axes in figure.get_axes():
+        for artist in axes.collections:
+            mesh = hasattr(artist, "get_coordinates") or (isinstance(artist, ContourSet) and artist.filled)
+            if mesh and len(artist.get_edgecolor()) == 0 and artist.get_alpha() in (None, 1.0):
+                artist.set_edgecolor("face")
+                artist.set_linewidth(0.5)
 
 
 def _rasterised(figure: Any, swaps: dict[str, str]) -> int:
