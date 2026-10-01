@@ -2251,7 +2251,8 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
     art = load_artwork(identifier, block.source)
     natural_w = art.width or box.width
     natural_h = art.height or box.height
-    scale = min((block.width or box.width) / natural_w, box.height / natural_h)
+    # A width asked for is the most it takes: never wider than its place.
+    scale = min(min(block.width or box.width, box.width) / natural_w, box.height / natural_h)
     width, height = natural_w * scale, natural_h * scale
     if art.format == "svg" and _drawable(art.markup):
         # Vectors the drawing reader draws exactly: placed as shapes and text.

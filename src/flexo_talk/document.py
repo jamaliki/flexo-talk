@@ -339,6 +339,10 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
         palette = data.get("palette", "default")
         if isinstance(palette, str) and palette.lower().endswith((".yaml", ".yml", ".json")):
             palette = str(_file(base, palette))
+        background = data.get("background", True)
+        if isinstance(background, str) and background and not background.startswith("#"):
+            # A picture behind every slide is found beside the document, as a slide's is.
+            background = str(_file(base, background, "deck.background"))
         deck = Deck(
             str(data.get("id") if data.get("id") is not None else "talk"),
             theme=theme,
@@ -348,7 +352,7 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
             figure_font=data.get("figure_font"),
             conventions=data.get("conventions"),
             sketch=data.get("sketch"),
-            background=data.get("background", True),
+            background=background,
             footer=str(data.get("footer") if data.get("footer") is not None else ""),
             look=look,
         )
