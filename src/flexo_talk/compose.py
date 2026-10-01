@@ -59,6 +59,7 @@ from flexo_talk.deck import (
     accent_field,
     inline,
     made,
+    paint_role,
 )
 
 
@@ -1334,7 +1335,7 @@ def _callout(canvas: _Canvas, identifier: str, block: _Callout, box: Box, *, dra
     height = 2 * pad + heading + canvas.measure(block.runs, size, inner.width, balance=False).height
     if not draw:
         return height
-    role = f"tone-{block.colour[6:] or 1}-stroke"
+    role = paint_role(block.colour)
     paint = canvas.palette.get(role)
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="callout")
     element(
@@ -1360,9 +1361,7 @@ def _paint_of(colour: str | None, default: str) -> tuple[str, str | None]:
         return default, None
     if colour.startswith("#"):
         return default, colour
-    if colour.startswith("accent"):
-        return f"tone-{colour[6:] or 1}-stroke", None
-    return {"muted": "muted-ink"}.get(colour, colour), None
+    return paint_role(colour), None
 
 
 def _gallery_plan(canvas: _Canvas, block: _Gallery, width: float) -> tuple[int, float, float, float]:
