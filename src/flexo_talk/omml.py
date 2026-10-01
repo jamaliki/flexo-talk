@@ -251,6 +251,10 @@ class _Writer:
             return (f"<m:limLow><m:e>{self.operator(base)}</m:e>"
                     f"<m:lim>{self.items(item.sub)}</m:lim></m:limLow>")
         body = self.atom(base) if base is not None else ""
+        if not body:
+            # Scripts before what follows (an isotope's ^{14}_{6}): an empty base would
+            # show as an empty slot.
+            body = self.run("\u200b", style="p", italic=False)
         if item.prime:
             # Primes are a superscript in PowerPoint's equations, as in TeX's.
             item = Scripts(base, [Sym(item.prime), *(item.sup or [])], item.sub)
