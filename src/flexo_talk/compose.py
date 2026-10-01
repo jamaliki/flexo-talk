@@ -2125,6 +2125,10 @@ class PlotInks(NamedTuple):
 
 
 def plot_inks(deck: Palette, slide: Palette) -> PlotInks:
+    """What a plot made in the ``deck``'s paints is told of the ``slide`` it is put on:
+    its dark ink is its ink or its page, whichever is dark (else a near black), and its
+    light ink likewise."""
+
     from flexo.colour import is_dark
 
     ink, page = slide.get("ink"), slide.get("canvas")
