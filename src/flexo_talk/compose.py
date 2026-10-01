@@ -1998,6 +1998,7 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
         svg = plot_svg(figure, width, height, family, identifier, maths=maths, said=said)
     for words, problem in said:
         canvas.say_maths(words, [problem])
+    block.drawn = svg
     _place_svg(canvas, identifier, _slide_inks(svg, canvas.deck.palette, canvas.palette), box.x, box.y, 1.0)
     return height
 
