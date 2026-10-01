@@ -300,6 +300,8 @@ class _Table:
     header: bool = True
     align: tuple[str, ...] = ()
     size: float | None = None
+    ragged: bool = False
+    """Whether its rows were written with different numbers of cells (the short filled)."""
 
 
 @dataclass(slots=True)
@@ -367,6 +369,21 @@ class Reference:
 
     def __repr__(self) -> str:
         return f"Reference({self.target!r})"
+
+
+def _check_theme(theme: object) -> None:
+    """A theme is a name flexo knows, or a theme file: said in words, before anything is drawn."""
+
+    from flexo.themes import theme_names
+
+    if isinstance(theme, Path) or (isinstance(theme, str) and theme.lower().endswith((".yaml", ".yml", ".json"))):
+        if not Path(theme).is_file():
+            raise ValueError(f"theme {str(theme)!r}: no such theme file")
+        return
+    if not isinstance(theme, str):
+        raise ValueError(f"theme is {theme!r}: it names a theme ({', '.join(theme_names())}) or a theme file")
+    if theme not in theme_names():
+        raise ValueError(f'unknown theme "{theme}"; themes are {", ".join(theme_names())}, or a theme file')
 
 
 def made(value: object) -> object:
@@ -522,8 +539,9 @@ class Region:
             for entry in entries:
                 if isinstance(entry, list | tuple):
                     add(entry, level + 1)
-                else:
-                    # A number is an item too (a year); anything else is not words.
+                elif str(_words(entry, "a bullet")).strip():
+                    # A number is an item too (a year); anything else is not words. An
+                    # empty item is left out, rather than drawn as a bare bullet.
                     flattened.append((level, inline(_words(entry, "a bullet"))))
 
         add(items, 0)
@@ -730,6 +748,7 @@ class Region:
         header, size = _flag(header, "header"), _size(size)
         cells = [[inline("" if cell is None else str(cell)) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
+        ragged = len({len(row) for row in cells}) > 1
         cells = [row + [()] * (columns - len(row)) for row in cells]
         names = {"l": "start", "c": "middle", "r": "end"}
         if isinstance(align, str) and align and all(ch in names for ch in align):
@@ -747,7 +766,7 @@ class Region:
                 else "start"
                 for index in range(columns)
             )
-        self.blocks.append(_Table(cells, header, aligned, size))
+        self.blocks.append(_Table(cells, header, aligned, size, ragged))
         given = align if isinstance(align, str) else list(align)
         self._record("table", _plain(rows), header=None if header else False, align=given or None, size=size)
         return self
@@ -834,8 +853,8 @@ class Slide:
         self.deck = deck
         self.index = index
         self.id = f"slide{index}"
-        self.title_runs = inline(title) if title else ()
-        self.subtitle_runs = inline(subtitle) if subtitle else ()
+        self.title_runs = inline(title) if title.strip() else ()
+        self.subtitle_runs = inline(subtitle) if subtitle.strip() else ()
         self.layout = layout
         self.split = split
         """The share of the width the left column takes, on a two-column slide."""
@@ -1064,6 +1083,7 @@ class Deck:
         """What the deck was made with, as a deck document writes it (see ``flexo_talk.document``)."""
         # A theme file is read now, by the Figure machinery that knows how, and
         # what it says about slides fills in what the deck leaves unsaid.
+        _check_theme(theme)
         probe = flexo.Figure("probe", theme=theme, palette=palette)
         slides = theme_slides(theme)
         own_look = look
