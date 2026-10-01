@@ -127,7 +127,10 @@ def _convert(arguments: argparse.Namespace) -> int:
     def plot(block, where: str) -> dict[str, object]:
         figure = made(block.figure)
         path = target.parent / f"{target.stem}-plot{len(saved) + 1}.svg"
-        figure.savefig(path, format="svg", transparent=True, metadata={"Date": None})
+        from flexo_talk.compose import clear_backgrounds
+
+        clear_backgrounds(figure)
+        figure.savefig(path, format="svg", metadata={"Date": None})
         saved.append(path)
         print(f"{where}: a matplotlib plot, saved as {path.name} and placed as an image")
         return {"image": path.name}
