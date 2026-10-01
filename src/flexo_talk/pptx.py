@@ -894,11 +894,12 @@ def _runs_xml(runs, typography, stack, size: float, palette, ink: str, *, native
 
     pieces = []
     for run in runs:
-        weight = 700 if bold and run.weight == 400 else drawn_weight(run, None)
+        # Bold words' maths stays regular (TextRun.maths), as flexo draws it.
+        weight = 700 if bold and run.weight == 400 and not run.maths else drawn_weight(run, None)
         if run.math:
             if native:
                 pieces.append(omml(run.math, size=size, colour=_colour(_ink_of(run, palette, ink)),
-                                   resolve=_resolver(palette)))
+                                   resolve=_resolver(palette), bold=weight >= 600))
             else:
                 pieces.append(_room_for(run, typography, stack.face(weight, False), size, weight))
             continue

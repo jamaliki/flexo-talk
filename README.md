@@ -187,7 +187,8 @@ slide.table([
 ```
 
 A table is ruled as in a paper -- a rule above, one under the header, one below,
-no grid -- with its header bold and each column as wide as its widest cell.
+no grid -- with its header bold (its maths regular, as LaTeX sets maths in bold
+words) and each column as wide as its widest cell.
 Columns of numbers are set flush right (`align="lrr"` or a list of
 `start`/`middle`/`end` to choose); `header=False` drops the header. In the
 PowerPoint it is a native table with the same columns, rows, and rules.
