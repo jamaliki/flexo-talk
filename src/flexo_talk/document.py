@@ -559,7 +559,7 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
 
 def _steps(value: object, where: str) -> str | list[str | dict[str, object]]:
     """A mechanism's steps as a document writes them: a SMILES, or a list of SMILES and
-    of steps ({smiles, arrows, label, reagents, conditions, arrow})."""
+    of steps ({smiles, arrows, label, reagents, conditions, arrow, place})."""
 
     if isinstance(value, str) and value.strip():
         return value
@@ -573,10 +573,18 @@ def _steps(value: object, where: str) -> str | list[str | dict[str, object]]:
             continue
         if not isinstance(step, dict):
             raise DeckDocumentError(here, "a step is a SMILES, or a mapping with smiles and arrows")
-        _only(step, ("smiles", "arrows", "label", "reagents", "conditions", "arrow"), here)
+        _only(step, ("smiles", "arrows", "label", "reagents", "conditions", "arrow", "place"), here)
         arrows = step.get("arrows")
         if arrows is not None and not isinstance(arrows, str | list):
             raise DeckDocumentError(here, 'arrows are a list, such as ["5 -> 2", "2=3 -> 3"]')
+        if step.get("place") is not None:
+            from flexo.mechanism import place_record
+
+            try:
+                place_record(step["place"])
+            except (ValueError, IndexError, TypeError, AttributeError):
+                raise DeckDocumentError(f"{here}.place", "place maps an atom to where its molecule goes, "
+                                        "such as {5: {move: [-1, 0.5], turn: 30, flip: true}}") from None
         for key in ("smiles", "label", "reagents", "conditions", "arrow"):
             if key in step and step[key] is not None and not _is_words(step[key]):
                 raise DeckDocumentError(f"{here}.{key}", f"{key} is words")

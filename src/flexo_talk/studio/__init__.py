@@ -343,7 +343,7 @@ class DeckKind:
         from flexo.studio.figure_edit import EditError, apply, apply_to_data, model
 
         if action.get("do") == "mechanism":
-            return _mechanism(document, action)
+            return _mechanism(document, action, base)
         if action.get("do") != "figure":
             raise EditError(f'unknown deck edit "{action.get("do")}"')
         at = action.get("at") or {}
@@ -376,16 +376,19 @@ class DeckKind:
         return dump_document(document)
 
 
-def _mechanism(document: dict[str, Any], action: dict[str, Any]) -> dict[str, Any]:
+def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
     """Drawing on a mechanism's ``step`` (from 0), as mechazyme's editor does: ``add``
-    an arrow (``{"tail", "head", "half"}``, each end ``{"atom": i}`` or ``{"bond": [i, j]}``)
-    or ``remove`` one (its place in the step), or neither, to see the step. Returns
+    an arrow (``{"tail", "head", "half"}``, each end ``{"atom": i}`` or ``{"bond": [i, j]}``),
+    ``remove`` one (its place in the step), ``place`` a molecule (``{"atom", "move",
+    "turn", "flip", "reset"}``), or none of these, to see the step. Returns
     the ``document`` and the step's ``sheet`` -- laid out for the arrows ``holding`` gives,
     so it holds still while it is drawn on -- or, when a bond's electrons go to an atom
     outside it, the ``ends`` it could bond from, to ask which."""
 
     from flexo.studio.figure_edit import EditError
-    from flexo.studio.mechanism_edit import OPTIONS, add_arrow, remove_arrow, sheet
+    from flexo.studio.mechanism_edit import OPTIONS, add_arrow, place_molecule, remove_arrow, sheet
+
+    from flexo_talk.document import make_deck
 
     changed = copy.deepcopy(document)
     block = _block_at(changed, action.get("at") or {})
@@ -404,12 +407,25 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any]) -> dict[str, An
             return {"document": document, "ends": made["ends"]}
         block["mechanism"] = _written(made["steps"])
         said["arrow"] = made["arrow"]
+    elif isinstance(action.get("place"), dict):
+        how = action["place"]
+        move = how.get("move")
+        block["mechanism"] = _written(place_molecule(
+            block["mechanism"], step=step, atom=int(how.get("atom") or 0),
+            move=[float(move[0]), float(move[1])] if isinstance(move, list) and len(move) == 2 else None,
+            turn=float(how.get("turn") or 0), flip=bool(how.get("flip")), reset=bool(how.get("reset")),
+            options=options)["steps"])
     elif action.get("remove") is not None:
         block["mechanism"] = _written(remove_arrow(block["mechanism"], step=step, index=int(action["remove"]))["steps"])
     else:
         changed = document
         block = _block_at(changed, action.get("at") or {})
-    drawn = sheet(block["mechanism"], step=step, holding=holding, options=options)
+    try:
+        # Drawn in the deck's look, as the slide draws it.
+        look = make_deck(document.get("deck") or {}, base).figure_options()
+    except (DeckDocumentError, ValueError, TypeError, OSError):
+        look = {}
+    drawn = sheet(block["mechanism"], step=step, holding=holding, options=options, look=look)
     return {"document": changed, "sheet": drawn, **said}
 
 
