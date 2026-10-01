@@ -1706,7 +1706,9 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     layout = _list_layout(canvas, block, box)
     top = box.y
     number = 0
-    step = 0
+    # A revealed list's steps follow those of the lists revealed before it on the slide,
+    # as the PowerPoint's clicks do: the left list, then the right.
+    step = canvas.steps - 1 if block.reveal else 0
     # A list reads one way, as most of its items do: an item that starts otherwise (an
     # English name leading a Persian line) takes the list's direction, by an invisible mark.
     leaning = sum(1 if _rtl(runs) else -1 for _, runs in block.items if any(run.text.strip() for run in runs))

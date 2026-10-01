@@ -446,3 +446,12 @@ def test_an_svg_placed_as_a_picture_keeps_its_text_in_the_png(tmp_path: Path) ->
     (png,) = deck.build(tmp_path / "out", formats=("png",)).pngs
     image = Image.open(png).convert("L")
     assert image.getextrema()[0] < 60  # the black words are drawn
+
+
+def test_two_revealed_lists_reveal_one_after_the_other_as_in_powerpoint() -> None:
+    deck = Deck("r")
+    slide = deck.slide("Two", layout="two-columns")
+    slide.left.bullets("a", "b", reveal=True)
+    slide.right.bullets("c", "d", reveal=True)
+    (rendered,) = deck.render()
+    assert rendered.steps == 5  # the slide, then a, b, c, d: a click each
