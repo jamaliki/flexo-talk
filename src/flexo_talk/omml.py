@@ -251,6 +251,9 @@ class _Writer:
             return (f"<m:limLow><m:e>{self.operator(base)}</m:e>"
                     f"<m:lim>{self.items(item.sub)}</m:lim></m:limLow>")
         body = self.atom(base) if base is not None else ""
+        if item.prime:
+            # Primes are a superscript in PowerPoint's equations, as in TeX's.
+            item = Scripts(base, [Sym(item.prime), *(item.sup or [])], item.sub)
         if item.sup is not None and item.sub is not None:
             return (f"<m:sSubSup><m:e>{body}</m:e><m:sub>{self.items(item.sub)}</m:sub>"
                     f"<m:sup>{self.items(item.sup)}</m:sup></m:sSubSup>")
