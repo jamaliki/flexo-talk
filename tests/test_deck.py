@@ -533,7 +533,8 @@ def test_an_equation_is_displayed_on_its_own_line_and_fits_its_place(tmp_path: P
     # The document keeps what was written.
     assert deck_document(deck)["slides"][0]["body"][2] == {"text": r"$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$"}
     result = deck.build(tmp_path / "out", formats=("svg", "pptx"))
-    assert not result.diagnostics, result.summary()
+    # Only the long one is said: set that small, it would read better broken into lines.
+    assert len(result.diagnostics) == 1 and "an equation set at" in result.diagnostics[0], result.summary()
     svg = result.svgs[0].read_text()
     groups = re.findall(r'<g [^>]*data-flexo-math="[^"]*"[^>]*>', svg)
     assert len(groups) == 3 and all('data-flexo-talk="math"' in group for group in groups)

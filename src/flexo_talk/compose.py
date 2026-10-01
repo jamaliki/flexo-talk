@@ -1401,8 +1401,14 @@ def _equation(canvas: _Canvas, identifier: str, block: _Math, box: Box, *, draw:
     size = block.size or style.body_size
     formula = typeset(block.source, canvas.deck.typography(size), size, display=True)
     if formula.width > box.width > 0:
+        wanted = size
         size *= box.width / formula.width
         formula = typeset(block.source, canvas.deck.typography(size), size, display=True)
+        if draw and size < min(style.small_size, wanted * 0.7):
+            canvas.diagnostics.append(
+                f"{canvas.slide.id}: an equation set at {size:.0f} pt to fit its place -- break it "
+                "into lines (\\\\, in aligned) or give it more room"
+            )
     canvas.say_maths(block.source, formula.problems)
     if draw:
         x = {"start": box.x, "middle": box.x + (box.width - formula.width) / 2.0,

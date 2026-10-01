@@ -516,6 +516,13 @@ class Region:
         words, size = _words(words, "text"), _size(size)
         align = _choice(align, "align", ("start", "middle", "end"))
         muted, colour = _flag(muted, "muted"), _colour(colour)
+        if displayed(words):
+            # A paragraph that is one equation ($$...$$) is displayed, as LaTeX displays
+            # it: centred unless placed, as a document's is.
+            return self.math(
+                words, size=size, align="middle" if align == "start" else align,
+                colour=colour or ("muted" if muted else None),
+            )
         self.blocks.append(_Words(inline(words), size, align, muted, colour))
         self._record(
             "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
