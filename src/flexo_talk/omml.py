@@ -63,16 +63,19 @@ _ERROR = "C0392B"
 
 
 class _Writer:
-    def __init__(self, size: float, colour: str | None, resolve, display: bool = False) -> None:
+    def __init__(self, size: float, colour: str | None, resolve, display: bool = False,
+                 bold: bool = False) -> None:
         self.size = size
         self.colour = colour
         self.resolve = resolve
         self.display = display
+        self.bold = bold
 
     # -- runs --
 
     def run(self, text: str, *, style: str | None = None, script: str | None = None, normal: bool = False,
-            italic: bool | None = None, colour: str | None = None, size: float | None = None) -> str:
+            italic: bool | None = None, colour: str | None = None, size: float | None = None,
+            bold: bool | None = None) -> str:
         if not text:
             return ""
         props = ""
@@ -86,7 +89,7 @@ class _Writer:
         if italic is None:
             italic = style in {"i", "bi"} or (style is None and not normal and not script
                                               and any(ch.isalpha() and (ch.isascii() or ch.islower()) for ch in text))
-        bold = style in {"b", "bi"}
+        bold = style in {"b", "bi"} if bold is None else bold
         fill = colour or self.colour
         paint = f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>' if fill else ""
         space = ' xml:space="preserve"' if text != text.strip() else ""
@@ -143,7 +146,8 @@ class _Writer:
         if isinstance(item, Sym):
             return self.sym(item)
         if isinstance(item, Text):
-            return self.run(item.words, normal=True, italic=item.font == "it")
+            # Words in maths are the words' weight around it, as amsmath's \text is.
+            return self.run(item.words, normal=True, italic=item.font == "it", bold=item.font == "bf" or self.bold)
         if isinstance(item, Group | Classed):
             return self.items(item.items if isinstance(item, Group) else item.body)
         if isinstance(item, Scripts):
@@ -364,18 +368,19 @@ def _space(em: float) -> str:
 
 
 def omml(source: str, *, size: float, colour: str | None = None, display: bool = False,
-         align: str = "middle", resolve=lambda colour: None) -> str:
+         align: str = "middle", resolve=lambda colour: None, bold: bool = False) -> str:
     """``source`` as Office Math, in PowerPoint's ``a14:m`` wrapper: a line of its own
     (``display``, aligned as ``align`` says) or a formula within words.
 
     ``colour`` is the words' colour (``rrggbb``); ``resolve`` turns a colour the
-    formula names (``\\color{accent}``) into one.
+    formula names (``\\color{accent}``) into one. In ``bold`` words its ``\\text`` is
+    bold; its maths stays regular, as flexo draws it.
     """
 
     display = display or source.lstrip().startswith("\\displaystyle")
     items, _ = parse(source)
     items = _implicit_rows(items, display)
-    body = _Writer(size, colour, resolve, display).items(items)
+    body = _Writer(size, colour, resolve, display, bold).items(items)
     maths = f"<m:oMath>{body}</m:oMath>"
     if display:
         jc = {"start": "left", "end": "right"}.get(align, "centerGroup")

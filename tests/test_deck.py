@@ -782,6 +782,40 @@ def test_powerpoints_equations_keep_tex_sizes_and_spaces() -> None:
     assert "\u2004" in inline and "\u2003" not in inline
 
 
+def test_a_bold_headers_maths_is_regular_all_of_it(tmp_path: Path) -> None:
+    import xml.etree.ElementTree as ET
+
+    from flexo_talk.compose import render_slide
+
+    # Bold is a meaning in maths, and a maths font has no bold for its Greek, its h-bar
+    # or its blackboard E: a bold header's maths stays regular, all of it, as LaTeX's
+    # does -- and so does strong words' (**...**), unless it asks (\mathbf).
+    deck = Deck("header")
+    deck.slide("Table").table([[r"Mean $\mathbb{E}[X]$", r"$H_n(\xi)$ over $E_n / \hbar\omega$"], ["1", "2"]])
+    deck.slide("Strong").text(r"**Strong $\xi + x$ and $\mathbf{v}$**")
+    strong = {run.text.strip(): run.weight for run in inline(r"**a $\xi + x$ $\mathbf{v}$**")}
+    assert strong["a"] == strong["v"] == 700 and strong["x"] == 400
+    weights = {}
+    for slide in deck.slides:
+        for text in ET.fromstring(render_slide(deck, slide).svg).iter("{http://www.w3.org/2000/svg}text"):
+            for span in text.findall("{http://www.w3.org/2000/svg}tspan"):  # a run each
+                weight = span.get("font-weight") or text.get("font-weight") or "400"
+                weights["".join(span.itertext()).strip()] = weight
+    blackboard, hbar = "\U0001d53c[", "\u210f"
+    assert weights["Mean"] == weights["over"] == weights["Strong"] == weights["v"] == "700"
+    assert {weights[maths] for maths in (blackboard, "H", hbar, "x")} == {"400"}
+    # The PowerPoint's table says the same: its words bold, its maths not.
+    table = re.search(r"<a:tbl>.*?</a:tr>", _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0], re.S)
+    runs = {text: attributes for attributes, text in re.findall(
+        r"<a:rPr([^>]*)>(?:(?!</a:r>).)*?<a:t>([^<]*)</a:t>", table.group(0), re.S)}
+    assert 'b="1"' in runs["Mean "] and 'b="1"' in runs[" over "]
+    assert 'b="1"' not in runs[blackboard] and 'b="1"' not in runs[hbar]
+    # Its equations' \text is the words' weight, as amsmath's is; their maths is not.
+    from flexo_talk.omml import omml
+
+    assert re.findall(r'b="(\d)"', omml(r"x \text{ if }", size=20.0, bold=True)) == ["0", "1"]
+
+
 def test_a_formula_with_rules_stays_drawn_in_the_powerpoint(tmp_path: Path) -> None:
     from flexo_talk.omml import expressible
 

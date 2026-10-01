@@ -472,7 +472,8 @@ def inline(words: str) -> tuple[TextRun, ...]:
                 replace(
                     run,
                     text=run.text.replace(_ASTERISK, "*"),
-                    weight=700 if bold else run.weight,
+                    # Strong words' maths stays regular, as LaTeX's \textbf leaves it.
+                    weight=700 if bold and not run.maths else run.weight,
                     italic=run.italic or italic,
                 )
             )
