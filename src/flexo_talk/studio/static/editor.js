@@ -248,7 +248,11 @@ export function mount(studio, container) {
   let pending = false;
   let inline = null;
 
-  studio.hints = () => ({ focus: state.slide });
+  // Figures on slides keep their layouts while the deck is changed, and are laid out at
+  // their best once it has been still a moment: the page asks the server to settle.
+  let settling = false;
+  let settleTimer = 0;
+  studio.hints = () => ({ focus: state.slide, settle: settling });
   const doc = () => studio.doc;
   const slides = () => doc().slides || [];
   const slideAt = (d = doc()) => (d.slides || [])[state.slide];
@@ -1986,6 +1990,8 @@ export function mount(studio, container) {
   // -- what happens --
   let lastKey = "";
   studio.on("change", ({ quiet, source, who, before }) => {
+    clearTimeout(settleTimer);
+    settling = false;
     if (state.slide >= slides().length) state.slide = Math.max(0, slides().length - 1);
     pending = true;
     if (source === "remote" && before) flash(before, who);
@@ -1999,6 +2005,11 @@ export function mount(studio, container) {
   studio.on("drawing", () => { pending = true; });
   studio.on("drawn", (result) => {
     pending = !result.latest || Boolean(result.unfinished);
+    if (result.latest && !result.unfinished) {
+      settling = false;
+      clearTimeout(settleTimer);
+      if (result.info?.unsettled) settleTimer = setTimeout(() => { settling = true; studio.requestDraw(0); }, 1200);
+    }
     pages = result.pages;
     messages = result.messages || [];
     renderRail();

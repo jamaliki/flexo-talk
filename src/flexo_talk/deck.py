@@ -1669,6 +1669,9 @@ class RenderedSlide:
     stands in its place."""
     worded: list[WordsLayout] = field(default_factory=list)
     """Words with maths in them, where they were set (see ``WordsLayout``)."""
+    settled: bool = True
+    """False when a figure on it kept the layout it had while it was being edited, rather
+    than the best one being found (``compose.EDITING``): drawn again once edits stop."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

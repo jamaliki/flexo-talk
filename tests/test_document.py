@@ -622,3 +622,25 @@ def test_the_studio_draws_a_mechanisms_arrows_from_two_clicks(tmp_path: Path) ->
         bad = {"deck": {"id": "c"}, "slides": [{"body": [{"mechanism": [
             {"smiles": "[OH-:1].[CH3:2][Br:3]", "place": "1 sideways"}]}]}]}
         deck_from_document(bad, tmp_path)
+
+
+def test_a_figure_keeps_its_layout_while_the_deck_is_changed_and_settles_after(tmp_path: Path, monkeypatch) -> None:
+    import flexo
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    kind = DeckKind()
+    nodes = [{"id": name, "label": name.title()} for name in ("one", "two", "three")]
+    figure = {"figure": {"id": "chain"}, "nodes": nodes,
+              "edges": [{"from": "one", "to": "two"}, {"from": "two", "to": "three"}]}
+    document = {"deck": {"id": "d"}, "slides": [{"title": "Chain", "layout": "figure", "body": [{"figure": figure}]}]}
+    first = kind.draw(document, tmp_path)
+    assert first.info["unsettled"] is False  # drawn the first time, it is laid out at its best
+    seen = []
+    real = flexo.fit_in_box
+    monkeypatch.setattr(flexo, "fit_in_box", lambda *a, **k: seen.append(k.get("keep")) or real(*a, **k))
+    nodes[1]["label"] = "Second"
+    edited = kind.draw(document, tmp_path)
+    assert seen[-1] is not None and edited.info["unsettled"] is True  # kept its layout, in one compile
+    settled = kind.draw(document, tmp_path, {"settle": True})
+    assert seen[-1] is None and settled.info["unsettled"] is False
+    assert kind.draw(document, tmp_path).info["unsettled"] is False  # and stays settled

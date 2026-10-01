@@ -14,6 +14,7 @@ decides where it goes and how large.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import functools
 import math
 import re
@@ -138,6 +139,8 @@ class _Canvas:
         self.tables: list[TableLayout] = []
         self.notes: list[str] = []
         self.held: list[str] = []
+        self.settled = True
+        """False when a figure on the slide kept its layout while being edited (``EDITING``)."""
         self.steps = 1
         self.alone = False
         """Whether the block being set has its region to itself."""
@@ -327,7 +330,7 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
     return RenderedSlide(
         slide, xml_document(canvas.root), canvas.lists, list(dict.fromkeys(canvas.diagnostics)), canvas.tables,
         canvas.notes,
-        canvas.steps, canvas.held, canvas.worded,
+        canvas.steps, canvas.held, canvas.worded, canvas.settled,
     )
 
 
@@ -1855,6 +1858,15 @@ LEGIBLE = 7.0
 """Words on a slide smaller than this (points) are reported: they will not read."""
 
 
+EDITING = contextvars.ContextVar("flexo_talk_editing", default=False)
+"""Whether slides are drawn for an editor while they are changed: a figure on one then
+keeps the layout it last had (``flexo.fit_in_box``'s ``keep``), drawn in one compile
+rather than every way it could be, and the slide says it is not settled."""
+
+_LAYOUTS: dict[tuple[str, str], str] = {}
+"""The layout each figure (by slide and figure) was last drawn in."""
+
+
 def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
     """A figure laid out for ``box`` by flexo (``flexo.fit_in_box``): at the width
     that sets its words at the deck's figure size, as written or turned, spaced
@@ -1879,10 +1891,14 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         largest, block.turn,
     )
     laid = _cached_fit(key)
+    where = (canvas.slide.id, spec.id)
     if laid is None:
+        # Drawn for an editor while it is changed, a figure keeps the layout it had, in
+        # one compile; the best of every layout is found once the changes stop.
+        keep = _LAYOUTS.get(where) if EDITING.get() else None
         fit = flexo.fit_in_box(
             spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-            turn=block.turn,
+            turn=block.turn, keep=keep,
         )
         codes = [
             diagnostic.code
@@ -1891,7 +1907,11 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
             if diagnostic.code != "layout.width.grown"
         ]
         laid = {"svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes}
-        _store_fit(key, laid)
+        if keep is not None and fit.layout == keep:
+            canvas.settled = False
+        else:
+            _store_fit(key, laid)
+    _LAYOUTS[where] = laid["layout"]
     for code in laid["codes"]:
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {code}")
     for text in block.said:
