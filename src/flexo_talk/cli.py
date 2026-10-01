@@ -131,12 +131,12 @@ def _convert(arguments: argparse.Namespace) -> int:
         if not svg:
             from flexo.text import maths_family
 
-            from flexo_talk.compose import plot_svg
+            from flexo_talk.compose import plot_faces, plot_svg
 
             typography = deck.layout_style.typography
             width = deck.style.width - 2 * deck.style.margin
             svg = plot_svg(made(block.figure), width, width * 0.5, typography.family, path.stem,
-                           maths=maths_family(typography))
+                           maths=maths_family(typography), faces=plot_faces(typography))
         target.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(svg, encoding="utf-8")
         saved.append(path)
