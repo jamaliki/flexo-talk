@@ -137,18 +137,21 @@ requires-dist = [
     { name = "gemmi", marker = "extra == 'structures'", specifier = ">=0.6" },
     { name = "jsonschema", specifier = ">=4.25" },
     { name = "molsketch", marker = "extra == 'molecules'", git = "https://github.com/jamaliki/mol-sketch?subdirectory=python" },
+    { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10" },
+    { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=4.30" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "resvg-py", specifier = ">=0.2" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "uharfbuzz", specifier = ">=0.52" },
 ]
-provides-extras = ["assistant", "structures", "molecules"]
+provides-extras = ["assistant", "structures", "molecules", "pdf"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "anthropic", specifier = ">=1.9" },
     { name = "gemmi", specifier = ">=0.6" },
     { name = "hypothesis", specifier = ">=6.138" },
+    { name = "pillow", specifier = ">=10" },
     { name = "pypdfium2", specifier = ">=5.13.0" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-cov", specifier = ">=6.2" },
@@ -628,7 +631,7 @@ wheels = [
 [[package]]
 name = "molsketch"
 version = "0.1.0"
-source = { git = "https://github.com/jamaliki/mol-sketch?subdirectory=python#078f01faa39d9520f82d9ae9c50e93565f652410" }
+source = { git = "https://github.com/jamaliki/mol-sketch?subdirectory=python#3c43f3713ca089c55eae4eea31470d2d188bdee0" }
 dependencies = [
     { name = "mini-racer" },
     { name = "numpy" },
