@@ -1914,9 +1914,47 @@ def _place_figure(canvas: _Canvas, identifier: str, item: _Prepared, box: Box, s
 
 
 def _drawable(markup: str) -> bool:
+    """Whether an SVG file is placed as shapes (editable in the PowerPoint): only when it
+    holds nothing the drawing reader draws other than its viewers would. Anything more is
+    placed as a picture, drawn exactly by every output."""
+
     from flexo.drawing import _drawable as drawable
 
-    return drawable(ET.fromstring(markup))
+    root = ET.fromstring(markup)
+    if not drawable(root):
+        return False
+    fitting = (root.get("preserveAspectRatio") or "xMidYMid meet").split()
+    if fitting[0] not in {"xMidYMid"} or (len(fitting) > 1 and fitting[1] != "meet"):
+        return False
+    for item in root.iter():
+        tag = local_name(item.tag)
+        if tag in _PICTURE_ONLY or (item is not root and tag == "svg"):
+            return False
+        if tag == "style" and re.search(r"(?:^|})\s*[^*\s{][^{]*\{", item.text or ""):
+            return False  # CSS beyond *{...} (which is applied): classes, selectors
+        if tag == "clipPath" and any(local_name(shape.tag) not in {"rect"} for shape in item):
+            return False
+        if item.get("class") or item.get("letter-spacing") or item.get("word-spacing"):
+            return False
+        if tag == "tspan" and item.get("dy"):
+            return False
+        if tag in {"text", "tspan"} and item.get("clip-path"):
+            return False
+        if any(item.get(name) for name in ("marker-start", "marker-mid", "marker-end")):
+            return False
+        if "currentcolor" in " ".join(item.attrib.values()).lower():
+            return False
+        if tag == "g" and item.get("opacity") not in {None, "1", "1.0"} and len(item) > 1:
+            return False  # a group's opacity is the group's, not each shape's
+        transform = item.get("transform") or ""
+        if re.search(r"scale\(\s*-|matrix\(\s*-", transform):
+            return False  # mirrored
+    return True
+
+
+_PICTURE_ONLY = frozenset({"symbol", "marker", "switch", "textPath"})
+"""Elements an SVG file is placed as a picture for: the shape reader does not draw them as
+the file's viewers do."""
 
 
 _REGISTERED = False
@@ -2240,7 +2278,8 @@ def _place_svg(canvas: _Canvas, identifier: str, svg: str, x: float, y: float, s
             for definition in child:
                 if local_name(definition.tag) != "style":
                     canvas.defs.append(definition)
-        elif tag in {"title", "desc", "metadata", "style"} or child.get(inkscape_attr("label")) == "Background":
+        elif tag in {"title", "desc", "metadata", "style"} or child.get("id") == "layer.background":
+            # A flexo figure's own canvas; a layer someone named Background keeps its content.
             continue
         else:
             child.attrib.pop(inkscape_attr("groupmode"), None)

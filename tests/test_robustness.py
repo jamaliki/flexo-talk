@@ -410,3 +410,39 @@ def test_a_plot_keeps_a_background_chosen_for_it_and_clears_the_default() -> Non
     plain, axes = plt.subplots()
     axes.plot([0, 1], [0, 1])
     assert "#ffffff" not in plot_svg(plain, 300.0, 200.0, "Figtree", "q").lower()
+
+
+@pytest.mark.parametrize(
+    ("svg", "shapes"),
+    [
+        ('<rect width="10" height="10" fill="#c00"/>', True),
+        ('<style>.a{fill:red}</style><rect class="a" width="10" height="10"/>', False),
+        ('<style>*{stroke-linejoin:round}</style><rect width="10" height="10"/>', True),
+        ('<defs><symbol id="s"><circle r="3"/></symbol></defs><use href="#s"/>', False),
+        ('<g opacity="0.5"><rect width="4" height="4"/><rect x="2" width="4" height="4"/></g>', False),
+        ('<text transform="scale(-1,1)" x="-20" y="10">mirrored</text>', False),
+        ('<rect width="10" height="10" fill="currentColor"/>', False),
+    ],
+)
+def test_an_svg_file_is_placed_as_shapes_only_when_it_draws_as_its_viewers_do(svg: str, shapes: bool) -> None:
+    from flexo_talk.compose import _drawable
+
+    markup = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">{svg}</svg>'
+    assert _drawable(markup) is shapes
+
+
+def test_an_svg_placed_as_a_picture_keeps_its_text_in_the_png(tmp_path: Path) -> None:
+    from PIL import Image
+
+    picture = tmp_path / "words.svg"
+    picture.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60" viewBox="0 0 200 60">'
+        '<defs><linearGradient id="g"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#fff"/>'
+        '</linearGradient></defs><rect width="200" height="60" fill="url(#g)"/>'
+        '<text x="10" y="45" font-size="40" font-family="Figtree" fill="#000">Words</text></svg>'
+    )
+    deck = Deck("p")
+    deck.slide("S").image(str(picture))
+    (png,) = deck.build(tmp_path / "out", formats=("png",)).pngs
+    image = Image.open(png).convert("L")
+    assert image.getextrema()[0] < 60  # the black words are drawn
