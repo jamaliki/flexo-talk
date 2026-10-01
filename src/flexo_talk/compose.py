@@ -745,8 +745,8 @@ def _plan_figures(
     and the height each other picture has."""
 
     style = canvas.deck.style
-    worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot)]  # and tables
-    pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot)]
+    worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot | _Gallery)]
+    pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot | _Gallery)]
     # Words take what they need; pictures share the height that is left.
     needed = sum(_height(canvas, block, box.width) for block in worded)
     gaps = style.block_gap * max(0, len(blocks) - 1)
@@ -811,7 +811,7 @@ def _region(canvas: _Canvas, region: Region, box: Box, *, words: float | None = 
                 align=block.align, role=role, fill=fill,
             )
         elif isinstance(block, _Gallery):
-            top += _gallery(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+            top += _gallery(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Figure):
             height = prepared[index].height * scale
             top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
@@ -848,11 +848,15 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
 
     style = canvas.deck.style
     blocks = list(region.blocks)
-    pictures = sum(isinstance(block, _Figure | _Image | _Plot) for block in blocks)
+    pictures = sum(isinstance(block, _Figure | _Image | _Plot | _Gallery) for block in blocks)
     room = box.height - style.block_gap * max(0, len(blocks) - 1) - PICTURE_LEAST * pictures
 
     def needed(scale: float) -> float:
-        return sum(_height(canvas, _sized(block, scale, style), box.width) for block in blocks)
+        # Pictures (and galleries) take what is left: only words are fitted here.
+        return sum(
+            _height(canvas, _sized(block, scale, style), box.width)
+            for block in blocks if not isinstance(block, _Gallery)
+        )
 
     if needed(1.0) <= room:
         return blocks
@@ -891,27 +895,44 @@ def _table_size(block: _Table, style) -> float:
     return block.size or style.body_size * 0.85
 
 
-def _table_plan(canvas: _Canvas, block: _Table, width: float) -> TableLayout:
-    """Column widths and row heights: each column as wide as its widest cell,
-    the table set smaller if that is wider than its place."""
+def _table_plan(canvas: _Canvas, block: _Table, width: float, *, said: bool = False) -> TableLayout:
+    """Column widths and row heights: each column as wide as its widest cell when the
+    table fits its place; else its long cells wrap (a column as narrow as its longest
+    word at least), and the table is set smaller only when even its words do not fit.
+    ``said``: say on the slide when its words had to be broken."""
 
     style = canvas.deck.style
     size = _table_size(block, style)
-    for _ in range(3):
+    columns = len(block.rows[0]) if block.rows else 0
+
+    def weight(r: int) -> int | None:
+        return 700 if block.header and r == 0 else None
+
+    while True:
         pad = size * 0.6
-        measured = [
-            [canvas.measure(cell, size, None, 700 if block.header and r == 0 else None) for cell in row]
-            for r, row in enumerate(block.rows)
-        ]
-        columns = len(block.rows[0]) if block.rows else 0
-        # A little slack, so a slide program measuring a hair wider keeps each cell on one line.
-        widths = [
-            max((row[c].width for row in measured), default=0.0) + 2 * pad + size * 0.2
-            for c in range(columns)
-        ]
-        if sum(widths) <= width or size <= style.small_size:
+        # A little slack, so a slide program measuring a hair wider keeps each cell's lines.
+        slack = 2 * pad + size * 0.2
+        measured = [[canvas.measure(cell, size, None, weight(r)) for cell in row] for r, row in enumerate(block.rows)]
+        widths = [max((row[c].width for row in measured), default=0.0) + slack for c in range(columns)]
+        if sum(widths) <= width:
             break
-        size = max(style.small_size, size * width / sum(widths))
+        least = [
+            max((_longest_word(canvas, row[c], size, weight(r)) for r, row in enumerate(block.rows)), default=0.0)
+            + slack for c in range(columns)
+        ]
+        if sum(least) <= width or size <= style.small_size:
+            widths = _shared(widths, least, width)
+            if sum(least) > width and said:
+                canvas.diagnostics.append(
+                    f"{canvas.slide.id}: a table of {columns} columns is too wide for its place even at the "
+                    "small size -- its words are broken; split it, or shorten its cells"
+                )
+            measured = [
+                [canvas.measure(cell, size, widths[c] - slack, weight(r), balance=False) for c, cell in enumerate(row)]
+                for r, row in enumerate(block.rows)
+            ]
+            break
+        size = max(style.small_size, size * 0.9)
     line = max((m.line_height for row in measured for m in row if m.lines), default=size * 1.2)
     baseline = max((m.baseline for row in measured for m in row if m.lines), default=size)
     lines = [max((len(m.lines) for m in row), default=1) or 1 for row in measured]
@@ -923,8 +944,38 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float) -> TableLayout:
     )
 
 
+def _longest_word(canvas: _Canvas, cell: tuple[TextRun, ...], size: float, weight: int | None) -> float:
+    """The widest thing in a cell that cannot be broken: a word, or a formula."""
+
+    widest = 0.0
+    for run in cell:
+        pieces = [run] if run.math else [replace(run, text=word) for word in run.text.split()]
+        for piece in pieces:
+            widest = max(widest, canvas.measure((piece,), size, None, weight).width)
+    return widest
+
+
+def _shared(natural: list[float], least: list[float], width: float) -> list[float]:
+    """Columns given ``width`` between: each its least, and what is left shared among
+    those that want more, in proportion to what they want, none past its natural width."""
+
+    if sum(least) >= width:
+        return [width * share / sum(least) for share in least] if sum(least) else least
+    widths, left = list(least), width - sum(least)
+    for _ in range(len(widths)):
+        wanting = [c for c in range(len(widths)) if natural[c] - widths[c] > 1e-6]
+        want = sum(natural[c] - widths[c] for c in wanting)
+        if not wanting or left <= 1e-6:
+            break
+        given = min(left, want)
+        for c in wanting:
+            widths[c] += given * (natural[c] - widths[c]) / want
+        left -= given
+    return widths
+
+
 def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
-    plan = _table_plan(canvas, block, box.width)
+    plan = _table_plan(canvas, block, box.width, said=True)
     total = sum(plan.widths)
     # A table headed in a right-to-left script reads from the right: its first
     # column on the right, the table against the right edge, cells set from the right.
@@ -942,7 +993,10 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
             if cell:
                 x = left + total - sum(plan.widths[: c + 1]) if plan.rtl else left + sum(plan.widths[:c])
                 inner = Box(x + plan.pad, y + plan.baseline, plan.widths[c] - 2 * plan.pad, 0.0)
-                metrics = canvas.measure(cell, plan.size, None, 700 if plan.header and r == 0 else None)
+                metrics = canvas.measure(
+                    cell, plan.size, plan.widths[c] - 2 * plan.pad - plan.size * 0.2,
+                    700 if plan.header and r == 0 else None, balance=False,
+                )
                 align = mirrored[plan.align[c]] if plan.rtl else plan.align[c]
                 anchor = {"start": inner.x, "middle": inner.x + inner.width / 2.0, "end": inner.x + inner.width}
                 render_runs(
@@ -971,17 +1025,18 @@ def _code_size(block: _Code, style) -> float:
 
 
 def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: bool = True) -> float:
-    """A listing: each line one text in the monospace family, on a tinted panel."""
+    """A listing: each line one text in the monospace family, on a tinted panel; set
+    smaller to fit its place, and a line still too long wrapped (said on the slide)."""
 
-    size = _code_size(block, canvas.deck.style)
+    size, lines = _code_lines(canvas, block, box.width, said=draw)
     pad = size * 0.9
     line = size * 1.35
-    height = line * len(block.lines) + 2 * pad
+    height = line * len(lines) + 2 * pad
     if not draw:
         return height
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="code")
     widths = [
-        canvas.measure((TextRun(text, code=True),), size, None).width for text in block.lines if text.strip()
+        canvas.measure((TextRun(text, code=True),), size, None).width for text, _ in lines if text.strip()
     ]
     width = min(box.width, max(widths, default=0.0) + 2 * pad)
     panel, role, ink, muted = _code_paints(canvas.palette)
@@ -989,10 +1044,9 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
         group, "rect", id=f"{identifier}.panel", x=box.x, y=box.y, width=width, height=height,
         rx=size * 0.35, fill=panel, **({"data__flexo__fill": role} if role else {}),
     )
-    for index, text in enumerate(block.lines):
+    for index, (text, comment) in enumerate(lines):
         if not text.strip():
             continue
-        comment = text.lstrip().startswith(("#", "//", "--", "%"))
         canvas.words(
             f"{identifier}.{index}", (TextRun(text, code=True),),
             Box(box.x + pad, box.y + pad + line * index + (line - size * 1.2) / 2.0, width, 0.0),
@@ -1000,6 +1054,53 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
             parent=group, wrap=False,
         )
     return height
+
+
+def _code_lines(
+    canvas: _Canvas, block: _Code, width: float, *, said: bool = False
+) -> tuple[float, list[tuple[str, bool]]]:
+    """The size a listing is set at in ``width`` -- smaller, down to near the small size,
+    when its longest line would run past its panel -- and its lines, each marked whether
+    it is a comment; a line still too long is wrapped, the rest of it indented under it."""
+
+    style = canvas.deck.style
+    size = _code_size(block, style)
+    texts = [text for text in block.lines if text.strip()]
+
+    def widest(at: float) -> float:
+        return max((canvas.measure((TextRun(text, code=True),), at, None).width for text in texts), default=0.0)
+
+    room = width - 2 * size * 0.9
+    longest = widest(size)
+    if longest > room > 0:
+        # The face is monospace: the width of a line is in proportion to its size.
+        size = max(min(size, style.small_size * 0.85), size * room / longest * 0.99)
+        room = width - 2 * size * 0.9
+    advance = canvas.measure((TextRun("M" * 20, code=True),), size, None).width / 20 or size * 0.6
+    fits = max(12, int(room / advance))
+    lines: list[tuple[str, bool]] = []
+    wrapped = 0
+    for text in block.lines:
+        comment = text.lstrip().startswith(("#", "//", "--", "%"))
+        if len(text) <= fits:
+            lines.append((text, comment))
+            continue
+        wrapped += 1
+        indent = " " * (len(text) - len(text.lstrip()) + 4)
+        rest, first = text, True
+        while len(rest) > (fits if first else fits - len(indent)):
+            limit = fits if first else fits - len(indent)
+            cut = rest.rfind(" ", int(limit * 0.6), limit)
+            cut = limit if cut <= 0 else cut + 1
+            lines.append((rest[:cut] if first else indent + rest[:cut], comment))
+            rest, first = rest[cut:], False
+        lines.append((rest if first else indent + rest, comment))
+    if wrapped and said:
+        canvas.diagnostics.append(
+            f"{canvas.slide.id}: {wrapped} line{'s' if wrapped > 1 else ''} of code too long for the slide, "
+            "wrapped -- shorten or break them"
+        )
+    return size, lines
 
 
 def _code_paints(palette: Palette) -> tuple[str, str | None, str, str]:
@@ -1188,8 +1289,17 @@ def _gallery(canvas: _Canvas, identifier: str, block: _Gallery, box: Box, *, dra
     columns, cell, picture, caption = _gallery_plan(canvas, block, box.width)
     gap = style.column_gap * 0.6
     under = style.small_size * 0.5 if caption else 0.0
-    row_height = picture + under + caption
     rows = -(-len(block.items) // columns)
+    if box.height > 0 and rows * (picture + under + caption) + (rows - 1) * gap > box.height:
+        # Taller than its place: the pictures smaller, each still fitted to its cell.
+        fitted = (box.height - (rows - 1) * gap) / rows - under - caption
+        if fitted < 24.0 and draw:
+            canvas.diagnostics.append(
+                f"{canvas.slide.id}: the gallery's {len(block.items)} pictures do not fit their place -- "
+                "split the slide, or give it more columns"
+            )
+        picture = max(fitted, 24.0)
+    row_height = picture + under + caption
     height = rows * row_height + (rows - 1) * gap
     if not draw:
         return height
@@ -1261,11 +1371,12 @@ def _cropped(source: str, crop: str, stamp: int = 0) -> tuple[str, float, float]
     import io
 
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image, ImageDraw, ImageOps
     except ImportError as error:  # pragma: no cover - depends on the environment
         raise ValueError("cropping pictures needs Pillow: pip install pillow") from error
     with Image.open(source) as opened:
-        picture = opened.convert("RGBA")
+        # Upright as the camera meant it (a phone photograph is stored on its side).
+        picture = ImageOps.exif_transpose(opened).convert("RGBA")
     side = min(picture.size)
     left, top = (picture.width - side) // 2, (picture.height - side) // 2
     picture = picture.crop((left, top, left + side, top + side)).resize((min(side, 600),) * 2)
