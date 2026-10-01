@@ -610,3 +610,15 @@ def test_the_studio_draws_a_mechanisms_arrows_from_two_clicks(tmp_path: Path) ->
     assert [end["name"] for end in asked["ends"]] == ["C2", "Br3"]
     gone = kind.act(made["document"], {"do": "mechanism", "at": at, "step": 0, "remove": 0}, tmp_path)
     assert gone["document"]["slides"][0]["body"][0]["mechanism"] == [{"smiles": "[OH-:1].[CH3:2][Br:3]"}]
+    # A molecule dragged on the sheet: kept on its step, by one of its atoms, and drawn there.
+    placed = kind.act(made["document"], {"do": "mechanism", "at": at, "step": 0,
+                                         "place": {"atom": 0, "move": [-1, 0.5]}}, tmp_path)
+    step = placed["document"]["slides"][0]["body"][0]["mechanism"][0]
+    assert step["place"] == {"1": {"move": [-1.0, 0.5]}}
+    assert placed["sheet"]["molecules"][0]["placed"] is True
+    (rendered,) = deck_from_document(placed["document"], tmp_path).render()
+    assert "mechanism" in rendered.svg
+    with pytest.raises(DeckDocumentError, match="place maps an atom"):
+        bad = {"deck": {"id": "c"}, "slides": [{"body": [{"mechanism": [
+            {"smiles": "[OH-:1].[CH3:2][Br:3]", "place": "1 sideways"}]}]}]}
+        deck_from_document(bad, tmp_path)

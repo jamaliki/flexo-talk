@@ -247,8 +247,10 @@ Atoms are named by their atom maps (`[O-:5]` is 5). An arrow from a lone pair is
 A step with no SMILES is drawn from the arrows before it, its atoms where they were;
 one written out is checked against them. A step that cannot be -- carbon with ten
 electrons, a lone pair that is not there -- is drawn as far as it goes, its arrows on
-it, and what is wrong said when the slide is drawn, in words. The curly arrows are magenta (`arrow_colour="#rrggbb"` for another), each
-carrying the lone pair it takes. In a document it is a `mechanism:` block (a SMILES,
+it, and what is wrong said when the slide is drawn, in words. The curly arrows carry the lone pairs they take, in magenta unless `arrow_colour` gives
+another (`accent`, `ink`, `muted`, which follow the theme, or `#rrggbb`). A step's
+`place` puts its molecules where you want them (`{5: {move: [-1, 0.5], turn: 30, flip:
+true}}`: the molecule with atom 5). In a document it is a `mechanism:` block (a SMILES,
 or a list of steps with `smiles`, `arrows`, `label`, `reagents`, `conditions`,
 `arrow`). In the PowerPoint the structures are shapes and their arrows curves, all
 editable.
@@ -259,7 +261,9 @@ atom shows its pairs), or a bond -- then where they go, and the arrow is written
 the step (an atom with no map is given one in its SMILES). A bond's electrons sent to
 an atom outside it ask which end the new bond forms from; **One electron** writes
 fishhooks. The step holds still while it is drawn on; **Tidy** lays it out again for
-its arrows. A step is usually wrong between one arrow and the next, so it is drawn
+its arrows. **Arrange** moves a molecule where you drag it, turns it 30 degrees at a
+time, flips it, or puts it back where it is laid out. The arrows' colour is chosen in
+the mechanism's panel, from the deck's colours or any other. A step is usually wrong between one arrow and the next, so it is drawn
 anyway, with what is wrong under it. Only the atoms the arrows name are numbered. See "Reaction
 mechanisms" in flexo's README for how structures are laid out.
 

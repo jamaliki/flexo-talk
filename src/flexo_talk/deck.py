@@ -734,13 +734,16 @@ class Region:
         one written out is checked against them. A step that cannot be (carbon with ten
         electrons) is drawn as far as it goes, its arrows on it, and what is wrong said
         when the slide is drawn -- as it is between one arrow and the next while a step
-        is written. The curly arrows are magenta, or ``arrow_colour`` (#rrggbb)."""
+        is written. A step's ``place`` moves its molecules from where they are laid out
+        (``{5: {"move": [-1, 0.5], "turn": 30, "flip": True}}``: the molecule with atom 5).
+        The curly arrows are magenta, or ``arrow_colour``: a palette role (accent, ink,
+        muted) or #rrggbb."""
 
         lone_pairs = _choice(lone_pairs, "lone_pairs", ("used", "all", "none"))
-        if arrow_colour is not None and not (
-            isinstance(arrow_colour, str) and re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", arrow_colour)
-        ):
-            raise SettingError("arrow_colour", f"arrow_colour is {arrow_colour!r}: it is a colour written #rrggbb")
+        arrow_colour = _colour(arrow_colour, "arrow_colour")
+        if arrow_colour is not None and not re.fullmatch(r"#.*|ink|muted|accent\d*", arrow_colour):
+            raise SettingError("arrow_colour", f"arrow_colour is {arrow_colour!r}: it is accent (accent2, ...), "
+                               "ink, muted, or a #rrggbb colour")
         charges = _choice(charges, "charges", ("circled", "plain"))
         if per_row is not None:
             per_row = int(_number(per_row, "per_row", 1, 20, "3"))

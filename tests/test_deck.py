@@ -892,6 +892,9 @@ def test_a_mechanism_is_drawn_as_shapes_with_its_arrows_and_a_wrong_one_is_said(
     assert ">tetrahedral intermediate<" in xml and ">NaOH<" in xml
     with pytest.raises(ValueError, match="arrow_colour"):
         deck.slide("Pink").mechanism("[OH-:1]", arrow_colour="pink")
+    # The deck's own colours: the arrows follow its theme.
+    deck.slide("Accent").mechanism([{"smiles": "[OH-:1].[CH3:2][Br:3]", "arrows": "1 -> 2; 2-3 -> 3",
+                                     "place": {1: {"move": [-1, 0]}}}], arrow_colour="accent")
     # A step that cannot be is drawn as far as it goes, its arrows on it, and said.
     deck.slide("Half drawn").mechanism([{"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2"]}])
     result = deck.build(tmp_path, formats=("svg",))

@@ -50,6 +50,7 @@ const LAYOUT_NAMES = {
 const LAYOUT_ORDER = ["content", "two-columns", "columns", "figure", "title", "section", "statement", "agenda", "blank"];
 const WORDLESS = new Set(["title", "section", "statement", "agenda"]);
 const TONES = ["accent", "accent2", "accent3", "accent4", "accent5", "accent6"];
+const ARROW_INK = "#d466d6";
 
 const NEW_SLIDES = {
   content: () => ({ title: "A new slide", body: [{ bullets: ["The first point", "The second point"] }] }),
@@ -1175,7 +1176,7 @@ export function mount(studio, container) {
           h("div.hint-line", {}, "A function returning a matplotlib figure; it runs inside ", h("code", {}, "deck.plotting()"), " and is given the deck if it takes an argument."),
           ui.field("Shape", ui.number({ value: block.aspect, placeholder: "fill the room", min: 0.2, step: 0.1, key: key("aspect"), onChange: set("aspect") }), { hint: "width ÷ height" })];
       case "math": return mathForm(block, at, edit, toneSwatches, size);
-      case "mechanism": return mechanismForm(block, at, edit);
+      case "mechanism": return mechanismForm(block, at, edit, toneSwatches);
       default:
         return [h("div.hint-line", {}, "This part has no form yet.")];
     }
@@ -1218,7 +1219,7 @@ export function mount(studio, container) {
       size()];
   }
 
-  function mechanismForm(block, at, edit) {
+  function mechanismForm(block, at, edit, toneSwatches) {
     // Each step a card: its structure, its arrows, and what is written by it.
     const steps = (Array.isArray(block.mechanism) ? block.mechanism : [block.mechanism])
       .map((step) => (typeof step === "string" ? { smiles: step } : { ...(step || {}) }));
@@ -1266,7 +1267,12 @@ export function mount(studio, container) {
       onChange: (value) => editBlock(at, (b) => setOption(b, "lone_pairs", value, "used")) })),
       ui.field("Charges", ui.segmented({ value: block.charges || "circled", options: [
         { value: "circled", label: "Circled" }, { value: "plain", label: "Plain" }],
-      onChange: (value) => editBlock(at, (b) => setOption(b, "charges", value, "circled")) }))];
+      onChange: (value) => editBlock(at, (b) => setOption(b, "charges", value, "circled")) })),
+      // Any colour: the deck's accents, ink or muted ink follow its theme; magenta unless chosen.
+      ui.field("Arrows", toneSwatches("arrow_colour", { none: false, fallback: ARROW_INK, extra: [
+        { value: ARROW_INK, colour: ARROW_INK, title: "Magenta" },
+        { value: "ink", colour: studio.info?.palette?.ink || "#222", title: "Ink" },
+        { value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] }))];
   }
 
   // -- drawing a mechanism's arrows by pointing (after mechazyme's editor) --
@@ -1278,13 +1284,13 @@ export function mount(studio, container) {
   function drawArrows(place, first) {
     const at = { slide: state.slide, region: place.region, index: place.index };
     const view = { step: first, holding: [], sheet: null, pending: null, asking: null, half: false,
-      said: "", hovering: null, busy: false, shown: null };
+      said: "", hovering: null, busy: false, shown: null, mode: "arrows", chosen: null };
     const nav = h("div.mech-nav");
     const sheetBox = h("div.mech-sheet");
     const banner = h("div.mech-banner-slot");
     const list = h("div.mech-arrows");
     // The step cards behind are written afresh when it closes: their arrows have changed.
-    dialog({ title: "Draw the arrows", wide: true, body: [nav, sheetBox, banner, list],
+    dialog({ title: "Draw the mechanism", wide: true, body: [nav, sheetBox, banner, list],
       actions: [{ label: "Done", kind: "primary" }], onClose: () => renderInspector() });
     const NS = "http://www.w3.org/2000/svg";
     const S = (tag, attributes = {}, ...children) => {
@@ -1332,7 +1338,7 @@ export function mount(studio, container) {
       render();
     }
     async function go(step) {
-      Object.assign(view, { step, pending: null, asking: null, hovering: null });
+      Object.assign(view, { step, pending: null, asking: null, hovering: null, chosen: null });
       hold();
       await load();
     }
@@ -1343,6 +1349,14 @@ export function mount(studio, container) {
       else if (result?.sheet) view.sheet = result.sheet;
       render();
     }
+    // A molecule moved, turned, flipped or put back: Python keeps where it goes, by its atom.
+    async function arrange(how) {
+      if (view.chosen === null) return;
+      const result = await act({ place: { atom: view.chosen, ...how } });
+      if (result?.sheet) view.sheet = result.sheet;
+      render();
+    }
+    const chosenMolecule = () => (view.sheet?.molecules || []).find((molecule) => molecule.atoms.includes(view.chosen));
     async function remove(index) {
       const result = await act({ remove: index });
       if (result?.sheet) view.sheet = result.sheet;
@@ -1390,9 +1404,19 @@ export function mount(studio, container) {
         ui.button("", () => go(view.step - 1), { kind: "ghost", icon: "left", small: true, disabled: view.step <= 0, title: "The step before" }),
         h("span.mech-step", {}, name, h("span.mech-of", {}, ` · ${view.step + 1} of ${states}`)),
         ui.button("", () => go(view.step + 1), { kind: "ghost", icon: "right", small: true, disabled: view.step >= states - 1, title: "The step after" }),
+        ui.segmented({ value: view.mode, options: [{ value: "arrows", label: "Arrows" }, { value: "arrange", label: "Arrange" }],
+          onChange: (value) => { Object.assign(view, { mode: value, pending: null, asking: null, hovering: null }); render(); } }),
         h("div.spacer"),
-        ui.toggle({ value: view.half, label: "One electron (fishhook)", onChange: (value) => { view.half = value; } }),
-        ui.button("Tidy", () => go(view.step), { kind: "ghost", small: true, title: "Lay the structure out again for the arrows it has now" }));
+        view.mode === "arrows"
+          ? [ui.toggle({ value: view.half, label: "One electron (fishhook)", onChange: (value) => { view.half = value; } }),
+            ui.button("Tidy", () => go(view.step), { kind: "ghost", small: true, title: "Lay the structure out again for the arrows it has now" })]
+          : chosenMolecule()
+            ? [ui.button("↺", () => arrange({ turn: -30 }), { kind: "ghost", small: true, title: "Turn it 30° anticlockwise" }),
+              ui.button("↻", () => arrange({ turn: 30 }), { kind: "ghost", small: true, title: "Turn it 30° clockwise" }),
+              ui.button("Flip", () => arrange({ flip: true }), { kind: "ghost", small: true, title: "Flip it left for right" }),
+              ui.button("Put back", () => arrange({ reset: true }), { kind: "ghost", small: true, disabled: !chosenMolecule().placed,
+                title: "Back where it is laid out" })]
+            : null);
     }
     function renderSheet() {
       const sheet = view.sheet;
@@ -1401,6 +1425,7 @@ export function mount(studio, container) {
         clear(sheetBox, h("div.mech-empty", {}, sheet ? "Nothing to draw on: the first structure cannot be read." : "Drawing…"));
         return;
       }
+      sheetBox.style.background = sheet.paper || "";
       if (view.shown !== sheet.svg) {
         // Only repainted when it differs: an identical drawing replaced flickers under the hand.
         const drawing = h("div.mech-drawing");
@@ -1412,6 +1437,7 @@ export function mount(studio, container) {
       }
     }
     function hitLayer() {
+      if (view.mode === "arrange") return arrangeLayer();
       const sheet = view.sheet;
       const r = sheet.bond;
       const asked = new Set((view.asking?.ends || []).map((end) => end.index));
@@ -1436,6 +1462,57 @@ export function mount(studio, container) {
       paintHover(layer);
       return layer;
     }
+    // Each molecule one thing to take hold of: dragged, it moves under the pointer and is
+    // placed where it is let go; clicked, it is chosen, to turn, flip or put back.
+    function arrangeLayer() {
+      const sheet = view.sheet;
+      const r = sheet.bond;
+      const layer = S("svg", { class: "mech-hit arrange", viewBox: sheet.view.join(" "), preserveAspectRatio: "xMidYMid meet" });
+      for (const molecule of sheet.molecules || []) {
+        const chosen = molecule.atoms.includes(view.chosen);
+        const group = S("g", { class: `mech-molecule${chosen ? " chosen" : ""}` },
+          S("title", {}, "Drag to move it; click to turn or flip it"),
+          sheet.atoms.filter((atom) => molecule.atoms.includes(atom.index)).map((atom) => S("circle", { cx: atom.x, cy: atom.y, r: r * 0.45 })),
+          sheet.bonds.filter((bond) => molecule.atoms.includes(bond.atoms[0])).map((bond) => S("circle", { cx: bond.x, cy: bond.y, r: r * 0.36 })));
+        group.addEventListener("pointerdown", (event) => drag(event, molecule, group, layer));
+        layer.append(group);
+      }
+      return layer;
+    }
+    function drag(event, molecule, group, layer) {
+      if (view.busy) return;
+      event.preventDefault();
+      const toSheet = (e) => {
+        const point = layer.createSVGPoint();
+        point.x = e.clientX;
+        point.y = e.clientY;
+        return point.matrixTransform(layer.getScreenCTM().inverse());
+      };
+      const start = toSheet(event);
+      const drawing = sheetBox.querySelector(".mech-drawing svg");
+      const parts = drawing ? molecule.ids.flatMap((id) => [...drawing.querySelectorAll(`[id="${CSS.escape(id)}"], [id^="${CSS.escape(id)}."]`)]) : [];
+      const before = parts.map((part) => part.getAttribute("transform"));
+      let moved = { x: 0, y: 0 };
+      group.setPointerCapture(event.pointerId);
+      const follow = (e) => {
+        const here = toSheet(e);
+        moved = { x: here.x - start.x, y: here.y - start.y };
+        const shift = `translate(${moved.x} ${moved.y})`;
+        parts.forEach((part, i) => part.setAttribute("transform", before[i] ? `${shift} ${before[i]}` : shift));
+        group.setAttribute("transform", shift);
+      };
+      const end = () => {
+        group.removeEventListener("pointermove", follow);
+        group.removeEventListener("pointerup", end);
+        group.removeEventListener("pointercancel", end);
+        view.chosen = molecule.atoms[0];
+        if (Math.hypot(moved.x, moved.y) < view.sheet.bond * 0.08) { render(); return; }
+        arrange({ move: [moved.x / view.sheet.bond, moved.y / view.sheet.bond] });
+      };
+      group.addEventListener("pointermove", follow);
+      group.addEventListener("pointerup", end);
+      group.addEventListener("pointercancel", end);
+    }
     function hover(index) {
       if (view.hovering === index) return;
       view.hovering = index;
@@ -1449,6 +1526,7 @@ export function mount(studio, container) {
       const sheet = view.sheet;
       const r = sheet.bond;
       const pairs = layer.querySelector(".mech-pairs");
+      if (!pairs) return;
       const numbers = layer.querySelector(".mech-numbers");
       const atom = sheet.atoms.find((item) => item.index === view.hovering);
       clear(pairs, ...(atom ? atom.pairs.map(([x1, y1, x2, y2]) => {
@@ -1473,6 +1551,12 @@ export function mount(studio, container) {
         : ["the ", h("b", {}, `${nameOf(pick.atoms[0])}–${nameOf(pick.atoms[1])}`), " bond"]);
       let line;
       if (view.said) line = ask(view.said);
+      else if (view.mode === "arrange") {
+        const molecule = chosenMolecule();
+        line = molecule
+          ? ask("The molecule with ", h("b", {}, nameOf(view.chosen)), ": drag it, turn it, flip it, or put it back where it is laid out.")
+          : ask(h("b", {}, "Drag"), " a molecule to move it; click one to turn or flip it.");
+      }
       else if (view.asking) {
         line = h("div.mech-banner.ask", {}, h("span.mech-light"), h("span.mech-words", {},
           "Either end of that bond could make the new one. Click the atom it forms from: ",
