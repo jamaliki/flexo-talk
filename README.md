@@ -247,9 +247,11 @@ Atoms are named by their atom maps (`[O-:5]` is 5). An arrow from a lone pair is
 A step with no SMILES is drawn from the arrows before it, its atoms where they were;
 one written out is checked against them. An arrow that cannot be -- carbon with ten
 electrons, a lone pair that is not there -- is said where the mechanism is written,
-in words. In a document it is a `mechanism:` block (a SMILES, or a list of steps with
-`smiles`, `arrows`, `label`, `reagents`, `conditions`, `arrow`). In the PowerPoint the
-structures are shapes and their arrows curves, all editable. See "Reaction
+in words. The curly arrows are magenta (`arrow_colour="#rrggbb"` for another), each
+carrying the lone pair it takes. In a document it is a `mechanism:` block (a SMILES,
+or a list of steps with `smiles`, `arrows`, `label`, `reagents`, `conditions`,
+`arrow`). In the PowerPoint the structures are shapes and their arrows curves, all
+editable. See "Reaction
 mechanisms" in flexo's README for how structures are laid out.
 
 ## Plots

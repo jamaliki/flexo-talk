@@ -888,6 +888,9 @@ def test_a_mechanism_is_drawn_as_shapes_with_its_arrows_and_a_wrong_one_is_said(
     xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
     assert "<p:pic>" not in xml
     assert xml.count("<a:cubicBezTo>") >= 4  # the curly arrows, as curves
+    assert 'srgbclr val="d466d6"' in xml.lower()  # in their one magenta ink
     assert ">tetrahedral intermediate<" in xml and ">NaOH<" in xml
+    with pytest.raises(ValueError, match="arrow_colour"):
+        deck.slide("Pink").mechanism("[OH-:1]", arrow_colour="pink")
     with pytest.raises(ValueError, match="C2 would have 10 electrons"):
         deck.slide("Wrong").mechanism([{"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2"]}])

@@ -718,6 +718,7 @@ class Region:
         lone_pairs: Literal["used", "all", "none"] = "used",
         charges: Literal["circled", "plain"] = "circled",
         per_row: int | None = None,
+        arrow_colour: str | None = None,
     ) -> Region:
         """A reaction mechanism, drawn as chemists draw it (see ``flexo.mechanism``):
         each step a structure in SMILES and its curly arrows, a reaction arrow (reagents
@@ -729,9 +730,14 @@ class Region:
         ``"5 -> 2"``, from a bond ``"2=3 -> 3"``, a bond moved ``"1=2 -> 2-6"``, a
         fishhook ``"~>"``. A step with no SMILES is drawn from the arrows before it;
         one written out is checked against them -- and an arrow that cannot be (carbon
-        with ten electrons) is said here, in words."""
+        with ten electrons) is said here, in words. The curly arrows are magenta, or
+        ``arrow_colour`` (#rrggbb)."""
 
         lone_pairs = _choice(lone_pairs, "lone_pairs", ("used", "all", "none"))
+        if arrow_colour is not None and not (
+            isinstance(arrow_colour, str) and re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", arrow_colour)
+        ):
+            raise SettingError("arrow_colour", f"arrow_colour is {arrow_colour!r}: it is a colour written #rrggbb")
         charges = _choice(charges, "charges", ("circled", "plain"))
         if per_row is not None:
             per_row = int(_number(per_row, "per_row", 1, 20, "3"))
@@ -745,7 +751,8 @@ class Region:
         identifier = f"{self._slide.id}-{self.name}-{len(self.blocks)}"
         figure = flexo.Figure(identifier, **deck.figure_options())
         node = figure.root.mechanism(
-            "mechanism", written, lone_pairs=lone_pairs, charges=charges, per_row=per_row
+            "mechanism", written, lone_pairs=lone_pairs, charges=charges, per_row=per_row,
+            arrow_colour=arrow_colour,
         )
         from flexo.diagnostics import FlexoError
         from flexo.mechanism import mechanism_panels
@@ -760,7 +767,7 @@ class Region:
             "mechanism", steps if isinstance(steps, str) else [dict(step) if isinstance(step, dict) else step
                                                                for step in written],
             lone_pairs=None if lone_pairs == "used" else lone_pairs,
-            charges=None if charges == "circled" else charges, per_row=per_row,
+            charges=None if charges == "circled" else charges, per_row=per_row, arrow_colour=arrow_colour,
         )
         return self
 

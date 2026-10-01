@@ -93,7 +93,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "stats": ("colour", "size"),
     "callout": ("title", "colour", "size"),
     "math": ("size", "align", "colour"),
-    "mechanism": ("lone_pairs", "charges", "per_row"),
+    "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour"),
 }
 """Each block kind and the options it takes beside its value."""
 
