@@ -1233,7 +1233,9 @@ export function mount(studio, container) {
     }, what);
     const arrowsText = (step) => (Array.isArray(step.arrows) ? step.arrows.join("; ") : step.arrows || "");
     const cards = steps.map((step, i) => h("div.step-card", {},
-      h("div.step-head", {}, h("span", {}, `Step ${i + 1}`),
+      h("div.step-head", {}, h("span", {}, `Step ${i + 1}`), h("div.spacer"),
+        ui.button("Draw", () => drawArrows(at, i), { kind: "ghost", icon: "mechanism", small: true,
+          title: "Draw this step's arrows by pointing: where the electrons come from, then where they go" }),
         ui.button("", () => { steps.splice(i, 1); write("steps"); renderInspector(); },
           { kind: "ghost", icon: "trash", small: true, disabled: steps.length <= 1 })),
       ui.field("Structure", ui.input({ value: step.smiles || "", mono: true, key: `step.${i}.smiles`,
@@ -1265,6 +1267,244 @@ export function mount(studio, container) {
       ui.field("Charges", ui.segmented({ value: block.charges || "circled", options: [
         { value: "circled", label: "Circled" }, { value: "plain", label: "Plain" }],
       onChange: (value) => editBlock(at, (b) => setOption(b, "charges", value, "circled")) }))];
+  }
+
+  // -- drawing a mechanism's arrows by pointing (after mechazyme's editor) --
+  // The structure a step acts on, drawn alone and large: an atom stands for its lone
+  // pair, a bond for its electrons, and two clicks -- where the electrons come from,
+  // where they go -- write an arrow. The page draws and points; Python decides what a
+  // click means, and says when a step cannot be (between one arrow and the next it
+  // usually cannot: that is drawn too). The step holds still while it is drawn on.
+  function drawArrows(place, first) {
+    const at = { slide: state.slide, region: place.region, index: place.index };
+    const view = { step: first, holding: [], sheet: null, pending: null, asking: null, half: false,
+      said: "", hovering: null, busy: false, shown: null };
+    const nav = h("div.mech-nav");
+    const sheetBox = h("div.mech-sheet");
+    const banner = h("div.mech-banner-slot");
+    const list = h("div.mech-arrows");
+    // The step cards behind are written afresh when it closes: their arrows have changed.
+    dialog({ title: "Draw the arrows", wide: true, body: [nav, sheetBox, banner, list],
+      actions: [{ label: "Done", kind: "primary" }], onClose: () => renderInspector() });
+    const NS = "http://www.w3.org/2000/svg";
+    const S = (tag, attributes = {}, ...children) => {
+      const node = document.createElementNS(NS, tag);
+      for (const [key, value] of Object.entries(attributes)) if (value !== undefined && value !== null && value !== false) node.setAttribute(key, value);
+      for (const child of children.flat()) if (child !== null && child !== undefined) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+      return node;
+    };
+    const nameOf = (index) => view.sheet?.atoms.find((atom) => atom.index === index)?.name ?? String(index);
+    const samePick = (a, b) => Boolean(a && b && a.kind === b.kind && (a.kind === "atom" ? a.index === b.index
+      : [...a.atoms].sort().join() === [...b.atoms].sort().join()));
+    const arrowsOf = (step) => {
+      const slide = studio.doc?.slides?.[at.slide];
+      const block = slide && blocksAt(slide, at.region)[at.index];
+      const steps = block ? (Array.isArray(block.mechanism) ? block.mechanism : [block.mechanism]) : [];
+      const arrows = steps[step] && typeof steps[step] === "object" ? steps[step].arrows : null;
+      if (Array.isArray(arrows)) return arrows.map(String);
+      return typeof arrows === "string" ? arrows.split(";").map((part) => part.trim()).filter(Boolean) : [];
+    };
+    // Laid out for the arrows the step has when it is opened (or tidied), and held so.
+    const hold = () => { view.holding = arrowsOf(view.step); };
+
+    async function act(extra) {
+      view.busy = true;
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const sent = studio.doc;
+          const result = await studio.api("/api/act", { file: studio.file, document: sent,
+            action: { do: "mechanism", at, step: view.step, holding: view.holding, ...extra } });
+          if (!same(studio.doc, sent)) continue;
+          if (result.document && !same(result.document, sent)) studio.change(() => result.document, { quiet: true });
+          return result;
+        }
+        return null;
+      } catch (error) {
+        flash(error.message);
+        return null;
+      } finally {
+        view.busy = false;
+      }
+    }
+    async function load() {
+      const result = await act({});
+      if (result?.sheet) { view.sheet = result.sheet; view.step = result.sheet.step; }
+      render();
+    }
+    async function go(step) {
+      Object.assign(view, { step, pending: null, asking: null, hovering: null });
+      hold();
+      await load();
+    }
+    async function add(tail, head) {
+      const result = await act({ add: { tail, head, half: view.half } });
+      view.pending = null;
+      if (result?.ends) view.asking = { ends: result.ends, tail, head };
+      else if (result?.sheet) view.sheet = result.sheet;
+      render();
+    }
+    async function remove(index) {
+      const result = await act({ remove: index });
+      if (result?.sheet) view.sheet = result.sheet;
+      render();
+    }
+    function flash(message) {
+      view.said = message;
+      render();
+      setTimeout(() => { if (view.said === message) { view.said = ""; render(); } }, 3500);
+    }
+    function cancel() { view.pending = null; view.asking = null; render(); }
+
+    function pick(kind, payload) {
+      if (view.busy) return;
+      const picked = { kind, ...payload };
+      if (view.asking) {
+        // Only the two ends it named will do; the answer finishes the arrow that asked.
+        if (kind !== "atom" || !view.asking.ends.some((end) => end.index === payload.index)) {
+          flash(`Click ${view.asking.ends.map((end) => end.name).join(" or ")}: the end the new bond forms from.`);
+          return;
+        }
+        const { tail, head } = view.asking;
+        view.asking = null;
+        add(tail, { bond: [payload.index, head.atom] });
+        return;
+      }
+      if (!view.pending) { view.pending = picked; render(); return; }
+      if (samePick(view.pending, picked)) { cancel(); return; }
+      const from = view.pending;
+      add(from.kind === "atom" ? { atom: from.index } : { bond: from.atoms },
+        kind === "atom" ? { atom: payload.index } : { bond: payload.atoms });
+    }
+
+    function render() {
+      renderNav();
+      renderSheet();
+      renderBanner();
+      renderList();
+    }
+    function renderNav() {
+      const states = view.sheet?.states || 1;
+      const steps = view.sheet?.steps || 1;
+      const name = view.step < steps ? `Step ${view.step + 1}` : "What the last step makes";
+      clear(nav,
+        ui.button("", () => go(view.step - 1), { kind: "ghost", icon: "left", small: true, disabled: view.step <= 0, title: "The step before" }),
+        h("span.mech-step", {}, name, h("span.mech-of", {}, ` · ${view.step + 1} of ${states}`)),
+        ui.button("", () => go(view.step + 1), { kind: "ghost", icon: "right", small: true, disabled: view.step >= states - 1, title: "The step after" }),
+        h("div.spacer"),
+        ui.toggle({ value: view.half, label: "One electron (fishhook)", onChange: (value) => { view.half = value; } }),
+        ui.button("Tidy", () => go(view.step), { kind: "ghost", small: true, title: "Lay the structure out again for the arrows it has now" }));
+    }
+    function renderSheet() {
+      const sheet = view.sheet;
+      if (!sheet?.svg) {
+        view.shown = null;
+        clear(sheetBox, h("div.mech-empty", {}, sheet ? "Nothing to draw on: the first structure cannot be read." : "Drawing…"));
+        return;
+      }
+      if (view.shown !== sheet.svg) {
+        // Only repainted when it differs: an identical drawing replaced flickers under the hand.
+        const drawing = h("div.mech-drawing");
+        drawing.innerHTML = sheet.svg;
+        view.shown = sheet.svg;
+        clear(sheetBox, drawing, hitLayer());
+      } else {
+        sheetBox.querySelector(".mech-hit")?.replaceWith(hitLayer());
+      }
+    }
+    function hitLayer() {
+      const sheet = view.sheet;
+      const r = sheet.bond;
+      const asked = new Set((view.asking?.ends || []).map((end) => end.index));
+      const layer = S("svg", { class: "mech-hit", viewBox: sheet.view.join(" "), preserveAspectRatio: "xMidYMid meet" });
+      for (const bond of sheet.bonds) {
+        const picked = samePick(view.pending, { kind: "bond", atoms: bond.atoms });
+        const node = S("circle", { class: `mech-bond${picked ? " picked" : ""}`, cx: bond.x, cy: bond.y, r: r * 0.24 },
+          S("title", {}, `${nameOf(bond.atoms[0])}–${nameOf(bond.atoms[1])} bond`));
+        node.addEventListener("click", () => pick("bond", { atoms: bond.atoms }));
+        layer.append(node);
+      }
+      for (const atom of sheet.atoms) {
+        const picked = samePick(view.pending, { kind: "atom", index: atom.index });
+        const node = S("circle", { class: `mech-atom${picked ? " picked" : ""}${asked.has(atom.index) ? " asked" : ""}`,
+          cx: atom.x, cy: atom.y, r: r * 0.32 }, S("title", {}, atom.name));
+        node.addEventListener("click", () => pick("atom", { index: atom.index }));
+        node.addEventListener("mouseenter", () => hover(atom.index));
+        layer.append(node);
+      }
+      layer.append(S("g", { class: "mech-pairs" }), S("g", { class: "mech-numbers" }));
+      layer.addEventListener("mouseleave", () => hover(null));
+      paintHover(layer);
+      return layer;
+    }
+    function hover(index) {
+      if (view.hovering === index) return;
+      view.hovering = index;
+      const layer = sheetBox.querySelector(".mech-hit");
+      if (layer) paintHover(layer);
+    }
+    // The electrons an atom has to give, shown under the pointer where an arrow off them
+    // would start, each pair a target of its own; and numbers on the atoms the arrows
+    // name, the one pointed at, and the one picked -- a number on every atom is none.
+    function paintHover(layer) {
+      const sheet = view.sheet;
+      const r = sheet.bond;
+      const pairs = layer.querySelector(".mech-pairs");
+      const numbers = layer.querySelector(".mech-numbers");
+      const atom = sheet.atoms.find((item) => item.index === view.hovering);
+      clear(pairs, ...(atom ? atom.pairs.map(([x1, y1, x2, y2]) => {
+        const grab = S("circle", { class: "mech-grab", cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, r: r * 0.2 },
+          S("title", {}, `lone pair on ${atom.name}`));
+        grab.addEventListener("click", () => pick("atom", { index: atom.index }));
+        grab.addEventListener("mouseenter", () => hover(atom.index));
+        return [S("circle", { class: "mech-dot", cx: x1, cy: y1, r: Math.max(sheet.dot, r * 0.055) }),
+          S("circle", { class: "mech-dot", cx: x2, cy: y2, r: Math.max(sheet.dot, r * 0.055) }), grab];
+      }) : []));
+      const shown = new Set([...sheet.named, view.hovering, view.pending?.kind === "atom" ? view.pending.index : null,
+        ...(view.pending?.kind === "bond" ? view.pending.atoms : []), ...(view.asking?.ends || []).map((end) => end.index)]);
+      clear(numbers, ...sheet.atoms.filter((item) => shown.has(item.index)).map((item) =>
+        S("text", { class: "mech-number", x: item.tag[0], y: item.tag[1], "font-size": r * 0.3,
+          "text-anchor": "middle", "dominant-baseline": "central" }, item.number ?? "·")));
+    }
+    function renderBanner() {
+      const sheet = view.sheet;
+      const ask = (...words) => h("div.mech-banner.ask", {}, h("span.mech-light"), h("span.mech-words", {}, ...words));
+      const stop = (label = "Cancel") => ui.button(label, cancel, { kind: "ghost", small: true });
+      const pickWords = (pick) => (pick.kind === "atom" ? [`the lone pair on `, h("b", {}, nameOf(pick.index))]
+        : ["the ", h("b", {}, `${nameOf(pick.atoms[0])}–${nameOf(pick.atoms[1])}`), " bond"]);
+      let line;
+      if (view.said) line = ask(view.said);
+      else if (view.asking) {
+        line = h("div.mech-banner.ask", {}, h("span.mech-light"), h("span.mech-words", {},
+          "Either end of that bond could make the new one. Click the atom it forms from: ",
+          ...view.asking.ends.flatMap((end, i) => [i ? " or " : "", h("b", {}, end.name)]), "."), stop());
+      } else if (view.pending) {
+        line = h("div.mech-banner.ask", {}, h("span.mech-light"), h("span.mech-words", {},
+          "Electrons come from ", ...pickWords(view.pending),
+          ". Now click where they go: the atom they bond to, the atom they settle on, or the bond they strengthen."), stop());
+      } else if (sheet?.problem) {
+        line = h("div.mech-held", {}, h("div.mech-held-lead", {}, h("span.mech-tag", {}, "HELD"),
+          h("span.mech-code", {}, sheet.problem.code)), h("div", {}, sheet.problem.message),
+          sheet.problem.hint ? h("div.mech-hint", {}, sheet.problem.hint) : null);
+      } else if (!sheet?.arrows?.length) {
+        line = ask("Click where the electrons ", h("b", {}, "come from"), ": an atom for its lone pair, or a bond.");
+      } else {
+        const count = sheet.arrows.length;
+        line = h("div.mech-banner.ok", {}, h("span.mech-light"), h("span.mech-words", {},
+          `${view.step < sheet.steps ? `Step ${view.step + 1}` : "This step"} can be: ${count} ${count === 1 ? "arrow" : "arrows"}. Click on to add another.`));
+      }
+      clear(banner, line);
+    }
+    function renderList() {
+      const rows = (view.sheet?.arrows || []).map((arrow, i) => h(`div.mech-arrow-row${arrow.problem ? ".wrong" : ""}`, {},
+        h("span.mech-said", {}, arrow.said || arrow.problem || arrow.text),
+        h("code", {}, arrow.text),
+        ui.button("", () => remove(i), { kind: "ghost", icon: "trash", small: true, title: "Take this arrow away" })));
+      clear(list, rows.length ? [h("div.mech-list-head", {}, "Arrows in this step"), rows] : null);
+    }
+
+    hold();
+    render();
+    load();
   }
 
   function statsForm(block, at, edit, toneSwatches, size) {

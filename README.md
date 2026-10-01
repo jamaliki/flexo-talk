@@ -245,13 +245,22 @@ its curly arrows, a reaction arrow (reagents over it, conditions under it) to th
 Atoms are named by their atom maps (`[O-:5]` is 5). An arrow from a lone pair is
 `"5 -> 2"`, from a bond `"2=3 -> 3"`, a bond moved `"1=2 -> 2-6"`, a fishhook `"~>"`.
 A step with no SMILES is drawn from the arrows before it, its atoms where they were;
-one written out is checked against them. An arrow that cannot be -- carbon with ten
-electrons, a lone pair that is not there -- is said where the mechanism is written,
-in words. The curly arrows are magenta (`arrow_colour="#rrggbb"` for another), each
+one written out is checked against them. A step that cannot be -- carbon with ten
+electrons, a lone pair that is not there -- is drawn as far as it goes, its arrows on
+it, and what is wrong said when the slide is drawn, in words. The curly arrows are magenta (`arrow_colour="#rrggbb"` for another), each
 carrying the lone pair it takes. In a document it is a `mechanism:` block (a SMILES,
 or a list of steps with `smiles`, `arrows`, `label`, `reagents`, `conditions`,
 `arrow`). In the PowerPoint the structures are shapes and their arrows curves, all
-editable. See "Reaction
+editable.
+
+In the studio each step has **Draw**: the structure it acts on, drawn large, to point
+at. Click where the electrons come from -- an atom for its lone pair (pointing at an
+atom shows its pairs), or a bond -- then where they go, and the arrow is written into
+the step (an atom with no map is given one in its SMILES). A bond's electrons sent to
+an atom outside it ask which end the new bond forms from; **One electron** writes
+fishhooks. The step holds still while it is drawn on; **Tidy** lays it out again for
+its arrows. A step is usually wrong between one arrow and the next, so it is drawn
+anyway, with what is wrong under it. Only the atoms the arrows name are numbered. See "Reaction
 mechanisms" in flexo's README for how structures are laid out.
 
 ## Plots

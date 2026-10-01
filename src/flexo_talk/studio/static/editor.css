@@ -243,4 +243,42 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 /* A mechanism's steps, each on a card of its own. */
 .step-cards { display: flex; flex-direction: column; gap: 10px; }
 .step-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 8px; }
-.step-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 12px; }
+.step-head { display: flex; align-items: center; gap: 4px; font-weight: 600; font-size: 12px; }
+.step-head .spacer { flex: 1; }
+
+/* Drawing a mechanism's arrows: the step's structure, large, every atom and bond a target. */
+.mech-nav { display: flex; align-items: center; gap: 6px; }
+.mech-nav .spacer { flex: 1; }
+.mech-step { font-weight: 600; font-size: 13px; }
+.mech-of { font-weight: 400; color: var(--ink-3); }
+.mech-sheet { position: relative; height: min(400px, 52vh); background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+/* The drawing and the targets over it take the same box, so the same viewBox maps alike. */
+.mech-drawing { position: absolute; inset: 14px; }
+.mech-drawing svg { width: 100%; height: 100%; display: block; }
+.mech-hit { position: absolute; left: 14px; top: 14px; width: calc(100% - 28px); height: calc(100% - 28px); }
+.mech-empty { display: grid; place-items: center; height: 100%; color: var(--ink-3); font-size: 13px; }
+.mech-hit circle.mech-atom, .mech-hit circle.mech-bond, .mech-hit circle.mech-grab { fill: transparent; cursor: pointer; }
+.mech-hit circle.mech-atom:hover, .mech-hit circle.mech-bond:hover { fill: rgba(61, 90, 254, 0.16); }
+.mech-hit circle.picked { fill: rgba(212, 102, 214, 0.26); }
+.mech-hit circle.asked { fill: rgba(212, 102, 214, 0.14); stroke: #d466d6; stroke-width: 0.4; stroke-dasharray: 1 1; }
+.mech-hit circle.mech-grab:hover { fill: rgba(212, 102, 214, 0.18); }
+.mech-hit .mech-dot { fill: #d466d6; pointer-events: none; }
+.mech-hit .mech-number { fill: #8a5ad4; font-family: var(--mono); font-weight: 600; pointer-events: none; }
+.mech-banner { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 9px; font-size: 13px; line-height: 1.45; }
+.mech-banner .mech-words { flex: 1; }
+.mech-light { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.mech-banner.ask { background: rgba(212, 102, 214, 0.08); border: 1px solid rgba(212, 102, 214, 0.45); }
+.mech-banner.ask .mech-light { background: #d466d6; }
+.mech-banner.ok { background: rgba(31, 138, 76, 0.08); border: 1px solid rgba(31, 138, 76, 0.4); }
+.mech-banner.ok .mech-light { background: var(--ok); }
+.mech-held { padding: 10px 13px; border-radius: 9px; background: var(--error-soft); border: 1px solid rgba(197, 48, 48, 0.35); font-size: 13px; line-height: 1.5; display: grid; gap: 3px; }
+.mech-held-lead { display: flex; align-items: baseline; gap: 9px; }
+.mech-tag { font: 700 10px var(--mono); letter-spacing: 0.08em; color: var(--error); }
+.mech-code { font: 400 10.5px var(--mono); color: var(--ink-3); }
+.mech-hint { color: var(--ink-2); }
+.mech-arrows { display: grid; gap: 4px; }
+.mech-list-head { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.mech-arrow-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.mech-arrow-row .mech-said { flex: 1; }
+.mech-arrow-row code { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+.mech-arrow-row.wrong .mech-said { color: var(--error); }
