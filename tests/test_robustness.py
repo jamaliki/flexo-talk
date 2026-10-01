@@ -798,3 +798,25 @@ def test_a_plot_of_very_many_marks_draws_them_as_one_picture_in_the_slides_paint
     with zipfile.ZipFile(result.pptx) as pptx:  # type: ignore[arg-type]
         slide = pptx.read("ppt/slides/slide1.xml").decode()
     assert slide.count("<p:sp>") < 200 and "<p:pic>" in slide
+
+
+@pytest.mark.parametrize("kind", ["pcolormesh", "contourf"])
+def test_a_mesh_shows_no_hairlines_of_the_slide_between_its_cells_in_the_png(kind: str, tmp_path: Path) -> None:
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.colors import ListedColormap
+    from PIL import Image
+
+    deck = Deck("mesh", theme="dark")
+    with deck.plotting():
+        figure, axes = plt.subplots()
+        x, y = np.meshgrid(np.linspace(0, 1, 13), np.linspace(0, 1, 13))
+        # Every cell (every level) one colour: anything else inside is the slide showing through.
+        getattr(axes, kind)(x, y, np.sin(6 * x) * np.cos(5 * y), cmap=ListedColormap(["#21918c"]))
+    deck.slide("Mesh").plot(figure)
+    (png,) = deck.build(tmp_path, formats=("png",)).pngs
+    pixels = np.asarray(Image.open(png).convert("RGB"), dtype=int)
+    away = np.abs(pixels - np.array([0x21, 0x91, 0x8C])).max(axis=2)
+    rows, columns = np.nonzero(away < 8)
+    inside = away[rows.min() + 6 : rows.max() - 6, columns.min() + 6 : columns.max() - 6]
+    assert inside.max() < 16  # a seam lets the slide through by 30 or more
