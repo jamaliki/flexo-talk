@@ -169,9 +169,12 @@ class _Canvas:
         runs = self._drawable(runs, typography)
         if self.link and any(run.link and not run.color for run in runs):
             runs = tuple(replace(run, color=self.link) if run.link and not run.color else run for run in runs)
-        # A word wider than the slide (a URL) breaks rather than running off it.
+        # A word wider than the slide (a URL) breaks rather than running off it. A width
+        # made by adding and taking away the words' own (a table's column) can fall a
+        # rounding error short of them: that is room enough, not a reason to break a word.
         return TextMeasurer(typography).measure(
-            runs, max_width=width, weight=weight, balance=balance, break_words=True
+            runs, max_width=width + 1e-6 if width else width, weight=weight, balance=balance,
+            break_words=True,
         )
 
     def _drawable(self, runs: tuple[TextRun, ...], typography: object) -> tuple[TextRun, ...]:
