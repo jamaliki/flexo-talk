@@ -5,7 +5,8 @@ A formula flexo reads (``flexo.texmath.parse``) is written as the Office Math th
 PowerPoint's equation editor makes: fractions, radicals, scripts, big operators with
 their limits, growing brackets, accents, bars, braces, matrices and cases. PowerPoint
 sets it in its maths font (Cambria Math); a slide program that does not read Office
-Math shows flexo's own drawing of it instead (see ``flexo_talk.pptx``).
+Math shows flexo's own drawing of it instead (see ``flexo_talk.pptx``), as every one
+does a formula Office Math cannot show (``expressible``).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from xml.sax.saxutils import escape
 
 from flexo.texmath import (
     BIN,
+    CLOSE,
     INTEGRALS,
     REL,
     Accent,
@@ -61,15 +63,16 @@ _ERROR = "C0392B"
 
 
 class _Writer:
-    def __init__(self, size: float, colour: str | None, resolve) -> None:
+    def __init__(self, size: float, colour: str | None, resolve, display: bool = False) -> None:
         self.size = size
         self.colour = colour
         self.resolve = resolve
+        self.display = display
 
     # -- runs --
 
     def run(self, text: str, *, style: str | None = None, script: str | None = None, normal: bool = False,
-            italic: bool | None = None, colour: str | None = None) -> str:
+            italic: bool | None = None, colour: str | None = None, size: float | None = None) -> str:
         if not text:
             return ""
         props = ""
@@ -89,7 +92,7 @@ class _Writer:
         space = ' xml:space="preserve"' if text != text.strip() else ""
         return (
             f"<m:r>{f'<m:rPr>{props}</m:rPr>' if props else ''}"
-            f'<a:rPr lang="en-GB" sz="{round(self.size * 100)}" b="{int(bold)}" i="{int(italic)}" dirty="0">'
+            f'<a:rPr lang="en-GB" sz="{round((size or self.size) * 100)}" b="{int(bold)}" i="{int(italic)}" dirty="0">'
             f'{paint}<a:latin typeface="{MATHS_FONT}"/><a:cs typeface="{MATHS_FONT}"/></a:rPr>'
             f"<m:t{space}>{escape(text)}</m:t></m:r>"
         )
@@ -103,7 +106,7 @@ class _Writer:
             item = items[index]
             index += 1
             operator = item.base if isinstance(item, Scripts) else item
-            if isinstance(operator, Operator) and operator.symbol:
+            if isinstance(operator, Operator) and (operator.symbol or operator.body):
                 # A big operator takes what follows it, up to a relation or sign, as its
                 # body; a named one (log, max) as its argument, so it is spaced as one.
                 body: list = []
@@ -167,8 +170,10 @@ class _Writer:
                     parts[-1].append(thing)
             return self.fenced(item.left, [self.items(part) for part in parts], item.right,
                                separator=separators[0] if separators else None)
-        if isinstance(item, Middle | Big):
+        if isinstance(item, Middle):
             return self.run(item.delimiter, style="p", italic=False)
+        if isinstance(item, Big):
+            return self.big(item)
         if isinstance(item, Accent):
             return (f'<m:acc><m:accPr><m:chr m:val="{escape(item.mark)}"/></m:accPr>'
                     f"<m:e>{self.items(item.body)}</m:e></m:acc>")
@@ -209,7 +214,8 @@ class _Writer:
         if isinstance(item, Array):
             return self.array(item)
         if isinstance(item, Space):
-            return self.run(_space(item.em), style="p", italic=False) if item.em > 0 else ""
+            em = item.em if item.inline is None or self.display else item.inline
+            return self.run(_space(em), style="p", italic=False) if em > 0 else ""
         if isinstance(item, Coloured):
             before = self.colour
             self.colour = self.resolve(item.colour) or before
@@ -240,9 +246,24 @@ class _Writer:
         return self.run(item.char)
 
     def operator(self, item: Operator) -> str:
+        if item.body is not None:
+            return self.items(item.body)
         if not item.symbol:
             return ""
         return self.run(item.symbol, style="p", italic=False)
+
+    def big(self, item: Big) -> str:
+        """``\\big(`` and its kin: a delimiter of a fixed size, 1.2, 1.8, 2.4 or 3 times the
+        words' as TeX's are. Office Math sizes none, but a delimiter grows to what it holds,
+        about the maths axis: here a hidden, zero-width bar as tall as that (Cambria Math's
+        bar reaches 0.699 em above its baseline, and its axis is 0.286 em up)."""
+
+        reach = (0.0, 1.2, 1.8, 2.4, 3.0)[item.size] / 2.0
+        tall = self.run("|", style="p", italic=False, size=self.size * (reach + 0.286) / 0.699)
+        phantom = (f'<m:phant><m:phantPr><m:show m:val="0"/><m:zeroWid m:val="1"/></m:phantPr>'
+                   f"<m:e>{tall}</m:e></m:phant>")
+        left, right = ("", item.delimiter) if item.kind == CLOSE else (item.delimiter, "")
+        return self.fenced(left, [phantom], right)
 
     def scripts(self, item: Scripts) -> str:
         base = item.base
@@ -354,9 +375,35 @@ def omml(source: str, *, size: float, colour: str | None = None, display: bool =
     display = display or source.lstrip().startswith("\\displaystyle")
     items, _ = parse(source)
     items = _implicit_rows(items, display)
-    body = _Writer(size, colour, resolve).items(items)
+    body = _Writer(size, colour, resolve, display).items(items)
     maths = f"<m:oMath>{body}</m:oMath>"
     if display:
         jc = {"start": "left", "end": "right"}.get(align, "centerGroup")
         maths = f'<m:oMathPara><m:oMathParaPr><m:jc m:val="{jc}"/></m:oMathParaPr>{maths}</m:oMathPara>'
     return f'<a14:m xmlns:a14="{A14}" xmlns:m="{M}" xmlns:a="{A}">{maths}</a14:m>'
+
+
+def expressible(source: str) -> bool:
+    """Whether Office Math can show ``source`` as flexo sets it. It draws no rules in a
+    matrix (an array's ``|`` and ``\\hline``): such a formula keeps flexo's drawing in
+    the PowerPoint too, rather than becoming an equation without them."""
+
+    items, _ = parse(source)
+    return not any(isinstance(item, Array) and (item.lines or item.bars)
+                   for item in _within(_implicit_rows(items, True)))
+
+
+def _within(items: list):
+    """Every atom of ``items``, and every atom inside each, however deep."""
+
+    for item in items:
+        if isinstance(item, list):
+            yield from _within(item)
+            continue
+        yield item
+        for name in getattr(item, "__slots__", ()):
+            value = getattr(item, name)
+            if isinstance(value, list):
+                yield from _within(value)
+            elif hasattr(value, "__slots__"):
+                yield from _within([value])

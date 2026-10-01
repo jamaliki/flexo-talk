@@ -871,6 +871,7 @@ def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None
         )
 
     maths = any(run.math for _, runs, _ in layout.items for run in runs)
+    editable = editable and _expressible(run for _, runs, _ in layout.items for run in runs)
     shape_id = ids()
     drawn = _group(Group(None, list(formulas or [])), Placement(), ids) if formulas else None
     if maths and editable:
@@ -921,6 +922,14 @@ def _runs_xml(runs, typography, stack, size: float, palette, ink: str, *, native
     return "".join(pieces)
 
 
+
+
+def _expressible(runs) -> bool:
+    """Whether every formula among ``runs`` is one Office Math shows as flexo set it."""
+
+    from flexo_talk.omml import expressible
+
+    return all(expressible(run.math) for run in runs if run.math)
 
 
 def _resolver(palette):
@@ -985,7 +994,7 @@ def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, p
 
     from flexo.text import font_stack
 
-    from flexo_talk.omml import omml
+    from flexo_talk.omml import expressible, omml
 
     equations: dict[str, Group] = {}
 
@@ -1005,6 +1014,10 @@ def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, p
     for drawn in list(tree.iter(f"{{{_P}}}grpSp")):
         name_element = drawn.find(f"{{{_P}}}nvGrpSpPr/{{{_P}}}cNvPr")
         name = name_element.get("name") if name_element is not None else None
+        if name in equations and not expressible(equations[name].data.get("data-flexo-math", "")):
+            continue
+        if name in passages and not _expressible(run for line in passages[name].lines for run in line):
+            continue
         if name in equations:
             group = equations[name]
             size = float(group.data.get("data-flexo-size", "20"))
@@ -1152,6 +1165,7 @@ def add_table(tree: etree._Element, deck, layout, *, formulas: list | None = Non
         )
 
     maths = any(run.math for row in layout.cells for cell in row for run in cell)
+    editable = editable and _expressible(run for row in layout.cells for cell in row for run in cell)
     frame_id = ids()
     drawn = _group(Group(None, list(formulas or [])), Placement(), ids) if formulas else None
     if maths and editable:
