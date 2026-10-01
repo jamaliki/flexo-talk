@@ -391,5 +391,5 @@ def test_title_section_and_statement_slides_fit_their_words_or_say_so() -> None:
     deck.statement(long, by="Someone")
     for slide in deck.render():
         ys = [float(y) for y in re.findall(r'<text [^>]*\by="([\d.-]+)"', slide.svg)]
-        assert 0 < min(ys) and max(ys) < deck.style.height, slide.slide.layout
+        assert min(ys) > 0 and max(ys) < deck.style.height, slide.slide.layout
         assert any("to fit" in line for line in slide.diagnostics)
