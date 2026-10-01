@@ -569,3 +569,18 @@ def test_in_the_studio_a_decks_python_runs_apart_and_cannot_hang_or_take_down_th
     assert said["slide9"] == "plots.py:typo: name 'figur' is not defined (line 29)"
     assert "slide1" not in said and "slide7" not in said and "pid " in pages["slide7"].svg
     assert seconds < 30
+
+
+def test_a_mechanism_block_is_read_and_its_mistakes_said_at_their_place(tmp_path: Path) -> None:
+    document = {
+        "deck": {"id": "chemistry"},
+        "slides": [{"title": "SN2", "body": [{"mechanism": [
+            {"smiles": "[OH-:1].[CH3:2][Br:3]", "arrows": ["1 -> 2", "2-3 -> 3"], "label": "backside attack"},
+        ]}]}],
+    }
+    deck = deck_from_document(document, tmp_path)
+    (rendered,) = deck.render()
+    assert "backside attack" in rendered.svg
+    document["slides"][0]["body"][0]["mechanism"][0]["arrows"] = ["1 -> 2"]
+    with pytest.raises(DeckDocumentError, match=r"slides\[0\]\.body\[0\] \(mechanism\).*10 electrons"):
+        deck_from_document(document, tmp_path)

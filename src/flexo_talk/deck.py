@@ -711,6 +711,59 @@ class Region:
         self._record("math", source, size=size, align=None if align == "middle" else align, colour=colour)
         return self
 
+    def mechanism(
+        self,
+        steps: str | Sequence[str | dict[str, object]],
+        *,
+        lone_pairs: Literal["used", "all", "none"] = "used",
+        charges: Literal["circled", "plain"] = "circled",
+        per_row: int | None = None,
+    ) -> Region:
+        """A reaction mechanism, drawn as chemists draw it (see ``flexo.mechanism``):
+        each step a structure in SMILES and its curly arrows, a reaction arrow (reagents
+        over it, conditions under it) to the next. ``steps`` is a SMILES or a list of
+        steps, each a SMILES or ``{"smiles": ..., "arrows": ["5 -> 2", "2=3 -> 3"],
+        "label": ..., "reagents": ..., "conditions": ..., "arrow": "equilibrium"}``.
+
+        Atoms are named by their atom maps (``[O-:5]``). An arrow from a lone pair is
+        ``"5 -> 2"``, from a bond ``"2=3 -> 3"``, a bond moved ``"1=2 -> 2-6"``, a
+        fishhook ``"~>"``. A step with no SMILES is drawn from the arrows before it;
+        one written out is checked against them -- and an arrow that cannot be (carbon
+        with ten electrons) is said here, in words."""
+
+        lone_pairs = _choice(lone_pairs, "lone_pairs", ("used", "all", "none"))
+        charges = _choice(charges, "charges", ("circled", "plain"))
+        if per_row is not None:
+            per_row = int(_number(per_row, "per_row", 1, 20, "3"))
+        written = [steps] if isinstance(steps, str) else list(steps)
+        if not written:
+            raise ValueError("a mechanism needs at least one step")
+        for number, step in enumerate(written, start=1):
+            if not isinstance(step, str | dict):
+                raise ValueError(f"step {number} of the mechanism is a SMILES, or a mapping with smiles and arrows")
+        deck = self._slide.deck
+        identifier = f"{self._slide.id}-{self.name}-{len(self.blocks)}"
+        figure = flexo.Figure(identifier, **deck.figure_options())
+        node = figure.root.mechanism(
+            "mechanism", written, lone_pairs=lone_pairs, charges=charges, per_row=per_row
+        )
+        from flexo.diagnostics import FlexoError
+        from flexo.mechanism import mechanism_panels
+
+        try:
+            mechanism_panels(next(item for item in figure.spec.nodes if item.id == node.id))
+        except FlexoError as error:
+            said = error.diagnostics[0]
+            raise ValueError(f"{said.message}{' ' + said.hint if said.hint else ''}") from None
+        self.blocks.append(_Figure(figure, False))
+        self._record(
+            "mechanism", steps if isinstance(steps, str) else [dict(step) if isinstance(step, dict) else step
+                                                               for step in written],
+            lone_pairs=None if lone_pairs == "used" else lone_pairs,
+            charges=None if charges == "circled" else charges, per_row=per_row,
+        )
+        return self
+
     def gallery(
         self,
         items: Sequence[str | Path | tuple[str | Path, str]],
@@ -1103,6 +1156,10 @@ class Slide:
 
     def math(self, source: str, **options: object) -> Slide:
         next(iter(self.regions.values())).math(source, **options)  # type: ignore[arg-type]
+        return self
+
+    def mechanism(self, steps, **options: object) -> Slide:
+        next(iter(self.regions.values())).mechanism(steps, **options)  # type: ignore[arg-type]
         return self
 
     def notes(self, text: str) -> Slide:

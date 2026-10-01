@@ -230,6 +230,28 @@ equations cannot draw, keeps the drawing in PowerPoint too.
 `deck.build(..., editable_maths=False)` writes only the drawing, so PowerPoint
 shows the maths in the deck's own maths font as well.
 
+## Mechanisms
+
+```python
+slide.mechanism([
+    {"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2", "2=3 -> 3"],
+     "reagents": "NaOH"},
+    {"arrows": ["3 -> 2", "2-4 -> 4"], "label": "tetrahedral intermediate"},
+])
+```
+
+A reaction mechanism, drawn as chemists draw it: each step a structure in SMILES and
+its curly arrows, a reaction arrow (reagents over it, conditions under it) to the next.
+Atoms are named by their atom maps (`[O-:5]` is 5). An arrow from a lone pair is
+`"5 -> 2"`, from a bond `"2=3 -> 3"`, a bond moved `"1=2 -> 2-6"`, a fishhook `"~>"`.
+A step with no SMILES is drawn from the arrows before it, its atoms where they were;
+one written out is checked against them. An arrow that cannot be -- carbon with ten
+electrons, a lone pair that is not there -- is said where the mechanism is written,
+in words. In a document it is a `mechanism:` block (a SMILES, or a list of steps with
+`smiles`, `arrows`, `label`, `reagents`, `conditions`, `arrow`). In the PowerPoint the
+structures are shapes and their arrows curves, all editable. See "Reaction
+mechanisms" in flexo's README for how structures are laid out.
+
 ## Plots
 
 ```python

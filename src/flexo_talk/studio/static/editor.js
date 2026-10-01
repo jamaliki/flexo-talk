@@ -20,9 +20,10 @@ const BLOCKS = {
   gallery: { icon: "gallery", label: "Gallery", hint: "Logos or people in a grid" },
   plot: { icon: "plot", label: "Plot", hint: "A matplotlib figure made in Python" },
   math: { icon: "math", label: "Equation", hint: "LaTeX, on a line of its own" },
+  mechanism: { icon: "mechanism", label: "Mechanism", hint: "Structures in SMILES and their curly arrows, checked" },
 };
 const MAIN_BLOCKS = ["text", "bullets", "figure", "image", "table"];
-const MORE_BLOCKS = ["math", "stats", "quote", "callout", "code", "gallery", "plot"];
+const MORE_BLOCKS = ["math", "mechanism", "stats", "quote", "callout", "code", "gallery", "plot"];
 
 // What an equation's snippet buttons put in: [label, title, LaTeX]; "|" is where the cursor goes.
 const MATH_SNIPPETS = [
@@ -79,6 +80,9 @@ const NEW_BLOCKS = {
   gallery: () => ({ gallery: [] }),
   plot: () => ({ plot: "" }),
   math: () => ({ math: "\\mathcal{L}(\\theta) = -\\frac{1}{N} \\sum_{i=1}^{N} \\log p_\\theta(y_i \\mid x_i)" }),
+  mechanism: () => ({ mechanism: [
+    { smiles: "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", arrows: ["5 -> 2", "2=3 -> 3"], reagents: "NaOH" },
+    { arrows: ["3 -> 2", "2-4 -> 4"], label: "tetrahedral intermediate" }] }),
 };
 
 // -- the document ---------------------------------------------------------------------
@@ -128,6 +132,11 @@ function summary(block) {
     case "image": case "plot": return value || "Not chosen yet";
     case "callout": return plain(block.title) || plain(value);
     case "math": return mathWords(value) || "An empty equation";
+    case "mechanism": {
+      const steps = Array.isArray(value) ? value : [value];
+      const first = steps.map((step) => (typeof step === "string" ? step : step?.smiles)).find(Boolean) || "";
+      return `${steps.length} step${steps.length === 1 ? "" : "s"} · ${first}`;
+    }
     default: return plain(value);
   }
 }
@@ -1163,6 +1172,7 @@ export function mount(studio, container) {
           h("div.hint-line", {}, "A function returning a matplotlib figure; it runs inside ", h("code", {}, "deck.plotting()"), " and is given the deck if it takes an argument."),
           ui.field("Shape", ui.number({ value: block.aspect, placeholder: "fill the room", min: 0.2, step: 0.1, key: key("aspect"), onChange: set("aspect") }), { hint: "width ÷ height" })];
       case "math": return mathForm(block, at, edit, toneSwatches, size);
+      case "mechanism": return mechanismForm(block, at, edit);
       default:
         return [h("div.hint-line", {}, "This part has no form yet.")];
     }
@@ -1203,6 +1213,56 @@ export function mount(studio, container) {
       onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "middle")) })),
       ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
       size()];
+  }
+
+  function mechanismForm(block, at, edit) {
+    // Each step a card: its structure, its arrows, and what is written by it.
+    const steps = (Array.isArray(block.mechanism) ? block.mechanism : [block.mechanism])
+      .map((step) => (typeof step === "string" ? { smiles: step } : { ...(step || {}) }));
+    const write = (what) => edit((b) => {
+      b.mechanism = steps.map((step) => {
+        const out = {};
+        for (const [key, value] of Object.entries(step)) {
+          if (key === "arrows" ? value && value.length : value !== "" && value !== undefined && value !== null) out[key] = value;
+        }
+        return out;
+      });
+    }, what);
+    const arrowsText = (step) => (Array.isArray(step.arrows) ? step.arrows.join("; ") : step.arrows || "");
+    const cards = steps.map((step, i) => h("div.step-card", {},
+      h("div.step-head", {}, h("span", {}, `Step ${i + 1}`),
+        ui.button("", () => { steps.splice(i, 1); write("steps"); renderInspector(); },
+          { kind: "ghost", icon: "trash", small: true, disabled: steps.length <= 1 })),
+      ui.field("Structure", ui.input({ value: step.smiles || "", mono: true, key: `step.${i}.smiles`,
+        placeholder: i ? "what the arrows before it make" : "SMILES, with atom maps: [O-:5]",
+        onInput: (value) => { step.smiles = value; write("smiles"); } })),
+      ui.field("Arrows", ui.input({ value: arrowsText(step), mono: true, key: `step.${i}.arrows`, placeholder: "5 -> 2; 2=3 -> 3",
+        onInput: (value) => { step.arrows = value.split(";").map((part) => part.trim()).filter(Boolean); write("arrows"); } })),
+      ui.field("Name", ui.input({ value: step.label || "", key: `step.${i}.label`, placeholder: "under the structure",
+        onInput: (value) => { step.label = value; write("label"); } })),
+      i < steps.length - 1 || (step.arrows && step.arrows.length)
+        ? h("div.list-row", {},
+          ui.input({ value: step.reagents || "", key: `step.${i}.reagents`, placeholder: "over the arrow (NaOH)",
+            onInput: (value) => { step.reagents = value; write("reagents"); } }),
+          ui.input({ value: step.conditions || "", key: `step.${i}.conditions`, placeholder: "under it (heat)",
+            onInput: (value) => { step.conditions = value; write("conditions"); } }),
+          ui.select({ value: step.arrow || "forward", options: [
+            { value: "forward", label: "→" }, { value: "equilibrium", label: "⇌" },
+            { value: "resonance", label: "↔" }, { value: "none", label: "none" }],
+          onChange: (value) => { step.arrow = value === "forward" ? undefined : value; write("arrow"); } }))
+        : null));
+    return [h("div.step-cards", {}, cards),
+      h("div", {}, ui.button("Step", () => { steps.push({ arrows: [] }); write("steps"); renderInspector(); },
+        { kind: "ghost", icon: "plus", small: true })),
+      h("div.hint-line", {}, "Atoms are their maps: ", h("code", {}, "[O-:5]"), " is 5. ",
+        h("code", {}, "5 -> 2"), " a lone pair to an atom, ", h("code", {}, "2=3 -> 3"), " a bond to an atom, ",
+        h("code", {}, "1=2 -> 2-6"), " a bond moved, ", h("code", {}, "~>"), " one electron. A step left without a structure is what the arrows make; one written out is checked."),
+      ui.field("Lone pairs", ui.segmented({ value: block.lone_pairs || "used", options: [
+        { value: "used", label: "Used" }, { value: "all", label: "All" }, { value: "none", label: "None" }],
+      onChange: (value) => editBlock(at, (b) => setOption(b, "lone_pairs", value, "used")) })),
+      ui.field("Charges", ui.segmented({ value: block.charges || "circled", options: [
+        { value: "circled", label: "Circled" }, { value: "plain", label: "Plain" }],
+      onChange: (value) => editBlock(at, (b) => setOption(b, "charges", value, "circled")) }))];
   }
 
   function statsForm(block, at, edit, toneSwatches, size) {
