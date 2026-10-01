@@ -230,3 +230,73 @@ def test_light_words_over_a_shaded_picture_and_a_word_when_they_will_not_read(tm
     faint = Deck("p")
     faint.title("Over a photograph", background=str(bright), shade=0.2)
     assert any("a shade of" in line for line in faint.render()[0].diagnostics)
+
+
+def test_a_wide_table_wraps_its_cells_to_stay_on_the_slide(tmp_path: Path) -> None:
+    deck = Deck("t")
+    deck.slide("Long cells").table([
+        ["Method", "Notes", "Score"],
+        ["Ours", "A long description of the method that goes on and on " * 3, "0.93"],
+    ])
+    deck.slide("Wide").table([[f"Column {i}" for i in range(14)], [f"value {i * 1234}" for i in range(14)]])
+    first, second = deck.render()
+    (table,) = first.tables
+    assert sum(table.widths) <= deck.style.width - 2 * deck.style.margin + 0.5
+    assert table.heights[1] > table.heights[0] * 1.5  # the long cell wrapped
+    assert first.diagnostics == []
+    assert sum(second.tables[0].widths) <= deck.style.width - 2 * deck.style.margin + 0.5
+    assert any("too wide for its place" in line for line in second.diagnostics)
+
+
+def test_a_long_code_line_is_set_smaller_then_wrapped_and_said() -> None:
+    from flexo_talk.compose import _Canvas, _code_lines
+
+    deck = Deck("c")
+    long = "result = some_function_with_a_long_name(argument_one, argument_two, keyword=value) " * 2
+    slide = deck.slide("Code")
+    slide.code(f"def f():\n    {long}\n    return result")
+    (rendered,) = deck.render()
+    assert any("too long for the slide, wrapped" in line for line in rendered.diagnostics)
+    canvas = _Canvas(deck, slide)
+    _, lines = _code_lines(canvas, slide.body.blocks[0], 400.0)
+    assert len(lines) > 3 and all(line.startswith("        ") for line, _ in lines[2:-1])
+
+
+def test_a_gallery_fits_the_height_of_its_place(tmp_path: Path) -> None:
+    import re
+
+    from PIL import Image
+
+    pictures = []
+    for index in range(4):
+        path = tmp_path / f"p{index}.png"
+        Image.new("RGB", (400, 400), "#3366aa").save(path)
+        pictures.append((str(path), f"Person {index}"))
+    deck = Deck("g")
+    deck.slide("People").gallery(pictures, columns=2, crop="circle")
+    (slide,) = deck.render()
+    placed = re.findall(r'<image[^>]* y="([\d.]+)"[^>]* height="([\d.]+)"', slide.svg)
+    bottoms = [float(y) + float(h) for y, h in placed]
+    assert bottoms and max(bottoms) <= deck.style.height - deck.style.margin + 1
+    assert not any("words do not fit" in line for line in slide.diagnostics)
+
+
+def test_a_phone_photograph_stands_upright_and_cmyk_reads(tmp_path: Path) -> None:
+    import base64
+    import io
+
+    from flexo.artwork import load_artwork
+    from PIL import Image
+
+    turned = tmp_path / "turned.jpg"
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    Image.new("RGB", (300, 200), "#cc0000").save(turned, exif=exif)
+    art = load_artwork("p", str(turned))
+    assert (art.width, art.height) == (200 * 0.75, 300 * 0.75)
+    upright = Image.open(io.BytesIO(base64.b64decode(art.data_uri.split(",", 1)[1])))
+    assert upright.size == (200, 300)
+    cmyk = tmp_path / "cmyk.jpg"
+    Image.new("CMYK", (40, 40), (0, 255, 255, 0)).save(cmyk)
+    shown = Image.open(io.BytesIO(base64.b64decode(load_artwork("c", str(cmyk)).data_uri.split(",", 1)[1])))
+    assert shown.mode == "RGB"
