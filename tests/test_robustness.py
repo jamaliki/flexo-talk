@@ -473,3 +473,15 @@ def test_small_things_are_left_out_or_said() -> None:
     assert 'data-flexo-talk="code"' not in rendered.svg
     assert any("different numbers of cells" in line for line in rendered.diagnostics)
     assert len(rendered.diagnostics) == len(set(rendered.diagnostics))
+
+
+def test_the_powerpoint_names_faces_in_english_and_tags_runs_by_script() -> None:
+    from flexo.fonts import family_faces, select_face
+
+    from flexo_talk.pptx import _lang, _legacy_family
+
+    faces = family_faces("Geeza Pro")
+    if faces:  # a Mac font: named in Persian, Hindi and Arabic only, on Windows
+        face = select_face(faces, 400, False)
+        assert _legacy_family(face.source, face.index) == "Geeza Pro"
+    assert [_lang(text) for text in ("hello", "گفتگو", "日本語のテキスト", "한국어")] == ["en-GB", "fa-IR", "ja-JP", "ko-KR"]
