@@ -248,7 +248,11 @@ all of LaTeX that flexo reads, in the deck's maths font -- and drawn as shapes. 
 is the same settings as a dict). An SVG saved by any program --
 `slide.image("plot.svg")` -- is placed as vectors the same way when it holds
 only what flexo draws exactly (paths, text, clips, pictures); otherwise, and for
-PNG and JPEG files, it is a picture.
+PNG and JPEG files, it is a picture. An Illustrator file or a PDF --
+`slide.image("figure.ai")`, `slide.image("paper.pdf#2")` -- is read back as the
+drawing it is: its shapes become freeforms, its words their glyphs' outlines,
+its photographs pictures, and a gradient or a curved mask a picture of that part
+alone (see "Illustrator and PDF files" in flexo's guide).
 
 ## PowerPoint
 
