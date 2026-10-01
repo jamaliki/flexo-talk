@@ -480,7 +480,10 @@ export function mount(studio, container) {
     // The slide's drawing is put in the page again only when it changed: parsing
     // and laying out an SVG is the costliest thing the stage does.
     const shows = page?.svg ? `${state.slide}:${page.hash}` : "";
+    let before = null;
     if (!pageNode || pageNode.dataset.shows !== shows) {
+      // A figure's parts just moved on this slide: they land from where they were.
+      before = figureBlock() ? figure.parts.landing() : null;
       pageNode = h("div.slide-page", { dataset: { shows } });
       if (page?.svg) pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, "");
       else pageNode.append(h("div.placeholder", {}, h("div.spinner")));
@@ -492,6 +495,7 @@ export function mount(studio, container) {
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
       pageNode.addEventListener("click", onPick);
       pageNode.addEventListener("dblclick", onEdit);
+      pageNode.addEventListener("pointerdown", onPress);
     }
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
@@ -513,6 +517,7 @@ export function mount(studio, container) {
     if (figureMarks.parentNode !== pageNode) pageNode.append(figureMarks, figureBar);
     placeFigure();
     figure?.parts.placeInline();
+    if (before && figureBlock()) figure.parts.land(before);
   }
 
   function messageView(message) {
@@ -581,6 +586,7 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
+    if (figure?.parts.dragging) return;
     if (inFigure(event)) {
       const id = figure.parts.idAt(event);
       const box = id && figure.parts.model ? boxOf(figurePrefix() + id) : null;
@@ -591,7 +597,14 @@ export function mount(studio, container) {
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
+  // A part of the chosen figure, pressed and moved, is dragged to another place in it.
+  function onPress(event) {
+    if (event.target.closest(".fig-inline, .figure-bar") || !figureBlock() || !editable(figureBlock()) || !inFigure(event)) return;
+    figure.parts.pointerdown(event);
+  }
+
   function onPick(event) {
+    if (figure?.parts.justDragged) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
@@ -679,6 +692,7 @@ export function mount(studio, container) {
       idOf: (id) => { const prefix = figurePrefix(); return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : null; },
       box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
       changed: () => { renderInspector(); placeFigure(); },
+      settled: () => placeFigure(),
       chooseFile,
       tones: () => studio.info?.tones,
       addAnchor: () => figureBar.querySelector(".add") || figureBar,
