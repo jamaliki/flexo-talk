@@ -47,6 +47,7 @@ back as a document.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import importlib.util
 import inspect
 import json
@@ -57,7 +58,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import fields, replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import yaml
@@ -147,7 +148,7 @@ def load_document(source: str | Path) -> dict[str, Any]:
     text = _text(data, path.name)
     try:
         json_file = path.suffix.lower() == ".json"
-        document = json.loads(text) if json_file else yaml.load(text, Loader=_DocumentLoader)
+        document = json.loads(text) if json_file else parse_document(text)
     except json.JSONDecodeError as error:
         raise DeckDocumentError("", f"{path.name}, line {error.lineno}, column {error.colno}: {error.msg}") from None
     except yaml.YAMLError as error:
@@ -158,6 +159,13 @@ def load_document(source: str | Path) -> dict[str, Any]:
         raise DeckDocumentError("", f"{path.name} is not a deck document (a mapping with deck and slides)")
     _bounded(document, path.name)
     return document
+
+
+def parse_document(text: str) -> object:
+    """Deck document text read as ``load_document`` reads a file: as YAML 1.2, with a key
+    written twice said rather than lost (JSON is YAML too)."""
+
+    return yaml.load(text, Loader=_DocumentLoader)
 
 
 def _text(data: bytes, name: str) -> str:
@@ -237,20 +245,26 @@ _MOST_PARTS = 2_000_000
 """More parts than any deck holds: a document past it (aliases repeating a list into
 billions) is refused rather than read for minutes."""
 
+_DEEPEST = 100
+"""More levels than any deck nests (a figure's groups, a list's levels): a document
+deeper is refused in words, before Python runs out of room to read it."""
+
 
 def _bounded(document: object, name: str) -> None:
     count = 0
-    stack = [document]
+    stack = [(document, 0)]
     while stack:
-        item = stack.pop()
+        item, depth = stack.pop()
         count += 1
         if count > _MOST_PARTS:
             raise DeckDocumentError("", f"{name} holds more parts than a deck can ({_MOST_PARTS:,})")
+        if depth > _DEEPEST:
+            raise DeckDocumentError("", f"{name} nests lists or mappings more than {_DEEPEST} levels deep")
         if isinstance(item, dict):
-            stack.extend(item.values())
-            stack.extend(key for key in item if isinstance(key, str))
+            stack.extend((value, depth + 1) for value in item.values())
+            stack.extend((key, depth + 1) for key in item if isinstance(key, str))
         elif isinstance(item, list):
-            stack.extend(item)
+            stack.extend((value, depth + 1) for value in item)
         elif isinstance(item, str):
             try:
                 item.encode("utf-8")
@@ -286,9 +300,10 @@ def deck_from_document(
     base = Path(base).resolve()
     if not isinstance(document, dict):
         raise DeckDocumentError("", "a deck document is a mapping with deck and slides")
+    _bounded(document, "the document")  # one not read from a file too (the studio's, an agent's)
     _only(document, ("schema_version", "deck", "slides"), "")
     version = document.get("schema_version", SCHEMA_VERSION)
-    if version != SCHEMA_VERSION:
+    if isinstance(version, bool) or version != SCHEMA_VERSION:
         raise DeckDocumentError(
             "schema_version", f"this flexo-talk reads version {SCHEMA_VERSION}, not {described(version)}"
         )
@@ -471,6 +486,8 @@ def _text_of(data: dict[str, Any], where: str) -> Callable[[str], str]:
         value = data.get(key)
         if value is None:
             return ""
+        if isinstance(value, datetime.date):  # read by a YAML 1.1 reader (yaml.safe_load)
+            return value.isoformat()
         if not _is_words(value):
             raise DeckDocumentError(f"{where}.{key}", f"{key} is words, not {described(value)}")
         return str(value)
@@ -925,13 +942,25 @@ def _string(dumper: yaml.SafeDumper, value: str) -> yaml.Node:
 
 _Dumper.add_representer(str, _string)
 _Dumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
+_Dumper.add_multi_representer(PurePath, lambda dumper, value: _string(dumper, str(value)))
+
+
+def _json_value(value: object) -> object:
+    """What JSON has no word for, as a deck document writes it: a date as YAML writes
+    one (2026-10-01), a file as its name."""
+
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, PurePath):
+        return str(value)
+    raise TypeError(f"a deck document cannot hold {type(value).__name__} ({value!r:.40})")
 
 
 def dump_document(document: dict[str, Any], *, format: str = "yaml") -> str:
     """A deck document as YAML (or JSON) text."""
 
     if format == "json":
-        return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+        return json.dumps(document, indent=2, ensure_ascii=False, default=_json_value) + "\n"
     return yaml.dump(document, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=100)
 
 
