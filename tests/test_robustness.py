@@ -626,3 +626,63 @@ def test_a_plot_that_never_returns_is_stopped_on_the_command_line(
     assert time.monotonic() - start < 30
     assert "slides[0].body[0] (plot): plots.py:loops took longer than 1 s, and was stopped" in capsys.readouterr().err
     assert signal.getitimer(signal.ITIMER_REAL)[0] == 0  # nothing left to ring later
+
+
+def test_callouts_opening_columns_side_by_side_stand_as_one_row_of_panels() -> None:
+    import re
+
+    deck = Deck("c")
+    slide = deck.slide("Three", layout="columns")
+    slide.columns[0].callout("A long point that takes several lines to say in a narrow column.", title="One")
+    slide.columns[0].text("Words under the first.")
+    slide.columns[1].callout("Short.", title="Two")
+    slide.columns[2].callout("Middling, a line or two.", title="Three")
+    (rendered,) = deck.render()
+    heights = [float(re.search(rf'id="slide1\.column{index}\.0\.panel"[^>]*height="([\d.]+)"', rendered.svg).group(1))
+               for index in (1, 2, 3)]
+    assert len(set(heights)) == 1
+    alone = Deck("a")
+    alone.slide("One").callout("Short.")
+    (single,) = alone.render()
+    natural = float(re.search(r'id="slide1\.body\.0\.panel"[^>]*height="([\d.]+)"', single.svg).group(1))
+    assert natural < heights[0]
+
+
+def test_a_figure_slide_s_figure_grows_to_fill_it_and_a_lone_picture_sits_with_its_title() -> None:
+    import flexo
+
+    from flexo_talk.compose import OPTICAL
+
+    def strip() -> flexo.Figure:
+        figure = flexo.Figure("strip")
+        a = figure.root.block("a", label="Sensor")
+        b = figure.root.block("b", label="Hub", input=a)
+        figure.root.block("c", label="Cloud", input=b)
+        return figure
+
+    content, figured = Deck("f"), Deck("f")
+    content.slide("Content").add(strip())
+    figured.slide("Figure", layout="figure").add(strip())
+    (small,), (large,) = content.render(), figured.render()
+
+    def scale(svg: str) -> float:
+        import re
+
+        return float(re.search(r'id="slide1\.body\.0"[^>]*transform="[^"]*scale\(([\d.]+)', svg).group(1))
+
+    assert scale(large.svg) > scale(small.svg) * 1.2  # words up to the title's size, not the body's
+    for align, share in (("auto", OPTICAL), ("middle", 0.5)):
+        deck = Deck("t")
+        deck.slide("T", align=align).table([["a", "b"], ["1", "2"]])
+        (slide,) = deck.render()
+        (table,) = slide.tables
+        top = table.y - _body_top(slide.svg)
+        below = deck.style.height - deck.style.margin - deck.style.small_size - (table.y + sum(table.heights))
+        assert abs(top / (top + below) - share) < 0.03, align
+
+
+def _body_top(svg: str) -> float:
+    import re
+
+    rule = re.search(r'id="slide1\.rule"[^>]*\by="([\d.]+)"[^>]*height="([\d.]+)"', svg)
+    return float(rule.group(1)) + float(rule.group(2)) + Deck("x").style.title_gap

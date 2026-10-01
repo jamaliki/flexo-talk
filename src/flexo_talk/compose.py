@@ -688,9 +688,10 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     """The slide's regions side by side, each set from its top, then aligned together.
 
     Each region is drawn in a group of its own, so aligning moves it whole: words
-    stay at the top; pictures standing alone are centred in the room they have; a
-    column of pictures shorter than the column of words beside it is centred
-    against it, and a taller one starts level with the words.
+    stay at the top; pictures standing alone stand at the room's optical centre
+    (``OPTICAL``), its middle with ``align="middle"``; a column of pictures shorter
+    than the column of words beside it is centred against it, and a taller one
+    starts level with the words.
     """
 
     style = canvas.deck.style
@@ -711,6 +712,7 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     ]
     if len(figured) > 1:
         shared = min(_figure_words(canvas, region, box) for region, box in figured)
+    panels = _panel_row(canvas, slide, names, boxes)
     placed = []
     outer = canvas.layer
     for name, box in zip(names, boxes, strict=True):
@@ -719,7 +721,7 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
         lists, tables = len(canvas.lists), (len(canvas.tables), len(canvas.worded))
         canvas.layer = group
         try:
-            used = _region(canvas, region, box, words=shared)
+            used = _region(canvas, region, box, words=shared, panel=panels.get(name, 0.0))
         finally:
             canvas.layer = outer
         pictures = bool(region.blocks) and all(isinstance(block, _PICTURES) for block in region.blocks)
@@ -736,8 +738,9 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
         if not full:
             continue
         if not worded:
-            # Pictures alone: each centred in the body.
-            shift = max(body.height - used, 0.0) / 2.0
+            # Pictures alone: each a little above the middle of the body, where the eye
+            # takes the middle to be, so a short one stays with its title.
+            shift = max(body.height - used, 0.0) * (0.5 if align == "middle" else OPTICAL)
         elif pictures:
             shift = lead + (band - used) / 2.0
         elif align == "middle":
@@ -751,9 +754,13 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             _shift(canvas, group, shift, lists, tables)
 
 
+OPTICAL = 0.4
+"""The share of the free room left above a picture standing alone: its optical centre
+is above the middle, as a page's text block is set above its middle."""
+
 _PICTURES = (_Figure, _Image, _Plot, _Gallery, _Quote, _Table, _Code, _Stats)
 """Blocks that stand on their own -- pictures, and the graphics made of words: a table,
-a listing, a row of numbers -- centred in the room they have when nothing else shares it."""
+a listing, a row of numbers -- set in the room they have when nothing else shares it."""
 
 
 def _shift(canvas: _Canvas, group: ET.Element, down: float, lists: int, tables: tuple[int, int]) -> None:
@@ -795,6 +802,21 @@ def _furniture(canvas: _Canvas, slide: Slide) -> None:
 
 
 # -- regions ---------------------------------------------------------------------------
+
+
+def _panel_row(canvas: _Canvas, slide: Slide, names: list[str], boxes: list[Box]) -> dict[str, float]:
+    """The height of each column's opening callout, where columns side by side open with
+    one: the tallest's, so they stand as a row of panels, as cards in a row do."""
+
+    # A trial: what it would note or warn of is said when the region is set.
+    diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
+    heights = {}
+    for name, box in zip(names, boxes, strict=True):
+        region = slide.regions[name]
+        if region.blocks and isinstance(region.blocks[0], _Callout):
+            heights[name] = _callout(canvas, "", _fitted(canvas, region, box)[0], box, draw=False)
+    del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
+    return dict.fromkeys(heights, max(heights.values())) if len(heights) > 1 else {}
 
 
 def _figure_words(canvas: _Canvas, region: Region, box: Box) -> float:
@@ -844,22 +866,28 @@ def _plan_figures(
             figure_room / sum(item.height for item in prepared.values()),
         )
 
+    # A figure's words are the size of the words around it at most; a figure slide's,
+    # its title's, so a small figure there fills the slide rather than floating in it.
+    most = style.title_size if canvas.slide.layout == "figure" else style.body_size
     diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
-    prepared, scale = laid(min(style.body_size, words) if words else style.body_size)
+    prepared, scale = laid(min(most, words) if words else most)
     if words and prepared and min(item.size for item in prepared.values()) * scale < words * 0.97:
         # Held to the size of the figures beside them, these fall short of it as
         # laid out for that size: take the layout that reaches it (folded, say),
         # drawn at that size.
         del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
-        prepared, scale = laid(style.body_size)
+        prepared, scale = laid(most)
         scale = min(scale, words / max(item.size for item in prepared.values()))
     return prepared, scale, share
 
 
-def _region(canvas: _Canvas, region: Region, box: Box, *, words: float | None = None) -> float:
+def _region(
+    canvas: _Canvas, region: Region, box: Box, *, words: float | None = None, panel: float = 0.0
+) -> float:
     """Set a region's blocks one under the other from the top of ``box``; return
     the height they took. ``words`` caps the size of its figures' words (points),
-    so they match the figures beside them."""
+    so they match the figures beside them; ``panel`` is the least height of a callout
+    it opens with, so it matches the callouts beside it."""
 
     style = canvas.deck.style
     blocks = _fitted(canvas, region, box)
@@ -898,7 +926,8 @@ def _region(canvas: _Canvas, region: Region, box: Box, *, words: float | None = 
         elif isinstance(block, _Stats):
             top += _stats(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Callout):
-            top += _callout(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+            least = panel if index == 0 else 0.0
+            top += _callout(canvas, identifier, block, Box(box.x, top, box.width, 0.0), least=least)
         elif isinstance(block, _Math):
             top += _equation(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         top += style.block_gap
@@ -1322,8 +1351,11 @@ def _stats(canvas: _Canvas, identifier: str, block: _Stats, box: Box, *, draw: b
     return height
 
 
-def _callout(canvas: _Canvas, identifier: str, block: _Callout, box: Box, *, draw: bool = True) -> float:
-    """Words on a panel tinted in a tone, a bar of the tone along its edge."""
+def _callout(
+    canvas: _Canvas, identifier: str, block: _Callout, box: Box, *, draw: bool = True, least: float = 0.0
+) -> float:
+    """Words on a panel tinted in a tone, a bar of the tone along its edge; the panel is
+    ``least`` high at least (the words at its top), to match the panels beside it."""
 
     style = canvas.deck.style
     size = block.size or style.body_size
@@ -1332,7 +1364,7 @@ def _callout(canvas: _Canvas, identifier: str, block: _Callout, box: Box, *, dra
     inner = Box(box.x + pad if rtl else box.x + bar + pad, box.y + pad, box.width - bar - 2 * pad, 0.0)
     heading = canvas.measure(block.title, size, inner.width).height + size * 0.2 if block.title else 0.0
     # The words fill the panel line by line; balanced lines would leave it ragged.
-    height = 2 * pad + heading + canvas.measure(block.runs, size, inner.width, balance=False).height
+    height = max(2 * pad + heading + canvas.measure(block.runs, size, inner.width, balance=False).height, least)
     if not draw:
         return height
     role = paint_role(block.colour)

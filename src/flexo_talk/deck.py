@@ -92,10 +92,11 @@ class DeckStyle:
     """A thin accent bar down the left edge of every slide but the opening."""
     align: Literal["auto", "top", "middle"] = "auto"
     """Where a slide's content sits in its body, top to bottom: ``auto`` keeps
-    words at the top, centres pictures standing alone in the room they have, and
-    centres a column of pictures against a taller column of words beside it (a
-    taller column of pictures starts level with the words); ``top`` sets
-    everything at the top; ``middle`` centres the whole content in the body."""
+    words at the top, sets pictures standing alone a little above the middle of the
+    room they have (where the eye takes its middle to be), and centres a column of
+    pictures against a taller column of words beside it (a taller column of pictures
+    starts level with the words); ``top`` sets everything at the top; ``middle``
+    centres the whole content in the body."""
     numbers: bool = True
     """A slide number in the bottom-right corner."""
     title_weight: int | None = None
