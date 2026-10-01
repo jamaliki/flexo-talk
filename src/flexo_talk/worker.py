@@ -125,13 +125,15 @@ def ask(folder: Path, request: dict[str, Any], seconds: float | None = None) -> 
 class RemotePlot:
     """A plot a worker makes: drawn there at the size and in the face asked for."""
 
-    def __init__(self, draw: Callable[[float, float, str, str, str], tuple[str, list]]) -> None:
+    def __init__(self, draw: Callable[[float, float, str, str, str, dict], tuple[str, list]]) -> None:
         self._draw = draw
         self.said: list[tuple[str, str]] = []
-        """What the worker could not read in the plot's maths, once drawn."""
+        """What the worker found to say of the plot (maths it could not read), once drawn."""
 
-    def svg(self, width: float, height: float, family: str, identifier: str, *, maths: str) -> str:
-        svg, self.said = self._draw(width, height, family, identifier, maths)
+    def svg(self, width: float, height: float, family: str, identifier: str, *, maths: str, **options: Any) -> str:
+        """The plot as ``plot_svg`` draws it; ``options`` (its ``inks``) are passed on as given."""
+
+        svg, self.said = self._draw(width, height, family, identifier, maths, options)
         return svg
 
 
@@ -274,7 +276,8 @@ def _answer(request: dict[str, Any]) -> dict[str, Any]:
                 return {"error": f"{name} did not return a matplotlib figure"}
             said: list[tuple[str, str]] = []
             svg = plot_svg(figure, request["width"], request["height"], request["family"],
-                           request["identifier"], maths=request.get("maths", "Latin Modern Math"), said=said)
+                           request["identifier"], maths=request.get("maths", "Latin Modern Math"), said=said,
+                           **(request.get("options") or {}))
             return {"svg": svg, "said": said}
     if request["do"] == "figure":
         import flexo

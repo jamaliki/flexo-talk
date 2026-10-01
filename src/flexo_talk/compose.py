@@ -20,7 +20,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import flexo
 from flexo.artwork import load_artwork, picture_href, picture_link
@@ -2062,13 +2062,18 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
     typography = canvas.deck.layout_style.typography
     family, maths = typography.family, maths_family(typography)
     said: list[tuple[str, str]] = []
+    options = {"inks": plot_inks(canvas.deck.palette, canvas.palette)}
     if isinstance(figure, RemotePlot):
-        svg = figure.svg(width, height, family, identifier, maths=maths)
+        svg = figure.svg(width, height, family, identifier, maths=maths, **options)
         said = figure.said
     else:
-        svg = plot_svg(figure, width, height, family, identifier, maths=maths, said=said)
+        svg = plot_svg(figure, width, height, family, identifier, maths=maths, said=said, **options)
     for words, problem in said:
-        canvas.say_maths(words, [problem])
+        # Maths it could not read is said with its formula; anything else, as it is.
+        if words:
+            canvas.say_maths(words, [problem])
+        else:
+            canvas.diagnostics.append(f"{canvas.slide.id}: {problem}")
     block.drawn = svg
     _place_svg(canvas, identifier, _slide_inks(svg, canvas.deck.palette, canvas.palette), box.x, box.y, 1.0)
     return height
@@ -2078,7 +2083,8 @@ def _slide_inks(svg: str, deck: Palette, slide: Palette, *, black: bool = True) 
     """A plot or figure drawn in the deck's paints, put on a slide of its own (a dark
     slide in a light deck, a light one in a dark deck): each paint the slide changes
     (words, axes, tints, connectors) as the slide has it. On a dark slide, black
-    (matplotlib's error bars) is the slide's ink, unless ``black`` is False."""
+    (matplotlib's error bars) is the slide's ink, unless ``black`` is False. Words a
+    plot set on its cells keep the paint chosen for the cell (``_words_on_cells``)."""
 
     from flexo.colour import is_dark
 
@@ -2091,18 +2097,136 @@ def _slide_inks(svg: str, deck: Palette, slide: Palette, *, black: bool = True) 
         swaps.setdefault("#000000", slide.get("ink").lower())
     if not swaps:
         return svg
-    pattern = re.compile("|".join(re.escape(colour) for colour in swaps), re.IGNORECASE)
-    return pattern.sub(lambda match: swaps[match.group(0).lower()], svg)
+    kept = rf'(<g id="{_ON_CELL}-\d+">.*?</g>)|'
+    pattern = re.compile(kept + "|".join(re.escape(colour) for colour in swaps), re.IGNORECASE | re.DOTALL)
+    return pattern.sub(lambda match: match.group(1) or swaps[match.group(0).lower()], svg)
+
+
+class PlotInks(NamedTuple):
+    """What a plot is told of the slide it is put on, as plain values (a worker draws it)."""
+
+    ink: str
+    """The deck's ink: the colour of a plot's words left as they were made."""
+    dark: str
+    light: str
+    """The slide's dark and light inks: words on a plot's cells take the one that reads."""
+    canvas: str
+    """The slide's page, seen through a cell that is not opaque."""
+
+
+def plot_inks(deck: Palette, slide: Palette) -> PlotInks:
+    from flexo.colour import is_dark
+
+    ink, page = slide.get("ink"), slide.get("canvas")
+    dark = next(colour for colour in (ink, page, "#1c1c1e") if is_dark(colour))
+    light = next(colour for colour in (ink, page, "#f7f5f0") if not is_dark(colour))
+    return PlotInks(deck.get("ink"), dark, light, page)
+
+
+_ON_CELL = "flexo-cell"
+"""The id of a plot's words set on a cell: the slide leaves the paint chosen for it."""
+
+
+def _words_on_cells(figure: Any, inks: PlotInks) -> None:
+    """A plot's words on its cells (an annotated heatmap's numbers) read on them: words left
+    in the deck's ink take whichever of the slide's dark and light inks reads on the cell
+    beneath, as seaborn's annotations do; words their author coloured keep their colour."""
+
+    from flexo.colour import contrast
+    from matplotlib.colors import to_hex, to_rgb
+
+    count = 0
+    for axes in figure.get_axes():
+        grounds = sorted((artist for artist in (*axes.images, *axes.collections) if _has_cells(artist)),
+                         key=lambda artist: artist.get_zorder())
+        if not grounds:
+            continue
+        to_data = axes.transData.inverted()
+        for text in axes.texts:
+            if text.get_gid() is not None or not text.get_text().strip():
+                continue
+            try:
+                x, y = to_data.transform(text.get_transform().transform(text.get_unitless_position()))
+            except Exception:  # placed in terms that need the plot drawn first
+                continue
+            cells = (_cell(ground, x, y) for ground in reversed(grounds))
+            cell = next((colour for colour in cells if colour is not None and colour[3] > 0.0), None)
+            if cell is None:
+                continue
+            seen = to_hex([cell[3] * part + (1.0 - cell[3]) * page for part, page in
+                           zip(cell[:3], to_rgb(inks.canvas), strict=True)])
+            if to_hex(text.get_color()) == to_hex(inks.ink):
+                text.set_color(max((inks.dark, inks.light), key=lambda ink: contrast(ink, seen)))
+            text.set_gid(f"{_ON_CELL}-{count}")
+            count += 1
+
+
+def _has_cells(artist: Any) -> bool:
+    """Whether an artist is a grid of cells: an image (``imshow``) or a rectangular mesh."""
+
+    from matplotlib.image import AxesImage, NonUniformImage
+
+    if isinstance(artist, AxesImage):
+        return not isinstance(artist, NonUniformImage)
+    return hasattr(artist, "get_coordinates")
+
+
+def _cell(ground: Any, x: float, y: float) -> tuple[float, float, float, float] | None:
+    """The colour of an image's or mesh's cell at ``(x, y)`` (in data), or None off it (or
+    on a mesh not of rows and columns)."""
+
+    import numpy as np
+
+    if hasattr(ground, "get_extent"):
+        array = ground.get_array()
+        if array is None:
+            return None
+        left, right, bottom, top = ground.get_extent()
+        first, last = (top, bottom) if ground.origin == "upper" else (bottom, top)
+        rows, columns = array.shape[:2]
+        row = math.floor((y - first) / (last - first) * rows)
+        column = math.floor((x - left) / (right - left) * columns)
+        if not (0 <= row < rows and 0 <= column < columns):
+            return None
+        colour = ground.to_rgba(array[row : row + 1, column : column + 1])[0, 0]
+    else:
+        corners = ground.get_coordinates()
+        xs, ys = corners[0, :, 0], corners[:, 0, 1]
+        if not (np.allclose(corners[..., 0], xs) and np.allclose(corners[..., 1], ys[:, None])):
+            return None
+        row, column = _between(ys, y), _between(xs, x)
+        ground.update_scalarmappable()
+        colours = ground.get_facecolor()
+        if row is None or column is None or len(colours) not in (1, (len(ys) - 1) * (len(xs) - 1)):
+            return None
+        colour = colours[row * (len(xs) - 1) + column if len(colours) > 1 else 0]
+    alpha = ground.get_alpha()
+    alpha = alpha if isinstance(alpha, int | float) else 1.0
+    return float(colour[0]), float(colour[1]), float(colour[2]), float(colour[3]) * alpha
+
+
+def _between(edges: Any, value: float) -> int | None:
+    """Which of the spans between ``edges`` (in order, up or down) holds ``value``."""
+
+    import numpy as np
+
+    rising = edges[0] <= edges[-1]
+    index = int(np.searchsorted(edges if rising else edges[::-1], value, side="right")) - 1
+    if not 0 <= index < len(edges) - 1:
+        return None
+    return index if rising else len(edges) - 2 - index
 
 
 def plot_svg(
     figure: Any, width: float, height: float, family: str, identifier: str, *,
     maths: str = "Latin Modern Math", said: list[tuple[str, str]] | None = None,
+    inks: PlotInks | None = None,
 ) -> str:
     """A matplotlib figure as SVG, laid out again at ``width`` by ``height`` points, its
     words set in ``family`` and kept as text; the figure is closed after. Its maths is
     set as the deck's is: letters in ``family``, and Greek, signs and script capitals
-    in the deck's maths font (``maths``) rather than matplotlib's STIX."""
+    in the deck's maths font (``maths``) rather than matplotlib's STIX. ``inks`` tell
+    it the slide it is put on, so words on its cells read there."""
 
     import io
 
@@ -2140,6 +2264,8 @@ def plot_svg(
         if "$" in words and not hasattr(text, "_flexo_problems"):
             text.set_text(_matplotlib_maths(words))
     clear_backgrounds(figure)
+    if inks is not None:
+        _words_on_cells(figure, inks)
     settings = {
         "svg.fonttype": "none",
         "svg.hashsalt": identifier,
