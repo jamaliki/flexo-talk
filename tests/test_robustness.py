@@ -625,6 +625,9 @@ def test_a_plot_that_never_returns_is_stopped_on_the_command_line(
     assert main(["build", str(tmp_path / "deck.yaml"), "-o", str(tmp_path / "out"), "--formats", "svg"]) == 1
     assert time.monotonic() - start < 30
     assert "slides[0].body[0] (plot): plots.py:loops took longer than 1 s, and was stopped" in capsys.readouterr().err
+    (tmp_path / "plots.py").write_text("def loops():\n    return None\n")
+    assert main(["build", str(tmp_path / "deck.yaml"), "-o", str(tmp_path / "out"), "--formats", "svg"]) == 1
+    assert "plots.py:loops did not return a matplotlib figure" in capsys.readouterr().err
     assert signal.getitimer(signal.ITIMER_REAL)[0] == 0  # nothing left to ring later
 
 

@@ -654,7 +654,15 @@ def _plot(base: Path, value: object, where: str, region: Region) -> Reference:
 
     # The file is read inside the deck's plotting look too: a style it sets as it is
     # imported is then the deck's for that plot, not the whole app's from then on.
-    return Reference(value, _maker(base, value, where, lambda made: made, call=call, around=deck.plotting, deck=deck))
+    return Reference(value, _maker(
+        base, value, where, lambda made: _as_plot(made, value, where), call=call, around=deck.plotting, deck=deck
+    ))
+
+
+def _as_plot(made: object, target: str, where: str) -> object:
+    if not hasattr(made, "savefig"):  # as the studio's worker says it
+        raise DeckDocumentError(where, f"{target} did not return a matplotlib figure")
+    return made
 
 
 def _is_code(value: str) -> bool:
