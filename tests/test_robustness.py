@@ -838,3 +838,34 @@ def test_a_plots_words_that_ask_for_monospace_or_serif_are_set_in_the_decks_face
     set_in = {words: family for family, words in re.findall(r"font-family: '([^']+)'[^>]*>(\w+)<", svg)}
     assert set_in == {"code": "IBM Plex Mono", "typed": "IBM Plex Mono", "roman": "Latin Modern Roman",
                       "plain": "Figtree"}
+
+
+def test_a_plots_words_longer_than_it_are_fitted_to_it_and_said() -> None:
+    import io
+    import re
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from flexo.export import rasterise
+    from PIL import Image
+
+    from flexo_talk.compose import plot_svg
+
+    figure, axes = plt.subplots()
+    axes.plot([0, 1], [0, 1])
+    axes.set_ylabel("a score with a very long axis label that keeps going and going and going")
+    axes.set_title("https://example.org/a/very/long/path/to/the/data/that/was/plotted/here.csv")
+    said: list[tuple[str, str]] = []
+    svg = plot_svg(figure, 300.0, 200.0, "Figtree", "w", said=said)
+    assert [line for _, line in said] == [
+        "the plot's words “a score with a very long axis label that keeps going and go…” are too long "
+        "for it, wrapped onto more lines -- shorten them",
+        "the plot's words “https://example.org/a/very/long/path/to/the/data/that/was/p…” are too long "
+        "for it, set smaller and cut short -- shorten them",
+    ]
+    # Drawn on a page a hundred points larger all round, nothing is outside the plot's own box.
+    wider = re.sub(r'width="[^"]+" height="[^"]+" viewBox="[^"]+"',
+                   'width="500pt" height="400pt" viewBox="-100 -100 500 400"', svg, count=1)
+    alpha = np.asarray(Image.open(io.BytesIO(rasterise(wider, dpi=72))).convert("RGBA"))[..., 3].copy()
+    alpha[99:301, 99:401] = 0
+    assert alpha.max() == 0

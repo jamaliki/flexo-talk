@@ -2302,17 +2302,24 @@ def plot_svg(
         try:
             figure.savefig(buffer, format="svg", metadata={"Date": None}, dpi=RASTER_DPI)
         except (ZeroDivisionError, ValueError) as error:
-            said = _plot_maths(figure, error)
-            if said:
+            unset = _plot_maths(figure, error)
+            if unset:
                 import matplotlib.pyplot as plt
 
                 plt.close(figure)
-                raise ValueError(said) from None
+                raise ValueError(unset) from None
             # Constrained layout cannot take over a figure built without it
             # (a colour bar made first): lay it out tightly instead.
             figure.set_layout_engine("tight")
             buffer = io.StringIO()
             figure.savefig(buffer, format="svg", metadata={"Date": None}, dpi=RASTER_DPI)
+        fitted = _fit_words(figure, family, maths)
+        if fitted:
+            # Drawn again with its words fitted to it.
+            buffer = io.StringIO()
+            figure.savefig(buffer, format="svg", metadata={"Date": None}, dpi=RASTER_DPI)
+            if said is not None:
+                said.extend(("", line) for line in fitted)
     # Drawn: pyplot need not keep it open (each redraw makes the plot afresh).
     import matplotlib.pyplot as plt
 
@@ -2438,6 +2445,153 @@ def _swapped(colours: Any, swaps: dict[str, str]) -> Any:
             colours[where.ravel() == index, :3] = to_rgb(shown)
             changed = True
     return colours if changed else None
+
+
+LEAST_FITTED = 0.7
+"""The smallest share of its own size a plot's words too long for it are set at."""
+
+ATTEMPTS = 6
+"""How many times a plot is laid out again as its words are fitted to it."""
+
+FITTED_TO = 0.97
+"""The share of their room words set smaller or cut take: a little air is left between
+them and the plot's edge, as its layout leaves beside its labels."""
+
+
+def _fit_words(figure: Any, family: str, maths: str) -> list[str]:
+    """Words longer than their plot (an axis label longer than its axis, a title wider
+    than the slide) would run over the slide: each is wrapped onto more lines, else set
+    smaller (to ``LEAST_FITTED`` of its size), else cut short, until it fits; what was
+    done to each, said. Tick labels are left to the plot's layout, which makes room."""
+
+    import io
+
+    import matplotlib.text
+    from matplotlib.backends.backend_svg import RendererSVG
+
+    from flexo_talk.plotmaths import set_by_flexo, tick_labels
+
+    ticks = tick_labels(figure)
+    # Measured as the SVG was drawn: at 72 dpi (matplotlib places some words, an axis
+    # label, in the pixels of the last drawing), its words unhinted.
+    figure.dpi = 72.0
+    fitted: dict[int, list] = {}  # each text's words as written, its size, and what was done
+    for attempt in range(ATTEMPTS):
+        renderer = RendererSVG(figure.bbox.width, figure.bbox.height, io.StringIO())
+        room = figure.bbox.padded(1.0)  # a point's grace
+        over = []
+        for text in figure.findobj(matplotlib.text.Text):
+            # Words drawn (matplotlib clears ``stale`` as it draws them), not a tick's.
+            if text.stale or id(text) in ticks or not text.get_visible() or not text.get_text().strip():
+                continue
+            share = _room_share(text, text.get_window_extent(renderer), room)
+            if share < 1.0:
+                over.append((text, share))
+        if not over or attempt == ATTEMPTS - 1:
+            break
+        fresh = [text for text, _ in over if id(text) not in fitted]
+        if fresh:
+            # Laid out without them first: the plot gets back the room they squeezed it out
+            # of (constrained layout shrinks a plot to make room for its words), to wrap to.
+            for text in fresh:
+                text.set_in_layout(False)
+            figure.draw_without_rendering()
+            for text in fresh:
+                text.set_in_layout(True)
+            renderer = RendererSVG(figure.bbox.width, figure.bbox.height, io.StringIO())
+        for text, share in over:
+            words, size, done = fitted.setdefault(id(text), [text.get_text(), text.get_fontsize(), []])
+            flexo_set = hasattr(text, "_flexo_problems")
+            if not done and " " in words.strip() and not flexo_set:
+                line = _line_room(text)
+                if line:
+                    text.set_text(_wrapped(text, line, renderer))
+                else:
+                    text.set_wrap(True)  # to the edge of the plot, as matplotlib wraps
+                done.append("wrapped onto more lines")
+            elif "set smaller" not in done and text.get_fontsize() > size * LEAST_FITTED:
+                text.set_fontsize(max(text.get_fontsize() * share * FITTED_TO, size * LEAST_FITTED))
+                done.append("set smaller")
+            elif not flexo_set and share > 0.2:
+                # Cut at the end (and wrapped again, if it was): the words shrink about where
+                # they are placed, as when set smaller.
+                shown = " ".join(text.get_text().removesuffix("\u2026").split())
+                text.set_text(shown[: max(1, int(len(shown) * share * FITTED_TO) - 1)].rstrip() + "\u2026")
+                if "wrapped onto more lines" in done and (line := _line_room(text)):
+                    text.set_text(_wrapped(text, line, renderer))
+                if "cut short" not in done:
+                    done.append("cut short")
+        if any(hasattr(text, "_flexo_problems") for text, _ in over):
+            set_by_flexo(figure, family, maths)  # its maths set again, at its size now
+        figure.draw_without_rendering()
+    unfitted = {id(text) for text, _ in over}
+    for text, _ in over:
+        fitted.setdefault(id(text), [text.get_text(), text.get_fontsize(), []])
+    said = []
+    for key, (words, _, done) in fitted.items():
+        shown = words if len(words) <= 60 else words[:59] + "\u2026"
+        if key in unfitted:
+            said.append(f"the plot's words \u201c{shown}\u201d run outside it -- shorten them")
+        elif done:
+            how = " and ".join([", ".join(done[:-1]), done[-1]] if len(done) > 1 else done)
+            said.append(f"the plot's words \u201c{shown}\u201d are too long for it, {how} -- shorten them")
+    return said
+
+
+def _line_room(text: Any) -> float | None:
+    """The length of the line a title or axis label stands along: its plot's width (its
+    height, for a label up the side), or the figure's for the figure's own; None for words
+    placed anywhere else."""
+
+    axes, figure = text.axes, text.get_figure(root=False)
+    if axes is not None:
+        if text in (axes.title, getattr(axes, "_left_title", None), getattr(axes, "_right_title", None),
+                    axes.xaxis.label):
+            return axes.bbox.width
+        if text is axes.yaxis.label:
+            return axes.bbox.height
+    if figure is not None:
+        if text in (getattr(figure, "_suptitle", None), getattr(figure, "_supxlabel", None)):
+            return figure.bbox.width
+        if text is getattr(figure, "_supylabel", None):
+            return figure.bbox.height
+    return None
+
+
+def _wrapped(text: Any, length: float, renderer: Any) -> str:
+    """A text's words broken onto lines of at most ``length`` (in display units), each line
+    as full as it goes -- but onto three or so at most: a column of a word a line is no
+    title (one squeezed narrow is set smaller instead)."""
+
+    def width(words: str) -> float:
+        return renderer.get_text_width_height_descent(words, text.get_fontproperties(), ismath=False)[0]
+
+    length = max(length, width(text.get_text()) / 3.0)
+    lines: list[str] = []
+    for word in text.get_text().split():
+        trial = f"{lines[-1]} {word}" if lines else word
+        if lines and width(trial) <= length:
+            lines[-1] = trial
+        else:
+            lines.append(word)
+    return "\n".join(lines)
+
+
+def _room_share(text: Any, box: Any, room: Any) -> float:
+    """The share of its size a text's words may take and stay in ``room``: 1 or more when
+    they fit in it. Set smaller (or cut), words shrink towards where they are placed."""
+
+    try:
+        x, y = text.get_transform().transform(text.get_unitless_position())
+    except Exception:  # placed in terms that need the plot drawn first
+        x, y = (box.x0 + box.x1) / 2.0, (box.y0 + box.y1) / 2.0
+    share = math.inf
+    for low, high, start, end, at in ((box.x0, box.x1, room.x0, room.x1, x), (box.y0, box.y1, room.y0, room.y1, y)):
+        if high > at:
+            share = min(share, (end - at) / (high - at))
+        if low < at:
+            share = min(share, (at - start) / (at - low))
+    return max(share, 0.0)
 
 
 def clear_backgrounds(figure: Any) -> None:
