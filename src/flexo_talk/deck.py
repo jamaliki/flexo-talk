@@ -1176,7 +1176,12 @@ class Deck:
 
         made = self.slide(title, layout="title", subtitle=subtitle, background=background, shade=shade)
         made.source.update(author=author, date=date)
-        byline = " · ".join(part for part in (author, date) if part)
+        parts = [part for part in (author, date) if part]
+        # In a right-to-left byline a middle dot reads as the Persian and Arabic zero
+        # (15 and a dot read as 150): a dash keeps author and date apart.
+        from flexo.bidi import has_rtl
+
+        byline = (" \u2013 " if any(has_rtl(part) for part in parts) else " · ").join(parts)
         made.byline_runs = inline(byline) if byline else ()
         return made
 
