@@ -120,8 +120,9 @@ as a whole (`DeckStyle.align`, or `deck.slide(..., align=)`):
 
 - `auto` (the default): words start at the top of the body, on every slide; a
   figure, plot, picture, gallery, quotation, table, code listing, or row of
-  numbers standing alone is centred in the room it has (a table narrower than
-  its place across it too); a column of pictures is centred against a taller
+  numbers standing alone stands a little above the middle of the room it has,
+  where the eye takes the middle to be (a table narrower than its place is
+  centred across it); a column of pictures is centred against a taller
   column of words beside it, and a taller one starts level with the words.
 - `top`: everything at the top. `middle`: the content centred in the body.
 
@@ -187,7 +188,8 @@ slide.table([
 ```
 
 A table is ruled as in a paper -- a rule above, one under the header, one below,
-no grid -- with its header bold and each column as wide as its widest cell.
+no grid -- with its header bold (its maths regular, as LaTeX sets maths in bold
+words) and each column as wide as its widest cell.
 Columns of numbers are set flush right (`align="lrr"` or a list of
 `start`/`middle`/`end` to choose); `header=False` drops the header. In the
 PowerPoint it is a native table with the same columns, rows, and rules.
@@ -210,12 +212,60 @@ lines aligned at `&` and broken at `\\` (in `aligned`, or without it), chemistry
 In words, `$...$` or `\(...\)` sets maths in the line, and a formula too long for its
 line breaks after a relation or an operator, as TeX breaks it. Dollars are read as
 pandoc reads them, so "it costs $5 and $10" stays two prices, and `\$` is a dollar.
-Simple maths (`$x_t$`) is set as words; the rest is laid out by TeX's rules from the
-bundled Latin Modern Math. Its letters and signs are the deck's own face, so a
-formula reads with the words around it. Maths that cannot be read is drawn in red
+Simple maths (`$x_t$`) is set as words; the rest is laid out by TeX's rules. Its
+letters are the deck's own face, and its Greek, signs and brackets come from a maths
+font that suits it -- Fira Math beside a sans face, Latin Modern Math beside a serif
+one -- in formulas, in words and in plots alike, so a formula reads with the words
+around it. Code is set in the bundled IBM Plex Mono unless a theme names another. Maths that cannot be read is drawn in red
 and said in the build summary (and beside the equation in the studio), with the
-command a typo probably meant. In the PowerPoint a formula is drawn as shapes, and
-native lists and tables leave room for it in their words.
+command a typo probably meant.
+
+In the PowerPoint, maths is PowerPoint's own: each equation, and each passage, list and
+table cell with maths in it, opens in PowerPoint's equation editor (in Cambria Math,
+PowerPoint's maths font). A program that does not read PowerPoint's equations is
+shown Flexo's drawing of it instead, which is in the file beside it (as the file
+format provides): formulas as shapes, over native lists and tables that leave room for
+them. A formula with rules in an array (`{c|c}`, `\hline`), which PowerPoint's
+equations cannot draw, keeps the drawing in PowerPoint too.
+`deck.build(..., editable_maths=False)` writes only the drawing, so PowerPoint
+shows the maths in the deck's own maths font as well.
+
+## Mechanisms
+
+```python
+slide.mechanism([
+    {"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2", "2=3 -> 3"],
+     "reagents": "NaOH"},
+    {"arrows": ["3 -> 2", "2-4 -> 4"], "label": "tetrahedral intermediate"},
+])
+```
+
+A reaction mechanism, drawn as chemists draw it: each step a structure in SMILES and
+its curly arrows, a reaction arrow (reagents over it, conditions under it) to the next.
+Atoms are named by their atom maps (`[O-:5]` is 5). An arrow from a lone pair is
+`"5 -> 2"`, from a bond `"2=3 -> 3"`, a bond moved `"1=2 -> 2-6"`, a fishhook `"~>"`.
+A step with no SMILES is drawn from the arrows before it, its atoms where they were;
+one written out is checked against them. A step that cannot be -- carbon with ten
+electrons, a lone pair that is not there -- is drawn as far as it goes, its arrows on
+it, and what is wrong said when the slide is drawn, in words. The curly arrows carry the lone pairs they take, in magenta unless `arrow_colour` gives
+another (`accent`, `ink`, `muted`, which follow the theme, or `#rrggbb`). A step's
+`place` puts its molecules where you want them (`{5: {move: [-1, 0.5], turn: 30, flip:
+true}}`: the molecule with atom 5). In a document it is a `mechanism:` block (a SMILES,
+or a list of steps with `smiles`, `arrows`, `label`, `reagents`, `conditions`,
+`arrow`). In the PowerPoint the structures are shapes and their arrows curves, all
+editable.
+
+In the studio each step has **Draw**: the structure it acts on, drawn large, to point
+at. Click where the electrons come from -- an atom for its lone pair (pointing at an
+atom shows its pairs), or a bond -- then where they go, and the arrow is written into
+the step (an atom with no map is given one in its SMILES). A bond's electrons sent to
+an atom outside it ask which end the new bond forms from; **One electron** writes
+fishhooks. The step holds still while it is drawn on; **Tidy** lays it out again for
+its arrows. **Arrange** moves a molecule where you drag it, turns it 30 degrees at a
+time, flips it, or puts it back where it is laid out. The arrows' colour is chosen in
+the mechanism's panel, from the deck's colours or any other. A step is usually wrong between one arrow and the next, so it is drawn
+anyway, with what is wrong under it. Only the atoms the arrows name are numbered. See "Reaction
+mechanisms" in flexo's README for how structures are laid out.
 
 ## Plots
 
@@ -234,11 +284,16 @@ with deck.slide("Training curves") as slide:
 (constrained layout), so its words are set at the deck's size rather than
 scaled, in the deck's font. It is placed as vectors: in the PowerPoint every
 line is a freeform and every tick label live text; in the PDF it is vectors and
-real text. `deck.plotting()` gives matplotlib the deck's look (`deck.plot_style()`
+real text. A label or title with maths in it is set by flexo, as a slide's maths is --
+all of LaTeX that flexo reads, in the deck's maths font -- and drawn as shapes. `deck.plotting()` gives matplotlib the deck's look (`deck.plot_style()`
 is the same settings as a dict). An SVG saved by any program --
 `slide.image("plot.svg")` -- is placed as vectors the same way when it holds
 only what flexo draws exactly (paths, text, clips, pictures); otherwise, and for
-PNG and JPEG files, it is a picture.
+PNG and JPEG files, it is a picture. An Illustrator file or a PDF --
+`slide.image("figure.ai")`, `slide.image("paper.pdf#2")` -- is read back as the
+drawing it is: its shapes become freeforms, its words their glyphs' outlines,
+its photographs pictures, and a gradient or a curved mask a picture of that part
+alone (see "Illustrator and PDF files" in flexo's guide).
 
 ## PowerPoint
 
@@ -312,8 +367,9 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   a figure, a picture, a table, and more -- after the one chosen. Pictures dropped
   on the slide are added to it.
 - **Figures are edited on their slides.** Choose a figure and its parts can be
-  chosen, typed on (double-click), connected, and gathered where they are drawn,
-  as in flexo's figure editor: a bar above the figure adds parts (A) and draws
+  chosen, typed on (double-click), connected, gathered, and dragged to another
+  place in their row or into another group where they are drawn, as in flexo's
+  figure editor: a bar above the figure adds parts (A) and draws
   lines (C), and the inspector shows the part chosen. A figure written in the deck
   changes in the deck, and undoes with it; a figure file changes in its file,
   comments and all. Esc steps out, a part at a time. A figure made in Python is

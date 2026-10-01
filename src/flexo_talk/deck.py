@@ -45,6 +45,15 @@ LAYOUTS: tuple[str, ...] = (
 )
 
 
+class SettingError(ValueError):
+    """A setting that cannot be what it was given. ``key`` names the setting, so a deck
+    document can say where it is wrong (``slides[2].split``, ``deck.palette``)."""
+
+    def __init__(self, key: str, message: str) -> None:
+        super().__init__(message)
+        self.key = key
+
+
 @dataclass(frozen=True, slots=True)
 class DeckStyle:
     """The proportions of a deck's slides; the look comes from the flexo theme.
@@ -83,10 +92,11 @@ class DeckStyle:
     """A thin accent bar down the left edge of every slide but the opening."""
     align: Literal["auto", "top", "middle"] = "auto"
     """Where a slide's content sits in its body, top to bottom: ``auto`` keeps
-    words at the top, centres pictures standing alone in the room they have, and
-    centres a column of pictures against a taller column of words beside it (a
-    taller column of pictures starts level with the words); ``top`` sets
-    everything at the top; ``middle`` centres the whole content in the body."""
+    words at the top, sets pictures standing alone a little above the middle of the
+    room they have (where the eye takes its middle to be), and centres a column of
+    pictures against a taller column of words beside it (a taller column of pictures
+    starts level with the words); ``top`` sets everything at the top; ``middle``
+    centres the whole content in the body."""
     numbers: bool = True
     """A slide number in the bottom-right corner."""
     title_weight: int | None = None
@@ -96,6 +106,35 @@ class DeckStyle:
     title_role: str = "ink"
     """The palette role that paints slide titles: ``ink``, or ``tone-1-stroke`` for the accent."""
 
+    def __post_init__(self) -> None:
+        # Proportions come from documents and the studio as well as Python: each is
+        # checked here, and said in words, before a slide is drawn at that size.
+        import math
+
+        for name, (low, high) in _STYLE_NUMBERS.items():
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+                raise SettingError(name, f"{name} is {value!r}: it is a number from {_said(low)} to {_said(high)}")
+            if not low <= value <= high:
+                raise SettingError(name, f"{name} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+        if self.margin * 2 >= min(self.width, self.height):
+            raise SettingError("margin", f"a margin of {_said(self.margin)} leaves no room on a "
+                                         f"{_said(self.width)} by {_said(self.height)} slide")
+        for name, allowed in _STYLE_CHOICES.items():
+            if getattr(self, name) not in allowed:
+                raise SettingError(name, f"{name} is {getattr(self, name)!r}: it is one of {', '.join(allowed)}")
+        for name in ("edge", "numbers"):
+            if not isinstance(getattr(self, name), bool):
+                raise SettingError(name, f"{name} is {getattr(self, name)!r}: it is true or false")
+        weight = self.title_weight
+        if weight is not None and (isinstance(weight, bool) or not isinstance(weight, int) or not 1 <= weight <= 1000):
+            raise SettingError("title_weight", f"title_weight is {weight!r}: it is a font weight from 100 to 900, "
+                                               "such as 700")
+        if not isinstance(self.title_role, str) or self.title_role not in _roles():
+            # A role no palette has would paint every title black.
+            raise SettingError("title_role", f"title_role is {self.title_role!r}: it names a palette role, "
+                                             "such as ink, muted-ink or tone-1-stroke")
+
     @classmethod
     def look(cls, name: str, **changes: object) -> DeckStyle:
         """A named look (see ``LOOKS``), with any field changed: ``DeckStyle.look("band", body_size=22)``."""
@@ -103,6 +142,156 @@ class DeckStyle:
         if name not in LOOKS:
             raise ValueError(f'unknown look "{name}"; looks are {", ".join(LOOKS)}')
         return cls(**{**LOOKS[name], **changes})  # type: ignore[arg-type]
+
+
+OKABE_ITO = ("#E69F00", "#56B4E9", "#009E73", "#D55E00", "#0072B2", "#CC79A7")
+"""Hues told apart by every eye (Okabe and Ito's), for a plot's series when a theme's
+own tones are too few to tell apart."""
+
+
+def link_colour(palette: Palette, ground: str | None = None) -> str | None:
+    """What a link is painted in where the accent cannot tell it from the words -- a
+    theme of greys (print, swiss, bauhaus) -- Okabe and Ito's blue, as links are blue,
+    made to read on ``ground`` (what the words are set on); ``None`` where a link is the
+    accent, as in every other theme."""
+
+    from flexo.colour import chroma, contrast, is_dark, with_contrast
+
+    if chroma(palette.get("tone-1-stroke")) >= 0.03:
+        return None
+    if ground is None:
+        ink, page = palette.get("ink"), palette.get("canvas")
+        # The page, unless the words are set over something else (a photograph).
+        ground = page if contrast(ink, page) >= 3.0 else ("#ffffff" if is_dark(ink) else "#000000")
+    return with_contrast(OKABE_ITO[4], ground, 4.5)
+
+
+def data_colours(palette: Palette, dark: bool) -> list[str]:
+    """Six colours for a plot's series, set to one lightness so they read as a set: the
+    theme's tones, each kept only if it can be told from those before it, then Okabe and
+    Ito's hues. A theme of greys (swiss, print) leads with its ink."""
+
+    from flexo.colour import chroma, hue_distance, with_lightness
+
+    lightness = 0.74 if dark else 0.58
+    tones = [palette.get(f"tone-{index}-stroke") for index in range(1, 7)]
+    first = tones[0]
+    colours = [palette.get("ink") if chroma(first) < 0.03 else with_lightness(first, lightness, 0.16)]
+    for candidate in [*tones[1:], *OKABE_ITO]:
+        if len(colours) == 6:
+            break
+        if chroma(candidate) < 0.03:
+            continue
+        shown = with_lightness(candidate, lightness, 0.16)
+        if all(hue_distance(shown, other) > 0.05 for other in colours):
+            colours.append(shown)
+    for candidate in OKABE_ITO:  # six, however near the theme's own hues they come
+        shown = with_lightness(candidate, lightness, 0.16)
+        if len(colours) < 6 and shown not in colours:
+            colours.append(shown)
+    return colours
+
+
+MOST_LEVELS = 100
+"""More levels than a list on any slide nests."""
+
+_STYLE_NUMBERS: dict[str, tuple[float, float]] = {
+    # PowerPoint's slides are 1 to 56 inches each way.
+    "width": (72.0, 4032.0), "height": (72.0, 4032.0), "margin": (0.0, 2016.0),
+    **{name: (1.0, 400.0) for name in ("title_size", "subtitle_size", "body_size", "small_size", "figure_size")},
+    "line_height": (0.5, 5.0), "paragraph_gap": (0.0, 20.0),
+    **{name: (0.0, 2016.0) for name in ("indent", "column_gap", "block_gap", "title_gap")},
+}
+"""DeckStyle's numbers, and the range each may take (points, or a share of a size)."""
+
+_STYLE_CHOICES: dict[str, tuple[str, ...]] = {
+    "header": ("rule", "band", "line", "none"),
+    "opening": ("centred", "left", "band"),
+    "sections": ("rule", "fill", "number"),
+    "align": ("auto", "top", "middle"),
+    "title_align": ("start", "middle"),
+}
+
+
+def _said(value: float) -> str:
+    return f"{value:g}"
+
+
+# -- settings, checked as they are given (from Python, documents and the studio alike) --
+
+
+def _number(value: object, what: str, low: float, high: float, example: str) -> float:
+    import math
+
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise SettingError(what, f"{what} is {value!r}: it is a number, such as {example}")
+    if not low <= value <= high:
+        raise SettingError(what, f"{what} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+    return float(value)
+
+
+def _size(value: object, what: str = "size") -> float | None:
+    """A size in points, or None for the size the place sets."""
+
+    return None if value is None else _number(value, what, 4.0, 400.0, "20 (points)")
+
+
+def _flag(value: object, what: str) -> bool:
+    if not isinstance(value, bool):
+        raise SettingError(what, f"{what} is {value!r}: it is true or false")
+    return value
+
+
+def _choice(value: object, what: str, allowed: tuple[str, ...]) -> str:
+    # "centre" is what a British hand writes for "middle".
+    value = {"centre": "middle", "center": "middle"}.get(value, value) if isinstance(value, str) else value
+    if value not in allowed:
+        raise SettingError(what, f"{what} is {value!r}: it is one of {', '.join(allowed)}")
+    return value
+
+
+def _words(value: object, what: str) -> str:
+    """Words: a string, or a number written as one; never a list, mapping or nothing."""
+
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        raise SettingError(what, f"{what} is {value!r}: it is words")
+    return str(value)
+
+
+def _colour(value: object, what: str = "colour") -> str | None:
+    """A colour: a palette role (accent, muted, ink...) or #rgb / #rrggbb."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise SettingError(what, f"{what} is {value!r}: it is a palette role (accent, muted) or a #rrggbb colour")
+    if value.startswith("#") and not re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", value):
+        raise SettingError(what, f"{what} is {value!r}: a colour is written #rgb or #rrggbb, in hex digits")
+    if not value.startswith("#") and paint_role(value) not in _roles():
+        # A role no palette has would be painted black, whatever the theme.
+        raise SettingError(what, f"{what} is {value!r}: it is accent (accent2, ...), muted, ink, or a #rrggbb colour")
+    return value
+
+
+def paint_role(colour: str) -> str:
+    """The palette role a block's colour names: ``accent`` (``accent2``...) is a tone's
+    stroke, ``muted`` the muted ink, and a role is itself."""
+
+    if colour.startswith("accent"):
+        return f"tone-{colour[6:] or 1}-stroke"
+    return {"muted": "muted-ink"}.get(colour, colour)
+
+
+_ROLES: set[str] = set()
+
+
+def _roles() -> set[str]:
+    """The roles a palette paints: every theme's and palette's are the same."""
+
+    if not _ROLES:
+        palette = with_tone_roles(resolve_palette("paper", "default"))
+        _ROLES.update(palette.paints, (alias for alias, _ in palette.aliases))
+    return _ROLES
 
 
 LOOKS: dict[str, dict[str, object]] = {
@@ -144,6 +333,8 @@ class _Figure:
     figure: flexo.Figure | FigureSpec
     turn: bool = True
     """Whether flexo may lay the figure out turned when that fits its place better."""
+    said: tuple[str, ...] = ()
+    """What is wrong with it that it is drawn despite: said when the slide is drawn."""
 
 
 @dataclass(slots=True)
@@ -158,6 +349,8 @@ class _Plot:
     """A matplotlib ``Figure``."""
     aspect: float | None = None
     """Width over height; ``None`` fills the height the place has."""
+    drawn: str = ""
+    """The SVG it was last drawn as, at the size of its place (what ``convert`` saves)."""
 
 
 @dataclass(slots=True)
@@ -166,6 +359,8 @@ class _Table:
     header: bool = True
     align: tuple[str, ...] = ()
     size: float | None = None
+    ragged: bool = False
+    """Whether its rows were written with different numbers of cells (the short filled)."""
 
 
 @dataclass(slots=True)
@@ -235,6 +430,73 @@ class Reference:
         return f"Reference({self.target!r})"
 
 
+def _check_theme(theme: object) -> None:
+    """A theme is a name flexo knows, or a theme file: said in words, before anything is drawn."""
+
+    from flexo.themes import theme_names
+
+    if isinstance(theme, Path) or (isinstance(theme, str) and theme.lower().endswith((".yaml", ".yml", ".json"))):
+        if not Path(theme).is_file():
+            raise SettingError("theme", f"theme {str(theme)!r}: no such theme file")
+        return
+    if not isinstance(theme, str):
+        raise SettingError("theme", f"theme is {theme!r}: it names a theme ({', '.join(theme_names())}) "
+                                    "or a theme file")
+    if theme not in theme_names():
+        raise SettingError("theme", f'unknown theme "{theme}"; themes are {", ".join(theme_names())}, or a theme file')
+
+
+def _check_settings(settings: dict[str, object]) -> None:
+    """A deck's other settings, each said in words under its own name before anything is
+    drawn: a wrong one would otherwise fail every slide, or be drawn as Python writes it."""
+
+    from flexo.conventions import parse_conventions
+    from flexo.sketch import Sketch, parse_sketch
+
+    def wrong(key: str, said: str) -> SettingError:
+        return SettingError(key, f"{key} is {settings[key]!r}: {said}")
+
+    for key in ("font", "title_font", "figure_font"):
+        if settings[key] is not None and not isinstance(settings[key], str):
+            raise wrong(key, "it names a font family, such as IBM Plex Sans")
+    palette = settings["palette"]
+    if not isinstance(palette, str | Path) and not (
+        isinstance(palette, list | tuple) and palette and all(isinstance(colour, str) for colour in palette)
+    ):
+        raise wrong("palette", "it names a palette, or lists #rrggbb colours")
+    look = settings["look"]
+    if look is not None and not isinstance(look, str):
+        raise wrong("look", f"it is one of {', '.join(LOOKS)}")
+    if look is not None and look not in LOOKS:
+        raise SettingError("look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+    background = settings["background"]
+    if not isinstance(background, bool | str | Path):
+        raise wrong("background", "it is true (the theme's page), false, a #rrggbb colour, or a picture file")
+    if isinstance(background, str) and background.startswith("#"):
+        _colour(background, "background")
+    for key in ("id", "footer"):
+        if settings[key] is not None:
+            _words(settings[key], key)
+    conventions, sketch = settings["conventions"], settings["sketch"]
+    if conventions is not None and not isinstance(conventions, dict):
+        raise wrong("conventions", "it is a mapping of flexo's conventions, such as {lines: straight}")
+    if sketch is not None and not isinstance(sketch, bool | dict | Sketch):
+        raise wrong("sketch", "it is true (a hand-drawn look), or a mapping of roughness, passes, fill, paper, seed")
+    for key, parse in (("conventions", parse_conventions), ("sketch", parse_sketch)):
+        try:
+            parse(settings[key])  # type: ignore[operator]
+        except (TypeError, ValueError) as error:
+            raise SettingError(key, str(error)) from None
+
+
+def _flexo_said(error: Exception) -> str:
+    """A flexo error's words, with its hint, on one line."""
+
+    return " ".join(
+        " ".join(filter(None, (item.message, item.hint))) for item in getattr(error, "diagnostics", ())
+    ) or str(error)
+
+
 def made(value: object) -> object:
     """A block's figure or plot, made now if a deck document named it by reference."""
 
@@ -289,23 +551,23 @@ def inline(words: str) -> tuple[TextRun, ...]:
 
     runs: list[TextRun] = []
     # Split on maths (read as flexo reads it), then links, code, ** and *; each piece
-    # takes the styles open around it.
+    # takes the styles open around it. \* is an asterisk, kept out of the split.
     tokens: list[str] = []
     at = 0
     for start, end in math_spans(words):
-        tokens += re.split(_INLINE, words[at:start])
+        tokens += re.split(_INLINE, words[at:start].replace("\\*", _ASTERISK))
         tokens.append(words[start:end])
         at = end
-    tokens += re.split(_INLINE, words[at:])
+    tokens += re.split(_INLINE, words[at:].replace("\\*", _ASTERISK))
+    tokens = [token for token in tokens if token]
+    paired = _emphasis(tokens)
     bold = italic = False
-    for token in tokens:
-        if token == "**":
+    for index, token in enumerate(tokens):
+        if token == "**" and index in paired:
             bold = not bold
             continue
-        if token == "*":
+        if token == "*" and index in paired:
             italic = not italic
-            continue
-        if not token:
             continue
         link = re.fullmatch(r"\[([^\]\n]+)\]\(([^)\s]+)\)", token)
         coloured = re.fullmatch(r"\[([^\]\n]+)\]\{([^}\s]+)\}", token)
@@ -320,11 +582,41 @@ def inline(words: str) -> tuple[TextRun, ...]:
             runs.append(
                 replace(
                     run,
-                    weight=700 if bold else run.weight,
+                    text=run.text.replace(_ASTERISK, "*"),
+                    # Strong words' maths stays regular, as LaTeX's \textbf leaves it.
+                    weight=700 if bold and not run.maths else run.weight,
                     italic=run.italic or italic,
                 )
             )
     return tuple(runs)
+
+
+_ASTERISK = "\ue000"
+"""Where an escaped asterisk (\\*) waits while emphasis is read."""
+
+
+def _emphasis(tokens: list[str]) -> set[int]:
+    """The indices of the ``*`` and ``**`` that open or close emphasis, as Markdown pairs
+    them: an opener touches the word after it, a closer the word before, and one with
+    no partner (2 * 3 * 4, a footnote's lone *) is an asterisk."""
+
+    paired: set[int] = set()
+    open_at: list[int] = []
+    for index, token in enumerate(tokens):
+        if token not in ("*", "**"):
+            continue
+        before = tokens[index - 1][-1:] if index > 0 else ""
+        after = tokens[index + 1][:1] if index + 1 < len(tokens) else ""
+        can_close = bool(before) and not before.isspace()
+        can_open = bool(after) and not after.isspace()
+        same = [at for at in open_at if tokens[at] == token]
+        if can_close and same:
+            # The nearest one open of its kind: ***both*** is bold and italic both.
+            open_at.remove(same[-1])
+            paired |= {same[-1], index}
+        elif can_open:
+            open_at.append(index)
+    return paired
 
 
 class Region:
@@ -352,14 +644,20 @@ class Region:
         ``reveal=True`` shows the outer items one at a time: a click each in the
         PowerPoint, a page each in the PDF (the SVG and PNG show them all)."""
 
+        size, numbered, reveal = _size(size), _flag(numbered, "numbered"), _flag(reveal, "reveal")
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
 
         def add(entries: Iterable[str | Sequence[str]], level: int) -> None:
             for entry in entries:
-                if isinstance(entry, str):
-                    flattened.append((level, inline(entry)))
-                else:
+                if isinstance(entry, list | tuple):
+                    if level + 1 >= MOST_LEVELS:
+                        # A slide shows a few levels; this many would outrun Python's own.
+                        raise ValueError(f"a list nested more than {MOST_LEVELS} levels deep")
                     add(entry, level + 1)
+                elif str(_words(entry, "a bullet")).strip():
+                    # A number is an item too (a year); anything else is not words. An
+                    # empty item is left out, rather than drawn as a bare bullet.
+                    flattened.append((level, inline(_words(entry, "a bullet"))))
 
         add(items, 0)
         self.blocks.append(_Bullets(flattened, size, numbered, reveal))
@@ -379,6 +677,16 @@ class Region:
         ``colour`` paints it: ``accent`` (``accent2``...), ``muted``, a palette role,
         or ``#rrggbb``; ``[words]{colour}`` paints only some words."""
 
+        words, size = _words(words, "text"), _size(size)
+        align = _choice(align, "align", ("start", "middle", "end"))
+        muted, colour = _flag(muted, "muted"), _colour(colour)
+        if displayed(words):
+            # A paragraph that is one equation ($$...$$) is displayed, as LaTeX displays
+            # it: centred unless placed, as a document's is.
+            return self.math(
+                words, size=size, align="middle" if align == "start" else align,
+                colour=colour or ("muted" if muted else None),
+            )
         self.blocks.append(_Words(inline(words), size, align, muted, colour))
         self._record(
             "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
@@ -398,9 +706,77 @@ class Region:
         ``\\\\``. Centred (``align`` to set it at the start or end), at the words' size
         (``size``) or smaller if that is wider than its place."""
 
-        source = display_source(source)
+        source = display_source(_words(source, "math"))
+        size, colour = _size(size), _colour(colour)
+        align = _choice(align, "align", ("start", "middle", "end"))
         self.blocks.append(_Math(source, size, align, colour))
         self._record("math", source, size=size, align=None if align == "middle" else align, colour=colour)
+        return self
+
+    def mechanism(
+        self,
+        steps: str | Sequence[str | dict[str, object]],
+        *,
+        lone_pairs: Literal["used", "all", "none"] = "used",
+        charges: Literal["circled", "plain"] = "circled",
+        per_row: int | None = None,
+        arrow_colour: str | None = None,
+    ) -> Region:
+        """A reaction mechanism, drawn as chemists draw it (see ``flexo.mechanism``):
+        each step a structure in SMILES and its curly arrows, a reaction arrow (reagents
+        over it, conditions under it) to the next. ``steps`` is a SMILES or a list of
+        steps, each a SMILES or ``{"smiles": ..., "arrows": ["5 -> 2", "2=3 -> 3"],
+        "label": ..., "reagents": ..., "conditions": ..., "arrow": "equilibrium"}``.
+
+        Atoms are named by their atom maps (``[O-:5]``). An arrow from a lone pair is
+        ``"5 -> 2"``, from a bond ``"2=3 -> 3"``, a bond moved ``"1=2 -> 2-6"``, a
+        fishhook ``"~>"``. A step with no SMILES is drawn from the arrows before it;
+        one written out is checked against them. A step that cannot be (carbon with ten
+        electrons) is drawn as far as it goes, its arrows on it, and what is wrong said
+        when the slide is drawn -- as it is between one arrow and the next while a step
+        is written. A step's ``place`` moves its molecules from where they are laid out
+        (``{5: {"move": [-1, 0.5], "turn": 30, "flip": True}}``: the molecule with atom 5).
+        The curly arrows are magenta, or ``arrow_colour``: a palette role (accent, ink,
+        muted) or #rrggbb."""
+
+        lone_pairs = _choice(lone_pairs, "lone_pairs", ("used", "all", "none"))
+        arrow_colour = _colour(arrow_colour, "arrow_colour")
+        if arrow_colour is not None and not re.fullmatch(r"#.*|ink|muted|accent\d*", arrow_colour):
+            raise SettingError("arrow_colour", f"arrow_colour is {arrow_colour!r}: it is accent (accent2, ...), "
+                               "ink, muted, or a #rrggbb colour")
+        charges = _choice(charges, "charges", ("circled", "plain"))
+        if per_row is not None:
+            per_row = int(_number(per_row, "per_row", 1, 20, "3"))
+        written = [steps] if isinstance(steps, str) else list(steps)
+        if not written:
+            raise ValueError("a mechanism needs at least one step")
+        for number, step in enumerate(written, start=1):
+            if not isinstance(step, str | dict):
+                raise ValueError(f"step {number} of the mechanism is a SMILES, or a mapping with smiles and arrows")
+        deck = self._slide.deck
+        identifier = f"{self._slide.id}-{self.name}-{len(self.blocks)}"
+        figure = flexo.Figure(identifier, **deck.figure_options())
+        node = figure.root.mechanism(
+            "mechanism", written, lone_pairs=lone_pairs, charges=charges, per_row=per_row,
+            arrow_colour=arrow_colour, partial=True,
+        )
+        from flexo.diagnostics import FlexoError
+        from flexo.mechanism import mechanism_states
+
+        try:
+            _, problem = mechanism_states(next(item for item in figure.spec.nodes if item.id == node.id))
+        except FlexoError as error:
+            # Nothing to draw: the first structure itself, or the steps, are not written right.
+            said = error.diagnostics[0]
+            raise ValueError(f"{said.message}{' ' + said.hint if said.hint else ''}") from None
+        wrong = () if problem is None else (f"{problem.message}{' ' + problem.hint if problem.hint else ''}",)
+        self.blocks.append(_Figure(figure, False, wrong))
+        self._record(
+            "mechanism", steps if isinstance(steps, str) else [dict(step) if isinstance(step, dict) else step
+                                                               for step in written],
+            lone_pairs=None if lone_pairs == "used" else lone_pairs,
+            charges=None if charges == "circled" else charges, per_row=per_row, arrow_colour=arrow_colour,
+        )
         return self
 
     def gallery(
@@ -423,10 +799,25 @@ class Region:
         or centred; a grid of several columns is centred.
         """
 
+        if isinstance(items, str | Path) or not items:
+            raise ValueError("a gallery is a list of at least one picture (a file, or a file and its caption)")
+        if columns is not None and (
+            isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= 12
+        ):
+            raise ValueError(f"columns is {columns!r}: it is a whole number from 1 to 12")
+        height = None if height is None else _number(height, "height", 8.0, 4032.0, "120 (points)")
+        crop = None if crop is None else _choice(crop, "crop", ("circle", "square"))
+        size = _size(size)
+        align = None if align is None else _choice(align, "align", ("start", "middle"))
         cells = []
         for item in items:
-            source, caption = (item, "") if isinstance(item, str | Path) else item
-            cells.append((str(source), inline(caption) if caption else ()))
+            if isinstance(item, str | Path):
+                source, caption = item, ""
+            elif isinstance(item, list | tuple) and len(item) == 2:
+                source, caption = item
+            else:
+                raise ValueError(f"a gallery picture is a file, or a file and its caption, not {item!r}")
+            cells.append((str(source), inline(_words(caption, "a caption")) if caption else ()))
         self.blocks.append(_Gallery(cells, columns, height, crop, size, align))
         pictures = [str(item) if isinstance(item, str | Path) else {"picture": str(item[0]), "caption": item[1]}
                     for item in items]
@@ -437,6 +828,7 @@ class Region:
         """A quotation set large in the title face, an accent quotation mark hung in
         the margin beside it, and who said it (``by``) under it, muted."""
 
+        words, by, size = _words(words, "quote"), _words(by, "by"), _size(size)
         self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size))
         self._record("quote", words, by=by or None, size=size)
         return self
@@ -454,6 +846,11 @@ class Region:
 
         if not items:
             raise ValueError("stats needs at least one (value, label) pair")
+        for item in items:
+            if isinstance(item, str) or not isinstance(item, list | tuple) or len(item) != 2:
+                raise ValueError(f'each of stats is a (value, label) pair, such as ("93%", "accuracy"), not {item!r}')
+        items = tuple((_words(value, "a stat's value"), _words(label, "a stat's label")) for value, label in items)
+        colour, size = _colour(colour), _size(size)
         self.blocks.append(
             _Stats([(inline(str(value)), inline(label)) for value, label in items], colour, size)
         )
@@ -468,7 +865,8 @@ class Region:
         """A key point on a panel tinted in a tone, a bar of the tone along its edge:
         ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words."""
 
-        if not (colour.startswith("accent") and colour[6:] in {"", *map(str, range(1, 13))}):
+        words, title, size = _words(words, "callout"), _words(title, "title"), _size(size)
+        if not (isinstance(colour, str) and colour.startswith("accent") and paint_role(colour) in _roles()):
             raise ValueError(f'a callout\'s colour is "accent", "accent2", ... not "{colour}"')
         self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
         self._record(
@@ -481,6 +879,7 @@ class Region:
         ``with`` block. ``turn=False`` keeps it as written (see ``add``)."""
 
         deck = self._slide.deck
+        turn = _flag(turn, "turn")
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
         self.blocks.append(_Figure(figure, turn))
@@ -495,7 +894,7 @@ class Region:
         be larger -- ``turn=False`` keeps it as written.
         """
 
-        self.blocks.append(_Figure(figure, turn))
+        self.blocks.append(_Figure(figure, _flag(turn, "turn")))
         self._record("figure", None, turn=None if turn else False)
         return self
 
@@ -503,6 +902,7 @@ class Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture."""
 
+        width = None if width is None else _number(width, "width", 1.0, 4032.0, "300 (points)")
         self.blocks.append(_Image(str(source), width))
         self._record("image", str(source), width=width)
         return self
@@ -523,16 +923,23 @@ class Region:
         default a column of numbers is set flush right and any other flush left.
         """
 
-        cells = [[inline(str(cell)) for cell in row] for row in rows]
+        if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
+            raise ValueError("a table is a list of rows, each a list of cells")
+        header, size = _flag(header, "header"), _size(size)
+        cells = [[inline("" if cell is None else _words(cell, "a table's cell")) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
+        ragged = len({len(row) for row in cells}) > 1
         cells = [row + [()] * (columns - len(row)) for row in cells]
         names = {"l": "start", "c": "middle", "r": "end"}
         if isinstance(align, str) and align and all(ch in names for ch in align):
             aligned = tuple(names[ch] for ch in align)
-        elif isinstance(align, str):
+        elif align == "":
             aligned = ()
+        elif isinstance(align, str):
+            raise SettingError("align", f"align is {align!r}: it is a letter for each column (l, c or r), "
+                                        "or a list of start, middle and end")
         else:
-            aligned = tuple(align)
+            aligned = tuple(_choice(item, "a column's align", ("start", "middle", "end")) for item in align)
         if len(aligned) != columns:
             body = [list(row) for row in rows[1 if header else 0 :]]
             aligned = tuple(
@@ -542,7 +949,7 @@ class Region:
                 else "start"
                 for index in range(columns)
             )
-        self.blocks.append(_Table(cells, header, aligned, size))
+        self.blocks.append(_Table(cells, header, aligned, size, ragged))
         given = align if isinstance(align, str) else list(align)
         self._record("table", _plain(rows), header=None if header else False, align=given or None, size=size)
         return self
@@ -553,6 +960,7 @@ class Region:
 
         import textwrap
 
+        source, size = _words(source, "code"), _size(size)
         text = textwrap.dedent(source.expandtabs(4)).strip("\n")
         self.blocks.append(_Code(text.splitlines() or [""], size))
         self._record("code", text, size=size)
@@ -567,6 +975,7 @@ class Region:
         ``with deck.plotting():`` for the deck's colours as well.
         """
 
+        aspect = None if aspect is None else _number(aspect, "aspect", 0.1, 10.0, "1.6 (width over height)")
         self.blocks.append(_Plot(figure, aspect))
         self._record("plot", None, aspect=aspect)
         return self
@@ -615,11 +1024,22 @@ class Slide:
     ) -> None:
         if layout not in LAYOUTS:
             raise ValueError(f'unknown layout "{layout}"; layouts are {", ".join(LAYOUTS)}')
+        title, subtitle = _words(title or "", "title"), _words(subtitle or "", "subtitle")
+        split = _number(split, "split", 0.15, 0.85, "0.5 (the left column's share of the width)")
+        shade = _number(shade, "shade", 0.0, 1.0, "0.4 (how much a picture is darkened)")
+        if dark is not None:
+            dark = _flag(dark, "dark")
+        if widths is not None:
+            widths = [_number(share, "a column's width", 0.01, 100.0, "1 (shares of the width)") for share in widths]
+        if background is not None and not isinstance(background, str | Path):
+            raise SettingError("background", f"background is {background!r}: it is a #rrggbb colour or a picture file")
+        if isinstance(background, str) and background.startswith("#"):
+            _colour(background, "background")
         self.deck = deck
         self.index = index
         self.id = f"slide{index}"
-        self.title_runs = inline(title) if title else ()
-        self.subtitle_runs = inline(subtitle) if subtitle else ()
+        self.title_runs = inline(title) if title.strip() else ()
+        self.subtitle_runs = inline(subtitle) if subtitle.strip() else ()
         self.layout = layout
         self.split = split
         """The share of the width the left column takes, on a two-column slide."""
@@ -635,7 +1055,7 @@ class Slide:
         self.dark = dark
         """Whether the slide's words are light; decided from the background when unset."""
         if align not in {None, "auto", "top", "middle"}:
-            raise ValueError(f'align is "auto", "top", or "middle", not "{align}"')
+            raise SettingError("align", f'align is "auto", "top", or "middle", not "{align}"')
         self.align = align
         """Where the content sits in the body; the deck style's ``align`` when unset."""
         self.byline_runs: tuple[TextRun, ...] = ()
@@ -753,6 +1173,10 @@ class Slide:
         next(iter(self.regions.values())).math(source, **options)  # type: ignore[arg-type]
         return self
 
+    def mechanism(self, steps, **options: object) -> Slide:
+        next(iter(self.regions.values())).mechanism(steps, **options)  # type: ignore[arg-type]
+        return self
+
     def notes(self, text: str) -> Slide:
         """What to say: kept as the slide's speaker notes."""
 
@@ -848,7 +1272,15 @@ class Deck:
         """What the deck was made with, as a deck document writes it (see ``flexo_talk.document``)."""
         # A theme file is read now, by the Figure machinery that knows how, and
         # what it says about slides fills in what the deck leaves unsaid.
-        probe = flexo.Figure("probe", theme=theme, palette=palette)
+        _check_theme(theme)
+        _check_settings({
+            "id": id, "palette": palette, "font": font, "title_font": title_font, "figure_font": figure_font,
+            "look": look, "background": background, "footer": footer, "conventions": conventions, "sketch": sketch,
+        })
+        try:
+            probe = flexo.Figure("probe", theme=theme, palette=palette)
+        except (TypeError, ValueError) as error:
+            raise SettingError("palette", str(error)) from None
         slides = theme_slides(theme)
         own_look = look
         look = look if look is not None else slides.get("look")  # type: ignore[assignment]
@@ -860,6 +1292,13 @@ class Deck:
         self.id = id
         self.theme = probe.style
         self.palette_name = probe.palette
+        from flexo.diagnostics import FlexoError
+
+        try:
+            # A palette named but not known is said now, not on every slide.
+            resolve_palette(self.theme, self.palette_name)
+        except FlexoError as error:
+            raise SettingError("palette", _flexo_said(error)) from None
         self.font = font
         """The family of the slides' words and figures; the theme's when unset."""
         self.title_font = title_font
@@ -868,17 +1307,20 @@ class Deck:
         """The family of the figures' words; ``font`` when unset."""
         from flexo.fonts import require_family
 
-        for family in (font, title_font, figure_font):
+        for key, family in (("font", font), ("title_font", title_font), ("figure_font", figure_font)):
             if family:
-                require_family(family)
+                try:
+                    require_family(family)
+                except FlexoError as error:
+                    raise SettingError(key, _flexo_said(error)) from None
         self.conventions = conventions
         self.sketch = sketch
         self.background = background
         """The page every slide is drawn on: the theme's page colour (``True``), a colour,
         a picture that fills each slide (a paper texture), or nothing (``False``)."""
-        self.footer = footer
+        self.footer = "" if footer is None else str(footer)
         if look is not None and look not in LOOKS:
-            raise ValueError(f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+            raise SettingError("look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
         # The theme's proportions, and the look: the deck's own look over the
         # theme's style, the theme's style over a look the theme chose.
         theme_style = slides.get("style") or {}
@@ -931,8 +1373,9 @@ class Deck:
         dark background the slide's words are set light (``dark`` overrides).
         ``align`` places the content in the body (see ``DeckStyle.align``)."""
 
-        if not 0.15 <= split <= 0.85:
-            raise ValueError("split is the left column's share of the width, between 0.15 and 0.85")
+        split = _number(split, "split", 0.15, 0.85, "0.5 (the left column's share of the width)")
+        if isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= 12:
+            raise SettingError("columns", f"columns is {columns!r}: it is a whole number from 1 to 12")
         made = Slide(
             self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
             background, shade, dark, align,
@@ -957,11 +1400,22 @@ class Deck:
         shade: float = 0.0,
     ) -> Slide:
         """The opening slide: the talk's title, a subtitle, who and when (and, if
-        given, a background colour or picture: see ``slide``)."""
+        given, a background colour or picture: see ``slide``). A ``date`` object is
+        written as a document writes one: 2026-10-01."""
 
+        import datetime
+
+        if isinstance(date, datetime.date):
+            date = date.isoformat()
+        author, date = _words(author, "author"), _words(date, "date")
         made = self.slide(title, layout="title", subtitle=subtitle, background=background, shade=shade)
         made.source.update(author=author, date=date)
-        byline = " · ".join(part for part in (author, date) if part)
+        parts = [part for part in (author, date) if part]
+        # In a right-to-left byline a middle dot reads as the Persian and Arabic zero
+        # (15 and a dot read as 150): a dash keeps author and date apart.
+        from flexo.bidi import has_rtl
+
+        byline = (" \u2013 " if any(has_rtl(part) for part in parts) else " · ").join(parts)
         made.byline_runs = inline(byline) if byline else ()
         return made
 
@@ -978,6 +1432,7 @@ class Deck:
         """A slide that says one thing, large, in the middle: a claim, a question, a
         quotation (``by`` says whose). ``[words]{accent}`` paints the words that matter."""
 
+        by = _words(by, "by")
         made = self.slide(words, layout="statement", background=background, shade=shade)
         made.source.update(by=by)
         made.byline_runs = inline(f"\u2014 {by}") if by else ()
@@ -1014,12 +1469,11 @@ class Deck:
         size, its inks, and the palette's tones as the colour cycle."""
 
         from cycler import cycler
-        from flexo.colour import is_dark, with_lightness
+        from flexo.colour import is_dark
 
         palette = self.palette
         dark = is_dark(palette.get("canvas"))
-        tones = [palette.get(f"tone-{index}-stroke") for index in range(1, 7)]
-        colours = [with_lightness(tone, 0.74 if dark else 0.58, 0.16) for tone in tones]
+        colours = data_colours(palette, dark)
         ink, muted = palette.get("ink"), palette.get("muted-ink")
         family = self.layout_style.typography.family
         # Plot words sit a little above figure labels: tick labels are read from afar.
@@ -1098,12 +1552,17 @@ class Deck:
         *,
         formats: Sequence[str] = ("pptx", "pdf", "svg", "png"),
         handout: bool = False,
+        editable_maths: bool = True,
     ) -> DeckBuild:
-        """Write the deck: ``pptx`` and ``pdf`` (one file each), ``svg`` and ``png`` per slide."""
+        """Write the deck: ``pptx`` and ``pdf`` (one file each), ``svg`` and ``png`` per slide.
+
+        ``editable_maths`` writes the PowerPoint's maths as its own equations, editable
+        there (set in PowerPoint's maths font), with flexo's drawing for other programs;
+        ``False`` keeps only the drawing, set in the deck's fonts everywhere."""
 
         from flexo_talk.export import build_deck
 
-        return build_deck(self, Path(directory), tuple(formats), handout=handout)
+        return build_deck(self, Path(directory), tuple(formats), handout=handout, editable_maths=editable_maths)
 
 
 @dataclass(slots=True)
@@ -1129,6 +1588,8 @@ class ListLayout:
     """The slide's paints (light words on a dark slide); the deck's when unset."""
     steps: list[float] = field(default_factory=list)
     """Each item's line height: a formula taller than the words opens its item's lines."""
+    opened: list[tuple[float, float, int]] = field(default_factory=list)
+    """Each item's room for a formula above and below its words, and its line count."""
 
     def step(self, index: int) -> float:
         """The line height of item ``index``."""
@@ -1174,6 +1635,26 @@ class TableLayout:
 
 
 @dataclass(slots=True)
+class WordsLayout:
+    """Words with maths in them, as they were set -- a paragraph, a title, a caption --
+    for writers that set them natively (PowerPoint, its equations its own)."""
+
+    id: str
+    x: float
+    """Where the lines are aligned: their left edge, middle, or right edge (``align``)."""
+    baseline: float
+    """The first line's baseline."""
+    width: float
+    line_height: float
+    lines: list[tuple[TextRun, ...]]
+    size: float
+    align: str = "start"
+    family: str = ""
+    weight: int | None = None
+    fill: str = "#000000"
+
+
+@dataclass(slots=True)
 class RenderedSlide:
     slide: Slide
     svg: str
@@ -1186,6 +1667,8 @@ class RenderedSlide:
     held: list[str] = field(default_factory=list)
     """Python the slide names that was not run (its folder not yet trusted): a quiet line
     stands in its place."""
+    worded: list[WordsLayout] = field(default_factory=list)
+    """Words with maths in them, where they were set (see ``WordsLayout``)."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

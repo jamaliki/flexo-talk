@@ -32,6 +32,7 @@ from flexo_talk.document import (
     dump_document,
     is_deck_document,
     load_document,
+    parse_document,
     save_document,
 )
 
@@ -127,9 +128,7 @@ class DeckKind:
         return changed
 
     def parse(self, text: str) -> Any:
-        import yaml
-
-        return yaml.safe_load(text)
+        return parse_document(text)
 
     def guide(self) -> str:
         import flexo_talk.document as module
@@ -336,12 +335,15 @@ class DeckKind:
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck
         (a figure written inline) or in its own file. ``action`` is ``{"do": "figure",
-        "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}``."""
+        "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}`` -- or
+        ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``)."""
 
         import copy
 
         from flexo.studio.figure_edit import EditError, apply, apply_to_data, model
 
+        if action.get("do") == "mechanism":
+            return _mechanism(document, action, base)
         if action.get("do") != "figure":
             raise EditError(f'unknown deck edit "{action.get("do")}"')
         at = action.get("at") or {}
@@ -372,6 +374,65 @@ class DeckKind:
 
     def text(self, document: dict[str, Any]) -> str:
         return dump_document(document)
+
+
+def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+    """Drawing on a mechanism's ``step`` (from 0), as mechazyme's editor does: ``add``
+    an arrow (``{"tail", "head", "half"}``, each end ``{"atom": i}`` or ``{"bond": [i, j]}``),
+    ``remove`` one (its place in the step), ``place`` a molecule (``{"atom", "move",
+    "turn", "flip", "reset"}``), or none of these, to see the step. Returns
+    the ``document`` and the step's ``sheet`` -- laid out for the arrows ``holding`` gives,
+    so it holds still while it is drawn on -- or, when a bond's electrons go to an atom
+    outside it, the ``ends`` it could bond from, to ask which."""
+
+    from flexo.studio.figure_edit import EditError
+    from flexo.studio.mechanism_edit import OPTIONS, add_arrow, place_molecule, remove_arrow, sheet
+
+    from flexo_talk.document import make_deck
+
+    changed = copy.deepcopy(document)
+    block = _block_at(changed, action.get("at") or {})
+    if not isinstance(block, dict) or "mechanism" not in block:
+        raise EditError("that part is not a mechanism any more: someone changed it meanwhile")
+    options = {key: block.get(key) for key in OPTIONS}
+    step = int(action.get("step") or 0)
+    holding = action.get("holding")
+    holding = [str(item) for item in holding] if isinstance(holding, list) else None
+    said: dict[str, Any] = {}
+    if isinstance(action.get("add"), dict):
+        add = action["add"]
+        made = add_arrow(block["mechanism"], step=step, tail=add.get("tail") or {}, head=add.get("head") or {},
+                         half=bool(add.get("half")), options=options)
+        if "ends" in made:
+            return {"document": document, "ends": made["ends"]}
+        block["mechanism"] = _written(made["steps"])
+        said["arrow"] = made["arrow"]
+    elif isinstance(action.get("place"), dict):
+        how = action["place"]
+        move = how.get("move")
+        block["mechanism"] = _written(place_molecule(
+            block["mechanism"], step=step, atom=int(how.get("atom") or 0),
+            move=[float(move[0]), float(move[1])] if isinstance(move, list) and len(move) == 2 else None,
+            turn=float(how.get("turn") or 0), flip=bool(how.get("flip")), reset=bool(how.get("reset")),
+            options=options)["steps"])
+    elif action.get("remove") is not None:
+        block["mechanism"] = _written(remove_arrow(block["mechanism"], step=step, index=int(action["remove"]))["steps"])
+    else:
+        changed = document
+        block = _block_at(changed, action.get("at") or {})
+    try:
+        # Drawn in the deck's look, as the slide draws it.
+        look = make_deck(document.get("deck") or {}, base).figure_options()
+    except (DeckDocumentError, ValueError, TypeError, OSError):
+        look = {}
+    drawn = sheet(block["mechanism"], step=step, holding=holding, options=options, look=look)
+    return {"document": changed, "sheet": drawn, **said}
+
+
+def _written(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Steps as the document keeps them: a step's arrows left out when it has none."""
+
+    return [{key: value for key, value in step.items() if not (key == "arrows" and not value)} for step in steps]
 
 
 def _figure_editor() -> dict[str, Any]:

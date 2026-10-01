@@ -97,11 +97,35 @@ def test_a_matplotlib_plot_is_native_shapes_and_text(tmp_path: Path) -> None:
         slide.plot(figure)
     result = deck.build(tmp_path, formats=("pptx", "pdf"))
     slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
-    # Tick labels and the axis label are live text in the deck's font, the label turned.
-    assert 'typeface="Figtree"' in slide and ">Loss" in slide and 'rot="16200000"' in slide
+    # Tick labels are live text in the deck's font.
+    assert 'typeface="Figtree"' in slide and ">0.00<" in slide
     # Lines are freeforms; the image is a picture, flipped as matplotlib stores it.
     assert "<a:custGeom>" in slide and "<p:pic>" in slide and 'flipV="1"' in slide
-    assert "θ" in "".join(re.findall(r"<a:t>([^<]*)</a:t>", slide))
+    # Words with maths in them are set by flexo, as on a slide, and drawn as outlines.
+    assert ">Loss" not in slide and "STIX" not in slide
+
+
+def test_an_illustrator_file_is_placed_as_shapes(tmp_path: Path) -> None:
+    pytest.importorskip("pypdfium2")
+    from flexo.pdf import write_pdf
+
+    # An Illustrator file is a PDF with Illustrator's data beside it; flexo's own PDF
+    # stands in for one: a box, and words in an embedded face.
+    source = tmp_path / "panel.ai"
+    write_pdf(
+        ['<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80" viewBox="0 0 200 80">'
+         '<rect x="10" y="10" width="60" height="60" fill="#d55e00"/>'
+         '<text x="90" y="50" font-size="20">Panel A</text></svg>'],
+        source,
+    )
+    deck = Deck("illustrator")
+    with deck.slide("A colleague's panel") as slide:
+        slide.image(source)
+    result = deck.build(tmp_path, formats=("pptx", "pdf"))
+    xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "<p:pic>" not in xml
+    assert xml.count("<a:custGeom>") >= 2  # the box, and the words' outlines
+    assert 'srgbClr val="D55E00"' in xml  # in the box's own colour
 
 
 def test_an_overfull_slide_is_set_smaller_and_reported(tmp_path: Path) -> None:
@@ -384,7 +408,13 @@ def test_a_filled_section_takes_the_accent_and_light_words(tmp_path: Path) -> No
     section, _ = _slides(result.pptx)  # type: ignore[arg-type]
     accent = deck.palette.get("tone-1-stroke").lstrip("#").upper()
     assert re.search(rf'<p:bg>.*?<a:srgbClr val="{accent}"/>', section, re.S)
-    assert "F7F5F0" in section  # its words set light
+    from flexo.colour import contrast
+
+    # Its words set light, and readable on the accent.
+    words = re.findall(r'<a:t>A part</a:t>', section)
+    run = r'<a:rPr[^>]*>(?:(?!</a:rPr>).)*?<a:srgbClr val="([0-9A-F]{6})"/>(?:(?!</a:rPr>).)*?</a:rPr><a:t>A part'
+    colours = re.findall(run, section, re.S)
+    assert words and colours and contrast(f"#{colours[0]}", f"#{accent}") >= 4.5
     # The content slide's title sits on a band of the accent across the top.
     assert 'id="slide2.band"' in result.svgs[1].read_text()
 
@@ -526,7 +556,8 @@ def test_an_equation_is_displayed_on_its_own_line_and_fits_its_place(tmp_path: P
     # The document keeps what was written.
     assert deck_document(deck)["slides"][0]["body"][2] == {"text": r"$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$"}
     result = deck.build(tmp_path / "out", formats=("svg", "pptx"))
-    assert not result.diagnostics, result.summary()
+    # Only the long one is said: set that small, it would read better broken into lines.
+    assert len(result.diagnostics) == 1 and "an equation set at" in result.diagnostics[0], result.summary()
     svg = result.svgs[0].read_text()
     groups = re.findall(r'<g [^>]*data-flexo-math="[^"]*"[^>]*>', svg)
     assert len(groups) == 3 and all('data-flexo-talk="math"' in group for group in groups)
@@ -570,13 +601,66 @@ def test_maths_in_a_list_leaves_room_in_the_native_words_and_is_drawn_over_it(tm
     assert re.search(r'spc="\d+"', table) and table.count("<a:custGeom>") >= 2
 
 
+@pytest.mark.parametrize("editable", [False, True])
+def test_a_list_opened_for_tall_maths_keeps_its_baselines_in_powerpoint(tmp_path: Path, editable: bool) -> None:
+    from flexo.text import font_stack
+
+    from flexo_talk.pptx import LOOSE, ascent
+
+    deck = Deck("tall")
+    deck.slide("Tall").bullets(
+        r"First: $\frac{\partial \mathcal{L}}{\partial \theta} = \sum_i \frac{1}{p_i}$ is tall",
+        "A plain second item",
+        r"A long item that wraps onto a second line because it goes on and on, with $\frac{a}{b}$ in "
+        "the middle of it and more words after",
+    )
+    (rendered,) = deck.render()
+    (layout,) = rendered.lists
+    assert [count for _, _, count in layout.opened] == [1, 1, 2]
+    xml = _slides(deck.build(tmp_path, formats=("pptx",), editable_maths=editable).pptx)[0]
+    share = ascent(font_stack(deck.typography(layout.size)).face(400, False))
+    shapes = re.findall(rf'<p:sp>(?:(?!</p:sp>).)*name="{re.escape(layout.id)}".*?</p:sp>', xml, re.S)
+    assert len(shapes) == (2 if editable else 1)
+    for shape in shapes:
+        # PowerPoint sets an exactly spaced line's baseline at the face's share of single
+        # spacing, and at LOOSE of any wider spacing: replayed, each item's first baseline
+        # lands where Flexo set it.
+        y = int(re.search(r'<a:off x="\d+" y="(\d+)"/>', shape).group(1)) / 12700
+        spacings = [int(v) / 100 for v in re.findall(r'<a:lnSpc><a:spcPts val="(\d+)"/>', shape)]
+        befores = [int(v) / 100 for v in re.findall(r'<a:spcBef><a:spcPts val="(\d+)"/>', shape)]
+        for index, ((_, _, baseline), (rise, fall, count), spacing, before) in enumerate(
+            zip(layout.items, layout.opened, spacings, befores, strict=True)
+        ):
+            y += before
+            plain = layout.step(index) - rise - fall
+            down = LOOSE * spacing if spacing > plain + 0.01 else share * spacing
+            assert y + down == pytest.approx(baseline, abs=0.02)
+            y += spacing * count
+
+
+def test_a_text_box_starts_where_its_words_were_set(tmp_path: Path) -> None:
+    deck = Deck("edges", footer="A footer")
+    deck.slide("A title").text("Words.")
+    xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]
+    for words in ("A title", "Words.", "A footer"):
+        shape = re.search(rf'<p:sp>(?:(?!</p:sp>).)*<a:t>{re.escape(words)}</a:t>', xml, re.S).group(0)
+        # Left-aligned words start at the margin; the room to spare is on their right.
+        assert int(re.search(r'<a:off x="(\d+)"', shape).group(1)) / 12700 == pytest.approx(48.0, abs=0.01)
+    number = re.search(r'<p:sp>(?:(?!</p:sp>).)*algn="r"(?:(?!</p:sp>).)*<a:t>1</a:t>', xml, re.S).group(0)
+    left, width = (int(v) / 12700 for v in re.search(r'<a:off x="(\d+)".*?<a:ext cx="(\d+)"', number, re.S).groups())
+    assert left + width == pytest.approx(960.0 - 48.0, abs=0.5)
+
+
 def test_maths_that_cannot_be_read_is_reported_on_its_slide(tmp_path: Path) -> None:
     deck = Deck("broken")
     deck.slide("Oops").text(r"Here: $\frac{1}{2} + \foo{x}$").math(r"\sqrt{x")
+    # Maths simple enough to be set as words is read for its mistakes all the same.
+    deck.slide("Squared").text(r"Then $x^{2$ is squared.")
     result = deck.build(tmp_path, formats=("svg",))
     said = " ".join(result.diagnostics)
     assert r"\foo is not a maths command flexo knows" in said
     assert "a { is not closed" in said and "slide1" in said
+    assert "slide2: a { is not closed, in the maths \u201cx^{2\u201d" in said
     assert "Traceback" not in said and "Error" not in said
 
 
@@ -586,7 +670,7 @@ def test_prices_are_prices_and_escaped_dollars_are_dollars() -> None:
     assert [run.text for run in runs if run.italic] == ["x"]
 
 
-def test_a_plot_whose_words_are_maths_matplotlib_cannot_set_is_said_plainly() -> None:
+def test_a_plot_sets_its_maths_as_a_slide_does_and_says_what_it_cannot_read() -> None:
     pytest.importorskip("matplotlib")
     import matplotlib
 
@@ -595,8 +679,225 @@ def test_a_plot_whose_words_are_maths_matplotlib_cannot_set_is_said_plainly() ->
 
     from flexo_talk.compose import plot_svg
 
+    # Maths matplotlib cannot set at all: a matrix, \le, a fraction in a legend.
     figure, axes = plt.subplots()
-    axes.set_title(r"$\frac{1}{$")
-    with pytest.raises(ValueError, match="maths matplotlib cannot set: a \\{ is not closed") as caught:
-        plot_svg(figure, 300.0, 200.0, "Figtree", "p")
-    assert "Parse" not in str(caught.value) and "Exception" not in str(caught.value)
+    axes.plot([0, 1], [0, 1], label=r"$\beta = \frac{1}{2}$")
+    axes.set_title(r"$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$ and $x \le y$")
+    axes.set_ylabel(r"$\frac{1}{$")
+    axes.legend()
+    said: list[tuple[str, str]] = []
+    svg = plot_svg(figure, 300.0, 200.0, "Figtree", "p", maths="Fira Math", said=said)
+    assert said == [(r"$\frac{1}{$", "a { is not closed")]
+    assert "STIX" not in svg and "<path" in svg
+
+
+def test_a_plot_annotation_with_maths_keeps_its_arrow_and_box() -> None:
+    import matplotlib.pyplot as plt
+
+    from flexo_talk.compose import plot_svg
+
+    def drawn(maths: bool) -> str:
+        figure, axes = plt.subplots()
+        label = r"peak $\alpha$" if maths else "peak"
+        axes.annotate(label, xy=(0.5, 0.5), xytext=(0.1, 0.8), arrowprops={"arrowstyle": "->"})
+        axes.text(0.6, 0.2, r"box $\beta$" if maths else "box", bbox={"boxstyle": "round", "fc": "#ffff00"})
+        return plot_svg(figure, 300.0, 200.0, "Figtree", "a", maths="Fira Math")
+
+    with_maths, without = drawn(True), drawn(False)
+    assert "#ffff00" in with_maths.lower()
+    # The arrow is there as it is for plain words (one path more for the formula's glyphs at most).
+    assert with_maths.count("stroke-linecap") >= without.count("stroke-linecap")
+
+
+def test_a_log_axis_ticks_are_matplotlibs_and_say_nothing() -> None:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    from flexo_talk.compose import plot_svg
+
+    figure, (left, right) = plt.subplots(1, 2)
+    left.loglog(np.logspace(-2, 4, 20), np.logspace(-2, 4, 20), label=r"$\kappa \le 1$")
+    left.set_xlim(1e-3, 1e5)
+    figure.canvas.draw()  # ticks made once (as tight_layout would), some then out of view
+    left.set_xlim(1e-2, 1e3)
+    left.legend()
+    right.semilogy([1, 2], [1, 1e5])
+    right.secondary_yaxis("right")
+    said: list[tuple[str, str]] = []
+    plot_svg(figure, 300.0, 200.0, "Figtree", "p", maths="Fira Math", said=said)
+    assert said == []
+
+
+@pytest.mark.parametrize(
+    ("source", "elements"),
+    [
+        (r"\frac{a}{b}", ["m:f", "m:num", "m:den"]),
+        (r"\sqrt{x} + \sqrt[3]{y}", ["m:rad", "m:degHide", "m:deg"]),
+        (r"\sum_{i=1}^{n} x_i", ["m:nary", 'm:chr m:val="∑"', 'm:limLoc m:val="undOvr"', "m:sSub"]),
+        (r"\sum_{i=1}^{n}", ["m:nary", "<m:e><m:r>", "\u200b"]),
+        (r"\int_0^1 f\,dx", ['m:chr m:val="∫"', 'm:limLoc m:val="subSup"']),
+        (r"\left( \frac{a}{b} \right)", ["m:d", 'm:begChr m:val="("', 'm:endChr m:val=")"']),
+        (r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", ["m:m", "m:mr", 'm:begChr m:val="("']),
+        (r"\begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}", ['m:begChr m:val="{"', 'm:endChr m:val=""']),
+        (r"a &= b \\ &= c", ["m:eqArr", "m:aln"]),
+        (r"\begin{gathered} a \\ b \end{gathered}", ["m:eqArr"]),
+        (r"\log p(x) + \sin x", ["m:func", "m:fName"]),
+        (r"\hat{x} + \overline{AB}", ["m:acc", "m:bar", 'm:pos m:val="top"']),
+        (r"\overbrace{a+b}^{n} \xrightarrow{k}", ["m:limUpp", "m:groupChr", 'm:chr m:val="⏞"']),
+        (r"\mathcal{L} + \mathbb{R} + \mathbf{x} + \text{if}", ['m:scr m:val="script"', 'm:scr m:val="double-struck"',
+                                                               'm:sty m:val="b"', "m:nor"]),
+        (r"\lim_{n \to \infty} a_n", ["m:limLow"]),
+        (r"\mathop{\mathrm{Res}}_{z=0} f", ["m:func", "m:limLow", "<m:t>R</m:t>"]),
+        (r"\binom{n}{k}", ['m:type m:val="noBar"']),
+        (r"\foo{x}", ['val="C0392B"']),
+    ],
+)
+def test_maths_is_written_as_powerpoints_own_equations(source: str, elements: list[str]) -> None:
+    from lxml import etree
+
+    from flexo_talk.omml import omml
+
+    written = omml(source, size=20.0, colour="242126", display=True)
+    root = etree.fromstring(written)
+    assert root.tag == "{http://schemas.microsoft.com/office/drawing/2010/main}m"
+    for element in elements:
+        assert f"<{element}" in written or element in written, element
+
+
+def test_powerpoints_equations_keep_tex_sizes_and_spaces() -> None:
+    from flexo_talk.omml import omml
+
+    # \big( to \Bigg(: a delimiter grown to a hidden, zero-width bar of TeX's size, alone.
+    sizes = []
+    for command in (r"\big", r"\Big", r"\bigg", r"\Bigg"):
+        written = omml(command + "( x " + command + ")", size=20.0)
+        assert written.count("<m:d>") == 2 and '<m:endChr m:val=""/>' in written
+        assert '<m:begChr m:val=""/><m:endChr m:val=")"/>' in written
+        assert '<m:show m:val="0"/><m:zeroWid m:val="1"/>' in written
+        sizes.append(int(re.search(r'sz="(\d+)"[^>]*>(?:(?!</m:r>).)*<m:t>\|</m:t>', written).group(1)))
+    assert sizes == sorted(sizes) and sizes[0] > 2000
+    # amsmath's \pmod: an em from what it follows in display, 8mu (a three-per-em space) in words.
+    assert "\u2003" in omml(r"a \equiv b \pmod{n}", size=20.0, display=True)
+    inline = omml(r"a \equiv b \pmod{n}", size=20.0)
+    assert "\u2004" in inline and "\u2003" not in inline
+
+
+def test_a_bold_headers_maths_is_regular_all_of_it(tmp_path: Path) -> None:
+    import xml.etree.ElementTree as ET
+
+    from flexo_talk.compose import render_slide
+
+    # Bold is a meaning in maths, and a maths font has no bold for its Greek, its h-bar
+    # or its blackboard E: a bold header's maths stays regular, all of it, as LaTeX's
+    # does -- and so does strong words' (**...**), unless it asks (\mathbf).
+    deck = Deck("header")
+    deck.slide("Table").table([[r"Mean $\mathbb{E}[X]$", r"$H_n(\xi)$ over $E_n / \hbar\omega$"], ["1", "2"]])
+    deck.slide("Strong").text(r"**Strong $\xi + x$ and $\mathbf{v}$**")
+    strong = {run.text.strip(): run.weight for run in inline(r"**a $\xi + x$ $\mathbf{v}$**")}
+    assert strong["a"] == strong["v"] == 700 and strong["x"] == 400
+    weights = {}
+    for slide in deck.slides:
+        for text in ET.fromstring(render_slide(deck, slide).svg).iter("{http://www.w3.org/2000/svg}text"):
+            for span in text.findall("{http://www.w3.org/2000/svg}tspan"):  # a run each
+                weight = span.get("font-weight") or text.get("font-weight") or "400"
+                weights["".join(span.itertext()).strip()] = weight
+    blackboard, hbar = "\U0001d53c[", "\u210f"
+    assert weights["Mean"] == weights["over"] == weights["Strong"] == weights["v"] == "700"
+    assert {weights[maths] for maths in (blackboard, "H", hbar, "x")} == {"400"}
+    # The PowerPoint's table says the same: its words bold, its maths not.
+    table = re.search(r"<a:tbl>.*?</a:tr>", _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0], re.S)
+    runs = {text: attributes for attributes, text in re.findall(
+        r"<a:rPr([^>]*)>(?:(?!</a:r>).)*?<a:t>([^<]*)</a:t>", table.group(0), re.S)}
+    assert 'b="1"' in runs["Mean "] and 'b="1"' in runs[" over "]
+    assert 'b="1"' not in runs[blackboard] and 'b="1"' not in runs[hbar]
+    # Its equations' \text is the words' weight, as amsmath's is; their maths is not.
+    from flexo_talk.omml import omml
+
+    assert re.findall(r'b="(\d)"', omml(r"x \text{ if }", size=20.0, bold=True)) == ["0", "1"]
+
+
+def test_a_formula_with_rules_stays_drawn_in_the_powerpoint(tmp_path: Path) -> None:
+    from flexo_talk.omml import expressible
+
+    ruled = r"\left[\begin{array}{cc|c} 1 & 0 & b_1 \\ \hline 0 & 0 & 1 \end{array}\right]"
+    assert not expressible(ruled) and not expressible(r"x^{\begin{array}{c} a \\ \hline b \end{array}}")
+    assert expressible(r"\begin{pmatrix} a & b \end{pmatrix}") and expressible(r"\frac{1}{2}")
+    # Office Math has no rules in a matrix: the formula keeps its drawing, a picture for
+    # every slide program, rather than becoming an equation without them.
+    deck = Deck("ruled")
+    slide = deck.slide("Rules")
+    slide.math(ruled).math(r"\frac{a}{b}")
+    slide.text(r"Inline $\begin{array}{c|c} a & b \end{array}$ too.")
+    slide.bullets(r"A list $\begin{array}{c} a \\ \hline b \end{array}$", "and more")
+    deck.slide("Table").table([["what", "value"], ["ruled", r"$\begin{array}{c|c} a & b \end{array}$"]])
+    first, second = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)
+    assert first.count("<mc:AlternateContent") == 1 and first.count("<a14:m") == 1
+    assert "<a:custGeom>" in first  # the ruled ones, drawn
+    assert "AlternateContent" not in second and "<a:tbl>" in second
+
+
+def test_the_powerpoint_has_editable_equations_and_the_drawing_for_other_programs(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    deck = Deck("equations")
+    slide = deck.slide("Maths")
+    slide.text(r"We minimise $\frac{1}{N}\sum_i \ell_i$ here.")
+    slide.math(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}")
+    slide.bullets(r"A rate $k = A e^{-E_a/RT}$")
+    deck.slide("Table").table([["what", "value"], ["half", r"$\frac{1}{2}$"]])
+    result = deck.build(tmp_path / "editable", formats=("pptx",))
+    first, second = _slides(result.pptx)
+    for xml, count in ((first, 3), (second, 1)):
+        blocks = re.findall(r"<mc:AlternateContent.*?</mc:AlternateContent>", xml, re.S)
+        assert len(blocks) == count
+        for block in blocks:
+            choice, fallback = block.split("<mc:Fallback>")
+            assert 'Requires="a14"' in choice and "<a14:m" in choice and "<a14:m" not in fallback
+            assert "<a:custGeom>" in fallback  # the formula, drawn
+    Presentation(str(result.pptx))  # python-pptx still reads it
+    # Without editable maths, only the drawing, and no Office Math anywhere.
+    drawn = deck.build(tmp_path / "drawn", formats=("pptx",), editable_maths=False)
+    assert all("<a14:m" not in xml and "AlternateContent" not in xml for xml in _slides(drawn.pptx))
+
+
+def test_no_formula_however_broken_makes_office_math_powerpoint_cannot_read() -> None:
+    import random
+
+    from lxml import etree
+
+    from flexo_talk.omml import omml
+
+    pieces = [r"\frac", r"\sqrt", "{", "}", "^", "_", "&", r"\\", r"\left(", r"\right)", r"\begin{pmatrix}",
+              r"\end{pmatrix}", "x", "2", r"\alpha", r"\sum", r"\middle|", r"\over", "'", r"\hat", r"\ce{",
+              r"\text{", "<", ">", "&amp;", r"\color{red}", r"\overbrace", r"\not", r"\big", r"\mathbb", " "]
+    rng = random.Random(9)
+    for _ in range(500):
+        source = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 14)))
+        etree.fromstring(omml(source, size=18.0, colour="000000", display=rng.random() < 0.5))
+
+
+def test_a_mechanism_is_drawn_as_shapes_with_its_arrows_and_a_wrong_one_is_said(tmp_path: Path) -> None:
+    deck = Deck("chemistry")
+    with deck.slide("Acyl substitution") as slide:
+        slide.mechanism([
+            {"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2", "2=3 -> 3"],
+             "reagents": "NaOH"},
+            {"arrows": ["3 -> 2", "2-4 -> 4"], "label": "tetrahedral intermediate"},
+        ])
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "<p:pic>" not in xml
+    assert xml.count("<a:cubicBezTo>") >= 4  # the curly arrows, as curves
+    assert 'srgbclr val="d466d6"' in xml.lower()  # in their one magenta ink
+    assert ">tetrahedral intermediate<" in xml and ">NaOH<" in xml
+    with pytest.raises(ValueError, match="arrow_colour"):
+        deck.slide("Pink").mechanism("[OH-:1]", arrow_colour="pink")
+    # The deck's own colours: the arrows follow its theme.
+    deck.slide("Accent").mechanism([{"smiles": "[OH-:1].[CH3:2][Br:3]", "arrows": "1 -> 2; 2-3 -> 3",
+                                     "place": {1: {"move": [-1, 0]}}}], arrow_colour="accent")
+    # A step that cannot be is drawn as far as it goes, its arrows on it, and said.
+    deck.slide("Half drawn").mechanism([{"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2"]}])
+    result = deck.build(tmp_path, formats=("svg",))
+    assert any("C2 would have 10 electrons" in said for said in result.diagnostics)
+    with pytest.raises(ValueError, match="never closed"):
+        deck.slide("Wrong").mechanism([{"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4", "arrows": ["5 -> 2"]}])

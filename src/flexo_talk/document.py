@@ -47,16 +47,19 @@ back as a document.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import importlib.util
 import inspect
 import json
 import os
+import re
+import signal
 import sys
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import fields, replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import yaml
@@ -64,11 +67,11 @@ from flexo.diagnostics import described
 
 from flexo_talk.deck import (
     LAYOUTS,
-    LOOKS,
     Deck,
     DeckStyle,
     Reference,
     Region,
+    SettingError,
     Slide,
     _Figure,
     _Plot,
@@ -90,6 +93,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "stats": ("colour", "size"),
     "callout": ("title", "colour", "size"),
     "math": ("size", "align", "colour"),
+    "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour"),
 }
 """Each block kind and the options it takes beside its value."""
 
@@ -132,14 +136,143 @@ class UntrustedCode(DeckDocumentError):
 
 
 def load_document(source: str | Path) -> dict[str, Any]:
-    """A deck document from a ``.yaml``, ``.yml``, or ``.json`` file."""
+    """A deck document from a ``.yaml``, ``.yml``, or ``.json`` file. Whatever is wrong
+    with the file -- not text, a mistake in its YAML or JSON (said with its line), a
+    key written twice -- is said in words."""
 
     path = Path(source)
-    text = path.read_text(encoding="utf-8")
-    document = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
+    try:
+        data = path.read_bytes()
+    except IsADirectoryError:
+        raise DeckDocumentError("", f"{path.name} is a folder, not a deck document") from None
+    except OSError as error:
+        raise DeckDocumentError("", f"{path.name} cannot be read: {error.strerror or error}") from None
+    text = _text(data, path.name)
+    try:
+        json_file = path.suffix.lower() == ".json"
+        document = json.loads(text) if json_file else parse_document(text)
+    except json.JSONDecodeError as error:
+        raise DeckDocumentError("", f"{path.name}, line {error.lineno}, column {error.colno}: {error.msg}") from None
+    except yaml.YAMLError as error:
+        raise DeckDocumentError("", f"{path.name}: {_yaml_said(error, text)}") from None
+    except RecursionError:
+        raise DeckDocumentError("", f"{path.name} is nested too deeply to read") from None
     if not isinstance(document, dict):
         raise DeckDocumentError("", f"{path.name} is not a deck document (a mapping with deck and slides)")
+    _bounded(document, path.name)
     return document
+
+
+def parse_document(text: str) -> object:
+    """Deck document text read as ``load_document`` reads a file: as YAML 1.2, with a key
+    written twice said rather than lost (JSON is YAML too)."""
+
+    return yaml.load(text, Loader=_DocumentLoader)
+
+
+def _text(data: bytes, name: str) -> str:
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = data.decode("utf-16")
+    else:
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise DeckDocumentError("", f"{name} is not text written in UTF-8") from None
+    if "\x00" in text:
+        raise DeckDocumentError("", f"{name} is not text: it holds a NUL character")
+    return text
+
+
+_BASE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+class _DocumentLoader(_BASE_LOADER):  # type: ignore[misc, valid-type]
+    """YAML read as YAML 1.2 reads it -- ``yes`` and ``no`` are words, ``012`` is twelve,
+    a date is the words written -- with a key written twice said rather than lost."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        seen: set[object] = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if isinstance(key, list | dict):
+                continue
+            if key in seen:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"{key!r} is written twice in one mapping", key_node.start_mark
+                )
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+_DocumentLoader.yaml_implicit_resolvers = {
+    first: [(tag, pattern) for tag, pattern in resolvers if tag not in {
+        "tag:yaml.org,2002:bool", "tag:yaml.org,2002:int", "tag:yaml.org,2002:float",
+        "tag:yaml.org,2002:timestamp"}]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_DocumentLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
+)
+_DocumentLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:int", re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"), list("-+0123456789")
+)
+
+
+_DocumentLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    re.compile(r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"),
+    list("-+.0123456789"),
+)
+
+
+def _construct_int(loader: yaml.SafeLoader, node: yaml.ScalarNode) -> int:
+    value = loader.construct_scalar(node)
+    return int(value, 0) if value[:2] in {"0o", "0x"} else int(value, 10)
+
+
+_DocumentLoader.add_constructor("tag:yaml.org,2002:int", _construct_int)
+
+
+def _yaml_said(error: yaml.YAMLError, text: str) -> str:
+    mark = getattr(error, "problem_mark", None) or getattr(error, "context_mark", None)
+    problem = getattr(error, "problem", None) or str(error).splitlines()[0]
+    lines = text.splitlines()
+    if mark is not None and mark.line < len(lines) and "\t" in lines[mark.line][: mark.column + 1]:
+        problem = "a tab, where YAML indents with spaces"
+    where = f"line {mark.line + 1}, column {mark.column + 1}: " if mark is not None else ""
+    return f"{where}{problem}"
+
+
+_MOST_PARTS = 2_000_000
+"""More parts than any deck holds: a document past it (aliases repeating a list into
+billions) is refused rather than read for minutes."""
+
+_DEEPEST = 100
+"""More levels than any deck nests (a figure's groups, a list's levels): a document
+deeper is refused in words, before Python runs out of room to read it."""
+
+
+def _bounded(document: object, name: str) -> None:
+    count = 0
+    stack = [(document, 0)]
+    while stack:
+        item, depth = stack.pop()
+        count += 1
+        if count > _MOST_PARTS:
+            raise DeckDocumentError("", f"{name} holds more parts than a deck can ({_MOST_PARTS:,})")
+        if depth > _DEEPEST:
+            raise DeckDocumentError("", f"{name} nests lists or mappings more than {_DEEPEST} levels deep")
+        if isinstance(item, dict):
+            stack.extend((value, depth + 1) for value in item.values())
+            stack.extend((key, depth + 1) for key in item if isinstance(key, str))
+        elif isinstance(item, list):
+            stack.extend((value, depth + 1) for value in item)
+        elif isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                # A JSON escape of half a UTF-16 pair ("\\ud800"): not a character at all.
+                raise DeckDocumentError("", f"{name} holds a broken character (half of a pair, {item!r:.40})") from None
 
 
 def read_deck(source: str | Path) -> Deck:
@@ -169,9 +302,10 @@ def deck_from_document(
     base = Path(base).resolve()
     if not isinstance(document, dict):
         raise DeckDocumentError("", "a deck document is a mapping with deck and slides")
+    _bounded(document, "the document")  # one not read from a file too (the studio's, an agent's)
     _only(document, ("schema_version", "deck", "slides"), "")
     version = document.get("schema_version", SCHEMA_VERSION)
-    if version != SCHEMA_VERSION:
+    if isinstance(version, bool) or version != SCHEMA_VERSION:
         raise DeckDocumentError(
             "schema_version", f"this flexo-talk reads version {SCHEMA_VERSION}, not {described(version)}"
         )
@@ -208,9 +342,6 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
     if not isinstance(data, dict):
         raise DeckDocumentError("deck", "deck is a mapping of the deck's settings")
     _only(data, DECK_KEYS, "deck")
-    look = data.get("look")
-    if look is not None and look not in LOOKS:
-        raise DeckDocumentError("deck.look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
     changes = data.get("style") or {}
     if not isinstance(changes, dict):
         raise DeckDocumentError("deck.style", "style is a mapping of DeckStyle fields")
@@ -218,12 +349,16 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
     try:
         theme = data.get("theme", "paper")
         if isinstance(theme, str) and theme.lower().endswith((".yaml", ".yml", ".json")):
-            theme = str(_file(base, theme))
+            theme = str(_file(base, theme, "deck.theme"))
         palette = data.get("palette", "default")
         if isinstance(palette, str) and palette.lower().endswith((".yaml", ".yml", ".json")):
-            palette = str(_file(base, palette))
+            palette = str(_file(base, palette, "deck.palette"))
+        background = data.get("background", True)
+        if isinstance(background, str) and background and not background.startswith("#"):
+            # A picture behind every slide is found beside the document, as a slide's is.
+            background = str(_file(base, background, "deck.background"))
         deck = Deck(
-            str(data.get("id", "talk")),
+            data.get("id") if data.get("id") is not None else "talk",
             theme=theme,
             palette=palette,
             font=data.get("font"),
@@ -231,14 +366,19 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
             figure_font=data.get("figure_font"),
             conventions=data.get("conventions"),
             sketch=data.get("sketch"),
-            background=data.get("background", True),
-            footer=str(data.get("footer", "")),
-            look=look,
+            background=background,
+            footer=data.get("footer"),
+            look=data.get("look"),
         )
         # The document's proportions are changes to what the look and theme set.
-        deck.style = replace(deck.style, **changes)
+        try:
+            deck.style = replace(deck.style, **changes)
+        except (TypeError, ValueError) as error:
+            raise DeckDocumentError(_at("deck.style", changes, error), str(error)) from None
     except DeckDocumentError:
         raise
+    except SettingError as error:
+        raise DeckDocumentError(_at("deck", data, error), str(error)) from None
     except Exception as error:
         raise DeckDocumentError("deck", str(error)) from error
     deck.source = {**deck.source, **{key: value for key, value in data.items() if key != "style"}}
@@ -257,8 +397,44 @@ def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
     background = data.get("background")
     if isinstance(background, str) and not background.startswith("#"):
         background = str(_file(base, background, f"{where}.background"))
-    shade = float(data.get("shade", 0.0))
+    shade = data.get("shade", 0.0)
     text = _text_of(data, where)
+    try:
+        slide = _slide_of(deck, data, layout, background, shade, text, base, where)
+    except DeckDocumentError:
+        raise
+    except (ValueError, TypeError) as error:
+        raise DeckDocumentError(_at(where, data, error), str(error)) from None
+    if data.get("notes"):
+        slide.notes(text("notes"))
+    footnotes = data.get("footnotes") or []
+    if isinstance(footnotes, str | int | float):
+        footnotes = [footnotes]
+    if not isinstance(footnotes, list) or not all(_is_words(note) for note in footnotes):
+        raise DeckDocumentError(f"{where}.footnotes", "footnotes are words, or a list of them")
+    for note in footnotes:
+        slide.footnote(str(note))
+    slide.source = {key: value for key, value in data.items() if key not in {"body", "left", "right"}}
+    if layout == "columns":
+        slide.source.pop("columns", None)
+    return slide
+
+
+def _at(where: str, data: dict[str, Any], error: Exception) -> str:
+    """Where a setting's error is: at its key, when the error names one this mapping has."""
+
+    key = getattr(error, "key", None)
+    return f"{where}.{key}" if isinstance(error, SettingError) and key in data else where
+
+
+def _is_words(value: object) -> bool:
+    """Words, or a number written as words; never yes/no, which YAML reads as true/false."""
+
+    return isinstance(value, str | int | float) and not isinstance(value, bool)
+
+
+def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object, shade: object,
+              text: Callable[[str], str], base: Path, where: str) -> Slide:
     if layout == "title":
         slide = deck.title(
             text("title"), subtitle=text("subtitle"), author=text("author"), date=text("date"),
@@ -283,7 +459,7 @@ def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
             text("title"),
             layout=layout,
             subtitle=text("subtitle"),
-            split=float(data.get("split", 0.5)),
+            split=data.get("split", 0.5),
             columns=len(columns) if columns else 3,
             widths=widths,
             background=background,
@@ -304,16 +480,6 @@ def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
                 raise DeckDocumentError(names[name], "a region is a list of blocks")
             for index, block in enumerate(blocks):
                 add_block(slide.regions[name], block, base, f"{names[name]}[{index}]")
-    if data.get("notes"):
-        slide.notes(text("notes"))
-    footnotes = data.get("footnotes") or []
-    if isinstance(footnotes, str):
-        footnotes = [footnotes]
-    for note in footnotes:
-        slide.footnote(str(note))
-    slide.source = {key: value for key, value in data.items() if key not in {"body", "left", "right"}}
-    if layout == "columns":
-        slide.source.pop("columns", None)
     return slide
 
 
@@ -322,7 +488,9 @@ def _text_of(data: dict[str, Any], where: str) -> Callable[[str], str]:
         value = data.get(key)
         if value is None:
             return ""
-        if isinstance(value, dict | list):
+        if isinstance(value, datetime.date):  # read by a YAML 1.1 reader (yaml.safe_load)
+            return value.isoformat()
+        if not _is_words(value):
             raise DeckDocumentError(f"{where}.{key}", f"{key} is words, not {described(value)}")
         return str(value)
 
@@ -355,11 +523,11 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
                 options["colour"] = "muted"
             region.math(value, **{"align": "middle", **options})
         elif kind == "math":
-            if not isinstance(value, str | int | float) or not str(value).strip():
+            if not _is_words(value) or not str(value).strip():
                 raise DeckDocumentError(here, "math is an equation in LaTeX, as math: E = mc^2")
             region.math(str(value), **options)
         elif kind in {"text", "code", "quote", "callout"}:
-            if not isinstance(value, str | int | float):
+            if not _is_words(value):
                 raise DeckDocumentError(here, f"{kind} is words")
             getattr(region, kind)(str(value), **options)
         elif kind == "image":
@@ -380,6 +548,8 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
             region.add(_figure(base, value, here, region), **options)
         elif kind == "plot":
             region.plot(_plot(base, value, here, region), **options)
+        elif kind == "mechanism":
+            region.mechanism(_steps(value, here), **options)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError, OSError) as error:
@@ -387,11 +557,46 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
     region.sources[-1] = dict(block)
 
 
+def _steps(value: object, where: str) -> str | list[str | dict[str, object]]:
+    """A mechanism's steps as a document writes them: a SMILES, or a list of SMILES and
+    of steps ({smiles, arrows, label, reagents, conditions, arrow, place})."""
+
+    if isinstance(value, str) and value.strip():
+        return value
+    if not isinstance(value, list) or not value:
+        raise DeckDocumentError(where, "a mechanism is a SMILES, or a list of steps, each {smiles, arrows}")
+    steps: list[str | dict[str, object]] = []
+    for number, step in enumerate(value, start=1):
+        here = f"{where}[{number - 1}]"
+        if isinstance(step, str):
+            steps.append(step)
+            continue
+        if not isinstance(step, dict):
+            raise DeckDocumentError(here, "a step is a SMILES, or a mapping with smiles and arrows")
+        _only(step, ("smiles", "arrows", "label", "reagents", "conditions", "arrow", "place"), here)
+        arrows = step.get("arrows")
+        if arrows is not None and not isinstance(arrows, str | list):
+            raise DeckDocumentError(here, 'arrows are a list, such as ["5 -> 2", "2=3 -> 3"]')
+        if step.get("place") is not None:
+            from flexo.mechanism import place_record
+
+            try:
+                place_record(step["place"])
+            except (ValueError, IndexError, TypeError, AttributeError):
+                raise DeckDocumentError(f"{here}.place", "place maps an atom to where its molecule goes, "
+                                        "such as {5: {move: [-1, 0.5], turn: 30, flip: true}}") from None
+        for key in ("smiles", "label", "reagents", "conditions", "arrow"):
+            if key in step and step[key] is not None and not _is_words(step[key]):
+                raise DeckDocumentError(f"{here}.{key}", f"{key} is words")
+        steps.append({key: item for key, item in step.items() if item is not None})
+    return steps
+
+
 def _check_items(items: list, where: str) -> None:
     for item in items:
         if isinstance(item, list):
             _check_items(item, where)
-        elif not isinstance(item, str | int | float):
+        elif not _is_words(item):
             raise DeckDocumentError(where, "bullets are words, and nested lists of words for the level below")
 
 
@@ -400,16 +605,19 @@ def _picture(base: Path, item: object, where: str) -> str | tuple[str, str]:
         return str(_file(base, item, where))
     if isinstance(item, dict) and "picture" in item:
         _only(item, ("picture", "caption"), where)
-        return str(_file(base, str(item["picture"]), where)), str(item.get("caption") or "")
+        caption = item.get("caption")
+        return str(_file(base, str(item["picture"]), where)), "" if caption is None else caption
     raise DeckDocumentError(where, "a gallery picture is a file, or a mapping with picture and caption")
 
 
 def _stat(item: object, where: str) -> tuple[object, str]:
+    # The value and label are checked as words where they are set, not written as Python writes them.
     if isinstance(item, dict) and "value" in item:
         _only(item, ("value", "label"), where)
-        return item["value"], str(item.get("label") or "")
+        label = item.get("label")
+        return item["value"], "" if label is None else label
     if isinstance(item, list) and len(item) == 2:
-        return item[0], str(item[1])
+        return item[0], "" if item[1] is None else item[1]
     raise DeckDocumentError(where, "each of stats is {value, label}")
 
 
@@ -484,7 +692,15 @@ def _plot(base: Path, value: object, where: str, region: Region) -> Reference:
 
     # The file is read inside the deck's plotting look too: a style it sets as it is
     # imported is then the deck's for that plot, not the whole app's from then on.
-    return Reference(value, _maker(base, value, where, lambda made: made, call=call, around=deck.plotting, deck=deck))
+    return Reference(value, _maker(
+        base, value, where, lambda made: _as_plot(made, value, where), call=call, around=deck.plotting, deck=deck
+    ))
+
+
+def _as_plot(made: object, target: str, where: str) -> object:
+    if not hasattr(made, "savefig"):  # as the studio's worker says it
+        raise DeckDocumentError(where, f"{target} did not return a matplotlib figure")
+    return made
 
 
 def _is_code(value: str) -> bool:
@@ -549,9 +765,12 @@ def _made_apart(
     if kind == "plot":
         view = worker.deck_view(deck) if deck is not None else {}
 
-        def draw(width: float, height: float, family: str, identifier: str) -> str:
-            return asked({"deck": view, "width": width, "height": height, "family": family,
-                          "identifier": identifier})["svg"]
+        def draw(
+            width: float, height: float, family: str, identifier: str, maths: str, options: dict[str, Any]
+        ) -> tuple[str, list]:
+            answer = asked({"deck": view, "width": width, "height": height, "family": family,
+                            "identifier": identifier, "maths": maths, "options": options})
+            return answer["svg"], [tuple(item) for item in answer.get("said") or []]
 
         return worker.RemotePlot(draw)
     from flexo.serialization import parse_figure
@@ -565,14 +784,28 @@ def _made_apart(
         raise DeckDocumentError(where, f"{target} made a figure flexo cannot read: {error}") from error
 
 
+CODE_TIMEOUT = 300.0
+"""Seconds a plot or figure a document names may take where it is made here (on the
+command line): one that never returns is stopped and said, not waited on for ever. The
+studio's worker stops one sooner (``worker.TIMEOUT``)."""
+
+
+class _TooLong(BaseException):
+    """A deck's own Python, stopped for taking longer than ``CODE_TIMEOUT``."""
+
+
 @contextlib.contextmanager
 def _own_code(target: str, where: str):
     """Around a deck's own Python: whatever it does to stop (``sys.exit()``) is said on
-    its slide, and the folder it may have moved into is left again."""
+    its slide, so is running past ``CODE_TIMEOUT``, and the folder it may have moved
+    into is left again."""
 
     folder = os.getcwd()
+    cancel = _alarm(CODE_TIMEOUT)
     try:
         yield
+    except _TooLong:
+        raise DeckDocumentError(where, f"{target} took longer than {CODE_TIMEOUT:g} s, and was stopped") from None
     except (DeckDocumentError, KeyboardInterrupt):
         raise
     except BaseException as error:
@@ -580,8 +813,34 @@ def _own_code(target: str, where: str):
             raise
         raise DeckDocumentError(where, f"{target} stopped: {type(error).__name__} {error}".strip()) from None
     finally:
+        cancel()
         if os.getcwd() != folder:
             os.chdir(folder)
+
+
+def _alarm(seconds: float) -> Callable[[], None]:
+    """Raise ``_TooLong`` in this thread after ``seconds``; the function returned calls
+    it off. Only the main thread can be interrupted so (by a signal, where there are
+    signals), and an alarm someone else has set is left to ring as they meant."""
+
+    if (
+        not hasattr(signal, "setitimer")
+        or threading.current_thread() is not threading.main_thread()
+        or signal.getitimer(signal.ITIMER_REAL)[0]
+    ):
+        return lambda: None
+
+    def ring(number: int, frame: object) -> None:
+        raise _TooLong
+
+    before = signal.signal(signal.SIGALRM, ring)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+
+    def cancel() -> None:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, before)
+
+    return cancel
 
 
 _MODULES: dict[Path, tuple[float, object]] = {}
@@ -772,13 +1031,25 @@ def _string(dumper: yaml.SafeDumper, value: str) -> yaml.Node:
 
 _Dumper.add_representer(str, _string)
 _Dumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
+_Dumper.add_multi_representer(PurePath, lambda dumper, value: _string(dumper, str(value)))
+
+
+def _json_value(value: object) -> object:
+    """What JSON has no word for, as a deck document writes it: a date as YAML writes
+    one (2026-10-01), a file as its name."""
+
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if isinstance(value, PurePath):
+        return str(value)
+    raise TypeError(f"a deck document cannot hold {type(value).__name__} ({value!r:.40})")
 
 
 def dump_document(document: dict[str, Any], *, format: str = "yaml") -> str:
     """A deck document as YAML (or JSON) text."""
 
     if format == "json":
-        return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+        return json.dumps(document, indent=2, ensure_ascii=False, default=_json_value) + "\n"
     return yaml.dump(document, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=100)
 
 

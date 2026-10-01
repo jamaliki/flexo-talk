@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,10 @@ from flexo_talk.export import FORMATS
 def load_deck(target: str, theme: str | None = None) -> Deck:
     path, _, name = target.partition(":")
     source = Path(path).resolve()
+    if not source.exists():
+        raise SystemExit(f"{path}: no such file")
+    if source.is_dir():
+        raise SystemExit(f"{path} is a folder: name a deck.py or a deck document in it")
     if source.suffix.lower() in {".yaml", ".yml", ".json"}:
         from flexo_talk.document import DeckDocumentError, read_deck
 
@@ -59,24 +64,55 @@ def main(argv: list[str] | None = None) -> int:
     studio.add_argument("--port", type=int, default=0, help="the port to serve on (default: any free one)")
     studio.add_argument("--no-browser", action="store_true", help="do not open a browser")
     arguments = parser.parse_args(argv)
-    if arguments.command == "convert":
-        return _convert(arguments)
     if arguments.command == "studio":
         from flexo.studio.server import main as studio_main
 
         options = [*([arguments.deck] if arguments.deck else []), "--port", str(arguments.port)]
         return studio_main([*options, *(["--no-browser"] if arguments.no_browser else [])], kind="deck")
-    deck = load_deck(arguments.deck, arguments.theme)
-    result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
+    try:
+        if arguments.command == "convert":
+            return _convert(arguments)
+        deck = load_deck(arguments.deck, arguments.theme)
+        result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
+    except KeyboardInterrupt:
+        return 130
+    except Exception as error:
+        if os.environ.get("FLEXO_TRACEBACK"):
+            raise
+        print(f"flexo-talk: {_said(error, arguments.deck)}", file=sys.stderr)
+        print("(FLEXO_TRACEBACK=1 shows the whole traceback)", file=sys.stderr)
+        return 1
     print(result.summary())
     return 0
+
+
+def _said(error: BaseException, target: str) -> str:
+    """An error as one line: where in the deck's own code it was raised, if there, and
+    what it says (with its kind, when the words are Python's rather than flexo's)."""
+
+    import traceback
+
+    from flexo.diagnostics import FlexoError
+
+    words = str(error).strip() or type(error).__name__
+    if isinstance(error, FlexoError):
+        words = str(error).splitlines()[0]
+    elif not isinstance(error, ValueError):
+        words = f"{type(error).__name__}: {words}"
+    folder = Path(target.partition(":")[0]).resolve().parent
+    own = [
+        frame for frame in traceback.extract_tb(error.__traceback__)
+        if Path(frame.filename).resolve().is_relative_to(folder) and "site-packages" not in frame.filename
+    ]
+    if own:
+        frame = own[-1]
+        return f"{Path(frame.filename).name}, line {frame.lineno}, in {frame.name}: {words}"
+    return words
 
 
 def _convert(arguments: argparse.Namespace) -> int:
     """Write a Python deck as a document. Its plots are saved as SVG files beside
     it (named in the document as images), since a matplotlib figure has no document."""
-
-    import os
 
     from flexo_talk.deck import made
     from flexo_talk.document import deck_document, save_document
@@ -84,51 +120,74 @@ def _convert(arguments: argparse.Namespace) -> int:
     source = Path(arguments.deck.partition(":")[0]).resolve()
     target = Path(arguments.output or source.with_suffix(".yaml")).resolve()
     deck = load_deck(arguments.deck, arguments.theme)
+    # Drawn first: each plot is saved as the deck draws it -- at the size of its place,
+    # its words the deck's size, its maths set by flexo -- not as matplotlib saves it.
+    deck.render()
     saved: list[Path] = []
 
     def plot(block, where: str) -> dict[str, object]:
-        figure = made(block.figure)
         path = target.parent / f"{target.stem}-plot{len(saved) + 1}.svg"
-        figure.savefig(path, format="svg", transparent=True, metadata={"Date": None})
+        svg = block.drawn
+        if not svg:
+            from flexo.text import maths_family
+
+            from flexo_talk.compose import plot_faces, plot_svg
+
+            typography = deck.layout_style.typography
+            width = deck.style.width - 2 * deck.style.margin
+            svg = plot_svg(made(block.figure), width, width * 0.5, typography.family, path.stem,
+                           maths=maths_family(typography), faces=plot_faces(typography))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(svg, encoding="utf-8")
         saved.append(path)
         print(f"{where}: a matplotlib plot, saved as {path.name} and placed as an image")
-        return {"image": path.name}
+        return {"image": str(path)}  # named beside the document, as every file is, below
 
     document = deck_document(deck, plots=plot)
-    here = Path.cwd()
-    for slide in document["slides"]:
-        _relocate(slide, here, target.parent, os)
+    _relocate(document, Path.cwd(), target.parent)
     print(save_document(document, target))
     return 0
 
 
-_FILE_KEYS = ("image", "background", "picture")
+_FILE_KEYS = ("image", "background", "picture", "theme", "palette")
 
 
-def _relocate(data: object, origin: Path, destination: Path, os) -> None:
-    """Rewrite file names written relative to where the deck ran so they are found
-    beside the document."""
+def _relocate(data: object, origin: Path, destination: Path) -> None:
+    """Rewrite the files a document names -- relative to where the deck ran, or whole
+    paths -- relative to the document, so they are found beside it wherever it goes."""
 
     if isinstance(data, list):
         for item in data:
-            _relocate(item, origin, destination, os)
+            _relocate(item, origin, destination)
         return
     if not isinstance(data, dict):
         return
     for key, value in list(data.items()):
         if key in _FILE_KEYS and isinstance(value, str) and not value.startswith("#"):
-            path = Path(value) if Path(value).is_absolute() else origin / value
-            if path.exists():
-                data[key] = os.path.relpath(path, destination)
+            # A theme or palette is a file only when it is named as one; else it is a name.
+            if key not in {"theme", "palette"} or value.lower().endswith((".yaml", ".yml", ".json")):
+                data[key] = _beside(value, origin, destination)
         elif key == "gallery" and isinstance(value, list):
-            data[key] = [
-                os.path.relpath(origin / item, destination)
-                if isinstance(item, str) and (origin / item).exists() else item
-                for item in value
-            ]
-            _relocate(data[key], origin, destination, os)
-        elif isinstance(value, dict | list) and key != "figure":
-            _relocate(value, origin, destination, os)
+            data[key] = [_beside(item, origin, destination) if isinstance(item, str) else item for item in value]
+            _relocate(data[key], origin, destination)
+        elif key == "figure" and isinstance(value, dict):
+            # A figure written in the deck names the pictures its parts draw as their sources.
+            for node in value.get("nodes") or []:
+                properties = node.get("properties") if isinstance(node, dict) else None
+                if isinstance(properties, dict) and isinstance(properties.get("source"), str):
+                    properties["source"] = _beside(properties["source"], origin, destination)
+        elif isinstance(value, dict | list):
+            _relocate(value, origin, destination)
+
+
+def _beside(name: str, origin: Path, destination: Path) -> str:
+    path = Path(name) if Path(name).is_absolute() else origin / name
+    if not path.exists():
+        return name
+    try:
+        return os.path.relpath(path, destination)
+    except ValueError:  # on another drive: only the whole path reaches it
+        return str(path)
 
 
 if __name__ == "__main__":

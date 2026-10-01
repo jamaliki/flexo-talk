@@ -20,9 +20,10 @@ const BLOCKS = {
   gallery: { icon: "gallery", label: "Gallery", hint: "Logos or people in a grid" },
   plot: { icon: "plot", label: "Plot", hint: "A matplotlib figure made in Python" },
   math: { icon: "math", label: "Equation", hint: "LaTeX, on a line of its own" },
+  mechanism: { icon: "mechanism", label: "Mechanism", hint: "Structures in SMILES and their curly arrows, checked" },
 };
 const MAIN_BLOCKS = ["text", "bullets", "figure", "image", "table"];
-const MORE_BLOCKS = ["math", "stats", "quote", "callout", "code", "gallery", "plot"];
+const MORE_BLOCKS = ["math", "mechanism", "stats", "quote", "callout", "code", "gallery", "plot"];
 
 // What an equation's snippet buttons put in: [label, title, LaTeX]; "|" is where the cursor goes.
 const MATH_SNIPPETS = [
@@ -49,6 +50,7 @@ const LAYOUT_NAMES = {
 const LAYOUT_ORDER = ["content", "two-columns", "columns", "figure", "title", "section", "statement", "agenda", "blank"];
 const WORDLESS = new Set(["title", "section", "statement", "agenda"]);
 const TONES = ["accent", "accent2", "accent3", "accent4", "accent5", "accent6"];
+const ARROW_INK = "#d466d6";
 
 const NEW_SLIDES = {
   content: () => ({ title: "A new slide", body: [{ bullets: ["The first point", "The second point"] }] }),
@@ -79,6 +81,9 @@ const NEW_BLOCKS = {
   gallery: () => ({ gallery: [] }),
   plot: () => ({ plot: "" }),
   math: () => ({ math: "\\mathcal{L}(\\theta) = -\\frac{1}{N} \\sum_{i=1}^{N} \\log p_\\theta(y_i \\mid x_i)" }),
+  mechanism: () => ({ mechanism: [
+    { smiles: "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", arrows: ["5 -> 2", "2=3 -> 3"], reagents: "NaOH" },
+    { arrows: ["3 -> 2", "2-4 -> 4"], label: "tetrahedral intermediate" }] }),
 };
 
 // -- the document ---------------------------------------------------------------------
@@ -128,6 +133,11 @@ function summary(block) {
     case "image": case "plot": return value || "Not chosen yet";
     case "callout": return plain(block.title) || plain(value);
     case "math": return mathWords(value) || "An empty equation";
+    case "mechanism": {
+      const steps = Array.isArray(value) ? value : [value];
+      const first = steps.map((step) => (typeof step === "string" ? step : step?.smiles)).find(Boolean) || "";
+      return `${steps.length} step${steps.length === 1 ? "" : "s"} · ${first}`;
+    }
     default: return plain(value);
   }
 }
@@ -470,7 +480,10 @@ export function mount(studio, container) {
     // The slide's drawing is put in the page again only when it changed: parsing
     // and laying out an SVG is the costliest thing the stage does.
     const shows = page?.svg ? `${state.slide}:${page.hash}` : "";
+    let before = null;
     if (!pageNode || pageNode.dataset.shows !== shows) {
+      // A figure's parts just moved on this slide: they land from where they were.
+      before = figureBlock() ? figure.parts.landing() : null;
       pageNode = h("div.slide-page", { dataset: { shows } });
       if (page?.svg) pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, "");
       else pageNode.append(h("div.placeholder", {}, h("div.spinner")));
@@ -482,6 +495,7 @@ export function mount(studio, container) {
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
       pageNode.addEventListener("click", onPick);
       pageNode.addEventListener("dblclick", onEdit);
+      pageNode.addEventListener("pointerdown", onPress);
     }
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
@@ -503,6 +517,7 @@ export function mount(studio, container) {
     if (figureMarks.parentNode !== pageNode) pageNode.append(figureMarks, figureBar);
     placeFigure();
     figure?.parts.placeInline();
+    if (before && figureBlock()) figure.parts.land(before);
   }
 
   function messageView(message) {
@@ -571,6 +586,7 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
+    if (figure?.parts.dragging) return;
     if (inFigure(event)) {
       const id = figure.parts.idAt(event);
       const box = id && figure.parts.model ? boxOf(figurePrefix() + id) : null;
@@ -581,7 +597,14 @@ export function mount(studio, container) {
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
+  // A part of the chosen figure, pressed and moved, is dragged to another place in it.
+  function onPress(event) {
+    if (event.target.closest(".fig-inline, .figure-bar") || !figureBlock() || !editable(figureBlock()) || !inFigure(event)) return;
+    figure.parts.pointerdown(event);
+  }
+
   function onPick(event) {
+    if (figure?.parts.justDragged) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
@@ -669,6 +692,7 @@ export function mount(studio, container) {
       idOf: (id) => { const prefix = figurePrefix(); return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : null; },
       box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
       changed: () => { renderInspector(); placeFigure(); },
+      settled: () => placeFigure(),
       chooseFile,
       tones: () => studio.info?.tones,
       addAnchor: () => figureBar.querySelector(".add") || figureBar,
@@ -1106,6 +1130,9 @@ export function mount(studio, container) {
   }
 
   function markBlockErrors() {
+    // What was wrong before and is mended now goes; what is wrong now is marked.
+    inspectorBody.querySelectorAll(".block-form > .block-error:not(.soft)").forEach((node) => node.remove());
+    inspectorBody.querySelectorAll(".block-row.error").forEach((node) => node.classList.remove("error"));
     for (const message of messages) {
       const where = placeOf(message.where);
       if (!where || where.slide !== state.slide || where.region === null || message.severity !== "error") continue;
@@ -1163,6 +1190,7 @@ export function mount(studio, container) {
           h("div.hint-line", {}, "A function returning a matplotlib figure; it runs inside ", h("code", {}, "deck.plotting()"), " and is given the deck if it takes an argument."),
           ui.field("Shape", ui.number({ value: block.aspect, placeholder: "fill the room", min: 0.2, step: 0.1, key: key("aspect"), onChange: set("aspect") }), { hint: "width ÷ height" })];
       case "math": return mathForm(block, at, edit, toneSwatches, size);
+      case "mechanism": return mechanismForm(block, at, edit, toneSwatches);
       default:
         return [h("div.hint-line", {}, "This part has no form yet.")];
     }
@@ -1203,6 +1231,378 @@ export function mount(studio, container) {
       onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "middle")) })),
       ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
       size()];
+  }
+
+  function mechanismForm(block, at, edit, toneSwatches) {
+    // Each step a card: its structure, its arrows, and what is written by it.
+    const steps = (Array.isArray(block.mechanism) ? block.mechanism : [block.mechanism])
+      .map((step) => (typeof step === "string" ? { smiles: step } : { ...(step || {}) }));
+    const write = (what) => edit((b) => {
+      b.mechanism = steps.map((step) => {
+        const out = {};
+        for (const [key, value] of Object.entries(step)) {
+          if (key === "arrows" ? value && value.length : value !== "" && value !== undefined && value !== null) out[key] = value;
+        }
+        return out;
+      });
+    }, what);
+    const arrowsText = (step) => (Array.isArray(step.arrows) ? step.arrows.join("; ") : step.arrows || "");
+    const cards = steps.map((step, i) => h("div.step-card", {},
+      h("div.step-head", {}, h("span", {}, `Step ${i + 1}`), h("div.spacer"),
+        ui.button("Draw", () => drawArrows(at, i), { kind: "ghost", icon: "mechanism", small: true,
+          title: "Draw this step's arrows by pointing: where the electrons come from, then where they go" }),
+        ui.button("", () => { steps.splice(i, 1); write("steps"); renderInspector(); },
+          { kind: "ghost", icon: "trash", small: true, disabled: steps.length <= 1 })),
+      ui.field("Structure", ui.input({ value: step.smiles || "", mono: true, key: `step.${i}.smiles`,
+        placeholder: i ? "what the arrows before it make" : "SMILES, with atom maps: [O-:5]",
+        onInput: (value) => { step.smiles = value; write("smiles"); } })),
+      ui.field("Arrows", ui.input({ value: arrowsText(step), mono: true, key: `step.${i}.arrows`, placeholder: "5 -> 2; 2=3 -> 3",
+        onInput: (value) => { step.arrows = value.split(";").map((part) => part.trim()).filter(Boolean); write("arrows"); } })),
+      ui.field("Name", ui.input({ value: step.label || "", key: `step.${i}.label`, placeholder: "under the structure",
+        onInput: (value) => { step.label = value; write("label"); } })),
+      i < steps.length - 1 || (step.arrows && step.arrows.length)
+        ? [ui.field("Over the arrow", ui.input({ value: step.reagents || "", key: `step.${i}.reagents`, placeholder: "NaOH",
+            onInput: (value) => { step.reagents = value; write("reagents"); } })),
+          ui.field("Under it", ui.input({ value: step.conditions || "", key: `step.${i}.conditions`, placeholder: "heat",
+            onInput: (value) => { step.conditions = value; write("conditions"); } })),
+          ui.field("Arrow", ui.segmented({ value: step.arrow || "forward", options: [
+            { value: "forward", label: "→" }, { value: "equilibrium", label: "⇌" },
+            { value: "resonance", label: "↔" }, { value: "none", label: "None" }],
+          onChange: (value) => { step.arrow = value === "forward" ? undefined : value; write("arrow"); renderInspector(); } }))]
+        : null));
+    return [h("div.step-cards", {}, cards),
+      h("div", {}, ui.button("Step", () => { steps.push({ arrows: [] }); write("steps"); renderInspector(); },
+        { kind: "ghost", icon: "plus", small: true })),
+      h("div.hint-line", {}, "Atoms are their maps: ", h("code", {}, "[O-:5]"), " is 5. ",
+        h("code", {}, "5 -> 2"), " a lone pair to an atom, ", h("code", {}, "2=3 -> 3"), " a bond to an atom, ",
+        h("code", {}, "1=2 -> 2-6"), " a bond moved, ", h("code", {}, "~>"), " one electron. A step left without a structure is what the arrows make; one written out is checked."),
+      ui.field("Lone pairs", ui.segmented({ value: block.lone_pairs || "used", options: [
+        { value: "used", label: "Used" }, { value: "all", label: "All" }, { value: "none", label: "None" }],
+      onChange: (value) => editBlock(at, (b) => setOption(b, "lone_pairs", value, "used")) })),
+      ui.field("Charges", ui.segmented({ value: block.charges || "circled", options: [
+        { value: "circled", label: "Circled" }, { value: "plain", label: "Plain" }],
+      onChange: (value) => editBlock(at, (b) => setOption(b, "charges", value, "circled")) })),
+      // Any colour: the deck's accents, ink or muted ink follow its theme; magenta unless chosen.
+      ui.field("Arrows", toneSwatches("arrow_colour", { none: false, fallback: ARROW_INK, extra: [
+        { value: ARROW_INK, colour: ARROW_INK, title: "Magenta" },
+        { value: "ink", colour: studio.info?.palette?.ink || "#222", title: "Ink" },
+        { value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] }))];
+  }
+
+  // -- drawing a mechanism's arrows by pointing (after mechazyme's editor) --
+  // The structure a step acts on, drawn alone and large: an atom stands for its lone
+  // pair, a bond for its electrons, and two clicks -- where the electrons come from,
+  // where they go -- write an arrow. The page draws and points; Python decides what a
+  // click means, and says when a step cannot be (between one arrow and the next it
+  // usually cannot: that is drawn too). The step holds still while it is drawn on.
+  function drawArrows(place, first) {
+    const at = { slide: state.slide, region: place.region, index: place.index };
+    const view = { step: first, holding: [], sheet: null, pending: null, asking: null, half: false,
+      said: "", hovering: null, busy: false, shown: null, mode: "arrows", chosen: null };
+    const nav = h("div.mech-nav");
+    const sheetBox = h("div.mech-sheet");
+    const banner = h("div.mech-banner-slot");
+    const list = h("div.mech-arrows");
+    // The step cards behind are written afresh when it closes: their arrows have changed.
+    dialog({ title: "Draw the mechanism", wide: true, body: [nav, sheetBox, banner, list],
+      actions: [{ label: "Done", kind: "primary" }], onClose: () => renderInspector() });
+    const NS = "http://www.w3.org/2000/svg";
+    const S = (tag, attributes = {}, ...children) => {
+      const node = document.createElementNS(NS, tag);
+      for (const [key, value] of Object.entries(attributes)) if (value !== undefined && value !== null && value !== false) node.setAttribute(key, value);
+      for (const child of children.flat()) if (child !== null && child !== undefined) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+      return node;
+    };
+    const nameOf = (index) => view.sheet?.atoms.find((atom) => atom.index === index)?.name ?? String(index);
+    const samePick = (a, b) => Boolean(a && b && a.kind === b.kind && (a.kind === "atom" ? a.index === b.index
+      : [...a.atoms].sort().join() === [...b.atoms].sort().join()));
+    const arrowsOf = (step) => {
+      const slide = studio.doc?.slides?.[at.slide];
+      const block = slide && blocksAt(slide, at.region)[at.index];
+      const steps = block ? (Array.isArray(block.mechanism) ? block.mechanism : [block.mechanism]) : [];
+      const arrows = steps[step] && typeof steps[step] === "object" ? steps[step].arrows : null;
+      if (Array.isArray(arrows)) return arrows.map(String);
+      return typeof arrows === "string" ? arrows.split(";").map((part) => part.trim()).filter(Boolean) : [];
+    };
+    // Laid out for the arrows the step has when it is opened (or tidied), and held so.
+    const hold = () => { view.holding = arrowsOf(view.step); };
+
+    async function act(extra) {
+      view.busy = true;
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const sent = studio.doc;
+          const result = await studio.api("/api/act", { file: studio.file, document: sent,
+            action: { do: "mechanism", at, step: view.step, holding: view.holding, ...extra } });
+          if (!same(studio.doc, sent)) continue;
+          if (result.document && !same(result.document, sent)) studio.change(() => result.document, { quiet: true });
+          return result;
+        }
+        return null;
+      } catch (error) {
+        flash(error.message);
+        return null;
+      } finally {
+        view.busy = false;
+      }
+    }
+    async function load() {
+      const result = await act({});
+      if (result?.sheet) { view.sheet = result.sheet; view.step = result.sheet.step; }
+      render();
+    }
+    async function go(step) {
+      Object.assign(view, { step, pending: null, asking: null, hovering: null, chosen: null });
+      hold();
+      await load();
+    }
+    async function add(tail, head) {
+      const result = await act({ add: { tail, head, half: view.half } });
+      view.pending = null;
+      if (result?.ends) view.asking = { ends: result.ends, tail, head };
+      else if (result?.sheet) view.sheet = result.sheet;
+      render();
+    }
+    // A molecule moved, turned, flipped or put back: Python keeps where it goes, by its atom.
+    async function arrange(how) {
+      if (view.chosen === null) return;
+      const result = await act({ place: { atom: view.chosen, ...how } });
+      if (result?.sheet) view.sheet = result.sheet;
+      render();
+    }
+    const chosenMolecule = () => (view.sheet?.molecules || []).find((molecule) => molecule.atoms.includes(view.chosen));
+    async function remove(index) {
+      const result = await act({ remove: index });
+      if (result?.sheet) view.sheet = result.sheet;
+      render();
+    }
+    function flash(message) {
+      view.said = message;
+      render();
+      setTimeout(() => { if (view.said === message) { view.said = ""; render(); } }, 3500);
+    }
+    function cancel() { view.pending = null; view.asking = null; render(); }
+
+    function pick(kind, payload) {
+      if (view.busy) return;
+      const picked = { kind, ...payload };
+      if (view.asking) {
+        // Only the two ends it named will do; the answer finishes the arrow that asked.
+        if (kind !== "atom" || !view.asking.ends.some((end) => end.index === payload.index)) {
+          flash(`Click ${view.asking.ends.map((end) => end.name).join(" or ")}: the end the new bond forms from.`);
+          return;
+        }
+        const { tail, head } = view.asking;
+        view.asking = null;
+        add(tail, { bond: [payload.index, head.atom] });
+        return;
+      }
+      if (!view.pending) { view.pending = picked; render(); return; }
+      if (samePick(view.pending, picked)) { cancel(); return; }
+      const from = view.pending;
+      add(from.kind === "atom" ? { atom: from.index } : { bond: from.atoms },
+        kind === "atom" ? { atom: payload.index } : { bond: payload.atoms });
+    }
+
+    function render() {
+      renderNav();
+      renderSheet();
+      renderBanner();
+      renderList();
+    }
+    function renderNav() {
+      const states = view.sheet?.states || 1;
+      const steps = view.sheet?.steps || 1;
+      const name = view.step < steps ? `Step ${view.step + 1}` : "What the last step makes";
+      clear(nav,
+        ui.button("", () => go(view.step - 1), { kind: "ghost", icon: "left", small: true, disabled: view.step <= 0, title: "The step before" }),
+        h("span.mech-step", {}, name, h("span.mech-of", {}, ` · ${view.step + 1} of ${states}`)),
+        ui.button("", () => go(view.step + 1), { kind: "ghost", icon: "right", small: true, disabled: view.step >= states - 1, title: "The step after" }),
+        ui.segmented({ value: view.mode, options: [{ value: "arrows", label: "Arrows" }, { value: "arrange", label: "Arrange" }],
+          onChange: (value) => { Object.assign(view, { mode: value, pending: null, asking: null, hovering: null }); render(); } }),
+        h("div.spacer"),
+        view.mode === "arrows"
+          ? [ui.toggle({ value: view.half, label: "One electron (fishhook)", onChange: (value) => { view.half = value; } }),
+            ui.button("Tidy", () => go(view.step), { kind: "ghost", small: true, title: "Lay the structure out again for the arrows it has now" })]
+          : chosenMolecule()
+            ? [ui.button("↺", () => arrange({ turn: -30 }), { kind: "ghost", small: true, title: "Turn it 30° anticlockwise" }),
+              ui.button("↻", () => arrange({ turn: 30 }), { kind: "ghost", small: true, title: "Turn it 30° clockwise" }),
+              ui.button("Flip", () => arrange({ flip: true }), { kind: "ghost", small: true, title: "Flip it left for right" }),
+              ui.button("Put back", () => arrange({ reset: true }), { kind: "ghost", small: true, disabled: !chosenMolecule().placed,
+                title: "Back where it is laid out" })]
+            : null);
+    }
+    function renderSheet() {
+      const sheet = view.sheet;
+      if (!sheet?.svg) {
+        view.shown = null;
+        clear(sheetBox, h("div.mech-empty", {}, sheet ? "Nothing to draw on: the first structure cannot be read." : "Drawing…"));
+        return;
+      }
+      sheetBox.style.background = sheet.paper || "";
+      if (view.shown !== sheet.svg) {
+        // Only repainted when it differs: an identical drawing replaced flickers under the hand.
+        const drawing = h("div.mech-drawing");
+        drawing.innerHTML = sheet.svg;
+        view.shown = sheet.svg;
+        clear(sheetBox, drawing, hitLayer());
+      } else {
+        sheetBox.querySelector(".mech-hit")?.replaceWith(hitLayer());
+      }
+    }
+    function hitLayer() {
+      if (view.mode === "arrange") return arrangeLayer();
+      const sheet = view.sheet;
+      const r = sheet.bond;
+      const asked = new Set((view.asking?.ends || []).map((end) => end.index));
+      const layer = S("svg", { class: "mech-hit", viewBox: sheet.view.join(" "), preserveAspectRatio: "xMidYMid meet" });
+      for (const bond of sheet.bonds) {
+        const picked = samePick(view.pending, { kind: "bond", atoms: bond.atoms });
+        const node = S("circle", { class: `mech-bond${picked ? " picked" : ""}`, cx: bond.x, cy: bond.y, r: r * 0.24 },
+          S("title", {}, `${nameOf(bond.atoms[0])}–${nameOf(bond.atoms[1])} bond`));
+        node.addEventListener("click", () => pick("bond", { atoms: bond.atoms }));
+        layer.append(node);
+      }
+      for (const atom of sheet.atoms) {
+        const picked = samePick(view.pending, { kind: "atom", index: atom.index });
+        const node = S("circle", { class: `mech-atom${picked ? " picked" : ""}${asked.has(atom.index) ? " asked" : ""}`,
+          cx: atom.x, cy: atom.y, r: r * 0.32 }, S("title", {}, atom.name));
+        node.addEventListener("click", () => pick("atom", { index: atom.index }));
+        node.addEventListener("mouseenter", () => hover(atom.index));
+        layer.append(node);
+      }
+      layer.append(S("g", { class: "mech-pairs" }), S("g", { class: "mech-numbers" }));
+      layer.addEventListener("mouseleave", () => hover(null));
+      paintHover(layer);
+      return layer;
+    }
+    // Each molecule one thing to take hold of: dragged, it moves under the pointer and is
+    // placed where it is let go; clicked, it is chosen, to turn, flip or put back.
+    function arrangeLayer() {
+      const sheet = view.sheet;
+      const r = sheet.bond;
+      const layer = S("svg", { class: "mech-hit arrange", viewBox: sheet.view.join(" "), preserveAspectRatio: "xMidYMid meet" });
+      for (const molecule of sheet.molecules || []) {
+        const chosen = molecule.atoms.includes(view.chosen);
+        const group = S("g", { class: `mech-molecule${chosen ? " chosen" : ""}` },
+          S("title", {}, "Drag to move it; click to turn or flip it"),
+          sheet.atoms.filter((atom) => molecule.atoms.includes(atom.index)).map((atom) => S("circle", { cx: atom.x, cy: atom.y, r: r * 0.45 })),
+          sheet.bonds.filter((bond) => molecule.atoms.includes(bond.atoms[0])).map((bond) => S("circle", { cx: bond.x, cy: bond.y, r: r * 0.36 })));
+        group.addEventListener("pointerdown", (event) => drag(event, molecule, group, layer));
+        layer.append(group);
+      }
+      return layer;
+    }
+    function drag(event, molecule, group, layer) {
+      if (view.busy) return;
+      event.preventDefault();
+      const toSheet = (e) => {
+        const point = layer.createSVGPoint();
+        point.x = e.clientX;
+        point.y = e.clientY;
+        return point.matrixTransform(layer.getScreenCTM().inverse());
+      };
+      const start = toSheet(event);
+      const drawing = sheetBox.querySelector(".mech-drawing svg");
+      const parts = drawing ? molecule.ids.flatMap((id) => [...drawing.querySelectorAll(`[id="${CSS.escape(id)}"], [id^="${CSS.escape(id)}."]`)]) : [];
+      const before = parts.map((part) => part.getAttribute("transform"));
+      let moved = { x: 0, y: 0 };
+      group.setPointerCapture(event.pointerId);
+      const follow = (e) => {
+        const here = toSheet(e);
+        moved = { x: here.x - start.x, y: here.y - start.y };
+        const shift = `translate(${moved.x} ${moved.y})`;
+        parts.forEach((part, i) => part.setAttribute("transform", before[i] ? `${shift} ${before[i]}` : shift));
+        group.setAttribute("transform", shift);
+      };
+      const end = () => {
+        group.removeEventListener("pointermove", follow);
+        group.removeEventListener("pointerup", end);
+        group.removeEventListener("pointercancel", end);
+        view.chosen = molecule.atoms[0];
+        if (Math.hypot(moved.x, moved.y) < view.sheet.bond * 0.08) { render(); return; }
+        arrange({ move: [moved.x / view.sheet.bond, moved.y / view.sheet.bond] });
+      };
+      group.addEventListener("pointermove", follow);
+      group.addEventListener("pointerup", end);
+      group.addEventListener("pointercancel", end);
+    }
+    function hover(index) {
+      if (view.hovering === index) return;
+      view.hovering = index;
+      const layer = sheetBox.querySelector(".mech-hit");
+      if (layer) paintHover(layer);
+    }
+    // The electrons an atom has to give, shown under the pointer where an arrow off them
+    // would start, each pair a target of its own; and numbers on the atoms the arrows
+    // name, the one pointed at, and the one picked -- a number on every atom is none.
+    function paintHover(layer) {
+      const sheet = view.sheet;
+      const r = sheet.bond;
+      const pairs = layer.querySelector(".mech-pairs");
+      if (!pairs) return;
+      const numbers = layer.querySelector(".mech-numbers");
+      const atom = sheet.atoms.find((item) => item.index === view.hovering);
+      clear(pairs, ...(atom ? atom.pairs.map(([x1, y1, x2, y2]) => {
+        const grab = S("circle", { class: "mech-grab", cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, r: r * 0.2 },
+          S("title", {}, `lone pair on ${atom.name}`));
+        grab.addEventListener("click", () => pick("atom", { index: atom.index }));
+        grab.addEventListener("mouseenter", () => hover(atom.index));
+        return [S("circle", { class: "mech-dot", cx: x1, cy: y1, r: Math.max(sheet.dot, r * 0.055) }),
+          S("circle", { class: "mech-dot", cx: x2, cy: y2, r: Math.max(sheet.dot, r * 0.055) }), grab];
+      }) : []));
+      const shown = new Set([...sheet.named, view.hovering, view.pending?.kind === "atom" ? view.pending.index : null,
+        ...(view.pending?.kind === "bond" ? view.pending.atoms : []), ...(view.asking?.ends || []).map((end) => end.index)]);
+      clear(numbers, ...sheet.atoms.filter((item) => shown.has(item.index)).map((item) =>
+        S("text", { class: "mech-number", x: item.tag[0], y: item.tag[1], "font-size": r * 0.3,
+          "text-anchor": "middle", "dominant-baseline": "central" }, item.number ?? "·")));
+    }
+    function renderBanner() {
+      const sheet = view.sheet;
+      const ask = (...words) => h("div.mech-banner.ask", {}, h("span.mech-light"), h("span.mech-words", {}, ...words));
+      const stop = (label = "Cancel") => ui.button(label, cancel, { kind: "ghost", small: true });
+      const pickWords = (pick) => (pick.kind === "atom" ? [`the lone pair on `, h("b", {}, nameOf(pick.index))]
+        : ["the ", h("b", {}, `${nameOf(pick.atoms[0])}–${nameOf(pick.atoms[1])}`), " bond"]);
+      let line;
+      if (view.said) line = ask(view.said);
+      else if (view.mode === "arrange") {
+        const molecule = chosenMolecule();
+        line = molecule
+          ? ask("The molecule with ", h("b", {}, nameOf(view.chosen)), ": drag it, turn it, flip it, or put it back where it is laid out.")
+          : ask(h("b", {}, "Drag"), " a molecule to move it; click one to turn or flip it.");
+      }
+      else if (view.asking) {
+        line = h("div.mech-banner.ask", {}, h("span.mech-light"), h("span.mech-words", {},
+          "Either end of that bond could make the new one. Click the atom it forms from: ",
+          ...view.asking.ends.flatMap((end, i) => [i ? " or " : "", h("b", {}, end.name)]), "."), stop());
+      } else if (view.pending) {
+        line = h("div.mech-banner.ask", {}, h("span.mech-light"), h("span.mech-words", {},
+          "Electrons come from ", ...pickWords(view.pending),
+          ". Now click where they go: the atom they bond to, the atom they settle on, or the bond they strengthen."), stop());
+      } else if (sheet?.problem) {
+        line = h("div.mech-held", {}, h("div.mech-held-lead", {}, h("span.mech-tag", {}, "HELD"),
+          h("span.mech-code", {}, sheet.problem.code)), h("div", {}, sheet.problem.message),
+          sheet.problem.hint ? h("div.mech-hint", {}, sheet.problem.hint) : null);
+      } else if (!sheet?.arrows?.length) {
+        line = ask("Click where the electrons ", h("b", {}, "come from"), ": an atom for its lone pair, or a bond.");
+      } else {
+        const count = sheet.arrows.length;
+        line = h("div.mech-banner.ok", {}, h("span.mech-light"), h("span.mech-words", {},
+          `${view.step < sheet.steps ? `Step ${view.step + 1}` : "This step"} can be: ${count} ${count === 1 ? "arrow" : "arrows"}. Click on to add another.`));
+      }
+      clear(banner, line);
+    }
+    function renderList() {
+      const rows = (view.sheet?.arrows || []).map((arrow, i) => h(`div.mech-arrow-row${arrow.problem ? ".wrong" : ""}`, {},
+        h("span.mech-said", {}, arrow.said || arrow.problem || arrow.text),
+        h("code", {}, arrow.text),
+        ui.button("", () => remove(i), { kind: "ghost", icon: "trash", small: true, title: "Take this arrow away" })));
+      clear(list, rows.length ? [h("div.mech-list-head", {}, "Arrows in this step"), rows] : null);
+    }
+
+    hold();
+    render();
+    load();
   }
 
   function statsForm(block, at, edit, toneSwatches, size) {
@@ -1369,7 +1769,7 @@ export function mount(studio, container) {
       let done = false;
       const finish = (value) => { if (!done) { done = true; resolve(value); box.close(); } };
       const list = h("div.list-rows", {}, h("div.empty", {}, h("div.spinner")));
-      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
+      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
         onchange: async () => { const file = upload.files[0]; if (file) finish(await studio.upload(file)); } });
       const actions = [];
       if (types.includes("image") || types.includes("figure")) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });
