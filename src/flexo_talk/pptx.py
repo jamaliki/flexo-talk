@@ -730,6 +730,10 @@ def _ink_of(run, palette, ink: str) -> str:
 
     from flexo.render_common import run_colour
 
+    from flexo_talk.deck import link_colour
+
+    if run.link and not run.color and (link := link_colour(palette)):
+        return link
     return run_colour(run, palette) or ink
 
 

@@ -51,8 +51,10 @@ def build_deck(
     diagnostics = [message for item in rendered for message in item.diagnostics]
     svgs: list[Path] = []
     pngs: list[Path] = []
+    # Numbered as wide as the count needs, so the files sort in order: talk-100 after talk-099.
+    digits = max(2, len(str(len(rendered))))
     for item in rendered:
-        stem = f"{name}-{item.slide.index:02d}"
+        stem = f"{name}-{item.slide.index:0{digits}d}"
         if "svg" in formats:
             path = directory / f"{stem}.svg"
             path.write_text(item.svg, encoding="utf-8")

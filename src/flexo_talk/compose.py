@@ -58,6 +58,7 @@ from flexo_talk.deck import (
     _Words,
     accent_field,
     inline,
+    link_colour,
     made,
     paint_role,
 )
@@ -88,6 +89,8 @@ class _Canvas:
         self.slide = slide
         self.palette = deck.palette
         self.palette = _slide_palette(deck, slide)
+        self.link = link_colour(self.palette)
+        """What links are painted in where the accent would not tell them from the words."""
         width_mm = style.width / POINTS_PER_INCH * MILLIMETRES_PER_INCH
         height_mm = style.height / POINTS_PER_INCH * MILLIMETRES_PER_INCH
         self.root = ET.Element(
@@ -164,6 +167,8 @@ class _Canvas:
 
                 self.say_maths(run.math, problems_in(run.math))
         runs = self._drawable(runs, typography)
+        if self.link and any(run.link and not run.color for run in runs):
+            runs = tuple(replace(run, color=self.link) if run.link and not run.color else run for run in runs)
         # A word wider than the slide (a URL) breaks rather than running off it.
         return TextMeasurer(typography).measure(
             runs, max_width=width, weight=weight, balance=balance, break_words=True
@@ -365,15 +370,16 @@ def _on_field(canvas: _Canvas):
     from flexo.colour import with_contrast
 
     field = accent_field(canvas.deck.palette)
-    saved = canvas.palette
+    saved, link = canvas.palette, canvas.link
     canvas.palette = saved.with_overrides({
         role: with_contrast(colour, field, 3.0)
         for role, colour in saved.paints.items() if role.endswith(("-stroke", "-motif"))
     })
+    canvas.link = link and link_colour(saved, field)
     try:
         yield
     finally:
-        canvas.palette = saved
+        canvas.palette, canvas.link = saved, link
 
 
 def _words_on(canvas: _Canvas) -> str:
