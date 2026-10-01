@@ -13,7 +13,9 @@ decides where it goes and how large.
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import math
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
@@ -127,6 +129,8 @@ class _Canvas:
         self.diagnostics: list[str] = []
         self.lost: set[str] = set()
         """Characters no font here draws, left out of the slide's drawing."""
+        if slide.backdrop:
+            _words_over_picture(self, slide)
         self.tables: list[TableLayout] = []
         self.notes: list[str] = []
         self.held: list[str] = []
@@ -348,6 +352,25 @@ def _paint_rect(canvas: _Canvas, identifier: str, box: Box, role: str | None, *,
     )
 
 
+@contextlib.contextmanager
+def _on_field(canvas: _Canvas):
+    """Words set on the accent field (a band): an accent word or a link in them is lifted
+    off the field, rather than drawn in its colour on it."""
+
+    from flexo.colour import with_contrast
+
+    field = accent_field(canvas.deck.palette)
+    saved = canvas.palette
+    canvas.palette = saved.with_overrides({
+        role: with_contrast(colour, field, 3.0)
+        for role, colour in saved.paints.items() if role.endswith(("-stroke", "-motif"))
+    })
+    try:
+        yield
+    finally:
+        canvas.palette = saved
+
+
 def _words_on(canvas: _Canvas) -> str:
     """The role whose words read best on the accent field: the page's own colour
     or the ink, whichever stands out more."""
@@ -386,15 +409,16 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
     # Where the title's ink ends: its last baseline and a descender below it.
     ink_bottom = top + heading.baseline + heading.line_height * (len(heading.lines) - 1)
     ink_bottom += style.title_size * 0.22
-    top += canvas.words(
-        f"{slide.id}.title", slide.title_runs, Box(margin, top, span, 0.0), size=style.title_size,
-        weight=weight, role=role, title=True, align=style.title_align,
-    )
-    if slide.subtitle_runs:
-        top += 4.0 + canvas.words(
-            f"{slide.id}.subtitle", slide.subtitle_runs, Box(margin, top + 4.0, span, 0.0),
-            size=style.subtitle_size, role=subtitle_role, align=style.title_align,
+    with _on_field(canvas) if style.header == "band" else contextlib.nullcontext():
+        top += canvas.words(
+            f"{slide.id}.title", slide.title_runs, Box(margin, top, span, 0.0), size=style.title_size,
+            weight=weight, role=role, title=True, align=style.title_align,
         )
+        if slide.subtitle_runs:
+            top += 4.0 + canvas.words(
+                f"{slide.id}.subtitle", slide.subtitle_runs, Box(margin, top + 4.0, span, 0.0),
+                size=style.subtitle_size, role=subtitle_role, align=style.title_align,
+            )
     start = style.title_align == "start"
     if style.header == "rule":
         # Below the ink, not the line box: faces sit differently in theirs, and a
@@ -445,15 +469,16 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
         if opening == "left":
             _paint_rect(canvas, f"{slide.id}.bar", Box(margin * 1.5, top + 4.0, 5.0, block - 4.0), "tone-1-stroke")
     first = top
-    top += canvas.words(
-        f"{slide.id}.title", slide.title_runs, replace(box, y=top), size=size, align=align, weight=bold,
-        role=role, title=True,
-    ) + 14.0
-    if subtitle is not None:
-        canvas.words(
-            f"{slide.id}.subtitle", slide.subtitle_runs, replace(box, y=top), size=subtitle_size,
-            align=align, role=subtitle_role,
-        )
+    with _on_field(canvas) if opening == "band" else contextlib.nullcontext():
+        top += canvas.words(
+            f"{slide.id}.title", slide.title_runs, replace(box, y=top), size=size, align=align, weight=bold,
+            role=role, title=True,
+        ) + 14.0
+        if subtitle is not None:
+            canvas.words(
+                f"{slide.id}.subtitle", slide.subtitle_runs, replace(box, y=top), size=subtitle_size,
+                align=align, role=subtitle_role,
+            )
     if opening == "centred":
         rule = Box(width / 2.0 - 30.0, first + block + 14.0, 60.0, 3.0)
         _paint_rect(canvas, f"{slide.id}.rule", rule, "tone-1-stroke")
@@ -959,9 +984,10 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
         canvas.measure((TextRun(text, code=True),), size, None).width for text in block.lines if text.strip()
     ]
     width = min(box.width, max(widths, default=0.0) + 2 * pad)
+    panel, role, ink, muted = _code_paints(canvas.palette)
     element(
         group, "rect", id=f"{identifier}.panel", x=box.x, y=box.y, width=width, height=height,
-        rx=size * 0.35, fill=canvas.palette.get("tone-1-fill"), data__flexo__fill="tone-1-fill",
+        rx=size * 0.35, fill=panel, **({"data__flexo__fill": role} if role else {}),
     )
     for index, text in enumerate(block.lines):
         if not text.strip():
@@ -970,9 +996,27 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
         canvas.words(
             f"{identifier}.{index}", (TextRun(text, code=True),),
             Box(box.x + pad, box.y + pad + line * index + (line - size * 1.2) / 2.0, width, 0.0),
-            size=size, role="muted-ink" if comment else "ink", parent=group, wrap=False,
+            size=size, role="muted-ink" if comment else "ink", fill=muted if comment else ink,
+            parent=group, wrap=False,
         )
     return height
+
+
+def _code_paints(palette: Palette) -> tuple[str, str | None, str, str]:
+    """A code panel's fill (and its role, when it is one) and the paints of its code and
+    comments: the theme's first tint when its words read on it, else a quiet panel of
+    the page (swiss's tint is its red), the words kept readable either way."""
+
+    from flexo.colour import contrast, mix, with_contrast
+
+    ink, muted = palette.get("ink"), palette.get("muted-ink")
+    panel, role = palette.get("tone-1-fill"), "tone-1-fill"
+    if contrast(ink, panel) < 7.0 or contrast(muted, panel) < 4.5:
+        page = palette.get("canvas")
+        panel, role = palette.get("inset-fill"), "inset-fill"
+        if panel.lower() == page.lower():
+            panel, role = mix(page, ink, 0.06), None
+    return panel, role, with_contrast(ink, panel, 7.0), with_contrast(muted, panel, 4.5)
 
 
 def _quote_size(block: _Quote, style) -> float:
@@ -1307,8 +1351,33 @@ def _dark_slide(deck: Deck, slide: Slide) -> bool:
         from flexo.colour import is_dark
 
         return is_dark(backdrop)
-    # A picture is as dark as it looks under its shade.
-    return _lightness(backdrop) * (1.0 - min(max(slide.shade, 0.0), 1.0)) < 0.45
+    shade = min(max(slide.shade, 0.0), 1.0)
+    _, mean, darkest, _ = _picture(backdrop)
+    if shade > 0:
+        # A picture is darkened for words over it: light words, unless even its darkest
+        # parts stay light under the shade.
+        return darkest * (1.0 - shade) < 0.6
+    return mean < 0.45
+
+
+def _words_over_picture(canvas: _Canvas, slide: Slide) -> None:
+    """Say when light words over a picture will not read where it is bright, and the
+    shade that would make them."""
+
+    if not _is_picture(slide.backdrop or "") or not _dark_slide(canvas.deck, slide):
+        return
+    from flexo.colour import contrast, to_hex
+
+    shade = min(max(slide.shade, 0.0), 1.0)
+    brightest = _picture(slide.backdrop)[3] * (1.0 - shade)
+    ink = canvas.palette.get("ink")
+    ratio = contrast(ink, to_hex((brightest, brightest, brightest)))
+    if ratio < 3.0:
+        needed = min(0.9, math.ceil((1.0 - 0.5 / max(_picture(slide.backdrop)[3], 0.5)) * 20) / 20)
+        canvas.diagnostics.append(
+            f"{slide.id}: words over the picture are hard to read where it is bright (contrast "
+            f"{ratio:.1f}:1) -- a shade of {needed:g} would make them read"
+        )
 
 
 def _is_picture(page: object) -> bool:
@@ -1318,8 +1387,9 @@ def _is_picture(page: object) -> bool:
 _PAGE_PICTURES: dict[tuple[str, int, bool], tuple[str, float]] = {}
 
 
-def _picture(source: str) -> tuple[str, float]:
-    """A picture's data URI and its mean lightness (0 to 1), read once for each version of it."""
+def _picture(source: str) -> tuple[str, float, float, float]:
+    """A picture's data URI and its lightness (0 to 1) -- its mean, and that of its
+    darkest and brightest tenths -- read once for each version of it."""
 
     path = Path(source)
     stamp = path.stat().st_mtime_ns if path.is_file() else 0
@@ -1332,18 +1402,21 @@ def _picture(source: str) -> tuple[str, float]:
         import base64
 
         href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
-        lightness = 1.0
+        lightness = darkest = brightest = 1.0
     else:
         from PIL import Image, ImageStat
 
         with Image.open(path) as image:
             image.draft("L", (64, 64))  # a JPEG is decoded small, not whole
-            lightness = ImageStat.Stat(image.convert("L").resize((32, 32))).mean[0] / 255
+            small = image.convert("L").resize((32, 32))
+            lightness = ImageStat.Stat(small).mean[0] / 255
+            values = sorted(small.tobytes())
+            darkest, brightest = values[len(values) // 10] / 255, values[len(values) * 9 // 10] / 255
         href = picture_href(art)
     if len(_PAGE_PICTURES) > 64:
         _PAGE_PICTURES.clear()
-    _PAGE_PICTURES[key] = (href, lightness)
-    return href, lightness
+    _PAGE_PICTURES[key] = (href, lightness, darkest, brightest)
+    return href, lightness, darkest, brightest
 
 
 def _picture_href(source: str) -> str:
@@ -1358,13 +1431,22 @@ def _slide_palette(deck: Deck, slide: Slide):
     """The deck's paints, or paints for words over this slide's own backdrop: light
     words on a dark one, dark words on a light one when the deck's page is dark."""
 
-    from flexo.colour import is_dark, with_lightness
+    from flexo.colour import is_dark, with_contrast, with_lightness
 
     palette = deck.palette
     page_dark = is_dark(palette.get("canvas"))
     dark = _dark_slide(deck, slide)
-    if (not slide.backdrop and slide.dark is None) or (not dark and not page_dark):
+    colour = slide.backdrop if (slide.backdrop or "").startswith("#") else None
+    if not slide.backdrop and slide.dark is None:
         return palette
+    if not dark and not page_dark:
+        # A light backdrop in a light deck (a mid grey): the deck's words, kept readable on it.
+        if colour is None:
+            return palette
+        return palette.with_overrides({
+            "ink": with_contrast(palette.get("ink"), colour, 7.0),
+            "muted-ink": with_contrast(palette.get("muted-ink"), colour, 4.5),
+        })
     light, deep = {"ink": "#f7f5f0", "muted-ink": "#d4d0c8"}, {"ink": "#1c1c1e", "muted-ink": "#55555a"}
     paints = light if dark else deep
     backdrop = slide.backdrop or ""
@@ -1383,6 +1465,9 @@ def _slide_palette(deck: Deck, slide: Slide):
         elif is_dark(colour) == dark:
             # Accents, strokes and connectors drawn for the page read poorly over it.
             paints[role] = with_lightness(colour, 0.78 if dark else 0.45, 0.14)
+    if backdrop.startswith("#"):
+        paints["ink"] = with_contrast(paints["ink"], backdrop, 7.0)
+        paints["muted-ink"] = with_contrast(paints["muted-ink"], backdrop, 4.5)
     return palette.with_overrides(paints)
 
 

@@ -184,3 +184,49 @@ def test_a_plot_and_a_code_panel_on_a_dark_slide_of_a_light_deck_take_the_slides
     assert ink not in first.svg.lower() and "#000000" not in first.svg  # words light, error bars too
     panel = deck.palette.get("tone-1-fill").lower()
     assert panel not in second.svg.lower()
+
+
+def test_words_read_on_every_backdrop_and_panel() -> None:
+    from flexo.colour import contrast
+
+    from flexo_talk.compose import _code_paints, _slide_palette
+
+    for colour in ("#888888", "#6b6b6b", "#1b2a41", "#f0f0f0"):
+        deck = Deck("g")
+        palette = _slide_palette(deck, deck.slide("T", background=colour))
+        assert contrast(palette.get("muted-ink"), colour) >= 4.5, colour
+    for theme in ("swiss", "bauhaus", "midcentury", "paper", "dark"):
+        panel, _, ink, muted = _code_paints(Deck("c", theme=theme).palette)
+        assert contrast(ink, panel) >= 7.0 and contrast(muted, panel) >= 4.5, theme
+
+
+def test_an_accent_word_in_a_band_title_is_lifted_off_the_band() -> None:
+    import re
+
+    from flexo.colour import contrast
+
+    from flexo_talk.deck import accent_field
+
+    deck = Deck("b", look="band")
+    deck.slide("Title with [accent words]{accent}").text("x")
+    (slide,) = deck.render()
+    field = accent_field(deck.palette)
+    title = re.search(r'id="slide1\.title".*?</text>', slide.svg, re.S).group(0)
+    fills = set(re.findall(r'fill="(#[0-9a-fA-F]{6})"', title))
+    assert fills and all(contrast(fill, field) >= 3.0 for fill in fills)
+
+
+def test_light_words_over_a_shaded_picture_and_a_word_when_they_will_not_read(tmp_path: Path) -> None:
+    from PIL import Image
+
+    bright = tmp_path / "bright.png"  # a dark street under a bright sky
+    picture = Image.new("RGB", (64, 64), "#f2f2f2")
+    picture.paste((30, 30, 30), (0, 32, 64, 64))
+    picture.save(bright)
+    shaded = Deck("p")
+    shaded.title("Over a photograph", background=str(bright), shade=0.5)
+    (slide,) = shaded.render()
+    assert slide.diagnostics == [] and "#f7f5f0" in slide.svg  # light words, and they read
+    faint = Deck("p")
+    faint.title("Over a photograph", background=str(bright), shade=0.2)
+    assert any("a shade of" in line for line in faint.render()[0].diagnostics)

@@ -385,7 +385,13 @@ def test_a_filled_section_takes_the_accent_and_light_words(tmp_path: Path) -> No
     section, _ = _slides(result.pptx)  # type: ignore[arg-type]
     accent = deck.palette.get("tone-1-stroke").lstrip("#").upper()
     assert re.search(rf'<p:bg>.*?<a:srgbClr val="{accent}"/>', section, re.S)
-    assert "F7F5F0" in section  # its words set light
+    from flexo.colour import contrast
+
+    # Its words set light, and readable on the accent.
+    words = re.findall(r'<a:t>A part</a:t>', section)
+    run = r'<a:rPr[^>]*>(?:(?!</a:rPr>).)*?<a:srgbClr val="([0-9A-F]{6})"/>(?:(?!</a:rPr>).)*?</a:rPr><a:t>A part'
+    colours = re.findall(run, section, re.S)
+    assert words and colours and contrast(f"#{colours[0]}", f"#{accent}") >= 4.5
     # The content slide's title sits on a band of the accent across the top.
     assert 'id="slide2.band"' in result.svgs[1].read_text()
 
