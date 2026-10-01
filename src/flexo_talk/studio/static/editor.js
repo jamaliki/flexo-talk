@@ -1369,7 +1369,7 @@ export function mount(studio, container) {
       let done = false;
       const finish = (value) => { if (!done) { done = true; resolve(value); box.close(); } };
       const list = h("div.list-rows", {}, h("div.empty", {}, h("div.spinner")));
-      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
+      const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
         onchange: async () => { const file = upload.files[0]; if (file) finish(await studio.upload(file)); } });
       const actions = [];
       if (types.includes("image") || types.includes("figure")) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });

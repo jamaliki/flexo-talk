@@ -105,6 +105,29 @@ def test_a_matplotlib_plot_is_native_shapes_and_text(tmp_path: Path) -> None:
     assert ">Loss" not in slide and "STIX" not in slide
 
 
+def test_an_illustrator_file_is_placed_as_shapes(tmp_path: Path) -> None:
+    pytest.importorskip("pypdfium2")
+    from flexo.pdf import write_pdf
+
+    # An Illustrator file is a PDF with Illustrator's data beside it; flexo's own PDF
+    # stands in for one: a box, and words in an embedded face.
+    source = tmp_path / "panel.ai"
+    write_pdf(
+        ['<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80" viewBox="0 0 200 80">'
+         '<rect x="10" y="10" width="60" height="60" fill="#d55e00"/>'
+         '<text x="90" y="50" font-size="20">Panel A</text></svg>'],
+        source,
+    )
+    deck = Deck("illustrator")
+    with deck.slide("A colleague's panel") as slide:
+        slide.image(source)
+    result = deck.build(tmp_path, formats=("pptx", "pdf"))
+    xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "<p:pic>" not in xml
+    assert xml.count("<a:custGeom>") >= 2  # the box, and the words' outlines
+    assert 'srgbClr val="D55E00"' in xml  # in the box's own colour
+
+
 def test_an_overfull_slide_is_set_smaller_and_reported(tmp_path: Path) -> None:
     deck = Deck("full")
     with deck.slide("Too much") as slide:
