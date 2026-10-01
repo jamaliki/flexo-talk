@@ -504,11 +504,38 @@ def _run_xml(run, *, size: float | None = None, baseline: int | None = None) -> 
             'val="tx"/></a:ext></a:extLst></a:hlinkClick>'
         )
     return (
-        f'<a:r><a:rPr lang="en-GB" sz="{round(size * 100)}"{bold}{italic}{raise_} dirty="0">'
+        f'<a:r><a:rPr lang="{_lang(run.text)}" sz="{round(size * 100)}"{bold}{italic}{raise_} dirty="0">'
         f"{_fill(run.fill, 1.0)}"
         f'<a:latin typeface="{face}"/><a:ea typeface="{face}"/><a:cs typeface="{face}"/>{link}'
         f"</a:rPr><a:t>{escape(run.text)}</a:t></a:r>"
     )
+
+
+_LANGUAGES = (
+    # The first script found decides: Persian's own letters before Arabic's.
+    ("fa-IR", ((0x067E, 0x067E), (0x0686, 0x0686), (0x0698, 0x0698), (0x06A9, 0x06A9), (0x06AF, 0x06AF),
+               (0x06CC, 0x06CC))),
+    ("ar-SA", ((0x0600, 0x06FF), (0x0750, 0x077F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF))),
+    ("he-IL", ((0x0590, 0x05FF),)),
+    ("ja-JP", ((0x3040, 0x30FF),)),
+    ("ko-KR", ((0x1100, 0x11FF), (0xAC00, 0xD7AF))),
+    ("zh-CN", ((0x4E00, 0x9FFF), (0x3400, 0x4DBF))),
+    ("th-TH", ((0x0E00, 0x0E7F),)),
+    ("hi-IN", ((0x0900, 0x097F),)),
+    ("el-GR", ((0x0370, 0x03FF),)),
+    ("ru-RU", ((0x0400, 0x04FF),)),
+)
+
+
+def _lang(text: str) -> str:
+    """The language a run is tagged with: by its script (a slide program checks its
+    spelling, and picks Chinese or Japanese forms of a character, by it); English else."""
+
+    codes = {ord(character) for character in text}
+    for tag, ranges in _LANGUAGES:
+        if any(low <= code <= high for code in codes for low, high in ranges):
+            return tag
+    return "en-GB"
 
 
 def _family_name(run) -> str:
@@ -534,7 +561,12 @@ def _legacy_family(source: str, index: int) -> str | None:
     name = font["name"]
     # Office finds a face by its Windows family name (platform 3), which may
     # differ from the Mac one ("LM Roman 10" against "Latin Modern Roman").
-    legacy = name.getName(1, 3, 1, 0x409) or name.getName(1, 3, 1) or name.getName(1, 3, 10)
+    # In English when the font has it (Windows', else the Mac's): Geeza Pro names itself
+    # on Windows only in Persian, Hindi and Arabic, which no slide program looks for.
+    legacy = (
+        name.getName(1, 3, 1, 0x409) or name.getName(1, 1, 0, 0)
+        or name.getName(1, 3, 1) or name.getName(1, 3, 10)
+    )
     if legacy is not None:
         return legacy.toUnicode()
     fallback = name.getDebugName(1)
