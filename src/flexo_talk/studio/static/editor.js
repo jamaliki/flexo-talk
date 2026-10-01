@@ -1115,6 +1115,9 @@ export function mount(studio, container) {
   }
 
   function markBlockErrors() {
+    // What was wrong before and is mended now goes; what is wrong now is marked.
+    inspectorBody.querySelectorAll(".block-form > .block-error:not(.soft)").forEach((node) => node.remove());
+    inspectorBody.querySelectorAll(".block-row.error").forEach((node) => node.classList.remove("error"));
     for (const message of messages) {
       const where = placeOf(message.where);
       if (!where || where.slide !== state.slide || where.region === null || message.severity !== "error") continue;
@@ -1241,15 +1244,14 @@ export function mount(studio, container) {
       ui.field("Name", ui.input({ value: step.label || "", key: `step.${i}.label`, placeholder: "under the structure",
         onInput: (value) => { step.label = value; write("label"); } })),
       i < steps.length - 1 || (step.arrows && step.arrows.length)
-        ? h("div.list-row", {},
-          ui.input({ value: step.reagents || "", key: `step.${i}.reagents`, placeholder: "over the arrow (NaOH)",
-            onInput: (value) => { step.reagents = value; write("reagents"); } }),
-          ui.input({ value: step.conditions || "", key: `step.${i}.conditions`, placeholder: "under it (heat)",
-            onInput: (value) => { step.conditions = value; write("conditions"); } }),
-          ui.select({ value: step.arrow || "forward", options: [
+        ? [ui.field("Over the arrow", ui.input({ value: step.reagents || "", key: `step.${i}.reagents`, placeholder: "NaOH",
+            onInput: (value) => { step.reagents = value; write("reagents"); } })),
+          ui.field("Under it", ui.input({ value: step.conditions || "", key: `step.${i}.conditions`, placeholder: "heat",
+            onInput: (value) => { step.conditions = value; write("conditions"); } })),
+          ui.field("Arrow", ui.segmented({ value: step.arrow || "forward", options: [
             { value: "forward", label: "→" }, { value: "equilibrium", label: "⇌" },
-            { value: "resonance", label: "↔" }, { value: "none", label: "none" }],
-          onChange: (value) => { step.arrow = value === "forward" ? undefined : value; write("arrow"); } }))
+            { value: "resonance", label: "↔" }, { value: "none", label: "None" }],
+          onChange: (value) => { step.arrow = value === "forward" ? undefined : value; write("arrow"); renderInspector(); } }))]
         : null));
     return [h("div.step-cards", {}, cards),
       h("div", {}, ui.button("Step", () => { steps.push({ arrows: [] }); write("steps"); renderInspector(); },
