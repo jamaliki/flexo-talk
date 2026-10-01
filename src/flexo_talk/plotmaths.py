@@ -60,18 +60,7 @@ def set_by_flexo(figure: Any, family: str, maths: str) -> int:
 
     import matplotlib.text
 
-    every = [*figure.get_axes()]
-    every += [child for axes in every for child in getattr(axes, "child_axes", [])]  # secondary axes
-    ticks = {
-        id(label)
-        for axes in every
-        for axis in getattr(axes, "_axis_map", {"x": axes.xaxis, "y": axes.yaxis}).values()
-        for label in (
-            *axis.get_ticklabels(), *axis.get_ticklabels(minor=True), axis.offsetText,
-            *(tick.label1 for tick in (*axis.majorTicks, *axis.minorTicks)),
-            *(tick.label2 for tick in (*axis.majorTicks, *axis.minorTicks)),
-        )
-    }
+    ticks = tick_labels(figure)
     count = 0
     for text in figure.findobj(matplotlib.text.Text):
         words = text.get_text()
@@ -86,6 +75,24 @@ def set_by_flexo(figure: Any, family: str, maths: str) -> int:
         text._flexo_problems = [(words, problem) for line in lines for problem in line.problems]
         count += 1
     return count
+
+
+def tick_labels(figure: Any) -> set[int]:
+    """The ids of the tick labels and axis offsets of ``figure``'s axes, its secondary
+    axes' too: matplotlib makes and places them afresh as it draws."""
+
+    every = [*figure.get_axes()]
+    every += [child for axes in every for child in getattr(axes, "child_axes", [])]  # secondary axes
+    return {
+        id(label)
+        for axes in every
+        for axis in getattr(axes, "_axis_map", {"x": axes.xaxis, "y": axes.yaxis}).values()
+        for label in (
+            *axis.get_ticklabels(), *axis.get_ticklabels(minor=True), axis.offsetText,
+            *(tick.label1 for tick in (*axis.majorTicks, *axis.minorTicks)),
+            *(tick.label2 for tick in (*axis.majorTicks, *axis.minorTicks)),
+        )
+    }
 
 
 def problems(figure: Any) -> list[tuple[str, str]]:
