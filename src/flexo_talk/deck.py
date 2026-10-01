@@ -290,6 +290,8 @@ class _Plot:
     """A matplotlib ``Figure``."""
     aspect: float | None = None
     """Width over height; ``None`` fills the height the place has."""
+    drawn: str = ""
+    """The SVG it was last drawn as, at the size of its place (what ``convert`` saves)."""
 
 
 @dataclass(slots=True)

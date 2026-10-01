@@ -122,15 +122,25 @@ def _convert(arguments: argparse.Namespace) -> int:
     source = Path(arguments.deck.partition(":")[0]).resolve()
     target = Path(arguments.output or source.with_suffix(".yaml")).resolve()
     deck = load_deck(arguments.deck, arguments.theme)
+    # Drawn first: each plot is saved as the deck draws it -- at the size of its place,
+    # its words the deck's size, its maths set by flexo -- not as matplotlib saves it.
+    deck.render()
     saved: list[Path] = []
 
     def plot(block, where: str) -> dict[str, object]:
-        figure = made(block.figure)
         path = target.parent / f"{target.stem}-plot{len(saved) + 1}.svg"
-        from flexo_talk.compose import clear_backgrounds
+        svg = block.drawn
+        if not svg:
+            from flexo.text import maths_family
 
-        clear_backgrounds(figure)
-        figure.savefig(path, format="svg", metadata={"Date": None})
+            from flexo_talk.compose import plot_svg
+
+            typography = deck.layout_style.typography
+            width = deck.style.width - 2 * deck.style.margin
+            svg = plot_svg(made(block.figure), width, width * 0.5, typography.family, path.stem,
+                           maths=maths_family(typography))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(svg, encoding="utf-8")
         saved.append(path)
         print(f"{where}: a matplotlib plot, saved as {path.name} and placed as an image")
         return {"image": path.name}
