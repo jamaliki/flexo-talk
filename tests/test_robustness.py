@@ -609,3 +609,20 @@ def test_a_document_nested_past_any_deck_is_refused_in_words(tmp_path: Path) -> 
         load_document(path)
     with pytest.raises(ValueError, match="nested more than 100 levels"):
         Deck("d").slide("S").bullets(*deep[:2])
+
+
+def test_a_plot_that_never_returns_is_stopped_on_the_command_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import signal
+
+    import flexo_talk.document as document
+
+    monkeypatch.setattr(document, "CODE_TIMEOUT", 1.0)
+    (tmp_path / "plots.py").write_text("def loops():\n    while True:\n        pass\n")
+    (tmp_path / "deck.yaml").write_text("deck: {id: x}\nslides:\n- body: [{plot: plots.py:loops}]\n")
+    start = time.monotonic()
+    assert main(["build", str(tmp_path / "deck.yaml"), "-o", str(tmp_path / "out"), "--formats", "svg"]) == 1
+    assert time.monotonic() - start < 30
+    assert "slides[0].body[0] (plot): plots.py:loops took longer than 1 s, and was stopped" in capsys.readouterr().err
+    assert signal.getitimer(signal.ITIMER_REAL)[0] == 0  # nothing left to ring later

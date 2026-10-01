@@ -53,6 +53,7 @@ import inspect
 import json
 import os
 import re
+import signal
 import sys
 import threading
 from collections import OrderedDict
@@ -735,14 +736,28 @@ def _made_apart(
         raise DeckDocumentError(where, f"{target} made a figure flexo cannot read: {error}") from error
 
 
+CODE_TIMEOUT = 300.0
+"""Seconds a plot or figure a document names may take where it is made here (on the
+command line): one that never returns is stopped and said, not waited on for ever. The
+studio's worker stops one sooner (``worker.TIMEOUT``)."""
+
+
+class _TooLong(BaseException):
+    """A deck's own Python, stopped for taking longer than ``CODE_TIMEOUT``."""
+
+
 @contextlib.contextmanager
 def _own_code(target: str, where: str):
     """Around a deck's own Python: whatever it does to stop (``sys.exit()``) is said on
-    its slide, and the folder it may have moved into is left again."""
+    its slide, so is running past ``CODE_TIMEOUT``, and the folder it may have moved
+    into is left again."""
 
     folder = os.getcwd()
+    cancel = _alarm(CODE_TIMEOUT)
     try:
         yield
+    except _TooLong:
+        raise DeckDocumentError(where, f"{target} took longer than {CODE_TIMEOUT:g} s, and was stopped") from None
     except (DeckDocumentError, KeyboardInterrupt):
         raise
     except BaseException as error:
@@ -750,8 +765,34 @@ def _own_code(target: str, where: str):
             raise
         raise DeckDocumentError(where, f"{target} stopped: {type(error).__name__} {error}".strip()) from None
     finally:
+        cancel()
         if os.getcwd() != folder:
             os.chdir(folder)
+
+
+def _alarm(seconds: float) -> Callable[[], None]:
+    """Raise ``_TooLong`` in this thread after ``seconds``; the function returned calls
+    it off. Only the main thread can be interrupted so (by a signal, where there are
+    signals), and an alarm someone else has set is left to ring as they meant."""
+
+    if (
+        not hasattr(signal, "setitimer")
+        or threading.current_thread() is not threading.main_thread()
+        or signal.getitimer(signal.ITIMER_REAL)[0]
+    ):
+        return lambda: None
+
+    def ring(number: int, frame: object) -> None:
+        raise _TooLong
+
+    before = signal.signal(signal.SIGALRM, ring)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+
+    def cancel() -> None:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, before)
+
+    return cancel
 
 
 _MODULES: dict[Path, tuple[float, object]] = {}
