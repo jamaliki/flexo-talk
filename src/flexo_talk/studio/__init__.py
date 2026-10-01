@@ -237,7 +237,7 @@ class DeckKind:
         """Draw what has changed, the slide in focus first and its neighbours next;
         slides not reached within ``BUDGET`` seconds are left pending for the next call."""
 
-        from flexo_talk.compose import render_slide
+        from flexo_talk.compose import EDITING, render_slide
 
         errors: list[DeckDocumentError] = []
         try:
@@ -277,19 +277,25 @@ class DeckKind:
                 "files": [(str(file), _stamp(file)) for file in files],
             }))
         focus = int((hints or {}).get("focus") or 0)
+        # While the deck is changed its figures keep their layouts (compose.EDITING); once
+        # the changes stop the page asks to settle, and the slides that kept one are
+        # drawn again with the best.
+        settle = bool((hints or {}).get("settle"))
         started = time.perf_counter()
         drawn_one = False
         for index in _order(len(slides), focus):
-            if index in failed or keys[index] in self._slides:
+            known = self._slides.get(keys[index])
+            if index in failed or (known is not None and (known.get("settled", True) or not settle)):
                 continue
             if drawn_one and time.perf_counter() - started > BUDGET:
                 break
             slide = deck.slides[index]
+            editing = EDITING.set(not settle)
             try:
                 rendered = render_slide(deck, slide)
                 self._slides[keys[index]] = {"svg": rendered.svg, "steps": rendered.steps,
                                              "diagnostics": rendered.diagnostics, "notes": rendered.notes,
-                                             "held": rendered.held}
+                                             "held": rendered.held, "settled": rendered.settled}
             except UntrustedCode as error:
                 self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
             except DeckDocumentError as error:
@@ -297,6 +303,8 @@ class DeckKind:
                 self._slides[keys[index]] = {"error": _plain_message(error), "where": error.where}
             except Exception as error:
                 self._slides[keys[index]] = {"error": explain(error)}
+            finally:
+                EDITING.reset(editing)
             drawn_one = True
         # Slides with photos carry them inside: the cache is held to a size in bytes too.
         while len(self._slides) > CACHE_SIZE or (
@@ -330,7 +338,9 @@ class DeckKind:
                 for text in done.get("held", []):
                     messages.append(Message(text, "warning", f"slides[{index}]", identifier, "code.untrusted"))
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
-        return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck), "tones": _tones(deck)})
+        unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
+        return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck), "tones": _tones(deck),
+                                                          "unsettled": unsettled})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck

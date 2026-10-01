@@ -901,3 +901,24 @@ def test_a_mechanism_is_drawn_as_shapes_with_its_arrows_and_a_wrong_one_is_said(
     assert any("C2 would have 10 electrons" in said for said in result.diagnostics)
     with pytest.raises(ValueError, match="never closed"):
         deck.slide("Wrong").mechanism([{"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4", "arrows": ["5 -> 2"]}])
+
+
+@pytest.mark.parametrize("look", [{"theme": "paper"}, {"theme": "paper", "font": "IBM Plex Sans"}, {"theme": "tikz"}])
+def test_a_mechanism_is_lettered_as_its_deck_is(look) -> None:
+    deck = Deck("chemistry", **look)
+    with deck.slide("Acyl substitution") as slide:
+        slide.text("Hydroxide attacks the carbonyl.").mechanism([
+            {"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", "arrows": ["5 -> 2", "2=3 -> 3"], "reagents": "NaOH"},
+            {"arrows": ["3 -> 2", "2-4 -> 4"], "label": "tetrahedral intermediate"},
+        ])
+    (rendered,) = deck.render()
+    texts = re.findall(r'<text[^>]*id="([^"]+)"[^>]*font-family="([^"]+)"[^>]*font-size="([^"]+)"', rendered.svg)
+    face = {ident: family.split(",")[0] for ident, family, _ in texts}
+    words = next(face[ident] for ident in face if ident.endswith("body.0"))
+    lettered = [ident for ident in face if ".mechanism." in ident]
+    assert lettered and {face[ident] for ident in lettered} == {words}
+    # Its atoms are set at the size of the words beside it, once scaled onto the slide.
+    scale = float(re.search(r'body\.1[^>]*transform="[^"]*scale\(([\d.]+)\)', rendered.svg).group(1))
+    size = {ident: float(value) for ident, _, value in texts}
+    atom = next(ident for ident in lettered if ".atom" in ident)
+    assert size[atom] * scale == pytest.approx(size[next(i for i in face if i.endswith("body.0"))], rel=0.02)
