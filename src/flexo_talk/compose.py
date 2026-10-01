@@ -314,8 +314,10 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
     if deck.title_font:
         headings = element(canvas.defs, "style", id=f"{slide.id}.title-fonts", type="text/css")
         embed_fonts(headings, canvas.root, replace(deck.layout_style, typography=deck.typography(12, title=True)))
+    # One line for each thing said, however many places on the slide said it.
     return RenderedSlide(
-        slide, xml_document(canvas.root), canvas.lists, canvas.diagnostics, canvas.tables, canvas.notes,
+        slide, xml_document(canvas.root), canvas.lists, list(dict.fromkeys(canvas.diagnostics)), canvas.tables,
+        canvas.notes,
         canvas.steps, canvas.held, canvas.worded,
     )
 
@@ -1042,6 +1044,11 @@ def _shared(natural: list[float], least: list[float], width: float) -> list[floa
 
 
 def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
+    if block.ragged:
+        canvas.diagnostics.append(
+            f"{canvas.slide.id}: a table's rows have different numbers of cells -- the short ones are "
+            "filled with empty cells at their end"
+        )
     plan = _table_plan(canvas, block, box.width, said=True)
     total = sum(plan.widths)
     # A table headed in a right-to-left script reads from the right: its first
@@ -1095,6 +1102,8 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
     """A listing: each line one text in the monospace family, on a tinted panel; set
     smaller to fit its place, and a line still too long wrapped (said on the slide)."""
 
+    if not any(text.strip() for text in block.lines):
+        return 0.0  # an empty listing is no panel
     size, lines = _code_lines(canvas, block, box.width, said=draw)
     pad = size * 0.9
     line = size * 1.35

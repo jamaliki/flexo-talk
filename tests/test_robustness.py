@@ -455,3 +455,21 @@ def test_two_revealed_lists_reveal_one_after_the_other_as_in_powerpoint() -> Non
     slide.right.bullets("c", "d", reveal=True)
     (rendered,) = deck.render()
     assert rendered.steps == 5  # the slide, then a, b, c, d: a click each
+
+
+def test_small_things_are_left_out_or_said() -> None:
+    import re
+
+    with pytest.raises(ValueError, match='unknown theme "night"'):
+        Deck("t", theme="night")
+    with pytest.raises(ValueError, match="theme is 123"):
+        Deck("t", theme=123)
+    deck = Deck("s")
+    slide = deck.slide("   ")
+    slide.bullets("a", "", "  ", "b").code("\n\n").table([["a", "b", "c"], ["d"]])
+    (rendered,) = deck.render()
+    assert slide.title_runs == () and 'id="slide1.rule"' not in rendered.svg
+    assert len(re.findall(r'id="slide1\.body\.0"', rendered.svg)) == 1 and len(slide.body.blocks[0].items) == 2
+    assert 'data-flexo-talk="code"' not in rendered.svg
+    assert any("different numbers of cells" in line for line in rendered.diagnostics)
+    assert len(rendered.diagnostics) == len(set(rendered.diagnostics))
