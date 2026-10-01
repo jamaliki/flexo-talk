@@ -763,3 +763,38 @@ def test_words_on_a_plots_cells_read_on_them_and_coloured_words_keep_their_colou
     assert len(fills("pale")) == 2 and all(contrast(fill, "#f7fbff") >= 4.5 for fill in fills("pale"))
     assert len(fills("deep")) == 2 and all(contrast(fill, "#08306b") >= 4.5 for fill in fills("deep"))
     assert fills("mine") == ["#ff0000", "#ff0000"]
+
+
+def test_a_plot_of_very_many_marks_draws_them_as_one_picture_in_the_slides_paints(tmp_path: Path) -> None:
+    import base64
+    import io
+    import re
+    import zipfile
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from PIL import Image
+
+    deck = Deck("dense", theme="dark")
+    with deck.plotting():
+        figure, (many, chosen) = plt.subplots(1, 2)
+        many.scatter(*np.random.default_rng(0).normal(size=(2, 100_000)), s=1, color="black")
+        chosen.scatter([0, 1], [0, 1], rasterized=True)  # the author's own choice, not said
+    deck.slide("Dense").plot(figure)
+    start = time.monotonic()
+    result = deck.build(tmp_path, formats=("png", "pdf", "pptx", "svg"))
+    assert time.monotonic() - start < 15  # 100,000 shapes took half a minute
+    assert [line for line in result.diagnostics if "rasterized=True" in line] == [
+        "slide1: the plot's 100,000 marks are drawn as a picture, not as shapes -- "
+        "plot them with rasterized=True to choose so yourself"
+    ]
+    svg = result.svgs[0].read_text()
+    assert len(svg) < 2_000_000 and svg.count("<path") < 200
+    pictures = [np.asarray(Image.open(io.BytesIO(base64.b64decode(data))).convert("RGBA"))
+                for data in re.findall(r"data:image/png;base64,([A-Za-z0-9+/=\s]+)", svg)]
+    marks = max(pictures, key=lambda pixels: int((pixels[..., 3] > 128).sum()))
+    # Black on a dark slide is the slide's ink, in a picture as in shapes.
+    assert marks[marks[..., 3] > 128][:, :3].mean() > 200
+    with zipfile.ZipFile(result.pptx) as pptx:  # type: ignore[arg-type]
+        slide = pptx.read("ppt/slides/slide1.xml").decode()
+    assert slide.count("<p:sp>") < 200 and "<p:pic>" in slide
