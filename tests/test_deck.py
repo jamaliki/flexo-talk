@@ -747,6 +747,7 @@ def test_a_log_axis_ticks_are_matplotlibs_and_say_nothing() -> None:
         (r"\mathcal{L} + \mathbb{R} + \mathbf{x} + \text{if}", ['m:scr m:val="script"', 'm:scr m:val="double-struck"',
                                                                'm:sty m:val="b"', "m:nor"]),
         (r"\lim_{n \to \infty} a_n", ["m:limLow"]),
+        (r"\mathop{\mathrm{Res}}_{z=0} f", ["m:func", "m:limLow", "<m:t>R</m:t>"]),
         (r"\binom{n}{k}", ['m:type m:val="noBar"']),
         (r"\foo{x}", ['val="C0392B"']),
     ],
@@ -761,6 +762,44 @@ def test_maths_is_written_as_powerpoints_own_equations(source: str, elements: li
     assert root.tag == "{http://schemas.microsoft.com/office/drawing/2010/main}m"
     for element in elements:
         assert f"<{element}" in written or element in written, element
+
+
+def test_powerpoints_equations_keep_tex_sizes_and_spaces() -> None:
+    from flexo_talk.omml import omml
+
+    # \big( to \Bigg(: a delimiter grown to a hidden, zero-width bar of TeX's size, alone.
+    sizes = []
+    for command in (r"\big", r"\Big", r"\bigg", r"\Bigg"):
+        written = omml(command + "( x " + command + ")", size=20.0)
+        assert written.count("<m:d>") == 2 and '<m:endChr m:val=""/>' in written
+        assert '<m:begChr m:val=""/><m:endChr m:val=")"/>' in written
+        assert '<m:show m:val="0"/><m:zeroWid m:val="1"/>' in written
+        sizes.append(int(re.search(r'sz="(\d+)"[^>]*>(?:(?!</m:r>).)*<m:t>\|</m:t>', written).group(1)))
+    assert sizes == sorted(sizes) and sizes[0] > 2000
+    # amsmath's \pmod: an em from what it follows in display, 8mu (a three-per-em space) in words.
+    assert "\u2003" in omml(r"a \equiv b \pmod{n}", size=20.0, display=True)
+    inline = omml(r"a \equiv b \pmod{n}", size=20.0)
+    assert "\u2004" in inline and "\u2003" not in inline
+
+
+def test_a_formula_with_rules_stays_drawn_in_the_powerpoint(tmp_path: Path) -> None:
+    from flexo_talk.omml import expressible
+
+    ruled = r"\left[\begin{array}{cc|c} 1 & 0 & b_1 \\ \hline 0 & 0 & 1 \end{array}\right]"
+    assert not expressible(ruled) and not expressible(r"x^{\begin{array}{c} a \\ \hline b \end{array}}")
+    assert expressible(r"\begin{pmatrix} a & b \end{pmatrix}") and expressible(r"\frac{1}{2}")
+    # Office Math has no rules in a matrix: the formula keeps its drawing, a picture for
+    # every slide program, rather than becoming an equation without them.
+    deck = Deck("ruled")
+    slide = deck.slide("Rules")
+    slide.math(ruled).math(r"\frac{a}{b}")
+    slide.text(r"Inline $\begin{array}{c|c} a & b \end{array}$ too.")
+    slide.bullets(r"A list $\begin{array}{c} a \\ \hline b \end{array}$", "and more")
+    deck.slide("Table").table([["what", "value"], ["ruled", r"$\begin{array}{c|c} a & b \end{array}$"]])
+    first, second = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)
+    assert first.count("<mc:AlternateContent") == 1 and first.count("<a14:m") == 1
+    assert "<a:custGeom>" in first  # the ruled ones, drawn
+    assert "AlternateContent" not in second and "<a:tbl>" in second
 
 
 def test_the_powerpoint_has_editable_equations_and_the_drawing_for_other_programs(tmp_path: Path) -> None:
