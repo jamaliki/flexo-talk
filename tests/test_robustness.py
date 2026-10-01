@@ -157,3 +157,30 @@ def test_the_command_line_says_every_failure_in_words(tmp_path: Path, capsys: py
     assert "slides[0].body[0] (figure): figs.py has no function nosuch" in capsys.readouterr().err
     with pytest.raises(SystemExit, match="no such file"):
         main(["build", str(tmp_path / "missing.yaml")])
+
+
+@pytest.mark.parametrize("theme", ["paper", "dark", "swiss", "bauhaus", "print", "archive", "rams", "midcentury"])
+def test_every_theme_gives_a_plot_six_colours_told_apart(theme: str) -> None:
+    from flexo.colour import hue_distance
+
+    colours = Deck("t", theme=theme).plot_style()["axes.prop_cycle"].by_key()["color"]
+    assert len(colours) == 6 and len(set(colours)) == 6
+    assert all(hue_distance(a, b) > 0.03 for index, a in enumerate(colours) for b in colours[index + 1:])
+
+
+def test_a_plot_and_a_code_panel_on_a_dark_slide_of_a_light_deck_take_the_slides_paints(tmp_path: Path) -> None:
+    import matplotlib.pyplot as plt
+
+    deck = Deck("bg")
+    with deck.plotting():
+        figure, axes = plt.subplots()
+        axes.bar([1, 2], [3, 4], yerr=[0.5, 0.5])
+        axes.set_title("Words")
+    slide = deck.slide("Dark", background="#1b2a41")
+    slide.plot(figure)
+    deck.slide("Code", background="#1b2a41").code("x = 1")
+    first, second = deck.render()
+    ink = deck.palette.get("ink").lower()
+    assert ink not in first.svg.lower() and "#000000" not in first.svg  # words light, error bars too
+    panel = deck.palette.get("tone-1-fill").lower()
+    assert panel not in second.svg.lower()

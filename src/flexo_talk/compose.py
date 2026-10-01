@@ -26,6 +26,7 @@ from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
 from flexo.lint import lint_compilation
 from flexo.render_common import render_runs
+from flexo.style import Palette
 from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, xml_document
 from flexo.svg_resources import embed_fonts
 from flexo.text import TextMeasurer
@@ -1366,9 +1367,21 @@ def _slide_palette(deck: Deck, slide: Slide):
         return palette
     light, deep = {"ink": "#f7f5f0", "muted-ink": "#d4d0c8"}, {"ink": "#1c1c1e", "muted-ink": "#55555a"}
     paints = light if dark else deep
+    backdrop = slide.backdrop or ""
+    if backdrop.startswith("#"):
+        paints["canvas"] = backdrop
     for role, colour in palette.paints.items():
-        # Accents drawn for the page read poorly on a backdrop of the other kind.
-        if role.startswith("tone-") and role.endswith("-stroke") and is_dark(colour) == dark:
+        if role in {"canvas", "ink", "muted-ink", "shadow"}:
+            continue
+        if role.endswith("-ink"):
+            paints[role] = paints["ink"]
+        elif role.endswith("-fill"):
+            # Tints (a code panel, a callout, a figure's boxes) for the page are glaring,
+            # or swallow light words, on a backdrop of the other kind: a quiet tint of it.
+            if is_dark(colour) != dark:
+                paints[role] = with_lightness(colour, 0.34 if dark else 0.94, 0.06)
+        elif is_dark(colour) == dark:
+            # Accents, strokes and connectors drawn for the page read poorly over it.
             paints[role] = with_lightness(colour, 0.78 if dark else 0.45, 0.14)
     return palette.with_overrides(paints)
 
@@ -1622,7 +1635,7 @@ def _place_figure(canvas: _Canvas, identifier: str, item: _Prepared, box: Box, s
 
     x = box.x + (box.width - item.width * scale) / 2.0 - item.left * scale
     y = box.y + (box.height - item.height * scale) / 2.0 - item.top * scale
-    _place_svg(canvas, identifier, item.svg, x, y, scale)
+    _place_svg(canvas, identifier, _slide_inks(item.svg, canvas.deck.palette, canvas.palette, black=False), x, y, scale)
     return box.height
 
 
@@ -1673,8 +1686,29 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
         svg = plot_svg(figure, width, height, family, identifier, maths=maths, said=said)
     for words, problem in said:
         canvas.say_maths(words, [problem])
-    _place_svg(canvas, identifier, svg, box.x, box.y, 1.0)
+    _place_svg(canvas, identifier, _slide_inks(svg, canvas.deck.palette, canvas.palette), box.x, box.y, 1.0)
     return height
+
+
+def _slide_inks(svg: str, deck: Palette, slide: Palette, *, black: bool = True) -> str:
+    """A plot or figure drawn in the deck's paints, put on a slide of its own (a dark
+    slide in a light deck, a light one in a dark deck): each paint the slide changes
+    (words, axes, tints, connectors) as the slide has it. On a dark slide, black
+    (matplotlib's error bars) is the slide's ink, unless ``black`` is False."""
+
+    from flexo.colour import is_dark
+
+    swaps: dict[str, str] = {}
+    for role in ("ink", "muted-ink", *deck.paints):
+        made, shown = deck.get(role).lower(), slide.get(role).lower()
+        if made != shown:
+            swaps.setdefault(made, shown)
+    if black and is_dark(slide.get("canvas")):
+        swaps.setdefault("#000000", slide.get("ink").lower())
+    if not swaps:
+        return svg
+    pattern = re.compile("|".join(re.escape(colour) for colour in swaps), re.IGNORECASE)
+    return pattern.sub(lambda match: swaps[match.group(0).lower()], svg)
 
 
 def plot_svg(
