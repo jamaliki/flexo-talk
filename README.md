@@ -224,7 +224,9 @@ table cell with maths in it, opens in PowerPoint's equation editor (in Cambria M
 PowerPoint's maths font). A program that does not read PowerPoint's equations is
 shown Flexo's drawing of it instead, which is in the file beside it (as the file
 format provides): formulas as shapes, over native lists and tables that leave room for
-them. `deck.build(..., editable_maths=False)` writes only the drawing, so PowerPoint
+them. A formula with rules in an array (`{c|c}`, `\hline`), which PowerPoint's
+equations cannot draw, keeps the drawing in PowerPoint too.
+`deck.build(..., editable_maths=False)` writes only the drawing, so PowerPoint
 shows the maths in the deck's own maths font as well.
 
 ## Plots
