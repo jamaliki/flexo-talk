@@ -869,3 +869,20 @@ def test_a_plots_words_longer_than_it_are_fitted_to_it_and_said() -> None:
     alpha = np.asarray(Image.open(io.BytesIO(rasterise(wider, dpi=72))).convert("RGBA"))[..., 3].copy()
     alpha[99:301, 99:401] = 0
     assert alpha.max() == 0
+
+
+def test_black_words_in_a_plot_read_on_a_dark_slide_as_black_lines_do() -> None:
+    import re
+
+    import matplotlib.pyplot as plt
+
+    deck = Deck("dark", theme="dark")
+    with deck.plotting():
+        figure, axes = plt.subplots()
+        axes.plot([0, 1], [0, 1], color="k")
+        axes.text(0.5, 0.2, "black words", color="k")
+    deck.slide("Black").plot(figure)
+    (slide,) = deck.render()
+    ink = deck.palette.get("ink").lower()
+    words = re.search(r"<text[^>]*>(?:(?!</text>).)*black words", slide.svg, re.DOTALL)
+    assert words is not None and ink in words.group(0).lower()
