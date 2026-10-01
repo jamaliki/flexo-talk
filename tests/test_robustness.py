@@ -138,12 +138,63 @@ def test_a_document_says_where_a_setting_is_wrong(tmp_path: Path) -> None:
             deck_from_document(document, tmp_path).render()
         return str(caught.value)
 
-    assert said({"deck": {"style": {"width": "wide"}}, "slides": []}).startswith("deck.style: width is 'wide'")
-    assert said({"slides": [{"shade": "dark"}]}).startswith("slides[0]: shade is 'dark'")
+    assert said({"deck": {"style": {"width": "wide"}}, "slides": []}).startswith("deck.style.width: width is 'wide'")
+    assert said({"slides": [{"shade": "dark"}]}).startswith("slides[0].shade: shade is 'dark'")
     assert said({"slides": [{"footnotes": {"a": 1}}]}).startswith("slides[0].footnotes:")
     assert said({"slides": [{"body": [{"text": "x", "align": "sideways"}]}]}).startswith("slides[0].body[0] (text)")
     built = deck_from_document({"deck": {"footer": None, "id": None}, "slides": [{"title": "x"}]}, tmp_path)
     assert built.id == "talk" and built.footer == ""
+
+
+@pytest.mark.parametrize(
+    ("document", "said"),
+    [
+        ({"deck": {"palette": 123}}, "deck.palette: palette is 123"),
+        ({"deck": {"palette": "nosuch"}}, 'deck.palette: Unknown palette "nosuch"'),
+        ({"deck": {"font": 123}}, "deck.font: font is 123"),
+        ({"deck": {"look": ["band"]}}, "deck.look: look is ['band']"),
+        ({"deck": {"sketch": "very"}}, "deck.sketch: sketch is 'very'"),
+        ({"deck": {"conventions": "straight"}}, "deck.conventions: conventions is 'straight'"),
+        ({"deck": {"conventions": {"nosuch": 1}}}, "deck.conventions: unknown convention nosuch"),
+        ({"deck": {"background": 5}}, "deck.background: background is 5"),
+        ({"deck": {"background": "#zzzzzz"}}, "deck.background: background is '#zzzzzz'"),
+        ({"deck": {"footer": ["a"]}}, "deck.footer: footer is ['a']"),
+        ({"deck": {"style": {"title_role": "accent"}}}, "deck.style.title_role: title_role is 'accent'"),
+        ({"slides": [{"title": True}]}, "slides[0].title: title is words, not yes/no (true)"),
+        ({"slides": [{"layout": "two-columns", "split": "half"}]}, "slides[0].split: split is 'half'"),
+        ({"slides": [{"background": 5}]}, "slides[0].background: background is 5"),
+        ({"slides": [{"footnotes": [True]}]}, "slides[0].footnotes: footnotes are words"),
+        ({"slides": [{"body": [{"text": "a", "colour": "red"}]}]}, "(text): colour is 'red'"),
+        ({"slides": [{"body": [{"text": True}]}]}, "(text): text is words"),
+        ({"slides": [{"body": [{"table": [[{"a": 1}, [1, 2]]]}]}]}, "(table): a table's cell is {'a': 1}"),
+        ({"slides": [{"body": [{"table": [["a"]], "align": "zzz"}]}]}, "(table): align is 'zzz'"),
+        ({"slides": [{"body": [{"stats": [{"value": 1, "label": ["a"]}]}]}]}, "(stats): a stat's label is ['a']"),
+        ({"slides": [{"body": [{"stats": [[1, {"a": 1}]]}]}]}, "(stats): a stat's label is {'a': 1}"),
+        ({"slides": [{"body": [{"callout": "c", "colour": "accent12"}]}]}, "(callout): a callout's colour"),
+    ],
+)
+def test_a_wrong_value_in_a_document_is_said_at_its_key_not_drawn(tmp_path: Path, document: dict, said: str) -> None:
+    with pytest.raises(DeckDocumentError) as caught:
+        deck_from_document({"deck": {}, "slides": [], **document}, tmp_path)
+    assert said in str(caught.value)
+
+
+def test_a_caption_is_words_not_what_python_writes_for_a_list(tmp_path: Path) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (8, 8)).save(tmp_path / "p.png")
+    gallery = {"gallery": [{"picture": "p.png", "caption": ["a"]}]}
+    with pytest.raises(DeckDocumentError, match=r"\(gallery\): a caption is \['a'\]"):
+        deck_from_document({"deck": {}, "slides": [{"body": [gallery]}]}, tmp_path)
+
+
+def test_the_studio_says_a_deck_setting_wrong_at_the_deck_not_on_its_first_slide(tmp_path: Path) -> None:
+    from flexo_talk.studio import DeckKind
+
+    for deck in ({"sketch": "very"}, {"palette": "nosuch"}, {"style": {"title_role": "nosuch"}}):
+        drawing = DeckKind().draw({"deck": deck, "slides": [{"title": "a"}, {"title": "b"}]}, tmp_path)
+        (message,) = [message for message in drawing.messages if message.severity == "error"]
+        assert message.where.startswith("deck.") and not message.page
 
 
 def test_the_command_line_says_every_failure_in_words(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:

@@ -65,11 +65,11 @@ from flexo.diagnostics import described
 
 from flexo_talk.deck import (
     LAYOUTS,
-    LOOKS,
     Deck,
     DeckStyle,
     Reference,
     Region,
+    SettingError,
     Slide,
     _Figure,
     _Plot,
@@ -325,9 +325,6 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
     if not isinstance(data, dict):
         raise DeckDocumentError("deck", "deck is a mapping of the deck's settings")
     _only(data, DECK_KEYS, "deck")
-    look = data.get("look")
-    if look is not None and look not in LOOKS:
-        raise DeckDocumentError("deck.look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
     changes = data.get("style") or {}
     if not isinstance(changes, dict):
         raise DeckDocumentError("deck.style", "style is a mapping of DeckStyle fields")
@@ -335,16 +332,16 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
     try:
         theme = data.get("theme", "paper")
         if isinstance(theme, str) and theme.lower().endswith((".yaml", ".yml", ".json")):
-            theme = str(_file(base, theme))
+            theme = str(_file(base, theme, "deck.theme"))
         palette = data.get("palette", "default")
         if isinstance(palette, str) and palette.lower().endswith((".yaml", ".yml", ".json")):
-            palette = str(_file(base, palette))
+            palette = str(_file(base, palette, "deck.palette"))
         background = data.get("background", True)
         if isinstance(background, str) and background and not background.startswith("#"):
             # A picture behind every slide is found beside the document, as a slide's is.
             background = str(_file(base, background, "deck.background"))
         deck = Deck(
-            str(data.get("id") if data.get("id") is not None else "talk"),
+            data.get("id") if data.get("id") is not None else "talk",
             theme=theme,
             palette=palette,
             font=data.get("font"),
@@ -353,16 +350,18 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
             conventions=data.get("conventions"),
             sketch=data.get("sketch"),
             background=background,
-            footer=str(data.get("footer") if data.get("footer") is not None else ""),
-            look=look,
+            footer=data.get("footer"),
+            look=data.get("look"),
         )
         # The document's proportions are changes to what the look and theme set.
         try:
             deck.style = replace(deck.style, **changes)
         except (TypeError, ValueError) as error:
-            raise DeckDocumentError("deck.style", str(error)) from None
+            raise DeckDocumentError(_at("deck.style", changes, error), str(error)) from None
     except DeckDocumentError:
         raise
+    except SettingError as error:
+        raise DeckDocumentError(_at("deck", data, error), str(error)) from None
     except Exception as error:
         raise DeckDocumentError("deck", str(error)) from error
     deck.source = {**deck.source, **{key: value for key, value in data.items() if key != "style"}}
@@ -388,13 +387,13 @@ def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
     except DeckDocumentError:
         raise
     except (ValueError, TypeError) as error:
-        raise DeckDocumentError(where, str(error)) from None
+        raise DeckDocumentError(_at(where, data, error), str(error)) from None
     if data.get("notes"):
         slide.notes(text("notes"))
     footnotes = data.get("footnotes") or []
     if isinstance(footnotes, str | int | float):
         footnotes = [footnotes]
-    if not isinstance(footnotes, list) or not all(isinstance(note, str | int | float) for note in footnotes):
+    if not isinstance(footnotes, list) or not all(_is_words(note) for note in footnotes):
         raise DeckDocumentError(f"{where}.footnotes", "footnotes are words, or a list of them")
     for note in footnotes:
         slide.footnote(str(note))
@@ -402,6 +401,19 @@ def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
     if layout == "columns":
         slide.source.pop("columns", None)
     return slide
+
+
+def _at(where: str, data: dict[str, Any], error: Exception) -> str:
+    """Where a setting's error is: at its key, when the error names one this mapping has."""
+
+    key = getattr(error, "key", None)
+    return f"{where}.{key}" if isinstance(error, SettingError) and key in data else where
+
+
+def _is_words(value: object) -> bool:
+    """Words, or a number written as words; never yes/no, which YAML reads as true/false."""
+
+    return isinstance(value, str | int | float) and not isinstance(value, bool)
 
 
 def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object, shade: object,
@@ -459,7 +471,7 @@ def _text_of(data: dict[str, Any], where: str) -> Callable[[str], str]:
         value = data.get(key)
         if value is None:
             return ""
-        if isinstance(value, dict | list):
+        if not _is_words(value):
             raise DeckDocumentError(f"{where}.{key}", f"{key} is words, not {described(value)}")
         return str(value)
 
@@ -492,11 +504,11 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
                 options["colour"] = "muted"
             region.math(value, **{"align": "middle", **options})
         elif kind == "math":
-            if not isinstance(value, str | int | float) or not str(value).strip():
+            if not _is_words(value) or not str(value).strip():
                 raise DeckDocumentError(here, "math is an equation in LaTeX, as math: E = mc^2")
             region.math(str(value), **options)
         elif kind in {"text", "code", "quote", "callout"}:
-            if not isinstance(value, str | int | float):
+            if not _is_words(value):
                 raise DeckDocumentError(here, f"{kind} is words")
             getattr(region, kind)(str(value), **options)
         elif kind == "image":
@@ -528,7 +540,7 @@ def _check_items(items: list, where: str) -> None:
     for item in items:
         if isinstance(item, list):
             _check_items(item, where)
-        elif not isinstance(item, str | int | float):
+        elif not _is_words(item):
             raise DeckDocumentError(where, "bullets are words, and nested lists of words for the level below")
 
 
@@ -537,16 +549,19 @@ def _picture(base: Path, item: object, where: str) -> str | tuple[str, str]:
         return str(_file(base, item, where))
     if isinstance(item, dict) and "picture" in item:
         _only(item, ("picture", "caption"), where)
-        return str(_file(base, str(item["picture"]), where)), str(item.get("caption") or "")
+        caption = item.get("caption")
+        return str(_file(base, str(item["picture"]), where)), "" if caption is None else caption
     raise DeckDocumentError(where, "a gallery picture is a file, or a mapping with picture and caption")
 
 
 def _stat(item: object, where: str) -> tuple[object, str]:
+    # The value and label are checked as words where they are set, not written as Python writes them.
     if isinstance(item, dict) and "value" in item:
         _only(item, ("value", "label"), where)
-        return item["value"], str(item.get("label") or "")
+        label = item.get("label")
+        return item["value"], "" if label is None else label
     if isinstance(item, list) and len(item) == 2:
-        return item[0], str(item[1])
+        return item[0], "" if item[1] is None else item[1]
     raise DeckDocumentError(where, "each of stats is {value, label}")
 
 

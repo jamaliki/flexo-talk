@@ -45,6 +45,15 @@ LAYOUTS: tuple[str, ...] = (
 )
 
 
+class SettingError(ValueError):
+    """A setting that cannot be what it was given. ``key`` names the setting, so a deck
+    document can say where it is wrong (``slides[2].split``, ``deck.palette``)."""
+
+    def __init__(self, key: str, message: str) -> None:
+        super().__init__(message)
+        self.key = key
+
+
 @dataclass(frozen=True, slots=True)
 class DeckStyle:
     """The proportions of a deck's slides; the look comes from the flexo theme.
@@ -104,23 +113,26 @@ class DeckStyle:
         for name, (low, high) in _STYLE_NUMBERS.items():
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-                raise ValueError(f"{name} is {value!r}: it is a number from {_said(low)} to {_said(high)}")
+                raise SettingError(name, f"{name} is {value!r}: it is a number from {_said(low)} to {_said(high)}")
             if not low <= value <= high:
-                raise ValueError(f"{name} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+                raise SettingError(name, f"{name} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
         if self.margin * 2 >= min(self.width, self.height):
-            raise ValueError(f"a margin of {_said(self.margin)} leaves no room on a "
-                             f"{_said(self.width)} by {_said(self.height)} slide")
+            raise SettingError("margin", f"a margin of {_said(self.margin)} leaves no room on a "
+                                         f"{_said(self.width)} by {_said(self.height)} slide")
         for name, allowed in _STYLE_CHOICES.items():
             if getattr(self, name) not in allowed:
-                raise ValueError(f"{name} is {getattr(self, name)!r}: it is one of {', '.join(allowed)}")
+                raise SettingError(name, f"{name} is {getattr(self, name)!r}: it is one of {', '.join(allowed)}")
         for name in ("edge", "numbers"):
             if not isinstance(getattr(self, name), bool):
-                raise ValueError(f"{name} is {getattr(self, name)!r}: it is true or false")
+                raise SettingError(name, f"{name} is {getattr(self, name)!r}: it is true or false")
         weight = self.title_weight
         if weight is not None and (isinstance(weight, bool) or not isinstance(weight, int) or not 1 <= weight <= 1000):
-            raise ValueError(f"title_weight is {weight!r}: it is a font weight from 100 to 900, such as 700")
-        if not isinstance(self.title_role, str):
-            raise ValueError(f"title_role is {self.title_role!r}: it names a palette role, such as ink")
+            raise SettingError("title_weight", f"title_weight is {weight!r}: it is a font weight from 100 to 900, "
+                                               "such as 700")
+        if not isinstance(self.title_role, str) or self.title_role not in _roles():
+            # A role no palette has would paint every title black.
+            raise SettingError("title_role", f"title_role is {self.title_role!r}: it names a palette role, "
+                                             "such as ink, muted-ink or tone-1-stroke")
 
     @classmethod
     def look(cls, name: str, **changes: object) -> DeckStyle:
@@ -191,9 +203,9 @@ def _number(value: object, what: str, low: float, high: float, example: str) -> 
     import math
 
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-        raise ValueError(f"{what} is {value!r}: it is a number, such as {example}")
+        raise SettingError(what, f"{what} is {value!r}: it is a number, such as {example}")
     if not low <= value <= high:
-        raise ValueError(f"{what} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+        raise SettingError(what, f"{what} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
     return float(value)
 
 
@@ -205,7 +217,7 @@ def _size(value: object, what: str = "size") -> float | None:
 
 def _flag(value: object, what: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f"{what} is {value!r}: it is true or false")
+        raise SettingError(what, f"{what} is {value!r}: it is true or false")
     return value
 
 
@@ -213,7 +225,7 @@ def _choice(value: object, what: str, allowed: tuple[str, ...]) -> str:
     # "centre" is what a British hand writes for "middle".
     value = {"centre": "middle", "center": "middle"}.get(value, value) if isinstance(value, str) else value
     if value not in allowed:
-        raise ValueError(f"{what} is {value!r}: it is one of {', '.join(allowed)}")
+        raise SettingError(what, f"{what} is {value!r}: it is one of {', '.join(allowed)}")
     return value
 
 
@@ -221,7 +233,7 @@ def _words(value: object, what: str) -> str:
     """Words: a string, or a number written as one; never a list, mapping or nothing."""
 
     if isinstance(value, bool) or not isinstance(value, str | int | float):
-        raise ValueError(f"{what} is {value!r}: it is words")
+        raise SettingError(what, f"{what} is {value!r}: it is words")
     return str(value)
 
 
@@ -231,10 +243,34 @@ def _colour(value: object, what: str = "colour") -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{what} is {value!r}: it is a palette role (accent, muted) or a #rrggbb colour")
+        raise SettingError(what, f"{what} is {value!r}: it is a palette role (accent, muted) or a #rrggbb colour")
     if value.startswith("#") and not re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", value):
-        raise ValueError(f"{what} is {value!r}: a colour is written #rgb or #rrggbb, in hex digits")
+        raise SettingError(what, f"{what} is {value!r}: a colour is written #rgb or #rrggbb, in hex digits")
+    if not value.startswith("#") and paint_role(value) not in _roles():
+        # A role no palette has would be painted black, whatever the theme.
+        raise SettingError(what, f"{what} is {value!r}: it is accent (accent2, ...), muted, ink, or a #rrggbb colour")
     return value
+
+
+def paint_role(colour: str) -> str:
+    """The palette role a block's colour names: ``accent`` (``accent2``...) is a tone's
+    stroke, ``muted`` the muted ink, and a role is itself."""
+
+    if colour.startswith("accent"):
+        return f"tone-{colour[6:] or 1}-stroke"
+    return {"muted": "muted-ink"}.get(colour, colour)
+
+
+_ROLES: set[str] = set()
+
+
+def _roles() -> set[str]:
+    """The roles a palette paints: every theme's and palette's are the same."""
+
+    if not _ROLES:
+        palette = with_tone_roles(resolve_palette("paper", "default"))
+        _ROLES.update(palette.paints, (alias for alias, _ in palette.aliases))
+    return _ROLES
 
 
 LOOKS: dict[str, dict[str, object]] = {
@@ -378,12 +414,64 @@ def _check_theme(theme: object) -> None:
 
     if isinstance(theme, Path) or (isinstance(theme, str) and theme.lower().endswith((".yaml", ".yml", ".json"))):
         if not Path(theme).is_file():
-            raise ValueError(f"theme {str(theme)!r}: no such theme file")
+            raise SettingError("theme", f"theme {str(theme)!r}: no such theme file")
         return
     if not isinstance(theme, str):
-        raise ValueError(f"theme is {theme!r}: it names a theme ({', '.join(theme_names())}) or a theme file")
+        raise SettingError("theme", f"theme is {theme!r}: it names a theme ({', '.join(theme_names())}) "
+                                    "or a theme file")
     if theme not in theme_names():
-        raise ValueError(f'unknown theme "{theme}"; themes are {", ".join(theme_names())}, or a theme file')
+        raise SettingError("theme", f'unknown theme "{theme}"; themes are {", ".join(theme_names())}, or a theme file')
+
+
+def _check_settings(settings: dict[str, object]) -> None:
+    """A deck's other settings, each said in words under its own name before anything is
+    drawn: a wrong one would otherwise fail every slide, or be drawn as Python writes it."""
+
+    from flexo.conventions import parse_conventions
+    from flexo.sketch import Sketch, parse_sketch
+
+    def wrong(key: str, said: str) -> SettingError:
+        return SettingError(key, f"{key} is {settings[key]!r}: {said}")
+
+    for key in ("font", "title_font", "figure_font"):
+        if settings[key] is not None and not isinstance(settings[key], str):
+            raise wrong(key, "it names a font family, such as IBM Plex Sans")
+    palette = settings["palette"]
+    if not isinstance(palette, str | Path) and not (
+        isinstance(palette, list | tuple) and palette and all(isinstance(colour, str) for colour in palette)
+    ):
+        raise wrong("palette", "it names a palette, or lists #rrggbb colours")
+    look = settings["look"]
+    if look is not None and not isinstance(look, str):
+        raise wrong("look", f"it is one of {', '.join(LOOKS)}")
+    if look is not None and look not in LOOKS:
+        raise SettingError("look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+    background = settings["background"]
+    if not isinstance(background, bool | str | Path):
+        raise wrong("background", "it is true (the theme's page), false, a #rrggbb colour, or a picture file")
+    if isinstance(background, str) and background.startswith("#"):
+        _colour(background, "background")
+    for key in ("id", "footer"):
+        if settings[key] is not None:
+            _words(settings[key], key)
+    conventions, sketch = settings["conventions"], settings["sketch"]
+    if conventions is not None and not isinstance(conventions, dict):
+        raise wrong("conventions", "it is a mapping of flexo's conventions, such as {lines: straight}")
+    if sketch is not None and not isinstance(sketch, bool | dict | Sketch):
+        raise wrong("sketch", "it is true (a hand-drawn look), or a mapping of roughness, passes, fill, paper, seed")
+    for key, parse in (("conventions", parse_conventions), ("sketch", parse_sketch)):
+        try:
+            parse(settings[key])  # type: ignore[operator]
+        except (TypeError, ValueError) as error:
+            raise SettingError(key, str(error)) from None
+
+
+def _flexo_said(error: Exception) -> str:
+    """A flexo error's words, with its hint, on one line."""
+
+    return " ".join(
+        " ".join(filter(None, (item.message, item.hint))) for item in getattr(error, "diagnostics", ())
+    ) or str(error)
 
 
 def made(value: object) -> object:
@@ -686,8 +774,7 @@ class Region:
         ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words."""
 
         words, title, size = _words(words, "callout"), _words(title, "title"), _size(size)
-        tones = {"", *map(str, range(1, 13))}
-        if not (isinstance(colour, str) and colour.startswith("accent") and colour[6:] in tones):
+        if not (isinstance(colour, str) and colour.startswith("accent") and paint_role(colour) in _roles()):
             raise ValueError(f'a callout\'s colour is "accent", "accent2", ... not "{colour}"')
         self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
         self._record(
@@ -747,15 +834,18 @@ class Region:
         if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
             raise ValueError("a table is a list of rows, each a list of cells")
         header, size = _flag(header, "header"), _size(size)
-        cells = [[inline("" if cell is None else str(cell)) for cell in row] for row in rows]
+        cells = [[inline("" if cell is None else _words(cell, "a table's cell")) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
         ragged = len({len(row) for row in cells}) > 1
         cells = [row + [()] * (columns - len(row)) for row in cells]
         names = {"l": "start", "c": "middle", "r": "end"}
         if isinstance(align, str) and align and all(ch in names for ch in align):
             aligned = tuple(names[ch] for ch in align)
-        elif isinstance(align, str):
+        elif align == "":
             aligned = ()
+        elif isinstance(align, str):
+            raise SettingError("align", f"align is {align!r}: it is a letter for each column (l, c or r), "
+                                        "or a list of start, middle and end")
         else:
             aligned = tuple(_choice(item, "a column's align", ("start", "middle", "end")) for item in align)
         if len(aligned) != columns:
@@ -849,6 +939,8 @@ class Slide:
             dark = _flag(dark, "dark")
         if widths is not None:
             widths = [_number(share, "a column's width", 0.01, 100.0, "1 (shares of the width)") for share in widths]
+        if background is not None and not isinstance(background, str | Path):
+            raise SettingError("background", f"background is {background!r}: it is a #rrggbb colour or a picture file")
         if isinstance(background, str) and background.startswith("#"):
             _colour(background, "background")
         self.deck = deck
@@ -871,7 +963,7 @@ class Slide:
         self.dark = dark
         """Whether the slide's words are light; decided from the background when unset."""
         if align not in {None, "auto", "top", "middle"}:
-            raise ValueError(f'align is "auto", "top", or "middle", not "{align}"')
+            raise SettingError("align", f'align is "auto", "top", or "middle", not "{align}"')
         self.align = align
         """Where the content sits in the body; the deck style's ``align`` when unset."""
         self.byline_runs: tuple[TextRun, ...] = ()
@@ -1085,7 +1177,14 @@ class Deck:
         # A theme file is read now, by the Figure machinery that knows how, and
         # what it says about slides fills in what the deck leaves unsaid.
         _check_theme(theme)
-        probe = flexo.Figure("probe", theme=theme, palette=palette)
+        _check_settings({
+            "id": id, "palette": palette, "font": font, "title_font": title_font, "figure_font": figure_font,
+            "look": look, "background": background, "footer": footer, "conventions": conventions, "sketch": sketch,
+        })
+        try:
+            probe = flexo.Figure("probe", theme=theme, palette=palette)
+        except (TypeError, ValueError) as error:
+            raise SettingError("palette", str(error)) from None
         slides = theme_slides(theme)
         own_look = look
         look = look if look is not None else slides.get("look")  # type: ignore[assignment]
@@ -1097,6 +1196,13 @@ class Deck:
         self.id = id
         self.theme = probe.style
         self.palette_name = probe.palette
+        from flexo.diagnostics import FlexoError
+
+        try:
+            # A palette named but not known is said now, not on every slide.
+            resolve_palette(self.theme, self.palette_name)
+        except FlexoError as error:
+            raise SettingError("palette", _flexo_said(error)) from None
         self.font = font
         """The family of the slides' words and figures; the theme's when unset."""
         self.title_font = title_font
@@ -1105,17 +1211,20 @@ class Deck:
         """The family of the figures' words; ``font`` when unset."""
         from flexo.fonts import require_family
 
-        for family in (font, title_font, figure_font):
+        for key, family in (("font", font), ("title_font", title_font), ("figure_font", figure_font)):
             if family:
-                require_family(family)
+                try:
+                    require_family(family)
+                except FlexoError as error:
+                    raise SettingError(key, _flexo_said(error)) from None
         self.conventions = conventions
         self.sketch = sketch
         self.background = background
         """The page every slide is drawn on: the theme's page colour (``True``), a colour,
         a picture that fills each slide (a paper texture), or nothing (``False``)."""
-        self.footer = footer
+        self.footer = "" if footer is None else str(footer)
         if look is not None and look not in LOOKS:
-            raise ValueError(f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+            raise SettingError("look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
         # The theme's proportions, and the look: the deck's own look over the
         # theme's style, the theme's style over a look the theme chose.
         theme_style = slides.get("style") or {}
@@ -1170,7 +1279,7 @@ class Deck:
 
         split = _number(split, "split", 0.15, 0.85, "0.5 (the left column's share of the width)")
         if isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= 12:
-            raise ValueError(f"columns is {columns!r}: it is a whole number from 1 to 12")
+            raise SettingError("columns", f"columns is {columns!r}: it is a whole number from 1 to 12")
         made = Slide(
             self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
             background, shade, dark, align,
