@@ -71,6 +71,10 @@ class Box:
         return self.y + self.height
 
 
+MOST_CHARACTERS = 20_000
+"""The most characters one passage of words is set with (a page of a paper is ~3,000)."""
+
+
 class _Canvas:
     """The slide's SVG under construction, and what writers need beside it."""
 
@@ -120,6 +124,8 @@ class _Canvas:
         self.lists: list[ListLayout] = []
         self.worded: list[WordsLayout] = []
         self.diagnostics: list[str] = []
+        self.lost: set[str] = set()
+        """Characters no font here draws, left out of the slide's drawing."""
         self.tables: list[TableLayout] = []
         self.notes: list[str] = []
         self.held: list[str] = []
@@ -151,10 +157,56 @@ class _Canvas:
                 from flexo.texmath import problems_in
 
                 self.say_maths(run.math, problems_in(run.math))
+        runs = self._drawable(runs, typography)
         # A word wider than the slide (a URL) breaks rather than running off it.
         return TextMeasurer(typography).measure(
             runs, max_width=width, weight=weight, balance=balance, break_words=True
         )
+
+    def _drawable(self, runs: tuple[TextRun, ...], typography: object) -> tuple[TextRun, ...]:
+        """The runs with what no font here draws (emoji, pictographs) left out, and said
+        once for the slide; the PowerPoint keeps them, for its own fonts to draw."""
+
+        from flexo.text import font_stack
+
+        stack = font_stack(typography)
+        lost: set[str] = set()
+        kept: list[TextRun] = []
+        total = sum(len(run.text) for run in runs)
+        if total > MOST_CHARACTERS:
+            # More than any slide holds (a pasted file): cut, so it is drawn (and said) at once.
+            said = (f"{self.slide.id}: words of {total:,} characters cut to {MOST_CHARACTERS:,} -- "
+                    "more than a slide can show")
+            if said not in self.diagnostics:
+                self.diagnostics.append(said)
+            cut, left = [], MOST_CHARACTERS
+            for run in runs:
+                if left <= 0:
+                    break
+                cut.append(replace(run, text=run.text[:left]))
+                left -= len(run.text)
+            runs = tuple(cut)
+        for run in runs:
+            missing = set() if run.math else stack.missing(run.text, run.italic)
+            if missing and stack.adopt(missing):
+                missing = stack.missing(run.text, run.italic)
+            if missing:
+                lost |= missing
+                run = replace(run, text="".join(ch for ch in run.text if ch not in missing))
+            kept.append(run)
+        if lost - self.lost:
+            # One line for the slide, however many of its words lost something.
+            before = self._lost_said()
+            self.lost |= lost
+            if before in self.diagnostics:
+                self.diagnostics[self.diagnostics.index(before)] = self._lost_said()
+            else:
+                self.diagnostics.append(self._lost_said())
+        return tuple(kept)
+
+    def _lost_said(self) -> str:
+        return (f"{self.slide.id}: no font here draws {' '.join(sorted(self.lost))} -- left out of "
+                "the slide's drawing (emoji are not drawn: a picture can show one)")
 
     def say_maths(self, source: str, problems: tuple[str, ...] | list[str]) -> None:
         """What could not be read in a formula, said once for the slide."""
@@ -1361,7 +1413,7 @@ def _list_layout(canvas: _Canvas, block: _Bullets, box: Box) -> ListLayout:
     )
     if block.numbered:
         count = sum(level == 0 for level, _ in block.items)
-        widest = max(canvas.measure((TextRun(f"{n}."),), size, None).width for n in range(1, count + 1))
+        widest = max(canvas.measure((TextRun(f"{n}."),), size, None).width for n in range(1, max(count, 1) + 1))
         layout.number_room = widest + size * 0.45
     return layout
 

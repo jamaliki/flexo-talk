@@ -29,6 +29,16 @@ from flexo_talk.pptx import editable_maths as editable_maths_of
 FORMATS = ("pptx", "pdf", "svg", "png")
 
 
+def file_stem(identifier: object) -> str:
+    """A deck's id as the name of its files: its own words, with nothing that would take
+    them out of the folder they are written to (a slash, a leading dot) -- or "deck"."""
+
+    import re
+
+    words = re.sub(r"[\\/:\x00-\x1f]+", "-", str(identifier or "")).strip(" .-")
+    return words or "deck"
+
+
 def build_deck(
     deck: Deck, directory: Path, formats: tuple[str, ...], *, handout: bool = False, editable_maths: bool = True
 ) -> DeckBuild:
@@ -37,11 +47,12 @@ def build_deck(
         raise ValueError(f"unknown format(s) {', '.join(sorted(unknown))}; use {', '.join(FORMATS)}")
     directory.mkdir(parents=True, exist_ok=True)
     rendered = deck.render()
+    name = file_stem(deck.id)
     diagnostics = [message for item in rendered for message in item.diagnostics]
     svgs: list[Path] = []
     pngs: list[Path] = []
     for item in rendered:
-        stem = f"{deck.id}-{item.slide.index:02d}"
+        stem = f"{name}-{item.slide.index:02d}"
         if "svg" in formats:
             path = directory / f"{stem}.svg"
             path.write_text(item.svg, encoding="utf-8")
@@ -59,10 +70,10 @@ def build_deck(
             for item in rendered
             for page in ([item.svg] if handout else [item.at_step(step) for step in range(1, item.steps + 1)])
         ]
-        pdf = write_pdf(pages, directory / f"{deck.id}.pdf", title=deck.id)
+        pdf = write_pdf(pages, directory / f"{name}.pdf", title=str(deck.id or name))
     pptx = None
     if "pptx" in formats:
-        pptx = directory / f"{deck.id}.pptx"
+        pptx = directory / f"{name}.pptx"
         write_pptx(deck, rendered, pptx, editable_maths=editable_maths)
     notes = tuple(note for item in rendered for note in item.notes)
     return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics), notes)
@@ -109,8 +120,10 @@ def write_pptx(
                 shape_id = add_list(
                     slide.shapes._spTree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths
                 )
-                if layout.reveal:
-                    outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
+                outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
+                if layout.reveal and outer:
+                    # Each outer item appears with the items under it; any before the first
+                    # are there from the start, as in the PDF.
                     ends = [*outer[1:], len(layout.items)]
                     ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
                     reveals.append((shape_id, ranges))
