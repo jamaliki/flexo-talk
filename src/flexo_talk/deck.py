@@ -131,6 +131,37 @@ class DeckStyle:
         return cls(**{**LOOKS[name], **changes})  # type: ignore[arg-type]
 
 
+OKABE_ITO = ("#E69F00", "#56B4E9", "#009E73", "#D55E00", "#0072B2", "#CC79A7")
+"""Hues told apart by every eye (Okabe and Ito's), for a plot's series when a theme's
+own tones are too few to tell apart."""
+
+
+def data_colours(palette: Palette, dark: bool) -> list[str]:
+    """Six colours for a plot's series, set to one lightness so they read as a set: the
+    theme's tones, each kept only if it can be told from those before it, then Okabe and
+    Ito's hues. A theme of greys (swiss, print) leads with its ink."""
+
+    from flexo.colour import chroma, hue_distance, with_lightness
+
+    lightness = 0.74 if dark else 0.58
+    tones = [palette.get(f"tone-{index}-stroke") for index in range(1, 7)]
+    first = tones[0]
+    colours = [palette.get("ink") if chroma(first) < 0.03 else with_lightness(first, lightness, 0.16)]
+    for candidate in [*tones[1:], *OKABE_ITO]:
+        if len(colours) == 6:
+            break
+        if chroma(candidate) < 0.03:
+            continue
+        shown = with_lightness(candidate, lightness, 0.16)
+        if all(hue_distance(shown, other) > 0.05 for other in colours):
+            colours.append(shown)
+    for candidate in OKABE_ITO:  # six, however near the theme's own hues they come
+        shown = with_lightness(candidate, lightness, 0.16)
+        if len(colours) < 6 and shown not in colours:
+            colours.append(shown)
+    return colours
+
+
 _STYLE_NUMBERS: dict[str, tuple[float, float]] = {
     # PowerPoint's slides are 1 to 56 inches each way.
     "width": (72.0, 4032.0), "height": (72.0, 4032.0), "margin": (0.0, 2016.0),
@@ -1162,12 +1193,11 @@ class Deck:
         size, its inks, and the palette's tones as the colour cycle."""
 
         from cycler import cycler
-        from flexo.colour import is_dark, with_lightness
+        from flexo.colour import is_dark
 
         palette = self.palette
         dark = is_dark(palette.get("canvas"))
-        tones = [palette.get(f"tone-{index}-stroke") for index in range(1, 7)]
-        colours = [with_lightness(tone, 0.74 if dark else 0.58, 0.16) for tone in tones]
+        colours = data_colours(palette, dark)
         ink, muted = palette.get("ink"), palette.get("muted-ink")
         family = self.layout_style.typography.family
         # Plot words sit a little above figure labels: tick labels are read from afar.
