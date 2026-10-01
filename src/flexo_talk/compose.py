@@ -2089,6 +2089,10 @@ def _slide_inks(svg: str, deck: Palette, slide: Palette, *, black: bool = True) 
     swaps = _ink_swaps(deck, slide, black=black)
     if not swaps:
         return svg
+    if "#000000" in swaps:
+        # matplotlib writes no fill on black words (black is what SVG draws without
+        # one): they are black all the same, and take the slide's ink as black does.
+        svg = re.sub(r"<text\b(?![^>]*\bfill)", f'<text fill="{swaps["#000000"]}"', svg)
     kept = rf'(<g id="{_ON_CELL}-\d+">.*?</g>)|'
     pattern = re.compile(kept + "|".join(re.escape(colour) for colour in swaps), re.IGNORECASE | re.DOTALL)
     return pattern.sub(lambda match: match.group(1) or swaps[match.group(0).lower()], svg)
