@@ -486,3 +486,12 @@ def test_the_powerpoint_names_faces_in_english_and_tags_runs_by_script() -> None
         assert _legacy_family(face.source, face.index) == "Geeza Pro"
     tags = [_lang(text) for text in ("hello", "گفتگو", "日本語のテキスト", "한국어")]
     assert tags == ["en-GB", "fa-IR", "ja-JP", "ko-KR"]
+
+
+def test_a_list_far_longer_than_any_slide_is_cut_and_said_quickly() -> None:
+    deck = Deck("l")
+    deck.slide("Huge").bullets(*[f"item {index}" for index in range(5000)])
+    start = time.monotonic()
+    (slide,) = deck.render()
+    assert time.monotonic() - start < 30
+    assert any("a list of 5,000 items cut" in line for line in slide.diagnostics)

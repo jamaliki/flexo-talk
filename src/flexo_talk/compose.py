@@ -916,7 +916,7 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
     """
 
     style = canvas.deck.style
-    blocks = list(region.blocks)
+    blocks = [_capped(canvas, block) for block in region.blocks]
     pictures = sum(isinstance(block, _Figure | _Image | _Plot | _Gallery) for block in blocks)
     room = box.height - style.block_gap * max(0, len(blocks) - 1) - PICTURE_LEAST * pictures
 
@@ -940,6 +940,26 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
         low, high = (middle, high) if needed(middle) <= room else (low, middle)
     canvas.diagnostics.append(f"{canvas.slide.id}: words set at {round(low * 100)}% to fit")
     return [_sized(block, low, style) for block in blocks]
+
+
+MOST_ITEMS = 300
+"""The most items of a list, rows of a table or lines of code drawn on one slide (500
+lines of code): more than any slide shows, cut so the slide is drawn (and said) at once."""
+
+
+def _capped(canvas: _Canvas, block):
+    """``block``, cut to what a slide can hold if it is far past it, and said."""
+
+    if isinstance(block, _Bullets) and len(block.items) > MOST_ITEMS:
+        kept, what = replace(block, items=block.items[:MOST_ITEMS]), f"a list of {len(block.items):,} items"
+    elif isinstance(block, _Table) and len(block.rows) > MOST_ITEMS:
+        kept, what = replace(block, rows=block.rows[:MOST_ITEMS]), f"a table of {len(block.rows):,} rows"
+    elif isinstance(block, _Code) and len(block.lines) > MOST_ITEMS * 5 // 3:
+        kept, what = replace(block, lines=block.lines[: MOST_ITEMS * 5 // 3]), f"{len(block.lines):,} lines of code"
+    else:
+        return block
+    canvas.diagnostics.append(f"{canvas.slide.id}: {what} cut to what a slide can show -- split them across slides")
+    return kept
 
 
 def _sized(block, scale: float, style):
