@@ -654,10 +654,13 @@ def test_a_text_box_starts_where_its_words_were_set(tmp_path: Path) -> None:
 def test_maths_that_cannot_be_read_is_reported_on_its_slide(tmp_path: Path) -> None:
     deck = Deck("broken")
     deck.slide("Oops").text(r"Here: $\frac{1}{2} + \foo{x}$").math(r"\sqrt{x")
+    # Maths simple enough to be set as words is read for its mistakes all the same.
+    deck.slide("Squared").text(r"Then $x^{2$ is squared.")
     result = deck.build(tmp_path, formats=("svg",))
     said = " ".join(result.diagnostics)
     assert r"\foo is not a maths command flexo knows" in said
     assert "a { is not closed" in said and "slide1" in said
+    assert "slide2: a { is not closed, in the maths \u201cx^{2\u201d" in said
     assert "Traceback" not in said and "Error" not in said
 
 
