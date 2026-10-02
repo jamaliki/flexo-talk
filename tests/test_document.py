@@ -4,6 +4,10 @@ slide by slide in the studio."""
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -644,3 +648,88 @@ def test_a_figure_keeps_its_layout_while_the_deck_is_changed_and_settles_after(t
     settled = kind.draw(document, tmp_path, {"settle": True})
     assert seen[-1] is None and settled.info["unsettled"] is False
     assert kind.draw(document, tmp_path).info["unsettled"] is False  # and stays settled
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_a_part_dragged_on_a_slide_swaps_goes_between_or_goes_home() -> None:
+    script = Path(__file__).parents[1] / "src/flexo_talk/studio/static/slidedrop.js"
+
+    def box(left, top, right, bottom):
+        return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+    # Three parts down a body; two columns, the left holding two parts, the right one or none.
+    body = [
+        {
+            "key": "body",
+            "room": box(0, 0, 400, 300),
+            "blocks": [
+                {"index": 0, "box": box(0, 0, 300, 40)},
+                {"index": 1, "box": box(0, 60, 300, 140)},
+                {"index": 2, "box": box(0, 160, 200, 172)},  # a line of words, 12 tall
+            ],
+        }
+    ]
+    left = {
+        "key": "left",
+        "room": box(0, 0, 200, 300),
+        "blocks": [{"index": 0, "box": box(0, 0, 180, 40)}, {"index": 1, "box": box(0, 60, 180, 100)}],
+    }
+    right_one = {"key": "right", "room": box(220, 0, 420, 300), "blocks": [{"index": 0, "box": box(220, 0, 400, 20)}]}
+    right_none = {"key": "right", "room": box(220, 0, 420, 300), "blocks": []}
+    drops = [
+        [body, {"region": "body", "index": 0}, {"x": 100, "y": 166}],  # the middle of the line
+        [body, {"region": "body", "index": 2}, {"x": 100, "y": 3}],  # the top edge of the first
+        [body, {"region": "body", "index": 0}, {"x": 100, "y": 62}],  # just after itself: home
+        [body, {"region": "body", "index": 0}, {"x": 100, "y": 250}],  # below them all
+        [body, {"region": "body", "index": 1}, {"x": 900, "y": 900}],  # off the slide
+        [[left, right_none], {"region": "left", "index": 1}, {"x": 300, "y": 200}],  # empty column
+        [[left, right_one], {"region": "left", "index": 0}, {"x": 300, "y": 250}],  # its one part
+    ]
+    code = (
+        f"import {{ blockDrop, blockPlan }} from {json.dumps(script.as_uri())};\n"
+        f"const drops = {json.dumps(drops)};\n"
+        "const out = drops.map(([regions, from, point]) => blockDrop(regions, from, point));\n"
+        "const at = (kind, region, index) => ({ kind, region, index });\n"
+        "out.push(blockPlan({ body: 3 }, { region: 'body', index: 0 }, at('swap', 'body', 2)));\n"
+        "out.push(blockPlan({ left: 2, right: 1 }, { region: 'left', index: 0 }, at('between', 'right', 1)));\n"
+        "console.log(JSON.stringify(out));\n"
+    )
+    done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
+    found = json.loads(done.stdout)
+    assert found[:7] == [
+        {"kind": "swap", "region": "body", "index": 2},
+        {"kind": "between", "region": "body", "index": 0},
+        {"kind": "home"},
+        {"kind": "between", "region": "body", "index": 3},
+        None,
+        {"kind": "into", "region": "right", "index": 0},
+        {"kind": "swap", "region": "right", "index": 0},
+    ]
+    place = lambda region, index: {"region": region, "index": index}  # noqa: E731
+    # Swapped: the first and the last trade places, the middle stays.
+    assert found[7] == [
+        [place("body", 2), place("body", 0)],
+        [place("body", 1), place("body", 1)],
+        [place("body", 0), place("body", 2)],
+    ]
+    # Moved across: the left's second part rises to first, the moved one goes after the right's.
+    assert found[8] == [
+        [place("left", 1), place("left", 0)],
+        [place("right", 0), place("right", 0)],
+        [place("left", 0), place("right", 1)],
+    ]
+
+
+def test_each_region_of_a_slide_says_where_its_room_is_empty_or_not(tmp_path: Path) -> None:
+    deck = deck_from_document(
+        {
+            "deck": {"id": "rooms"},
+            "slides": [{"layout": "two-columns", "title": "Two", "left": [{"text": "words"}], "right": []}],
+        },
+        tmp_path,
+    )
+    svg = render_slide(deck, deck.slides[0]).svg
+    rooms = dict(re.findall(r'<g id="slide1\.(left|right)"[^>]*data-flexo-box="([^"]+)"', svg))
+    assert set(rooms) == {"left", "right"}  # the empty column too: a part can be dropped in it
+    (lx, ly, lw, lh), (rx, ry, rw, rh) = (map(float, rooms[key].split()) for key in ("left", "right"))
+    assert lw > 0 and lh > 0 and (rw, rh, ry) == (lw, lh, ly) and rx > lx + lw

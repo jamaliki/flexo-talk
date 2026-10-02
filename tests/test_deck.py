@@ -442,7 +442,8 @@ def test_words_start_at_the_top_and_a_shorter_picture_is_centred_against_them(tm
     taller, shorter, middle = (path.read_text() for path in result.svgs)
 
     def moved(svg: str, region: str) -> bool:
-        return 'transform="translate(0' in svg.split(f'id="{region}"')[1][:80]
+        tag = re.search(rf'<g id="{re.escape(region)}"[^>]*>', svg)
+        return tag is not None and 'transform="translate(0' in tag.group(0)
 
     # The words start where the body starts, whatever is beside them.
     assert not moved(taller, "slide1.left") and not moved(shorter, "slide2.left")

@@ -6,6 +6,7 @@
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
 import { figureParts, widenLines } from "/static/kinds/figure/parts.js";
+import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph" },
@@ -247,6 +248,11 @@ export function mount(studio, container) {
   let mathNotes = null;
   let pending = false;
   let inline = null;
+  // A part of the slide being dragged on it, and parts just moved, landing.
+  let carry = null;
+  let moving = null;
+  let landing = null;
+  let swallowClick = false;
 
   // Figures on slides keep their layouts while the deck is changed, and are laid out at
   // their best once it has been still a moment: the page asks the server to settle.
@@ -484,10 +490,14 @@ export function mount(studio, container) {
     // The slide's drawing is put in the page again only when it changed: parsing
     // and laying out an SVG is the costliest thing the stage does.
     const shows = page?.svg ? `${state.slide}:${page.hash}` : "";
-    let before = null;
+    let before = null, moved = null;
     if (!pageNode || pageNode.dataset.shows !== shows) {
       // A figure's parts just moved on this slide: they land from where they were.
       before = figureBlock() ? figure.parts.landing() : null;
+      // So do the slide's own parts, just moved or swapped.
+      moved = blockLanding();
+      landing = null;
+      if (carry) dropCarry();
       pageNode = h("div.slide-page", { dataset: { shows } });
       if (page?.svg) pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, "");
       else pageNode.append(h("div.placeholder", {}, h("div.spinner")));
@@ -512,7 +522,7 @@ export function mount(studio, container) {
       page?.steps > 1 ? h("span.chip", {}, icon("reveal"), `${page.steps} steps`) : null,
       here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), entry.who.name, entry.doing ? h("span.muted", {}, ` · ${entry.doing}`) : null)),
       h("span.spacer", { style: { flex: 1 } }),
-      pending ? h("span.row.drawing", {}, h("span.spinner"), "Drawing…") : h("span.stage-hint", {}, "Click to choose · double-click words to edit"));
+      pending ? h("span.row.drawing", {}, h("span.spinner"), "Drawing…") : h("span.stage-hint", {}, "Click to choose · drag to move · double-click words to edit"));
     clear(stageMessages, own.map(messageView));
     stageMessages.hidden = !own.length;
     fitStage();
@@ -522,6 +532,7 @@ export function mount(studio, container) {
     placeFigure();
     figure?.parts.placeInline();
     if (before && figureBlock()) figure.parts.land(before);
+    if (moved) landBlocks(moved);
   }
 
   function messageView(message) {
@@ -590,7 +601,7 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
-    if (figure?.parts.dragging) return;
+    if (figure?.parts.dragging || carry?.started) return;
     if (inFigure(event)) {
       const id = figure.parts.idAt(event);
       const box = id && figure.parts.model ? boxOf(figurePrefix() + id) : null;
@@ -601,14 +612,265 @@ export function mount(studio, container) {
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
-  // A part of the chosen figure, pressed and moved, is dragged to another place in it.
+  // A part of the chosen figure, pressed and moved, is dragged to another place in it;
+  // any other part of the slide, to another place on the slide.
   function onPress(event) {
-    if (event.target.closest(".fig-inline, .figure-bar") || !figureBlock() || !editable(figureBlock()) || !inFigure(event)) return;
-    figure.parts.pointerdown(event);
+    if (event.target.closest(".fig-inline, .figure-bar")) return;
+    if (figureBlock() && editable(figureBlock()) && inFigure(event)) { figure.parts.pointerdown(event); return; }
+    pressBlock(event, partAt(event));
+  }
+
+  // -- the slide's parts, moved on it --
+  // A part pressed and moved is lifted and follows the pointer. Over the middle of
+  // another part, the two swap: that one slides over to where this one was, and a frame
+  // shows where this one lands. Near another part's top or bottom, it goes between them:
+  // a line shows where, and the parts either side step apart for it. Over an empty
+  // column, it goes into it. Let go, the slide is changed -- an edit like any other, ⌘Z
+  // undoes it -- and when it is drawn again each part glides from where it was. Esc, or
+  // letting go anywhere else, sends it home.
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  // Parts are set from their top left, as words are: one goes where another was by it.
+  const cornerOf = (box) => ({ x: box.left, y: box.top });
+  const scaleOf = (element) => 1 / (element?.parentNode?.getScreenCTM?.()?.a || 1);
+  const drawnBox = (element) => { const box = element?.getBoundingClientRect(); return box && (box.width || box.height) ? box : null; };
+  const samePlace = (a, b) => a?.region === b?.region && a?.index === b?.index;
+
+  // What is moved: a group round the part's drawing, so its own transform (an image's
+  // scale, say) stays its own.
+  function mover(element) {
+    const parent = element.parentNode;
+    if (parent?.classList?.contains("block-mover")) return parent;
+    const wrap = document.createElementNS(SVG_NS, "g");
+    wrap.setAttribute("class", "block-mover");
+    parent.insertBefore(wrap, element);
+    wrap.append(element);
+    return wrap;
+  }
+  function blockElement(region, index) {
+    const found = regionsOf(slideAt()).find((item) => item.key === region);
+    return found && pageNode ? pageNode.querySelector(`[id="slide${state.slide + 1}.${found.svg}.${index}"]`) : null;
+  }
+  // A region's room on screen, from the box the slide's drawing gives it (in its parent's units).
+  function roomOf(group) {
+    const values = (group?.getAttribute("data-flexo-box") || "").split(" ").map(Number);
+    const matrix = group?.parentNode?.getScreenCTM?.();
+    if (values.length !== 4 || values.some(Number.isNaN) || !matrix) return null;
+    const [x, y, width, height] = values;
+    const a = new DOMPoint(x, y).matrixTransform(matrix), b = new DOMPoint(x + width, y + height).matrixTransform(matrix);
+    return { left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y) };
+  }
+  function regionsDrawn() {
+    const slide = slideAt();
+    return regionsOf(slide).map((region) => ({
+      key: region.key,
+      label: region.label,
+      room: roomOf(pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`)),
+      blocks: blocksAt(slide, region.key).map((block, index) => {
+        const element = blockElement(region.key, index);
+        return { index, label: BLOCKS[kindOf(block)].label, element, box: drawnBox(element) };
+      }),
+    }));
+  }
+
+  function pressBlock(event, part) {
+    if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (!part || part.kind !== "block" || carry || figure?.parts.dragging) return;
+    const element = blockElement(part.region, part.index);
+    if (!element) return;
+    carry = { from: { region: part.region, index: part.index }, start: { x: event.clientX, y: event.clientY }, started: false, element, frame: 0, at: null };
+    window.addEventListener("pointermove", carryMove);
+    window.addEventListener("pointerup", carryEnd);
+    window.addEventListener("pointercancel", carryCancel);
+    window.addEventListener("keydown", carryKey, true);
+  }
+
+  function carryStart() {
+    closeInline();
+    window.getSelection?.()?.removeAllRanges();
+    hover.hidden = true;
+    const regions = regionsDrawn();
+    const home = drawnBox(carry.element);
+    if (!home) { dropCarry(); return; }
+    const lifted = mover(carry.element);
+    lifted.classList.add("block-lifted");
+    const zone = h("div.block-drop-zone", {}, h("span.hit-label"));
+    const line = h("div.block-drop-line");
+    pageNode.append(zone, line);
+    pageNode.classList.add("block-dragging");
+    document.body.classList.add("block-grabbing");
+    Object.assign(carry, { started: true, regions, home, lifted, scale: scaleOf(lifted), zone, line, shifted: [] });
+  }
+
+  function carryMove(event) {
+    if (!carry) return;
+    carry.pointer = { x: event.clientX, y: event.clientY };
+    if (!carry.started) {
+      if (Math.hypot(event.clientX - carry.start.x, event.clientY - carry.start.y) < 4) return;
+      carryStart();
+      if (!carry) return;
+    }
+    event.preventDefault();
+    if (!carry.frame) carry.frame = requestAnimationFrame(carryFrame);
+  }
+
+  function carryFrame() {
+    if (!carry?.started) return;
+    carry.frame = 0;
+    const dx = carry.pointer.x - carry.start.x, dy = carry.pointer.y - carry.start.y;
+    carry.lifted.style.transform = `translate(${dx * carry.scale}px, ${dy * carry.scale}px)`;
+    const at = dropAt(carry.pointer);
+    if (JSON.stringify(at) !== JSON.stringify(carry.at)) { carry.at = at; showDrop(at); }
+  }
+
+  const dropAt = (point) => blockDrop(carry.regions, carry.from, point);
+
+  function showDrop(at) {
+    for (const wrap of carry.shifted) wrap.style.transform = "";
+    carry.shifted = [];
+    carry.zone.classList.remove("on");
+    carry.line.classList.remove("on");
+    carry.lifted.classList.toggle("block-astray", !at);
+    if (!at || at.kind === "home") return;
+    const origin = pageNode.getBoundingClientRect();
+    // A mark not shown yet appears where it goes; one shown glides there.
+    const put = (node, box, pad = 0) => {
+      Object.assign(node.style, { left: `${box.left - origin.left - pad}px`, top: `${box.top - origin.top - pad}px`,
+        width: `${box.right - box.left + 2 * pad}px`, height: `${box.bottom - box.top + 2 * pad}px` });
+      if (!node.classList.contains("on")) void node.offsetWidth;
+    };
+    const region = carry.regions.find((item) => item.key === at.region);
+    const shift = (block, x, y) => {
+      const wrap = mover(block.element);
+      const scale = scaleOf(wrap);
+      wrap.style.transform = `translate(${x * scale}px, ${y * scale}px)`;
+      carry.shifted.push(wrap);
+    };
+    if (at.kind === "swap") {
+      // The part there slides to where this one was; this one lands where it is.
+      const target = region.blocks[at.index];
+      const there = cornerOf(target.box), home = cornerOf(carry.home);
+      shift(target, home.x - there.x, home.y - there.y);
+      put(carry.zone, target.box, 6);
+      carry.zone.firstChild.textContent = `Swap with the ${target.label.toLowerCase()}`;
+      carry.zone.classList.add("on");
+    } else if (at.kind === "into") {
+      put(carry.zone, region.room, 4);
+      carry.zone.firstChild.textContent = `Move to ${region.label.toLowerCase()}`;
+      carry.zone.classList.add("on");
+    } else {
+      const isFrom = (block) => region.key === carry.from.region && block.index === carry.from.index;
+      const placed = region.blocks.filter((block) => block.box && !isFrom(block));
+      const above = placed.filter((block) => block.index < at.index).at(-1);
+      const below = placed.find((block) => block.index >= at.index);
+      const y = above && below ? (above.box.bottom + below.box.top) / 2 : above ? above.box.bottom + 8 : below ? below.box.top - 8 : region.room.top + 8;
+      const span = region.room || (above || below).box;
+      put(carry.line, { left: span.left, right: span.right, top: y - 1.5, bottom: y + 1.5 });
+      carry.line.classList.add("on");
+      if (above) shift(above, 0, -7);
+      if (below) shift(below, 0, 7);
+    }
+  }
+
+  // The drag over: listeners off, marks gone; what it was is returned (null for a click).
+  function finishCarry() {
+    window.removeEventListener("pointermove", carryMove);
+    window.removeEventListener("pointerup", carryEnd);
+    window.removeEventListener("pointercancel", carryCancel);
+    window.removeEventListener("keydown", carryKey, true);
+    const was = carry;
+    carry = null;
+    if (!was?.started) return null;
+    if (was.frame) cancelAnimationFrame(was.frame);
+    was.zone.remove();
+    was.line.remove();
+    pageNode?.classList.remove("block-dragging");
+    document.body.classList.remove("block-grabbing");
+    was.lifted.classList.remove("block-lifted", "block-astray");
+    // The drag ends in a click on whatever is under the pointer: that click is not one.
+    swallowClick = true;
+    setTimeout(() => { swallowClick = false; }, 0);
+    return was;
+  }
+  // Its drawing is going (drawn again under it): let go of it where it is.
+  function dropCarry() { finishCarry(); }
+  function sendHome(was) {
+    for (const wrap of was.shifted) wrap.style.transform = "";
+    was.lifted.style.transform = "";
+    placeChosen();
+  }
+  function carryCancel() { const was = finishCarry(); if (was) sendHome(was); }
+  function carryKey(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    carryCancel();
+  }
+
+  function carryEnd(event) {
+    if (carry?.started && event) { carry.pointer = { x: event.clientX, y: event.clientY }; carryFrame(); }
+    const was = finishCarry();
+    if (!was) return;
+    const at = was.at;
+    if (!at || at.kind === "home") { sendHome(was); return; }
+    const { from } = was;
+    if (at.kind === "swap") {
+      // It glides the rest of the way to where it goes.
+      const target = was.regions.find((region) => region.key === at.region).blocks[at.index];
+      const there = cornerOf(target.box), home = cornerOf(was.home);
+      was.lifted.style.transform = `translate(${(there.x - home.x) * was.scale}px, ${(there.y - home.y) * was.scale}px)`;
+    }
+    const plan = planOf(from, at);
+    moving = { slide: state.slide, at: Date.now(), plan, wraps: [was.lifted, ...was.shifted] };
+    chosen.hidden = true;
+    // Should no new drawing come (the edit changed nothing after all), the parts go home.
+    const mine = moving;
+    setTimeout(() => { if (moving === mine) { moving = null; for (const wrap of mine.wraps) wrap.style.transform = ""; placeChosen(); } }, 6000);
+    editSlide((slide) => rearrange({ [from.region]: blocksAt(slide, from.region, true), [at.region]: blocksAt(slide, at.region, true) }, from, at));
+    // It is the part chosen where it lands -- a figure still edited there.
+    const landed = plan.find(([old]) => samePlace(old, from))[1];
+    focusBlock(landed.region, landed.index);
+  }
+
+  // Where each part of the slide goes, as [where it was, where it goes].
+  function planOf(from, at) {
+    const slide = slideAt();
+    return blockPlan(Object.fromEntries(regionsOf(slide).map((region) => [region.key, blocksAt(slide, region.key).length])), from, at);
+  }
+
+  // Before the slide is drawn again: where each moved part shows now, by where it goes.
+  function blockLanding() {
+    const was = moving;
+    moving = null;
+    if (!was || was.slide !== state.slide || Date.now() - was.at > 6000 || !pageNode) return null;
+    const boxes = [];
+    for (const [old, now] of was.plan) {
+      const box = drawnBox(blockElement(old.region, old.index));
+      if (box) boxes.push([now, box]);
+    }
+    return boxes;
+  }
+  function landBlocks(boxes) {
+    const glides = [];
+    for (const [now, was] of boxes) {
+      const element = blockElement(now.region, now.index);
+      const box = drawnBox(element);
+      if (!box) continue;
+      const dx = cornerOf(was).x - cornerOf(box).x, dy = cornerOf(was).y - cornerOf(box).y;
+      if (Math.hypot(dx, dy) < 0.5) continue;
+      const wrap = mover(element);
+      const scale = scaleOf(wrap);
+      glides.push(wrap.animate([{ transform: `translate(${dx * scale}px, ${dy * scale}px)` }, { transform: "translate(0px, 0px)" }],
+        { duration: 300, easing: "cubic-bezier(.2,.8,.2,1)" }).finished.catch(() => {}));
+    }
+    // The chosen part's frame waits for the parts to arrive: one drawn while they glide
+    // would be drawn where they pass.
+    const mine = {};
+    landing = mine;
+    Promise.all(glides).then(() => { if (landing === mine) { landing = null; placeChosen(); } });
   }
 
   function onPick(event) {
-    if (figure?.parts.justDragged) return;
+    if (figure?.parts.justDragged || swallowClick) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
@@ -635,7 +897,7 @@ export function mount(studio, container) {
 
   function placeChosen() {
     const focus = state.focus;
-    if (!focus || !pageNode) { chosen.hidden = true; return; }
+    if (!focus || !pageNode || moving || landing || carry?.started) { chosen.hidden = true; return; }
     const region = regionsOf(slideAt()).find((r) => r.key === focus.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${focus.index}`);
     const block = blocksAt(slideAt() || {}, focus.region)[focus.index];
@@ -745,14 +1007,18 @@ export function mount(studio, container) {
     figureBar.hidden = !box;
     if (!box) return;
     const words = figure.parts.hint();
+    const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: "Drag to move the figure on the slide",
+      onpointerdown: (event) => { event.stopPropagation(); pressBlock(event, { kind: "block", region: figure.region, index: figure.index }); } }, icon("grip"));
+    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Gather the chosen parts (G)" });
     clear(figureBar, words ? h("span.figure-hint", {}, words) : [
+      grip,
       ui.button("Add part", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add a part to the figure (A)", id: undefined }),
       ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one part to another (C)" }),
-      ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Gather the chosen parts (G)" }),
+      group,
       figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete the chosen parts (⌫)" }) : null,
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
-    figureBar.querySelectorAll(".btn")[2]?.classList.add("group");
+    group.classList.add("group");
     // Over the figure's right end: its left end carries the part's own tag.
     const left = Math.max(4, Math.min(box.left + box.width - figureBar.offsetWidth, pageNode.clientWidth - figureBar.offsetWidth - 4));
     Object.assign(figureBar.style, { left: `${left}px`, top: `${box.top > 44 ? box.top - 40 : box.top + 6}px` });
