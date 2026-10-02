@@ -2802,7 +2802,7 @@ def _place_svg(canvas: _Canvas, identifier: str, svg: str, x: float, y: float, s
             for definition in child:
                 if local_name(definition.tag) != "style":
                     canvas.defs.append(definition)
-        elif tag in {"title", "desc", "metadata", "style"} or child.get("id") == "layer.background":
+        elif tag in {"title", "desc", "metadata", "style"} or child.get("id") == f"{prefix}layer.background":
             # A flexo figure's own canvas; a layer someone named Background keeps its content.
             continue
         else:

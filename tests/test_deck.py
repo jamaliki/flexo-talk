@@ -205,6 +205,22 @@ def test_a_tall_figure_is_laid_out_for_a_wide_slide(tmp_path: Path) -> None:
     assert not any("too small" in message for message in result.diagnostics)
 
 
+def test_a_figure_leaves_its_own_page_behind(tmp_path: Path) -> None:
+    # Its page would reach past what it draws (off the slide, in a column), and be
+    # what the studio frames and clicks.
+    deck = Deck("page")
+    with deck.slide("Two sides", layout="two-columns") as slide:
+        slide.left.bullets("A point")
+        with slide.right.figure() as figure:
+            x = figure.root.text("x", "Input $x$")
+            figure.root.block("model", label="Model", input=x)
+    result = deck.build(tmp_path, formats=("svg",))
+    svg = result.svgs[0].read_text()
+    assert 'id="slide1.right.0.root"' in svg
+    assert "slide1.right.0.layer.background" not in svg
+    assert "slide1.right.0.canvas.background" not in svg
+
+
 def test_a_code_listing_is_set_in_monospace(tmp_path: Path) -> None:
     deck = Deck("code")
     with deck.slide("Code") as slide:
