@@ -1311,11 +1311,12 @@ export function mount(studio, container) {
 
   // The server makes the edit where the figure is written; if the deck changed while
   // it did, the edit is made again on the deck as it is now.
-  async function runFigure(action, { merge }) {
+  async function runFigure(action, { merge, label: told = null }) {
     if (!figure) return null;
     const at = { slide: figure.slide, region: figure.region, index: figure.index };
-    // A part moved is named: read from the figure alone, a swap could be either part's.
-    const label = (action.do === "move" || action.do === "step") && action.id ? `Moved ${quoted(figure.parts.nameOf(action.id)) || "a part"}` : null;
+    // What changed is read from the figure before and after, but for a part moved: a swap
+    // read from the figure alone could be either part's, so it is said as the parts say it.
+    const label = action.do === "move" || action.do === "step" ? told : null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
       const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } });
@@ -1336,12 +1337,18 @@ export function mount(studio, container) {
   function recordFile(result, at, label, merge) {
     const file = result.file;
     const restore = (text, expect) => studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "figure-file", file, text, expect } });
-    const [was, now] = result.change || [];
+    const [from, to] = result.change || [];
+    const say = (a, b) => label || (a && b ? figureChange(a, b) : "Edited the figure");
     studio.record({
-      label: label || (was && now ? figureChange(was, now) : "Edited the figure"),
-      place: `Slide ${at.slide + 1}`, where: at.slide, was: result.was, now: result.now,
+      label: say(from, to), place: `Slide ${at.slide + 1}`, where: at.slide, was: result.was, now: result.now, from, to,
       apply(target) { return target === "before" ? restore(this.was, this.now) : restore(this.now, this.was); },
-      absorb(newer) { if (newer.was !== this.now) return false; this.now = newer.now; return true; },
+      // Typing on in one part: one change, said from where it started to where it is.
+      absorb(newer) {
+        if (newer.was !== this.now) return false;
+        Object.assign(this, { now: newer.now, to: newer.to, said: null });
+        this.label = say(this.from, this.to);
+        return true;
+      },
     }, { merge });
   }
 
@@ -2975,7 +2982,10 @@ export function mount(studio, container) {
     let first = 0;
     while (first < Math.min(was.length, now.length) && same(was[first], now[first])) first += 1;
     const on = (index, text) => ({ text, place: `Slide ${index + 1}`, where: index });
-    if (now.length > was.length) return on(first, now.length - was.length > 1 ? `Added ${now.length - was.length} slides` : "Added a slide");
+    if (now.length > was.length) {
+      if (now.length - was.length > 1) return on(first, `Added ${now.length - was.length} slides`);
+      return on(first, first > 0 && same(now[first], now[first - 1]) ? `Duplicated slide ${first}` : "Added a slide");
+    }
     if (now.length < was.length) {
       const gone = was.length - now.length;
       return { ...on(Math.min(first, Math.max(now.length - 1, 0)), gone > 1 ? `Deleted ${gone} slides` : `Deleted the slide ${quoted(slideTitle(was[first]))}`), place: `Slide ${first + 1}` };
