@@ -810,3 +810,27 @@ def test_each_region_of_a_slide_says_where_its_room_is_empty_or_not(tmp_path: Pa
     assert set(rooms) == {"left", "right"}  # the empty column too: a part can be dropped in it
     (lx, ly, lw, lh), (rx, ry, rw, rh) = (map(float, rooms[key].split()) for key in ("left", "right"))
     assert lw > 0 and lh > 0 and (rw, rh, ry) == (lw, lh, ly) and rx > lx + lw
+
+
+def test_a_structure_on_a_slide_says_the_mol_sketch_settings_it_is_drawn_with(tmp_path: Path) -> None:
+    pytest.importorskip("molsketch")
+    import shutil
+
+    data = Path(__file__).resolve().parents[2] / "flexo" / "tests" / "unit" / "data" / "1a7g.cif"
+    if not data.is_file():
+        pytest.skip("no structure file beside flexo")
+    shutil.copy(data, tmp_path / "1a7g.cif")
+    figure = {
+        "figure": {"id": "mol"},
+        "nodes": [{"id": "m", "kind": "structure",
+                   "properties": {"source": "1a7g.cif", "style": {"line": {"width": 2.5}}}}],
+    }
+    document = {"schema_version": 1, "deck": {"id": "talk", "theme": "sketch"},
+                "slides": [{"title": "A molecule", "body": [{"figure": figure}]}]}
+    at = {"slide": 0, "region": "body", "index": 0}
+    asked = {"do": "figure", "at": at, "edit": {"do": "structure-settings", "id": "m"}}
+    result = DeckKind().act(document, asked, tmp_path)
+    assert result["document"] == document
+    # In the deck's look: a sketched theme draws in watercolour, the molecule's own pen over it.
+    assert result["settings"]["look"] == "watercolour"
+    assert result["settings"]["style"]["line.width"] == 2.5

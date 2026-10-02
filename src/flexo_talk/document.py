@@ -670,9 +670,11 @@ def _beside(base: Path, figure: dict) -> dict:
     found = []
     for node in nodes:
         properties = node.get("properties") if isinstance(node, dict) else None
-        source = properties.get("source") if isinstance(properties, dict) else None
-        if isinstance(source, str) and source and (base / source).is_file():
-            node = {**node, "properties": {**properties, "source": str((base / source).resolve())}}
+        for key in ("source", "density"):
+            value = properties.get(key) if isinstance(properties, dict) else None
+            if isinstance(value, str) and value and (base / value).is_file():
+                properties = {**properties, key: str((base / value).resolve())}
+                node = {**node, "properties": properties}
         found.append(node)
     return {**figure, "nodes": found}
 

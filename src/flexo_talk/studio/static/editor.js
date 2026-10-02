@@ -3156,6 +3156,18 @@ export function mount(studio, container) {
       if (keys.length && keys.every((key) => ["yaw", "pitch", "roll"].includes(key))) return `Turned ${call(id)}`;
       if (keys.length && keys.every((key) => key === "zoom")) return `Zoomed ${call(id)}`;
       if (keys.length && keys.every((key) => key === "width" || key === "height")) return `Sized ${call(id)}`;
+      // mol-sketch's settings, by name: "Set the line width of “1A8O”".
+      if (keys.length === 1 && keys[0] === "style") {
+        const flat = (value, prefix = "") => Object.entries(value || {}).flatMap(([key, part]) =>
+          (part && typeof part === "object" && !Array.isArray(part) ? flat(part, `${prefix}${key}.`) : [[`${prefix}${key}`, part]]));
+        const before = new Map(flat(was.properties?.style)), after = new Map(flat(now.properties?.style));
+        const changed = [...new Set([...before.keys(), ...after.keys()])].filter((key) => !same(before.get(key), after.get(key)));
+        if (!after.size) return `Drew ${call(id)} as its look does`;
+        if (changed.length) return `Set the ${changed.map((key) => key.replace(/[._]/g, " ")).join(", ")} of ${call(id)}`;
+      }
+      if (keys.length === 1 && keys[0] === "palette") return now.properties?.palette ? `Gave ${call(id)} the ${now.properties.palette} palette` : `Gave ${call(id)} its look's palette`;
+      if (keys.length === 1 && keys[0] === "colors") return `Coloured ${call(id)}`;
+      if (keys.length === 1 && keys[0] === "density") return now.properties?.density ? `Drew a density map with ${call(id)}` : `Took the density map off ${call(id)}`;
       if (!same(was.kind, now.kind)) return `Made ${call(id)} a ${now.kind || "block"}`;
       return `Changed ${call(id)}`;
     }

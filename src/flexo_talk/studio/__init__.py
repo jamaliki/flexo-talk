@@ -371,6 +371,11 @@ class DeckKind:
         edit = action.get("edit") or {}
         if edit.get("do") == "structure-view":
             return {"document": document, "view": _structure_view(document, at, str(edit.get("id")), base)}
+        if edit.get("do") == "structure-settings":
+            from flexo.studio.figure_kind import settings_of
+
+            spec = _slide_figure(document, at, base)
+            return {"document": document, "settings": settings_of(spec, str(edit.get("id")))}
         changed = copy.deepcopy(document)
         block = _block_at(changed, at)
         value = block.get("figure") if isinstance(block, dict) else None
@@ -567,10 +572,17 @@ def _figure_data(text: str, suffix: str) -> Any:
 def _structure_view(document: dict[str, Any], at: dict[str, Any], identifier: str, base: Path) -> Any:
     """A structure's trace and turn on a slide, in the deck's look, as the slide draws it."""
 
+    from flexo.studio.figure_kind import view_of
+
+    return view_of(_slide_figure(document, at, base), identifier)
+
+
+def _slide_figure(document: dict[str, Any], at: dict[str, Any], base: Path) -> Any:
+    """The figure at ``at`` on a slide, in the deck's look, as the slide draws it."""
+
     from dataclasses import replace
 
     from flexo.studio.figure_edit import EditError
-    from flexo.studio.figure_kind import view_of
 
     from flexo_talk.deck import made
     from flexo_talk.document import _figure, make_deck
@@ -581,8 +593,7 @@ def _structure_view(document: dict[str, Any], at: dict[str, Any], identifier: st
     deck = make_deck(document.get("deck") or {}, base)
     figure = made(_figure(base, block["figure"], "figure", None))
     spec = getattr(figure, "spec", figure)
-    spec = replace(spec, style=deck.theme, palette=deck.palette_name, font=deck.figure_font or deck.font or spec.font)
-    return view_of(spec, identifier)
+    return replace(spec, style=deck.theme, palette=deck.palette_name, font=deck.figure_font or deck.font or spec.font)
 
 
 def _inline(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
