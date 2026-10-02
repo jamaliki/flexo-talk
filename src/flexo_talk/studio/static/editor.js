@@ -879,7 +879,8 @@ export function mount(studio, container) {
     // Should no new drawing come (the edit changed nothing after all), the parts go home.
     const mine = moving;
     setTimeout(() => { if (moving === mine) { moving = null; for (const wrap of mine.wraps) wrap.style.transform = ""; placeChosen(); } }, 6000);
-    editSlide((slide) => rearrange({ [from.region]: blocksAt(slide, from.region, true), [at.region]: blocksAt(slide, at.region, true) }, from, at));
+    editSlide((slide) => rearrange({ [from.region]: blocksAt(slide, from.region, true), [at.region]: blocksAt(slide, at.region, true) }, from, at),
+      { label: movedLabel(from) });
     // It is the part chosen where it lands -- a figure still edited there.
     const landed = plan.find(([old]) => samePlace(old, from))[1];
     focusBlock(landed.region, landed.index);
@@ -1309,15 +1310,35 @@ export function mount(studio, container) {
   async function runFigure(action, { merge }) {
     if (!figure) return null;
     const at = { slide: figure.slide, region: figure.region, index: figure.index };
+    // A part moved is named: read from the figure alone, a swap could be either part's.
+    const label = (action.do === "move" || action.do === "step") && action.id ? `Moved ${quoted(figure.parts.nameOf(action.id)) || "a part"}` : null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
       const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } });
       if (!same(studio.doc, sent)) continue;
-      if (result.file) { if (action.do !== "read") studio.requestDraw(0); }
-      else if (!same(result.document, sent)) studio.change(() => result.document, { merge, quiet: true });
+      if (result.file) {
+        if (action.do !== "read") studio.requestDraw(0);
+        if (result.was !== undefined) recordFile(result, at, label, merge);
+      }
+      else if (!same(result.document, sent)) studio.change(() => result.document, { merge, quiet: true, label });
       return result;
     }
     return null;
+  }
+
+  // An edit to a figure kept in its own file is written there, not in the deck: the
+  // deck's history keeps it all the same, undone by putting the file back as it was
+  // (if no one has changed it since).
+  function recordFile(result, at, label, merge) {
+    const file = result.file;
+    const restore = (text, expect) => studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "figure-file", file, text, expect } });
+    const [was, now] = result.change || [];
+    studio.record({
+      label: label || (was && now ? figureChange(was, now) : "Edited the figure"),
+      place: `Slide ${at.slide + 1}`, where: at.slide, was: result.was, now: result.now,
+      apply(target) { return target === "before" ? restore(this.was, this.now) : restore(this.now, this.was); },
+      absorb(newer) { if (newer.was !== this.now) return false; this.now = newer.now; return true; },
+    }, { merge });
   }
 
   function placeFigure() {
@@ -1689,7 +1710,11 @@ export function mount(studio, container) {
     if (INLINE.has(kind) && !given) setTimeout(() => openInline({ kind: "block", region, index }, { selectAll: true }), 300);
   }
 
+  // The part moved, by name: a swap read from the slides alone could be either part's.
+  const movedLabel = (from) => `Moved the ${blockName(blocksAt(slideAt() || {}, from.region)[from.index])}`;
+
   function moveBlock(from, to) {
+    const label = movedLabel(from);
     editSlide((slide) => {
       const source = blocksAt(slide, from.region, true);
       const [block] = source.splice(from.index, 1);
@@ -1698,7 +1723,7 @@ export function mount(studio, container) {
       if (from.region === to.region && from.index < index) index -= 1;
       target.splice(Math.min(index, target.length), 0, block);
       state.focus = { region: to.region, index: Math.min(index, target.length - 1) };
-    });
+    }, { label });
     renderInspector();
     placeChosen();
   }
@@ -2846,8 +2871,139 @@ export function mount(studio, container) {
 
   // -- what happens --
   let lastKey = "";
-  studio.on("change", ({ quiet, source, who, before }) => {
+  // -- the history, in words --
+  // What a change did to the deck, for its history and its undo button: what it did,
+  // on which slide -- where the deck goes when it is undone or redone.
+  studio.describe = (before, after) => {
+    const was = before?.slides || [], now = after?.slides || [];
+    let first = 0;
+    while (first < Math.min(was.length, now.length) && same(was[first], now[first])) first += 1;
+    const on = (index, text) => ({ text, place: `Slide ${index + 1}`, where: index });
+    if (now.length > was.length) return on(first, now.length - was.length > 1 ? `Added ${now.length - was.length} slides` : "Added a slide");
+    if (now.length < was.length) {
+      const gone = was.length - now.length;
+      return { ...on(Math.min(first, Math.max(now.length - 1, 0)), gone > 1 ? `Deleted ${gone} slides` : `Deleted the slide ${quoted(slideTitle(was[first]))}`), place: `Slide ${first + 1}` };
+    }
+    const changed = now.map((_, index) => index).filter((index) => !same(was[index], now[index]));
+    if (!changed.length) return deckChange(before?.deck || {}, after?.deck || {});
+    if (changed.length > 1) {
+      const a = changed[0], b = changed[changed.length - 1];
+      if (same(was[a], now[b])) return on(b, `Moved slide ${a + 1} to ${b + 1}`);
+      if (same(was[b], now[a])) return on(a, `Moved slide ${b + 1} to ${a + 1}`);
+      return on(a, `Changed ${changed.length} slides`);
+    }
+    return on(changed[0], slideChange(was[changed[0]], now[changed[0]]));
+  };
+  const quoted = (text, most = 28) => {
+    const words = plain(text).trim();
+    return words ? `“${words.length > most ? `${words.slice(0, most - 1)}…` : words}”` : "";
+  };
+  const differing = (a = {}, b = {}) => [...new Set([...Object.keys(a || {}), ...Object.keys(b || {})])].filter((key) => !same(a?.[key], b?.[key]));
+  const blockName = (block) => (BLOCKS[kindOf(block)]?.label || "part").toLowerCase();
+  const article = (name) => (/^[aeiou]/.test(name) ? `an ${name}` : `a ${name}`);
+  // Every part of a slide in order, read without touching it (blocksAt makes columns).
+  const partsOf = (slide) => regionsOf(slide).flatMap((region) => {
+    const list = region.key.startsWith("columns.") ? slide.columns?.[Number(region.key.split(".")[1])] : slide[region.key];
+    return (Array.isArray(list) ? list : []).map((block, index) => ({ region: region.key, index, block }));
+  });
+  const DECK_NAMES = { palette: "colours", title_font: "title font", figure_font: "figure font" };
+  function deckChange(a, b) {
+    const keys = differing(a, b);
+    return keys.length === 1 ? `Changed the deck's ${DECK_NAMES[keys[0]] || keys[0].replace(/_/g, " ")}` : "Changed the deck's design";
+  }
+  const SLIDE_WORDS = [["title", "title"], ["subtitle", "subtitle"], ["words", "words"], ["author", "author"], ["date", "date"]];
+  const SLIDE_NAMES = { widths: "column widths", align: "alignment", dark: "darkness", shade: "shade" };
+  function slideChange(a, b) {
+    if (layoutOf(a) !== layoutOf(b)) return `Changed the layout to ${LAYOUT_NAMES[layoutOf(b)] || layoutOf(b)}`;
+    for (const [key, name] of SLIDE_WORDS) if (!same(a[key], b[key])) return b[key] ? `Typed the ${name} ${quoted(b[key])}` : `Cleared the ${name}`;
+    if (!same(a.notes, b.notes)) return "Edited the notes";
+    if (!same(a.footnotes, b.footnotes)) return "Edited the footnotes";
+    const old = partsOf(a), next = partsOf(b);
+    const found = (list, item) => list.some((other) => same(other.block, item.block));
+    if (next.length > old.length) { const added = next.find((item) => !found(old, item)) || next[next.length - 1]; return `Added ${article(blockName(added.block))}`; }
+    if (next.length < old.length) { const gone = old.find((item) => !found(next, item)) || old[old.length - 1]; return `Deleted the ${blockName(gone.block)}`; }
+    const pairs = next.map((item, k) => [old[k], item]).filter(([was, now]) => !same(was.block, now.block) || was.region !== now.region);
+    if (pairs.length && pairs.every(([, now]) => found(old, now))) return `Moved the ${blockName(pairs[0][1].block)}`;
+    if (pairs.length === 1) return blockChange(pairs[0][0].block, pairs[0][1].block);
+    if (pairs.length > 1) return `Changed ${pairs.length} parts`;
+    const keys = differing(a, b).filter((key) => key !== "body" && key !== "left" && key !== "right" && key !== "columns");
+    if (keys.length === 1 && keys[0] === "dark") return b.dark ? "Made the slide dark" : "Made the slide light";
+    return keys.length === 1 ? `Changed the slide's ${SLIDE_NAMES[keys[0]] || keys[0]}` : "Changed the slide";
+  }
+  const BLOCK_NAMES = { align: "alignment", size: "size", turn: "turning", colour: "colour", muted: "colour" };
+  function blockChange(a, b) {
+    const kind = kindOf(b), name = blockName(b), keys = differing(a, b);
+    if (keys.length === 1 && keys[0] === "width") return b.width == null ? `Fitted the ${name} to its place` : `Sized the ${name}`;
+    if (keys.includes(kind)) {
+      if (kind === "figure" && typeof a.figure === "object" && typeof b.figure === "object") return figureChange(a.figure, b.figure);
+      if (kind === "image" || (kind === "figure" && typeof b.figure === "string")) return `Changed the ${name}'s file`;
+      return `Typed in the ${name}`;
+    }
+    return `Changed the ${name}'s ${BLOCK_NAMES[keys[0]] || keys[0]}`;
+  }
+  // A change to a figure written in the deck: the part it was made to, by name.
+  function figureChange(a, b) {
+    const byId = (list) => new Map((list || []).map((item) => [item.id, item]));
+    const nodesA = byId(a.nodes), nodesB = byId(b.nodes), groupsA = byId(a.groups), groupsB = byId(b.groups);
+    const named = (item, id) => quoted(item?.label || id || "a part", 24) || "a part";
+    const call = (id) => named(nodesB.get(id) || nodesA.get(id) || groupsB.get(id) || groupsA.get(id), id);
+    const ref = (end) => (nodesB.has(end) || nodesA.has(end) ? end : String(end).slice(0, String(end).lastIndexOf(".")) || end);
+    const added = [...nodesB.keys()].filter((id) => !nodesA.has(id)), removed = [...nodesA.keys()].filter((id) => !nodesB.has(id));
+    if (added.length === 1 && !removed.length) return `Added ${call(added[0])}`;
+    if (removed.length === 1 && !added.length) return `Deleted ${call(removed[0])}`;
+    if (added.length > 1 && !removed.length) return `Added ${added.length} parts`;
+    if (removed.length > 1 && !added.length) return `Deleted ${removed.length} parts`;
+    if (added.length || removed.length) return "Changed the figure's parts";
+    const changed = [...nodesB.keys()].filter((id) => !same(nodesA.get(id), nodesB.get(id)));
+    if (changed.length === 1) {
+      const id = changed[0], was = nodesA.get(id), now = nodesB.get(id);
+      if (!same(was.label, now.label)) return was.label ? `Renamed ${named(was, id)} to ${named(now, id)}` : `Named ${named(now, id)}`;
+      const keys = differing(was.properties, now.properties);
+      if (keys.length && keys.every((key) => ["yaw", "pitch", "roll"].includes(key))) return `Turned ${call(id)}`;
+      if (keys.length && keys.every((key) => key === "zoom")) return `Zoomed ${call(id)}`;
+      if (!same(was.kind, now.kind)) return `Made ${call(id)} a ${now.kind || "block"}`;
+      return `Changed ${call(id)}`;
+    }
+    if (changed.length > 1) return `Changed ${changed.length} parts`;
+    const edgeKey = (edge) => JSON.stringify(edge);
+    const edgesA = (a.edges || []).map(edgeKey), edgesB = (b.edges || []).map(edgeKey);
+    const newEdges = (b.edges || []).filter((edge) => !edgesA.includes(edgeKey(edge)));
+    const oldEdges = (a.edges || []).filter((edge) => !edgesB.includes(edgeKey(edge)));
+    if (newEdges.length === 1 && !oldEdges.length) return `Connected ${call(ref(newEdges[0].from))} to ${call(ref(newEdges[0].to))}`;
+    if (oldEdges.length === 1 && !newEdges.length) return `Removed the line from ${call(ref(oldEdges[0].from))} to ${call(ref(oldEdges[0].to))}`;
+    if (newEdges.length || oldEdges.length) return newEdges.length === oldEdges.length ? "Changed a line" : "Changed the lines";
+    // Its parts arranged: grouped, ungrouped, or one moved in its row or to another.
+    const newGroups = [...groupsB.keys()].filter((id) => !groupsA.has(id)), oldGroups = [...groupsA.keys()].filter((id) => !groupsB.has(id));
+    if (newGroups.length === 1 && !oldGroups.length) return `Grouped ${count((groupsB.get(newGroups[0]).children || []).length, "part")}`;
+    if (oldGroups.length === 1 && !newGroups.length) return `Ungrouped ${call(oldGroups[0])}`;
+    const parentOf = (groups) => { const map = new Map(); for (const group of groups.values()) (group.children || []).forEach((child, index) => map.set(child, [group.id, index])); return map; };
+    const homeA = parentOf(groupsA), homeB = parentOf(groupsB);
+    const moved = [...homeB.keys()].filter((id) => homeA.get(id)?.[0] !== homeB.get(id)[0]);
+    if (moved.length === 1) return `Moved ${call(moved[0])}`;
+    for (const [id, group] of groupsB) {
+      const was = groupsA.get(id);
+      if (!was || same(was, group)) continue;
+      if (!same(was.children, group.children)) {
+        const before = was.children || [], after = group.children || [];
+        const k = after.findIndex((child, index) => child !== before[index]);
+        const without = (list, child) => list.filter((item) => item !== child);
+        const one = [after[k], before[k]].find((child) => same(without(before, child), without(after, child)));
+        return one ? `Moved ${call(one)}` : `Rearranged ${call(id)}`;
+      }
+      return id === b.groups?.[0]?.id ? "Changed the figure's layout" : `Changed the layout of ${call(id)}`;
+    }
+    return "Edited the figure";
+  }
+
+  studio.on("change", ({ quiet, source, who, before, entry }) => {
     clearTimeout(settleTimer);
+    // Undone or redone, the deck goes to the slide the change was made on.
+    if (source === "history" && Number.isInteger(entry?.where) && entry.where !== state.slide && entry.where < slides().length) {
+      closeInline();
+      leaveFigure(false);
+      state.slide = entry.where;
+      state.focus = null;
+    }
     settling = false;
     if (state.slide >= slides().length) state.slide = Math.max(0, slides().length - 1);
     pending = true;

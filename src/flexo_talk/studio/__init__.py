@@ -348,7 +348,12 @@ class DeckKind:
         "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}`` -- or
         ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``), or
         ``{"do": "inline", "at"}``, a figure file's figure written into the deck
-        (``_inline``)."""
+        (``_inline``), or ``{"do": "figure-file", "file", "text", "expect"}``, a figure
+        file put back as an edit made on its slide found it or left it (``_restore``).
+
+        An edit to a figure file answers with the file's text before and after it
+        (``was``, ``now``) and both read as data (``change``): the studio keeps them in
+        the deck's history, to undo the edit and say what it did."""
 
         import copy
 
@@ -358,6 +363,8 @@ class DeckKind:
             return _mechanism(document, action, base)
         if action.get("do") == "inline":
             return _inline(document, action, base)
+        if action.get("do") == "figure-file":
+            return _restore(document, action, base)
         if action.get("do") != "figure":
             raise EditError(f'unknown deck edit "{action.get("do")}"')
         at = action.get("at") or {}
@@ -372,14 +379,16 @@ class DeckKind:
             block["figure"] = made["data"]
             return {"document": changed, "select": made["select"], "model": made["model"]}
         if isinstance(value, str) and value and ".py:" not in value:
-            path = (base / value).resolve()
-            if not path.is_file() or not path.is_relative_to(base.resolve()):
-                raise EditError(f"no figure file {value} beside the deck")
-            result = apply(path.read_text(encoding="utf-8"), edit, suffix=path.suffix, base=path.parent)
-            if edit.get("do") != "read":
+            path = _figure_file(base, value)
+            was = path.read_text(encoding="utf-8")
+            result = apply(was, edit, suffix=path.suffix, base=path.parent)
+            answer = {"document": document, "select": result["select"],
+                      "model": model(result["text"], suffix=path.suffix), "file": value}
+            if edit.get("do") != "read" and result["text"] != was:
                 path.write_text(result["text"], encoding="utf-8")
-            return {"document": document, "select": result["select"],
-                    "model": model(result["text"], suffix=path.suffix), "file": value}
+                answer |= {"was": was, "now": result["text"],
+                           "change": [_figure_data(was, path.suffix), _figure_data(result["text"], path.suffix)]}
+            return answer
         raise EditError("a figure made in Python is changed in its Python file")
 
     def export(self, document: dict[str, Any], base: Path, stem: str, formats: list[str]) -> list[Path]:
@@ -513,6 +522,46 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> 
         look = {}
     drawn = sheet(block["mechanism"], step=step, holding=holding, options=options, look=look)
     return {"document": changed, "sheet": drawn, **said}
+
+
+def _figure_file(base: Path, value: str) -> Path:
+    """The figure file ``value`` names, in the deck's folder."""
+
+    from flexo.studio.figure_edit import EditError
+
+    path = (base / value).resolve()
+    figure = path.suffix.lower() in {".yaml", ".yml", ".json"}
+    if not figure or not path.is_file() or not path.is_relative_to(base.resolve()):
+        raise EditError(f"no figure file {value} beside the deck")
+    return path
+
+
+def _restore(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+    """A figure file written as ``text`` -- as an edit made on its slide found it (undone)
+    or left it (done again) -- only while it is still ``expect``: a change made to the
+    file since, by hand or by someone else, is not lost."""
+
+    from flexo.studio.figure_edit import EditError
+
+    value = str(action.get("file") or "")
+    path = _figure_file(base, value)
+    if path.read_text(encoding="utf-8") != action.get("expect"):
+        raise EditError(f"{value} has changed since; it is left as it is")
+    path.write_text(str(action.get("text") or ""), encoding="utf-8")
+    return {"document": document, "file": value}
+
+
+def _figure_data(text: str, suffix: str) -> Any:
+    """A figure file's text as data (None if it does not read)."""
+
+    import json
+
+    import yaml
+
+    try:
+        return json.loads(text) if suffix.lower() == ".json" else yaml.safe_load(text)
+    except (ValueError, yaml.YAMLError):
+        return None
 
 
 def _structure_view(document: dict[str, Any], at: dict[str, Any], identifier: str, base: Path) -> Any:

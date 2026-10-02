@@ -358,6 +358,39 @@ def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
     assert text.startswith("# A flexo figure") and "id: backbone" in text and "to: backbone" in text
 
 
+def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: Path) -> None:
+    from flexo.studio.figure_edit import EditError
+    from flexo.studio.figure_kind import NEW_FIGURE
+
+    path = tmp_path / "model.yaml"
+    path.write_text(NEW_FIGURE, encoding="utf-8")
+    kind = DeckKind()
+    document = _deck_with_figures()
+    at = {"slide": 1, "region": "body", "index": 0}
+    read = kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+    assert "was" not in read  # nothing changed, nothing to undo
+    rename = {"do": "rename", "id": "encoder", "to": "backbone"}
+    result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
+    assert result["was"] == NEW_FIGURE and result["now"] == path.read_text()
+    was, now = result["change"]
+    assert "encoder" in [node["id"] for node in was["nodes"]] and "backbone" in [node["id"] for node in now["nodes"]]
+
+    def restore(text: str, expect: str) -> None:
+        kind.act(document, {"do": "figure-file", "file": "model.yaml", "text": text, "expect": expect}, tmp_path)
+
+    restore(result["was"], result["now"])  # undone
+    assert path.read_text() == NEW_FIGURE
+    restore(result["now"], result["was"])  # done again
+    assert path.read_text() == result["now"]
+    # Changed since by hand: left as it is.
+    path.write_text(result["now"] + "\n# mine\n", encoding="utf-8")
+    with pytest.raises(EditError, match="changed since"):
+        restore(result["was"], result["now"])
+    assert path.read_text().endswith("# mine\n")
+    with pytest.raises(EditError, match="no figure file"):
+        kind.act(document, {"do": "figure-file", "file": "../elsewhere.yaml", "text": "", "expect": ""}, tmp_path)
+
+
 def test_a_figure_made_in_python_or_gone_is_not_edited_on_its_slide(tmp_path: Path) -> None:
     from flexo.studio.figure_edit import EditError
 
