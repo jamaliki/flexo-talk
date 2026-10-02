@@ -45,7 +45,7 @@ const MATH_SNIPPETS = [
   ["x̂", "Hat", "\\hat{|}"],
   ["Tt", "Words", "\\text{|}"],
 ];
-const INLINE = new Set(["text", "bullets", "quote", "callout", "code"]);
+const INLINE = new Set(["text", "bullets", "quote", "callout", "code", "math"]);
 // Parts that are drawn rather than read: they take the right of a slide with words.
 const VISUAL = new Set(["figure", "image", "plot", "table", "gallery", "mechanism"]);
 // A figure on a slide, exported by itself: what flexo builds of it, or its document.
@@ -1430,6 +1430,7 @@ export function mount(studio, container) {
       bullets = kind === "bullets";
       if (bullets) editor = ui.markup({ value: bulletsText(block.bullets), rows: 3, tabs: true, onInput: (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }) });
       else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
+      else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, onInput: (text) => editBlock(at, (b) => { b.math = text; }, { merge }) });
       else editor = ui.markup({ value: block[kind], rows: 2, onInput: (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }) });
       const region = regionsOf(slide).find((r) => r.key === at.region);
       id = `slide${state.slide + 1}.${region.svg}.${at.index}`;
@@ -1448,7 +1449,11 @@ export function mount(studio, container) {
       if (event.key === "Enter" && !event.shiftKey && target.kind === "field") { event.preventDefault(); closeInline(); }
       if (target.kind === "cell" && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) { event.preventDefault(); nextCell(target, event.key, event.shiftKey); }
     });
-    inline = { node, id, area, bullets, cell };
+    // An equation's LaTeX looks nothing like it: it is typed under the equation, which
+    // stays in view and is drawn again as it changes.
+    const under = target.kind === "block" && kindOf(blocksAt(slide, target.region)[target.index]) === "math";
+    if (under) node.classList.add("under");
+    inline = { node, id, area, bullets, cell, under };
     center.append(node);
     positionInline();
     area.focus();
@@ -1542,6 +1547,15 @@ export function mount(studio, container) {
     const box = boxOf(inline.id);
     const look = wordsLook(element) || inline.look || (inline.cell ? cellLook(inline.id) : null);
     if (look) inline.look = look;
+    if (inline.under) {
+      chosen.hidden = true;
+      hover.hidden = true;
+      if (!box) return;
+      const width = Math.min(Math.max(box.width + 40, 360), slide.width - 24);
+      const left = slide.left - outer.left + Math.min(Math.max(12, box.left + box.width / 2 - width / 2), slide.width - width - 12);
+      Object.assign(inline.node.style, { left: `${left}px`, top: `${slide.top - outer.top + box.top + box.height + 6}px`, width: `${width}px`, minHeight: "" });
+      return;
+    }
     if (element && inline.hidden !== element) { inline.hidden?.style.removeProperty("visibility"); element.style.visibility = "hidden"; inline.hidden = element; }
     // The words being typed are what is chosen: no frame over them.
     chosen.hidden = true;

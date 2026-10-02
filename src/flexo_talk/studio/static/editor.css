@@ -113,6 +113,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .inline-editor.in-place .markup { background: transparent; }
 .inline-editor.in-place .textarea { background: transparent; border: 0; box-shadow: none; padding: 5px; line-height: 1.22; letter-spacing: normal; resize: none; overflow: hidden; caret-color: var(--accent); }
 .inline-editor.in-place .textarea:focus { box-shadow: none; outline: none; }
+/* An equation's LaTeX is typed under it, on a panel of its own. */
+.inline-editor.in-place.under { background: var(--raised); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-2); padding: 4px; }
+.inline-editor.in-place.under textarea { font-size: 13px; background: transparent; }
 /* A cell is small and its neighbours close: its words are made strong or emphatic by key. */
 .inline-editor.in-place.cell .markup-tools { display: none; }
 .inline-editor.in-place .markup-tools { position: absolute; bottom: calc(100% + 8px); left: -2px; opacity: 1; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); }
