@@ -365,7 +365,12 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
 
 - **The slide is where you work.** Click a part to choose it; double-click words
   (a title, a list, a paragraph) to type them in place, on the slide, in their own
-  face and size. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  face and size; double-click a table's cell to type in it (Tab to the next, a new
+  row after the last; Enter to the one below), or an equation to type its LaTeX
+  under it as it redraws. Right-click anything for what can be done with it. A
+  figure or picture chosen has a handle at each corner: drag one to size it (its
+  `width`), drawn where the slide will put it as you drag; double-click a handle
+  to fit it to its place again. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere. The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
@@ -384,9 +389,12 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   figure adds parts (A) and draws lines (C), a **+** beside the part chosen adds
   the next step, joined to it, its words typed at once, and the inspector shows
   the part chosen. A part added after one whose single line runs on to the next
-  goes into that line, as a step into a flow chart. A figure written in the deck
-  changes in the deck, and undoes with it; a figure file changes in its file,
-  comments and all (**Made from › Here** writes its figure into the deck instead,
+  goes into that line, as a step into a flow chart. A chosen molecule turns as
+  it is dragged, its trace turning over it; its corners, like a picture's, size
+  it. A part's **Kind** may be made a structure or a picture -- a step becomes the
+  backbones it stands for, keeping its words and lines. A figure written in the
+  deck changes in the deck; a figure file changes in its file, comments and all,
+  and either undoes with the deck (**Made from › Here** writes its figure into the deck instead,
   the file left as it was). Esc steps out, a part at a time. A figure made in
   Python is changed in its Python. There is no separate figure editor to go to:
   to use a figure elsewhere, **Export** on the bar above it (or in its panel)
@@ -403,8 +411,11 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
 - **Others, live**: slides an agent or another person changes flash in their
   colour, and their avatars show which slide they are on.
 - It presents full screen (reveals, notes, a clock) and exports PowerPoint, PDF,
-  SVG, and PNG. Saving is automatic; ⌘Z undoes your own last change. Saving
-  writes the document back as YAML (comments in a hand-written file are not kept).
+  SVG, and PNG. Saving is automatic; ⌘Z undoes your own last change, and the
+  history beside it (⌥⌘Z) lists every change in words -- "Renamed 'Model' to
+  'Encoder' · Slide 2" -- to go back, or forward, to any of them, the deck going
+  to the slide each was made on. Saving writes the document back as YAML
+  (comments in a hand-written file are not kept).
 
 ## Command line
 
