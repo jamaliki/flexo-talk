@@ -114,33 +114,39 @@ class DeckStyle:
         for name, (low, high) in _STYLE_NUMBERS.items():
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-                raise SettingError(name, f"{name} is {value!r}: it is a number from {_said(low)} to {_said(high)}")
+                raise SettingError(
+                    name, f"{name} must be a number from {_said(low)} to {_said(high)}, not {value!r}."
+                )
             if not low <= value <= high:
-                raise SettingError(name, f"{name} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+                raise SettingError(
+                    name, f"{name} must be between {_said(low)} and {_said(high)}, not {_said(value)}."
+                )
         if self.margin * 2 >= min(self.width, self.height):
-            raise SettingError("margin", f"a margin of {_said(self.margin)} leaves no room on a "
-                                         f"{_said(self.width)} by {_said(self.height)} slide")
+            raise SettingError("margin", f"A margin of {_said(self.margin)} leaves no room on a "
+                                         f"{_said(self.width)} \u00d7 {_said(self.height)} slide.")
         for name, allowed in _STYLE_CHOICES.items():
             if getattr(self, name) not in allowed:
-                raise SettingError(name, f"{name} is {getattr(self, name)!r}: it is one of {', '.join(allowed)}")
+                raise SettingError(
+                    name, f"{name} must be one of {', '.join(allowed)}, not {getattr(self, name)!r}."
+                )
         for name in ("edge", "numbers"):
             if not isinstance(getattr(self, name), bool):
-                raise SettingError(name, f"{name} is {getattr(self, name)!r}: it is true or false")
+                raise SettingError(name, f"{name} must be true or false, not {getattr(self, name)!r}.")
         weight = self.title_weight
         if weight is not None and (isinstance(weight, bool) or not isinstance(weight, int) or not 1 <= weight <= 1000):
-            raise SettingError("title_weight", f"title_weight is {weight!r}: it is a font weight from 100 to 900, "
-                                               "such as 700")
+            raise SettingError("title_weight", "title_weight must be a font weight from 100 to 900 (such as 700), "
+                                               f"not {weight!r}.")
         if not isinstance(self.title_role, str) or self.title_role not in _roles():
             # A role no palette has would paint every title black.
-            raise SettingError("title_role", f"title_role is {self.title_role!r}: it names a palette role, "
-                                             "such as ink, muted-ink or tone-1-stroke")
+            raise SettingError("title_role", "title_role must be a palette role (such as ink, muted-ink or "
+                                             f"tone-1-stroke), not {self.title_role!r}.")
 
     @classmethod
     def look(cls, name: str, **changes: object) -> DeckStyle:
         """A named look (see ``LOOKS``), with any field changed: ``DeckStyle.look("band", body_size=22)``."""
 
         if name not in LOOKS:
-            raise ValueError(f'unknown look "{name}"; looks are {", ".join(LOOKS)}')
+            raise ValueError(f"Unknown look \u201c{name}\u201d. Available looks: {', '.join(LOOKS)}.")
         return cls(**{**LOOKS[name], **changes})  # type: ignore[arg-type]
 
 
@@ -224,9 +230,9 @@ def _number(value: object, what: str, low: float, high: float, example: str) -> 
     import math
 
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-        raise SettingError(what, f"{what} is {value!r}: it is a number, such as {example}")
+        raise SettingError(what, f"{what} must be a number, such as {example}, not {value!r}.")
     if not low <= value <= high:
-        raise SettingError(what, f"{what} is {_said(value)}: it is from {_said(low)} to {_said(high)}")
+        raise SettingError(what, f"{what} must be between {_said(low)} and {_said(high)}, not {_said(value)}.")
     return float(value)
 
 
@@ -244,7 +250,7 @@ def _size(value: object, what: str = "size") -> float | None:
 
 def _flag(value: object, what: str) -> bool:
     if not isinstance(value, bool):
-        raise SettingError(what, f"{what} is {value!r}: it is true or false")
+        raise SettingError(what, f"{what} must be true or false, not {value!r}.")
     return value
 
 
@@ -252,7 +258,7 @@ def _choice(value: object, what: str, allowed: tuple[str, ...]) -> str:
     # "centre" is what a British hand writes for "middle".
     value = {"centre": "middle", "center": "middle"}.get(value, value) if isinstance(value, str) else value
     if value not in allowed:
-        raise SettingError(what, f"{what} is {value!r}: it is one of {', '.join(allowed)}")
+        raise SettingError(what, f"{what} must be one of {', '.join(allowed)}, not {value!r}.")
     return value
 
 
@@ -260,7 +266,7 @@ def _words(value: object, what: str) -> str:
     """Words: a string, or a number written as one; never a list, mapping or nothing."""
 
     if isinstance(value, bool) or not isinstance(value, str | int | float):
-        raise SettingError(what, f"{what} is {value!r}: it is words")
+        raise SettingError(what, f"{what} must be text, not {value!r}.")
     return str(value)
 
 
@@ -270,12 +276,14 @@ def _colour(value: object, what: str = "colour") -> str | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
-        raise SettingError(what, f"{what} is {value!r}: it is a palette role (accent, muted) or a #rrggbb colour")
+        raise SettingError(what, f"{what} must be a palette role (accent, muted) or a #rrggbb colour, not {value!r}.")
     if value.startswith("#") and not re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", value):
-        raise SettingError(what, f"{what} is {value!r}: a colour is written #rgb or #rrggbb, in hex digits")
+        raise SettingError(what, f"{what} must be a colour written as #rgb or #rrggbb in hex digits, not {value!r}.")
     if not value.startswith("#") and paint_role(value) not in _roles():
         # A role no palette has would be painted black, whatever the theme.
-        raise SettingError(what, f"{what} is {value!r}: it is accent (accent2, ...), muted, ink, or a #rrggbb colour")
+        raise SettingError(
+            what, f"{what} must be accent (accent2, \u2026), muted, ink or a #rrggbb colour, not {value!r}."
+        )
     return value
 
 
@@ -445,13 +453,14 @@ def _check_theme(theme: object) -> None:
 
     if isinstance(theme, Path) or (isinstance(theme, str) and theme.lower().endswith((".yaml", ".yml", ".json"))):
         if not Path(theme).is_file():
-            raise SettingError("theme", f"theme {str(theme)!r}: no such theme file")
+            raise SettingError("theme", f"Cannot find the theme file \u201c{theme}\u201d.")
         return
     if not isinstance(theme, str):
-        raise SettingError("theme", f"theme is {theme!r}: it names a theme ({', '.join(theme_names())}) "
-                                    "or a theme file")
+        raise SettingError("theme", f"theme must name a theme ({', '.join(theme_names())}) or a theme file, "
+                                    f"not {theme!r}.")
     if theme not in theme_names():
-        raise SettingError("theme", f'unknown theme "{theme}"; themes are {", ".join(theme_names())}, or a theme file')
+        raise SettingError("theme", f"Unknown theme \u201c{theme}\u201d. Use one of {', '.join(theme_names())}, "
+                                    "or a theme file.")
 
 
 def _check_settings(settings: dict[str, object]) -> None:
@@ -462,24 +471,24 @@ def _check_settings(settings: dict[str, object]) -> None:
     from flexo.sketch import Sketch, parse_sketch
 
     def wrong(key: str, said: str) -> SettingError:
-        return SettingError(key, f"{key} is {settings[key]!r}: {said}")
+        return SettingError(key, f"{key} must be {said}, not {settings[key]!r}.")
 
     for key in ("font", "title_font", "figure_font"):
         if settings[key] is not None and not isinstance(settings[key], str):
-            raise wrong(key, "it names a font family, such as IBM Plex Sans")
+            raise wrong(key, "a font family name, such as IBM Plex Sans")
     palette = settings["palette"]
     if not isinstance(palette, str | Path) and not (
         isinstance(palette, list | tuple) and palette and all(isinstance(colour, str) for colour in palette)
     ):
-        raise wrong("palette", "it names a palette, or lists #rrggbb colours")
+        raise wrong("palette", "a palette name or a list of #rrggbb colours")
     look = settings["look"]
     if look is not None and not isinstance(look, str):
-        raise wrong("look", f"it is one of {', '.join(LOOKS)}")
+        raise wrong("look", f"one of {', '.join(LOOKS)}")
     if look is not None and look not in LOOKS:
-        raise SettingError("look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+        raise SettingError("look", f"Unknown look \u201c{look}\u201d. Available looks: {', '.join(LOOKS)}.")
     background = settings["background"]
     if not isinstance(background, bool | str | Path):
-        raise wrong("background", "it is true (the theme's page), false, a #rrggbb colour, or a picture file")
+        raise wrong("background", "true (the theme's page colour), false, a #rrggbb colour or a picture file")
     if isinstance(background, str) and background.startswith("#"):
         _colour(background, "background")
     for key in ("id", "footer"):
@@ -487,9 +496,9 @@ def _check_settings(settings: dict[str, object]) -> None:
             _words(settings[key], key)
     conventions, sketch = settings["conventions"], settings["sketch"]
     if conventions is not None and not isinstance(conventions, dict):
-        raise wrong("conventions", "it is a mapping of flexo's conventions, such as {lines: straight}")
+        raise wrong("conventions", "a mapping of flexo conventions, such as {lines: straight}")
     if sketch is not None and not isinstance(sketch, bool | dict | Sketch):
-        raise wrong("sketch", "it is true (a hand-drawn look), or a mapping of roughness, passes, fill, paper, seed")
+        raise wrong("sketch", "true (for a hand-drawn look) or a mapping of roughness, passes, fill, paper and seed")
     for key, parse in (("conventions", parse_conventions), ("sketch", parse_sketch)):
         try:
             parse(settings[key])  # type: ignore[operator]
@@ -660,12 +669,12 @@ class Region:
                 if isinstance(entry, list | tuple):
                     if level + 1 >= MOST_LEVELS:
                         # A slide shows a few levels; this many would outrun Python's own.
-                        raise ValueError(f"a list nested more than {MOST_LEVELS} levels deep")
+                        raise ValueError(f"A list is nested more than {MOST_LEVELS} levels deep.")
                     add(entry, level + 1)
-                elif str(_words(entry, "a bullet")).strip():
+                elif str(_words(entry, "A bullet")).strip():
                     # A number is an item too (a year); anything else is not words. An
                     # empty item is left out, rather than drawn as a bare bullet.
-                    flattened.append((level, inline(_words(entry, "a bullet"))))
+                    flattened.append((level, inline(_words(entry, "A bullet"))))
 
         add(items, 0)
         self.blocks.append(_Bullets(flattened, size, numbered, reveal))
@@ -750,17 +759,18 @@ class Region:
         lone_pairs = _choice(lone_pairs, "lone_pairs", ("used", "all", "none"))
         arrow_colour = _colour(arrow_colour, "arrow_colour")
         if arrow_colour is not None and not re.fullmatch(r"#.*|ink|muted|accent\d*", arrow_colour):
-            raise SettingError("arrow_colour", f"arrow_colour is {arrow_colour!r}: it is accent (accent2, ...), "
-                               "ink, muted, or a #rrggbb colour")
+            raise SettingError("arrow_colour", "arrow_colour must be accent (accent2, \u2026), ink, muted or a "
+                               f"#rrggbb colour, not {arrow_colour!r}.")
         charges = _choice(charges, "charges", ("circled", "plain"))
         if per_row is not None:
             per_row = int(_number(per_row, "per_row", 1, 20, "3"))
         written = [steps] if isinstance(steps, str) else list(steps)
         if not written:
-            raise ValueError("a mechanism needs at least one step")
+            raise ValueError("A mechanism needs at least one step.")
         for number, step in enumerate(written, start=1):
             if not isinstance(step, str | dict):
-                raise ValueError(f"step {number} of the mechanism is a SMILES, or a mapping with smiles and arrows")
+                raise ValueError(f"Step {number} of the mechanism must be a SMILES string or a mapping with smiles "
+                                 "and arrows.")
         deck = self._slide.deck
         identifier = f"{self._slide.id}-{self.name}-{len(self.blocks)}"
         figure = flexo.Figure(identifier, **deck.figure_options())
@@ -808,11 +818,11 @@ class Region:
         """
 
         if isinstance(items, str | Path) or not items:
-            raise ValueError("a gallery is a list of at least one picture (a file, or a file and its caption)")
+            raise ValueError("A gallery needs at least one picture (a file, or a file and its caption).")
         if columns is not None and (
             isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= 12
         ):
-            raise ValueError(f"columns is {columns!r}: it is a whole number from 1 to 12")
+            raise ValueError(f"columns must be a whole number from 1 to 12, not {columns!r}.")
         height = None if height is None else _number(height, "height", 8.0, 4032.0, "120 (points)")
         crop = None if crop is None else _choice(crop, "crop", ("circle", "square"))
         size = _size(size)
@@ -824,8 +834,8 @@ class Region:
             elif isinstance(item, list | tuple) and len(item) == 2:
                 source, caption = item
             else:
-                raise ValueError(f"a gallery picture is a file, or a file and its caption, not {item!r}")
-            cells.append((str(source), inline(_words(caption, "a caption")) if caption else ()))
+                raise ValueError(f"A gallery picture must be a file, or a file and its caption, not {item!r}.")
+            cells.append((str(source), inline(_words(caption, "A caption")) if caption else ()))
         self.blocks.append(_Gallery(cells, columns, height, crop, size, align))
         pictures = [str(item) if isinstance(item, str | Path) else {"picture": str(item[0]), "caption": item[1]}
                     for item in items]
@@ -853,11 +863,11 @@ class Region:
         is the values' size."""
 
         if not items:
-            raise ValueError("stats needs at least one (value, label) pair")
+            raise ValueError("Stats need at least one (value, label) pair.")
         for item in items:
             if isinstance(item, str) or not isinstance(item, list | tuple) or len(item) != 2:
-                raise ValueError(f'each of stats is a (value, label) pair, such as ("93%", "accuracy"), not {item!r}')
-        items = tuple((_words(value, "a stat's value"), _words(label, "a stat's label")) for value, label in items)
+                raise ValueError(f'Each stat must be a (value, label) pair, such as ("93%", "accuracy"), not {item!r}.')
+        items = tuple((_words(value, "A stat's value"), _words(label, "A stat's label")) for value, label in items)
         colour, size = _colour(colour), _size(size)
         self.blocks.append(
             _Stats([(inline(str(value)), inline(label)) for value, label in items], colour, size)
@@ -875,7 +885,7 @@ class Region:
 
         words, title, size = _words(words, "callout"), _words(title, "title"), _size(size)
         if not (isinstance(colour, str) and colour.startswith("accent") and paint_role(colour) in _roles()):
-            raise ValueError(f'a callout\'s colour is "accent", "accent2", ... not "{colour}"')
+            raise ValueError(f"A callout's colour must be an accent (accent, accent2, \u2026), not {colour!r}.")
         self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
         self._record(
             "callout", words, title=title or None, colour=None if colour == "accent" else colour, size=size
@@ -941,9 +951,9 @@ class Region:
         """
 
         if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
-            raise ValueError("a table is a list of rows, each a list of cells")
+            raise ValueError("A table must be a list of rows, each a list of cells.")
         header, size = _flag(header, "header"), _size(size)
-        cells = [[inline("" if cell is None else _words(cell, "a table's cell")) for cell in row] for row in rows]
+        cells = [[inline("" if cell is None else _words(cell, "A table cell")) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
         ragged = len({len(row) for row in cells}) > 1
         cells = [row + [()] * (columns - len(row)) for row in cells]
@@ -953,10 +963,10 @@ class Region:
         elif align == "":
             aligned = ()
         elif isinstance(align, str):
-            raise SettingError("align", f"align is {align!r}: it is a letter for each column (l, c or r), "
-                                        "or a list of start, middle and end")
+            raise SettingError("align", "align must be a letter for each column (l, c or r) or a list of start, "
+                                        f"middle and end, not {align!r}.")
         else:
-            aligned = tuple(_choice(item, "a column's align", ("start", "middle", "end")) for item in align)
+            aligned = tuple(_choice(item, "A column's alignment", ("start", "middle", "end")) for item in align)
         if len(aligned) != columns:
             body = [list(row) for row in rows[1 if header else 0 :]]
             aligned = tuple(
@@ -1040,16 +1050,18 @@ class Slide:
         align: str | None = None,
     ) -> None:
         if layout not in LAYOUTS:
-            raise ValueError(f'unknown layout "{layout}"; layouts are {", ".join(LAYOUTS)}')
+            raise ValueError(f"Unknown layout \u201c{layout}\u201d. Available layouts: {', '.join(LAYOUTS)}.")
         title, subtitle = _words(title or "", "title"), _words(subtitle or "", "subtitle")
         split = _number(split, "split", 0.15, 0.85, "0.5 (the left column's share of the width)")
         shade = _number(shade, "shade", 0.0, 1.0, "0.4 (how much a picture is darkened)")
         if dark is not None:
             dark = _flag(dark, "dark")
         if widths is not None:
-            widths = [_number(share, "a column's width", 0.01, 100.0, "1 (shares of the width)") for share in widths]
+            widths = [_number(share, "A column width", 0.01, 100.0, "1 (shares of the width)") for share in widths]
         if background is not None and not isinstance(background, str | Path):
-            raise SettingError("background", f"background is {background!r}: it is a #rrggbb colour or a picture file")
+            raise SettingError(
+                "background", f"background must be a #rrggbb colour or a picture file, not {background!r}."
+            )
         if isinstance(background, str) and background.startswith("#"):
             _colour(background, "background")
         self.deck = deck
@@ -1072,7 +1084,7 @@ class Slide:
         self.dark = dark
         """Whether the slide's words are light; decided from the background when unset."""
         if align not in {None, "auto", "top", "middle"}:
-            raise SettingError("align", f'align is "auto", "top", or "middle", not "{align}"')
+            raise SettingError("align", f"align must be auto, top or middle, not {align!r}.")
         self.align = align
         """Where the content sits in the body; the deck style's ``align`` when unset."""
         self.byline_runs: tuple[TextRun, ...] = ()
@@ -1080,7 +1092,7 @@ class Slide:
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:
-                raise ValueError("a columns slide needs at least one column")
+                raise ValueError("A columns slide needs at least one column.")
             names = tuple(f"column{index + 1}" for index in range(count))
             total = sum(widths) if widths else float(count)
             self.shares = [share / total for share in widths] if widths else [1.0 / count] * count
@@ -1128,7 +1140,8 @@ class Slide:
     def _region(self, name: str) -> Region:
         if name not in self.regions:
             raise AttributeError(
-                f'a "{self.layout}" slide has regions {", ".join(self.regions)}, not "{name}"'
+                f"A \u201c{self.layout}\u201d slide has no region \u201c{name}\u201d. Its regions are "
+                f"{', '.join(self.regions)}."
             )
         return self.regions[name]
 
@@ -1242,25 +1255,29 @@ def theme_slides(theme: object) -> dict[str, object]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     slides = (data.get("slides") or {}) if isinstance(data, dict) else {}
     if not isinstance(slides, dict):
-        raise ValueError(f"{path.name}: slides: is a mapping ({', '.join(THEME_SLIDE_KEYS)})")
+        raise ValueError(f"{path.name}: slides must be a mapping ({', '.join(THEME_SLIDE_KEYS)}).")
     unknown = sorted(set(slides) - set(THEME_SLIDE_KEYS))
     if unknown:
         raise ValueError(
-            f"{path.name}: slides: has no {', '.join(unknown)}; it takes {', '.join(THEME_SLIDE_KEYS)}"
+            f"{path.name}: Unknown {'key' if len(unknown) == 1 else 'keys'} in slides: {', '.join(unknown)}. "
+            f"Valid keys: {', '.join(THEME_SLIDE_KEYS)}."
         )
     style = slides.get("style") or {}
     names = {item.name for item in fields(DeckStyle)}
-    if not isinstance(style, dict) or set(style) - names:
-        wrong = sorted(set(style) - names) if isinstance(style, dict) else ["(not a mapping)"]
-        raise ValueError(f"{path.name}: slides.style has no {', '.join(wrong)}")
+    if not isinstance(style, dict):
+        raise ValueError(f"{path.name}: slides.style must be a mapping of DeckStyle fields.")
+    if set(style) - names:
+        wrong = sorted(set(style) - names)
+        raise ValueError(f"{path.name}: Unknown {'field' if len(wrong) == 1 else 'fields'} in slides.style: "
+                         f"{', '.join(wrong)}.")
     look = slides.get("look")
     if look is not None and look not in LOOKS:
-        raise ValueError(f'{path.name}: unknown look "{look}"; looks are {", ".join(LOOKS)}')
+        raise ValueError(f"{path.name}: Unknown look \u201c{look}\u201d. Available looks: {', '.join(LOOKS)}.")
     background = slides.get("background")
     if isinstance(background, str) and not background.startswith("#"):
         picture = (path.parent / background).resolve()
         if not picture.is_file():
-            raise ValueError(f"{path.name}: slides.background: no picture {background}")
+            raise ValueError(f"{path.name}: Cannot find the picture {background} named in slides.background.")
         slides = {**slides, "background": str(picture)}
     _THEME_SLIDES[str(path)] = (stamp, slides)
     return dict(slides)
@@ -1341,7 +1358,7 @@ class Deck:
         a picture that fills each slide (a paper texture), or nothing (``False``)."""
         self.footer = "" if footer is None else str(footer)
         if look is not None and look not in LOOKS:
-            raise SettingError("look", f'unknown look "{look}"; looks are {", ".join(LOOKS)}')
+            raise SettingError("look", f"Unknown look \u201c{look}\u201d. Available looks: {', '.join(LOOKS)}.")
         # The theme's proportions, and the look: the deck's own look over the
         # theme's style, the theme's style over a look the theme chose.
         theme_style = slides.get("style") or {}
@@ -1396,7 +1413,7 @@ class Deck:
 
         split = _number(split, "split", 0.15, 0.85, "0.5 (the left column's share of the width)")
         if isinstance(columns, bool) or not isinstance(columns, int) or not 1 <= columns <= 12:
-            raise SettingError("columns", f"columns is {columns!r}: it is a whole number from 1 to 12")
+            raise SettingError("columns", f"columns must be a whole number from 1 to 12, not {columns!r}.")
         made = Slide(
             self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
             background, shade, dark, align,

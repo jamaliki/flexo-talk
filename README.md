@@ -257,12 +257,12 @@ or a list of steps with `smiles`, `arrows`, `label`, `reagents`, `conditions`,
 `arrow`). In the PowerPoint the structures are shapes and their arrows curves, all
 editable.
 
-In the studio each step has **Draw**: the structure it acts on, drawn large, to point
+In the studio each step has **Draw Arrows…**: the structure it acts on, drawn large, to point
 at. Click where the electrons come from -- an atom for its lone pair (pointing at an
 atom shows its pairs), or a bond -- then where they go, and the arrow is written into
 the step (an atom with no map is given one in its SMILES). A bond's electrons sent to
-an atom outside it ask which end the new bond forms from; **One electron** writes
-fishhooks. The step holds still while it is drawn on; **Tidy** lays it out again for
+an atom outside it ask which end the new bond forms from; **Single electron (fishhook)** writes
+fishhooks. The step holds still while it is drawn on; **Clean Up** lays it out again for
 its arrows. **Arrange** moves a molecule where you drag it, turns it 30 degrees at a
 time, flips it, or puts it back where it is laid out. The arrows' colour is chosen in
 the mechanism's panel, from the deck's colours or any other. A step is usually wrong between one arrow and the next, so it is drawn
@@ -391,19 +391,19 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   the part chosen. A part added after one whose single line runs on to the next
   goes into that line, as a step into a flow chart. A chosen molecule turns as
   it is dragged, its trace turning over it; its corners, like a picture's, size
-  it. A part's **Kind** may be made a structure or a picture -- a step becomes the
+  it. A shape's **Type** may be made a structure or a picture -- a step becomes the
   backbones it stands for, keeping its words and lines. A figure written in the
   deck changes in the deck; a figure file changes in its file, comments and all,
-  and either undoes with the deck (**Made from › Here** writes its figure into the deck instead,
+  and either undoes with the deck (**Source › In Deck** writes its figure into the deck instead,
   the file left as it was). Esc steps out, a part at a time. A figure made in
   Python is changed in its Python. There is no separate figure editor to go to:
   to use a figure elsewhere, **Export** on the bar above it (or in its panel)
   writes it out by itself, in the deck's look -- an editable SVG, a PDF, a PNG,
   or its document as a flexo figure file (YAML).
-- **The inspector shows what is chosen**: a part's own settings, or, with nothing
-  chosen, the slide's title, its parts in order (drag to reorder), its layout,
+- **Format shows what is selected**: an object's own settings, or, with nothing
+  selected, the slide's title, its parts in order (drag to reorder), its layout,
   background, and footnotes. **Design** holds the look, theme, palette, type, and
-  proportions; *Customise* starts a theme file from the deck's theme and opens it
+  proportions; **Customise…** starts a theme file from the deck's theme and opens it
   in the theme editor, and the deck redraws as the theme changes.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
@@ -412,8 +412,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   colour, and their avatars show which slide they are on.
 - It presents full screen (reveals, notes, a clock) and exports PowerPoint, PDF,
   SVG, and PNG. Saving is automatic; ⌘Z undoes your own last change, and the
-  history beside it (⌥⌘Z) lists every change in words -- "Renamed 'Model' to
-  'Encoder' · Slide 2" -- to go back, or forward, to any of them, the deck going
+  history beside it (⌥⌘Z) lists every change by name -- "Rename “Model” to
+  “Encoder” · Slide 2" -- to go back, or forward, to any of them, the deck going
   to the slide each was made on. Saving writes the document back as YAML
   (comments in a hand-written file are not kept).
 

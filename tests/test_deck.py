@@ -78,7 +78,7 @@ def test_a_deck_takes_any_flexo_theme_and_checks_its_layouts() -> None:
         with Deck("t", theme=theme) as deck, deck.slide("Hello") as slide:
             slide.bullets("one", "two")
         assert deck.render()[0].svg.startswith("<?xml")
-    with pytest.raises(ValueError, match="layouts are"), Deck("t") as deck:
+    with pytest.raises(ValueError, match="Available layouts"), Deck("t") as deck:
         deck.slide("x", layout="three-columns")  # type: ignore[arg-type]
 
 
@@ -201,7 +201,7 @@ def test_a_tall_figure_is_laid_out_for_a_wide_slide(tmp_path: Path) -> None:
         for index in range(6):
             previous = layers.block(f"b{index}", label=f"Layer {index}", input=previous)
     result = deck.build(tmp_path, formats=("svg",))
-    assert any("laid out turned" in note for note in result.notes)
+    assert any("Figure rotated" in note and note.endswith("to fit the slide.") for note in result.notes)
     assert not any("too small" in message for message in result.diagnostics)
 
 
@@ -493,7 +493,7 @@ def test_a_look_is_a_style_preset() -> None:
     assert DeckStyle.look("band").header == "band"
     assert Deck(look="editorial").style.sections == "number"
     assert DeckStyle.look("keynote", body_size=24).body_size == 24
-    with pytest.raises(ValueError, match="looks are"):
+    with pytest.raises(ValueError, match="Available looks"):
         Deck(look="fancy")
     with pytest.raises(ValueError, match="callout"):
         Deck().slide("x").callout("words", colour="red")
@@ -593,7 +593,7 @@ def test_an_equation_is_displayed_on_its_own_line_and_fits_its_place(tmp_path: P
     assert deck_document(deck)["slides"][0]["body"][2] == {"text": r"$$\begin{pmatrix} a & b \\ c & d \end{pmatrix}$$"}
     result = deck.build(tmp_path / "out", formats=("svg", "pptx"))
     # Only the long one is said: set that small, it would read better broken into lines.
-    assert len(result.diagnostics) == 1 and "an equation set at" in result.diagnostics[0], result.summary()
+    assert len(result.diagnostics) == 1 and "Equation reduced to" in result.diagnostics[0], result.summary()
     svg = result.svgs[0].read_text()
     groups = re.findall(r'<g [^>]*data-flexo-math="[^"]*"[^>]*>', svg)
     assert len(groups) == 3 and all('data-flexo-talk="math"' in group for group in groups)
@@ -958,3 +958,12 @@ def test_a_mechanism_is_lettered_as_its_deck_is(look) -> None:
     size = {ident: float(value) for ident, _, value in texts}
     atom = next(ident for ident in lettered if ".atom" in ident)
     assert size[atom] * scale == pytest.approx(size[next(i for i in face if i.endswith("body.0"))], rel=0.02)
+
+
+def test_what_a_figure_check_found_is_said_in_words_under_the_slide() -> None:
+    from flexo_talk.compose import _figure_check
+
+    assert _figure_check("routing.connector.crossing") == "Lines cross in this figure."
+    assert _figure_check("routing.net.target.arrow") == "A line or arrowhead is cramped in this figure."
+    assert _figure_check("routing.source.direction").startswith("A line doesn't meet its shape")
+    assert "(svg.id.missing)" in _figure_check("svg.id.missing")

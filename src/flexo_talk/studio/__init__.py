@@ -37,48 +37,99 @@ from flexo_talk.document import (
 )
 
 LOOK_NOTES = {
-    "classic": "A short accent rule under each title; centred opening",
-    "band": "Titles on a band of the accent; sections filled with it",
-    "editorial": "A hairline under each title; sections numbered large",
+    "classic": "Short accent rule under titles, centred title slide",
+    "band": "Titles on an accent band, filled section slides",
+    "editorial": "Hairline under titles, large section numbers",
     "keynote": "Centred titles and content, no rules",
-    "margin": "Titles in the accent; a bar down each slide's edge",
+    "margin": "Accent-coloured titles, accent bar along the left edge",
 }
+
+LAYOUT_LABELS = {
+    "content": "Content",
+    "two-columns": "Two Columns",
+    "columns": "Columns",
+    "figure": "Figure",
+    "title": "Title",
+    "section": "Section",
+    "statement": "Statement",
+    "agenda": "Agenda",
+    "blank": "Blank",
+}
+"""What the studio calls each layout."""
 
 LAYOUT_NOTES = {
-    "content": "A title over words, lists, pictures, figures",
-    "two-columns": "A title over two columns side by side",
-    "columns": "A title over any number of columns",
-    "figure": "A title over one figure, as large as the slide allows",
-    "title": "The opening: title, subtitle, who and when",
-    "section": "A divider between parts of the talk",
-    "statement": "One sentence, large, in the middle",
-    "agenda": "The talk's sections, numbered",
-    "blank": "The whole slide as one body",
+    "content": "Title with text, lists, pictures or figures",
+    "two-columns": "Title with two columns side by side",
+    "columns": "Title with any number of columns",
+    "figure": "Title with one figure, as large as the slide allows",
+    "title": "Title, subtitle, author and date",
+    "section": "Divider between sections of the talk",
+    "statement": "One large sentence in the centre",
+    "agenda": "Numbered list of the talk's sections",
+    "blank": "No title; the content fills the slide",
 }
 
-STYLE_NOTES = {
-    "title_size": "Slide titles (pt)",
-    "subtitle_size": "Subtitles (pt)",
-    "body_size": "Words and lists (pt)",
-    "small_size": "Footnotes, captions, the smallest words may shrink to (pt)",
-    "figure_size": "Words in figures (pt)",
-    "margin": "Space around the slide's edge (pt)",
-    "line_height": "Line height, as a multiple of the size",
-    "paragraph_gap": "Space between bullets, as a fraction of the size",
-    "indent": "How far each list level steps in (pt)",
-    "column_gap": "Space between columns (pt)",
-    "block_gap": "Space between blocks (pt)",
-    "title_gap": "Space between the title and the body (pt)",
-    "header": "What marks a slide's title",
-    "opening": "How the title slide is set",
-    "sections": "How section slides are set",
-    "edge": "An accent bar down the left edge",
-    "align": "Where content sits in the body",
-    "numbers": "Slide numbers",
-    "title_weight": "The weight of titles (100 to 900)",
-    "title_align": "Titles flush left or centred",
-    "title_role": "The colour titles are painted in",
+STYLE_LABELS = {
+    "margin": "Margin",
+    "title_size": "Title Size",
+    "subtitle_size": "Subtitle Size",
+    "body_size": "Body Size",
+    "small_size": "Small Text Size",
+    "figure_size": "Figure Text Size",
+    "line_height": "Line Height",
+    "paragraph_gap": "Paragraph Spacing",
+    "indent": "Indent",
+    "column_gap": "Column Spacing",
+    "block_gap": "Object Spacing",
+    "title_gap": "Title Spacing",
+    "header": "Title Decoration",
+    "opening": "Title Slide",
+    "sections": "Section Slides",
+    "edge": "Edge Bar",
+    "align": "Content Position",
+    "numbers": "Slide Numbers",
+    "title_weight": "Title Weight",
+    "title_align": "Title Alignment",
+    "title_role": "Title Colour",
 }
+"""What the studio calls each of the deck's style settings."""
+
+STYLE_NOTES = {
+    "title_size": "Slide titles, in points",
+    "subtitle_size": "Subtitles, in points",
+    "body_size": "Body text and lists, in points",
+    "small_size": "Footnotes, captions and the minimum text size, in points",
+    "figure_size": "Text in figures, in points",
+    "margin": "Space around the slide edges, in points",
+    "line_height": "As a multiple of the font size",
+    "paragraph_gap": "Space between bullets, as a fraction of the font size",
+    "indent": "Indent for each list level, in points",
+    "column_gap": "Space between columns, in points",
+    "block_gap": "Space between objects, in points",
+    "title_gap": "Space between the title and the body, in points",
+    "header": "How slide titles are marked",
+    "opening": "How the title slide is laid out",
+    "sections": "How section slides are laid out",
+    "edge": "An accent bar along the left edge",
+    "align": "Where content sits on the slide",
+    "numbers": "Show slide numbers",
+    "title_weight": "Font weight of titles, 100 to 900",
+    "title_align": "Titles aligned left or centred",
+    "title_role": "The colour of titles",
+}
+
+CHOICE_LABELS = {
+    "auto": "Automatic",
+    "centred": "Centred",
+    "middle": "Middle",
+    "start": "Left",
+    "ink": "Ink",
+    "tone-1-stroke": "Accent",
+    "tone-2-stroke": "Accent 2",
+    "muted-ink": "Muted",
+}
+"""What the studio shows for a style setting's choices, where it is not the value
+capitalised (``title_align: middle`` is Centre)."""
 
 CACHE_SIZE = 600
 CACHE_BYTES = 200_000_000
@@ -216,15 +267,20 @@ class DeckKind:
             kind = "choice" if choices else "bool" if isinstance(value, bool) else "number"
             if item.name == "title_role":
                 kind, choices = "choice", ["ink", "tone-1-stroke", "tone-2-stroke", "muted-ink"]
-            style.append({"name": item.name, "kind": kind, "default": value, "choices": choices,
+            labels = {**CHOICE_LABELS, **({"middle": "Centre"} if item.name == "title_align" else {})}
+            style.append({"name": item.name, "label": STYLE_LABELS.get(item.name, item.name.replace("_", " ").title()),
+                          "kind": kind, "default": value, "choices": choices,
+                          "labels": {choice: labels.get(choice, choice.capitalize()) for choice in choices},
                           "note": STYLE_NOTES.get(item.name, "")})
         return {
             "themes": list(theme_names()),
-            "looks": [{"name": name, "note": LOOK_NOTES.get(name, ""), "style": {**LOOKS[name]}} for name in LOOKS],
+            "looks": [{"name": name, "label": name.title(), "note": LOOK_NOTES.get(name, ""), "style": {**LOOKS[name]}}
+                      for name in LOOKS],
             "palettes": {name: list(colours) for name, colours in design_palettes().items()},
             "fonts": sorted(available_families()),
             "style": style,
-            "layouts": [{"name": name, "note": LAYOUT_NOTES[name]} for name in LAYOUTS],
+            "layouts": [{"name": name, "label": LAYOUT_LABELS.get(name, name.title()), "note": LAYOUT_NOTES[name]}
+                        for name in LAYOUTS],
             "slide_keys": {layout: [*COMMON_KEYS, *keys] for layout, keys in SLIDE_KEYS.items()},
             "blocks": {kind: list(options) for kind, options in BLOCKS.items()},
             # What the figure editor offers, for figures edited on their slides.
@@ -366,7 +422,7 @@ class DeckKind:
         if action.get("do") == "figure-file":
             return _restore(document, action, base)
         if action.get("do") != "figure":
-            raise EditError(f'unknown deck edit "{action.get("do")}"')
+            raise EditError(f"Unknown deck edit “{action.get('do')}”.")
         at = action.get("at") or {}
         edit = action.get("edit") or {}
         if edit.get("do") == "structure-view":
@@ -394,7 +450,7 @@ class DeckKind:
                 answer |= {"was": was, "now": result["text"],
                            "change": [_figure_data(was, path.suffix), _figure_data(result["text"], path.suffix)]}
             return answer
-        raise EditError("a figure made in Python is changed in its Python file")
+        raise EditError("This figure is made in Python. Edit it in its Python file.")
 
     def export(self, document: dict[str, Any], base: Path, stem: str, formats: list[str]) -> list[Path]:
         deck = deck_from_document(document, base)
@@ -424,7 +480,7 @@ class DeckKind:
 
         block = _block_at(document, part)
         if not isinstance(block, dict) or "figure" not in block:
-            raise EditError("that part of the slide is not a figure")
+            raise EditError("The selected object isn't a figure.")
         deck = make_deck(document.get("deck") or {}, base)
         where = f"slides[{part.get('slide')}].{part.get('region')}[{part.get('index')}]"
         figure = made(_figure(base, block["figure"], where, None))
@@ -493,7 +549,7 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> 
     changed = copy.deepcopy(document)
     block = _block_at(changed, action.get("at") or {})
     if not isinstance(block, dict) or "mechanism" not in block:
-        raise EditError("that part is not a mechanism any more: someone changed it meanwhile")
+        raise EditError("This object is no longer a mechanism. Someone else may have changed it.")
     options = {key: block.get(key) for key in OPTIONS}
     step = int(action.get("step") or 0)
     holding = action.get("holding")
@@ -537,7 +593,7 @@ def _figure_file(base: Path, value: str) -> Path:
     path = (base / value).resolve()
     figure = path.suffix.lower() in {".yaml", ".yml", ".json"}
     if not figure or not path.is_file() or not path.is_relative_to(base.resolve()):
-        raise EditError(f"no figure file {value} beside the deck")
+        raise EditError(f"Can't find the figure file “{value}” in the deck's folder.")
     return path
 
 
@@ -551,7 +607,7 @@ def _restore(document: dict[str, Any], action: dict[str, Any], base: Path) -> di
     value = str(action.get("file") or "")
     path = _figure_file(base, value)
     if path.read_text(encoding="utf-8") != action.get("expect"):
-        raise EditError(f"{value} has changed since; it is left as it is")
+        raise EditError(f"“{value}” has changed since this edit, so it was left unchanged.")
     path.write_text(str(action.get("text") or ""), encoding="utf-8")
     return {"document": document, "file": value}
 
@@ -589,7 +645,7 @@ def _slide_figure(document: dict[str, Any], at: dict[str, Any], base: Path) -> A
 
     block = _block_at(document, at)
     if not isinstance(block, dict) or "figure" not in block:
-        raise EditError("that part of the slide is not a figure any more")
+        raise EditError("This object is no longer a figure. Someone else may have changed it.")
     deck = make_deck(document.get("deck") or {}, base)
     figure = made(_figure(base, block["figure"], "figure", None))
     spec = getattr(figure, "spec", figure)
@@ -612,13 +668,13 @@ def _inline(document: dict[str, Any], action: dict[str, Any], base: Path) -> dic
     if isinstance(value, dict):
         return {"document": document}
     if not isinstance(value, str) or not value or ".py:" in value:
-        raise EditError("only a figure kept in a figure file can be written into the deck")
+        raise EditError("Only a figure stored in a file can be moved into the deck.")
     path = (base / value).resolve()
     if not path.is_file() or not path.is_relative_to(base.resolve()):
-        raise EditError(f"no figure file {value} beside the deck")
+        raise EditError(f"Can't find the figure file “{value}” in the deck's folder.")
     data = yaml.safe_load(path.read_text(encoding="utf-8"))  # JSON reads as YAML too
     if not isinstance(data, dict):
-        raise EditError(f"{value} is not a figure")
+        raise EditError(f"“{value}” isn't a figure.")
 
     def rebased(name: object) -> object:
         if not isinstance(name, str) or not name or Path(name).is_absolute():
@@ -662,7 +718,7 @@ def _block_at(document: dict[str, Any], at: dict[str, Any]) -> Any:
         blocks = slide["columns"][int(region.split(".", 1)[1])] if column else slide[region]
         return blocks[int(at["index"])]
     except (KeyError, IndexError, TypeError, ValueError) as error:
-        raise EditError("that part of the slide is gone: someone changed it meanwhile") from error
+        raise EditError("This object no longer exists. Someone else may have changed the slide.") from error
 
 
 def _order(count: int, focus: int) -> list[int]:

@@ -81,11 +81,11 @@ def test_words_over_several_lines_are_written_as_blocks() -> None:
 @pytest.mark.parametrize(
     ("slide", "where", "words"),
     [
-        ({"layout": "sideways"}, "slides[0].layout", "unknown layout"),
-        ({"title": "T", "colour": "red"}, "slides[0]", "unknown key colour"),
+        ({"layout": "sideways"}, "slides[0].layout", "Unknown layout"),
+        ({"title": "T", "colour": "red"}, "slides[0]", "Unknown key colour"),
         ({"body": [{"table": "not rows"}]}, "slides[0].body[0] (table)", "list of rows"),
-        ({"body": [{"text": "a", "bullets": ["b"]}]}, "slides[0].body[0]", "names text, bullets"),
-        ({"body": [{"image": "nowhere.png"}]}, "slides[0].body[0] (image)", "no file nowhere.png"),
+        ({"body": [{"text": "a", "bullets": ["b"]}]}, "slides[0].body[0]", "more than one kind (text, bullets)"),
+        ({"body": [{"image": "nowhere.png"}]}, "slides[0].body[0] (image)", "Cannot find nowhere.png"),
         ({"layout": "columns", "columns": [[], []], "widths": [1]}, "slides[0].widths", "one share"),
         ({"body": [{"callout": "c", "colour": "red"}]}, "slides[0].body[0] (callout)", "accent"),
     ],
@@ -211,7 +211,7 @@ def test_an_agent_gets_a_guide_and_a_quick_check() -> None:
     guide = kind.guide()
     assert "two-columns" in guide and "bullets" in guide and "Look at each slide" in guide
     assert kind.check({"deck": {}, "slides": [{"body": [{"table": 1}]}]}, ROOT) == [
-        "slides[0].body[0] (table): a table is a list of rows, each a list of cells"
+        "slides[0].body[0] (table): A table must be a list of rows, each a list of cells."
     ]
     document = {"schema_version": 1, **_small()}
     assert kind.parse(kind.dump(document)) == document
@@ -387,7 +387,7 @@ def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: P
     with pytest.raises(EditError, match="changed since"):
         restore(result["was"], result["now"])
     assert path.read_text().endswith("# mine\n")
-    with pytest.raises(EditError, match="no figure file"):
+    with pytest.raises(EditError, match="Can't find the figure file"):
         kind.act(document, {"do": "figure-file", "file": "../elsewhere.yaml", "text": "", "expect": ""}, tmp_path)
 
 
@@ -402,7 +402,7 @@ def test_a_figure_made_in_python_or_gone_is_not_edited_on_its_slide(tmp_path: Pa
 
     with pytest.raises(EditError, match="Python file"):
         read(2, "body", 0)
-    with pytest.raises(EditError, match="gone"):
+    with pytest.raises(EditError, match="no longer exists"):
         read(0, "right", 5)
 
 
@@ -431,7 +431,7 @@ def test_a_figure_on_a_slide_is_exported_by_itself_in_the_decks_look(tmp_path: P
     assert load_figure(tmp_path / "build" / "talk-pic.yaml").id == "pic"
     from flexo.studio.figure_edit import EditError
 
-    with pytest.raises(EditError, match="not a figure"):
+    with pytest.raises(EditError, match="isn't a figure"):
         DeckKind().export_part(document, tmp_path, "talk", {**at, "index": 0}, ["yaml"])
 
 
@@ -642,11 +642,11 @@ def test_in_the_studio_a_decks_python_runs_apart_and_cannot_hang_or_take_down_th
     pages = {page.id: page for page in drawing.pages}
     assert f"pid {os.getpid()}" not in pages["slide1"].svg and "pid " in pages["slide1"].svg
     assert "Made apart" in pages["slide2"].svg
-    assert said["slide3"] == "plots.py:forever took longer than 3 s, and was stopped"
-    assert said["slide4"] == "plots.py:crash quit the Python it ran in (exit code 3)"
-    assert said["slide5"] == "plots.py:leave: it called sys.exit(2) (line 22)"
+    assert said["slide3"] == "plots.py:forever took longer than 3 seconds and was stopped."
+    assert said["slide4"] == "plots.py:crash quit unexpectedly (exit code 3)."
+    assert said["slide5"] == "plots.py:leave: sys.exit(2) was called (line 22)"
     assert said["slide6"] == "plots.py:nothing: nothing did not return a matplotlib figure"
-    assert said["slide8"] == "plots.py:fault crashed the Python it ran in (signal 11)"
+    assert said["slide8"] == "plots.py:fault crashed (signal 11)."
     assert said["slide9"] == "plots.py:typo: name 'figur' is not defined (line 29)"
     assert "slide1" not in said and "slide7" not in said and "pid " in pages["slide7"].svg
     assert seconds < 30
@@ -699,7 +699,7 @@ def test_the_studio_draws_a_mechanisms_arrows_from_two_clicks(tmp_path: Path) ->
     assert placed["sheet"]["molecules"][0]["placed"] is True
     (rendered,) = deck_from_document(placed["document"], tmp_path).render()
     assert "mechanism" in rendered.svg
-    with pytest.raises(DeckDocumentError, match="place maps an atom"):
+    with pytest.raises(DeckDocumentError, match="place must map an atom"):
         bad = {"deck": {"id": "c"}, "slides": [{"body": [{"mechanism": [
             {"smiles": "[OH-:1].[CH3:2][Br:3]", "place": "1 sideways"}]}]}]}
         deck_from_document(bad, tmp_path)

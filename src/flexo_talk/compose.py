@@ -192,8 +192,8 @@ class _Canvas:
         total = sum(len(run.text) for run in runs)
         if total > MOST_CHARACTERS:
             # More than any slide holds (a pasted file): cut, so it is drawn (and said) at once.
-            said = (f"{self.slide.id}: words of {total:,} characters cut to {MOST_CHARACTERS:,} -- "
-                    "more than a slide can show")
+            said = (f"{self.slide.id}: Text shortened from {total:,} to {MOST_CHARACTERS:,} characters, "
+                    "the most a slide can show.")
             if said not in self.diagnostics:
                 self.diagnostics.append(said)
             cut, left = [], MOST_CHARACTERS
@@ -222,8 +222,9 @@ class _Canvas:
         return tuple(kept)
 
     def _lost_said(self) -> str:
-        return (f"{self.slide.id}: no font here draws {' '.join(sorted(self.lost))} -- left out of "
-                "the slide's drawing (emoji are not drawn: a picture can show one)")
+        return (f"{self.slide.id}: No available font can display {' '.join(sorted(self.lost))}, so "
+                f"{'it is' if len(self.lost) == 1 else 'they are'} left out of the slide. Emoji are not supported; "
+                "use a picture instead.")
 
     def say_maths(self, source: str, problems: tuple[str, ...] | list[str]) -> None:
         """What could not be read in a formula, said once for the slide."""
@@ -350,7 +351,7 @@ def _held_back(canvas: _Canvas, slide: Slide) -> None:
             except UntrustedCode as error:
                 canvas.held.append(error.message)
                 region.blocks[index] = _Words(
-                    inline(f"*{reference.target}* is drawn once you trust this folder"),
+                    inline(f"*{reference.target}* will appear when you trust this folder"),
                     align="middle", muted=True,
                 )
 
@@ -586,9 +587,9 @@ _SHRINK = (1.0, 0.9, 0.8, 0.7, 0.6, 0.5)
 
 def _said_shrunk(canvas: _Canvas, slide: Slide, scale: float) -> None:
     if scale < 1.0:
-        canvas.diagnostics.append(f"{slide.id}: words set at {round(scale * 100)}% to fit")
+        canvas.diagnostics.append(f"{slide.id}: Text size reduced to {round(scale * 100)}% to fit the slide.")
     if scale == _SHRINK[-1]:
-        canvas.diagnostics.append(f"{slide.id}: the words do not fit even at half their size -- shorten them")
+        canvas.diagnostics.append(f"{slide.id}: Text does not fit, even at half size. Try shortening it.")
 
 
 def _statement_slide(canvas: _Canvas, slide: Slide) -> None:
@@ -623,7 +624,7 @@ def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
     style = canvas.deck.style
     sections = [other for other in slide.deck.slides if other.layout == "section"]
     if not sections:
-        canvas.diagnostics.append(f"{slide.id}: the agenda lists section slides, and the deck has none")
+        canvas.diagnostics.append(f"{slide.id}: The agenda is empty because the deck has no section slides.")
         return
     size = style.body_size * 1.1
     gap = style.column_gap
@@ -640,8 +641,8 @@ def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
             break
     else:
         canvas.diagnostics.append(
-            f"{slide.id}: the agenda's {len(sections)} sections do not fit even in two columns -- "
-            "fewer sections, or shorter titles"
+            f"{slide.id}: The {len(sections)} sections do not fit in the agenda, even in two columns. "
+            "Try fewer sections or shorter titles."
         )
     size *= scale
     first = body.y
@@ -996,13 +997,13 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
     low, high = style.small_size / style.body_size, 1.0
     if needed(low) > room:
         canvas.diagnostics.append(
-            f"{canvas.slide.id}: the words do not fit even at the small size -- split the slide"
+            f"{canvas.slide.id}: Text does not fit, even at the smallest size. Try splitting the slide."
         )
         return [_sized(block, low, style) for block in blocks]
     for _ in range(10):
         middle = (low + high) / 2.0
         low, high = (middle, high) if needed(middle) <= room else (low, middle)
-    canvas.diagnostics.append(f"{canvas.slide.id}: words set at {round(low * 100)}% to fit")
+    canvas.diagnostics.append(f"{canvas.slide.id}: Text size reduced to {round(low * 100)}% to fit the slide.")
     return [_sized(block, low, style) for block in blocks]
 
 
@@ -1015,14 +1016,19 @@ def _capped(canvas: _Canvas, block):
     """``block``, cut to what a slide can hold if it is far past it, and said."""
 
     if isinstance(block, _Bullets) and len(block.items) > MOST_ITEMS:
-        kept, what = replace(block, items=block.items[:MOST_ITEMS]), f"a list of {len(block.items):,} items"
+        kept, what = replace(block, items=block.items[:MOST_ITEMS]), ("List", len(block.items), MOST_ITEMS, "items")
     elif isinstance(block, _Table) and len(block.rows) > MOST_ITEMS:
-        kept, what = replace(block, rows=block.rows[:MOST_ITEMS]), f"a table of {len(block.rows):,} rows"
+        kept, what = replace(block, rows=block.rows[:MOST_ITEMS]), ("Table", len(block.rows), MOST_ITEMS, "rows")
     elif isinstance(block, _Code) and len(block.lines) > MOST_ITEMS * 5 // 3:
-        kept, what = replace(block, lines=block.lines[: MOST_ITEMS * 5 // 3]), f"{len(block.lines):,} lines of code"
+        most = MOST_ITEMS * 5 // 3
+        kept, what = replace(block, lines=block.lines[:most]), ("Code", len(block.lines), most, "lines")
     else:
         return block
-    canvas.diagnostics.append(f"{canvas.slide.id}: {what} cut to what a slide can show -- split them across slides")
+    kind, count, most, unit = what
+    canvas.diagnostics.append(
+        f"{canvas.slide.id}: {kind} shortened from {count:,} to {most:,} {unit}, the most a slide can show. "
+        "Try splitting it across slides."
+    )
     return kept
 
 
@@ -1077,8 +1083,8 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float, *, said: bool = Fa
             widths = _shared(widths, least, width)
             if sum(least) > width and said:
                 canvas.diagnostics.append(
-                    f"{canvas.slide.id}: a table of {columns} columns is too wide for its place even at the "
-                    "small size -- its words are broken; split it, or shorten its cells"
+                    f"{canvas.slide.id}: A table with {columns} columns is too wide to fit, even at the smallest "
+                    "size, so words are broken across lines. Try splitting the table or shortening its cells."
                 )
             measured = [
                 [canvas.measure(cell, size, widths[c] - slack, weight(r), balance=False) for c, cell in enumerate(row)]
@@ -1130,8 +1136,8 @@ def _shared(natural: list[float], least: list[float], width: float) -> list[floa
 def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     if block.ragged:
         canvas.diagnostics.append(
-            f"{canvas.slide.id}: a table's rows have different numbers of cells -- the short ones are "
-            "filled with empty cells at their end"
+            f"{canvas.slide.id}: Table rows have different numbers of cells. Empty cells were added to the "
+            "end of the shorter rows."
         )
     plan = _table_plan(canvas, block, box.width, said=True)
     total = sum(plan.widths)
@@ -1257,8 +1263,8 @@ def _code_lines(
         lines.append((rest if first else indent + rest, comment))
     if wrapped and said:
         canvas.diagnostics.append(
-            f"{canvas.slide.id}: {wrapped} line{'s' if wrapped > 1 else ''} of code too long for the slide, "
-            "wrapped -- shorten or break them"
+            f"{canvas.slide.id}: {wrapped} line{'s' if wrapped > 1 else ''} of code wrapped to fit the slide. "
+            f"Try shortening or breaking {'them' if wrapped > 1 else 'it'}."
         )
     return size, lines
 
@@ -1459,8 +1465,8 @@ def _gallery(canvas: _Canvas, identifier: str, block: _Gallery, box: Box, *, dra
         fitted = (box.height - (rows - 1) * gap) / rows - under - caption
         if fitted < 24.0 and draw:
             canvas.diagnostics.append(
-                f"{canvas.slide.id}: the gallery's {len(block.items)} pictures do not fit their place -- "
-                "split the slide, or give it more columns"
+                f"{canvas.slide.id}: The {len(block.items)} pictures in the gallery do not fit. "
+                "Try splitting the slide or using more columns."
             )
         picture = max(fitted, 24.0)
     row_height = picture + under + caption
@@ -1537,7 +1543,7 @@ def _cropped(source: str, crop: str, stamp: int = 0) -> tuple[str, float, float]
     try:
         from PIL import Image, ImageDraw, ImageOps
     except ImportError as error:  # pragma: no cover - depends on the environment
-        raise ValueError("cropping pictures needs Pillow: pip install pillow") from error
+        raise ValueError("Cropping pictures requires Pillow (pip install pillow).") from error
     with Image.open(source) as opened:
         # Upright as the camera meant it (a phone photograph is stored on its side).
         picture = ImageOps.exif_transpose(opened).convert("RGBA")
@@ -1570,8 +1576,8 @@ def _equation(canvas: _Canvas, identifier: str, block: _Math, box: Box, *, draw:
         formula = typeset(block.source, canvas.deck.typography(size), size, display=True)
         if draw and size < min(style.small_size, wanted * 0.7):
             canvas.diagnostics.append(
-                f"{canvas.slide.id}: an equation set at {size:.0f} pt to fit its place -- break it "
-                "into lines (\\\\, in aligned) or give it more room"
+                f"{canvas.slide.id}: Equation reduced to {size:.0f} pt to fit. Try breaking it into lines "
+                "(\\\\ inside aligned) or giving it more room."
             )
     canvas.say_maths(block.source, formula.problems)
     if draw:
@@ -1652,8 +1658,9 @@ def _words_over_picture(canvas: _Canvas, slide: Slide) -> None:
     if ratio < 3.0:
         needed = min(0.9, math.ceil((1.0 - 0.5 / max(_picture(slide.backdrop)[3], 0.5)) * 20) / 20)
         canvas.diagnostics.append(
-            f"{slide.id}: words over the picture are hard to read where it is bright (contrast "
-            f"{ratio:.1f}:1) -- a shade of {needed:g} would make them read"
+            f"{slide.id}: Text over the background picture is hard to read where the picture is bright "
+            f"(contrast {ratio:.1f}:1). Darken the picture by {needed:.0%} (shade {needed:g}) to make the text "
+            "readable."
         )
 
 
@@ -1889,6 +1896,25 @@ _LAYOUTS: dict[tuple[str, str], str] = {}
 """The layout each figure (by slide and figure) was last drawn in."""
 
 
+def _layout_said(layout: str) -> str:
+    """The note for a figure drawn in a layout other than as written: ``flexo.fit_in_box``
+    names it (``turned``, ``turned within, tighter``, ``as written, folded``...)."""
+
+    done = []
+    if layout.startswith("turned within"):
+        done.append("rotated within its groups")
+    elif layout.startswith("turned"):
+        done.append("rotated")
+    if "tighter" in layout:
+        done.append("set with tighter spacing")
+    if "folded" in layout:
+        done.append("wrapped onto two lines")
+    if not done:
+        return "Figure rearranged to fit the slide."
+    how = done[0] if len(done) == 1 else f"{', '.join(done[:-1])} and {done[-1]}"
+    return f"Figure {how} to fit the slide."
+
+
 def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
     """A figure laid out for ``box`` by flexo (``flexo.fit_in_box``): at the width
     that sets its words at the deck's figure size, as written or turned, spaced
@@ -1934,14 +1960,43 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         else:
             _store_fit(key, laid)
     _LAYOUTS[where] = laid["layout"]
-    for code in laid["codes"]:
-        canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {code}")
+    for said in dict.fromkeys(_figure_check(code) for code in laid["codes"]):
+        canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {said}")
     for text in block.said:
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {text}")
     if laid["layout"] != "as written":
-        canvas.notes.append(f"{canvas.slide.id} {spec.id}: laid out {laid['layout']} to fit the slide")
+        canvas.notes.append(f"{canvas.slide.id} {spec.id}: {_layout_said(laid['layout'])}")
     left, top, width, height = laid["ink"]
     return _Prepared(laid["svg"], left, top, width, height, largest / base, base, spec.id)
+
+
+_FIGURE_CHECKS = {
+    "layout.text.overflow": "Some text doesn't fit its shape in this figure.",
+    "layout.sibling.overlap": "Some shapes overlap in this figure.",
+    "layout.child.outside": "A shape sticks out of its group in this figure.",
+    "layout.canvas.clipped": "Part of this figure is cut off.",
+    "routing.connector.crossing": "Lines cross in this figure.",
+    "routing.obstacle.intersection": "A line passes through a shape in this figure.",
+    "routing.net.obstacle.intersection": "A line passes through a shape in this figure.",
+    "routing.caption.overlap": "A line's label overlaps something in this figure.",
+    "routing.caption.covers-line": "A line's label covers a line in this figure.",
+    "routing.canvas.clipped": "A line is cut off in this figure.",
+    "routing.net.canvas.clipped": "A line is cut off in this figure.",
+    "routing.container.clipped": "A line is cut off by its group in this figure.",
+    "routing.track.separation": "Lines run too close together in this figure.",
+    "label.math": "Some maths in this figure can't be typeset.",
+}
+"""What a figure's checks found, said under its slide (flexo's codes, by their meaning)."""
+
+
+def _figure_check(code: str) -> str:
+    if code in _FIGURE_CHECKS:
+        return _FIGURE_CHECKS[code]
+    if code.startswith("routing.") and code.endswith((".arrow", ".clearance", ".orientation")):
+        return "A line or arrowhead is cramped in this figure."
+    if code.startswith("routing."):
+        return "A line doesn't meet its shape cleanly in this figure."
+    return f"This figure has a drawing problem ({code})."
 
 
 # -- the figure cache --------------------------------------------------------------------
@@ -2014,8 +2069,8 @@ def _check_legible(canvas: _Canvas, prepared: dict[int, _Prepared], scales: dict
         drawn = item.size * scales[index]
         if drawn < LEGIBLE:
             canvas.diagnostics.append(
-                f"{canvas.slide.id} {item.id}: its words are {drawn:.1f}pt, too small to read -- "
-                "give the figure a slide of its own, a wider layout, or fewer parts"
+                f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.1f} pt, too small to read. "
+                "Try giving the figure its own slide, a wider layout, or fewer shapes."
             )
 
 
@@ -2333,8 +2388,8 @@ def plot_svg(
     _seamless(figure)
     marks = _rasterised(figure, inks.swaps if inks is not None else {})
     if marks and said is not None:
-        said.append(("", f"the plot's {marks:,} marks are drawn as a picture, not as shapes -- "
-                         "plot them with rasterized=True to choose so yourself"))
+        said.append(("", f"The {marks:,} marks in the plot are drawn as an image, not as shapes. "
+                         "To choose this yourself, plot them with rasterized=True."))
     if inks is not None:
         _words_on_cells(figure, inks)
     settings = {
@@ -2510,6 +2565,9 @@ FITTED_TO = 0.97
 """The share of their room words set smaller or cut take: a little air is left between
 them and the plot's edge, as its layout leaves beside its labels."""
 
+_FITTED_SAID = {"wrapped onto more lines": "wrapped", "set smaller": "reduced in size", "cut short": "truncated"}
+"""What was done to a plot's words too long for it, as the message under the slide says it."""
+
 
 def _fit_words(figure: Any, family: str, maths: str) -> list[str]:
     """Words longer than their plot (an axis label longer than its axis, a title wider
@@ -2584,10 +2642,11 @@ def _fit_words(figure: Any, family: str, maths: str) -> list[str]:
     for key, (words, _, done) in fitted.items():
         shown = words if len(words) <= 60 else words[:59] + "\u2026"
         if key in unfitted:
-            said.append(f"the plot's words \u201c{shown}\u201d run outside it -- shorten them")
+            said.append(f"Text \u201c{shown}\u201d in the plot runs outside it. Try shortening it.")
         elif done:
-            how = " and ".join([", ".join(done[:-1]), done[-1]] if len(done) > 1 else done)
-            said.append(f"the plot's words \u201c{shown}\u201d are too long for it, {how} -- shorten them")
+            steps = [_FITTED_SAID[step] for step in done]
+            how = " and ".join([", ".join(steps[:-1]), steps[-1]] if len(steps) > 1 else steps)
+            said.append(f"Text \u201c{shown}\u201d in the plot is too long, so it was {how}. Try shortening it.")
     return said
 
 
@@ -2746,11 +2805,11 @@ def _plot_maths(figure: Any, error: Exception) -> str | None:
     if problems:
         reason = problems[0]
     elif "\\begin" in formula:
-        reason = "matplotlib's maths has no environments (matrices, cases): set the formula on the slide instead"
+        reason = "it has no environments, such as matrices or cases; set the formula on the slide instead"
     else:
-        reason = "matplotlib's maths does not know all of it: set the formula on the slide instead"
+        reason = "it supports only part of LaTeX; set the formula on the slide instead"
     shown = words if len(words) <= 60 else words[:59] + "\u2026"
-    return f"the plot's words \u201c{shown}\u201d are maths matplotlib cannot set: {reason}"
+    return f"Matplotlib cannot render the maths in the plot text \u201c{shown}\u201d: {reason}."
 
 
 def _ink(svg: str) -> tuple[float, float, float, float]:
