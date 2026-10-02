@@ -2056,7 +2056,7 @@ export function mount(studio, container) {
     const write = () => edit((b) => { b.table = rows.map((row) => [...row]); }, "cells");
     const restructure = (mutate) => { mutate(); editBlock(at, (b) => { b.table = rows.map((row) => [...row]); if (b.align) delete b.align; }); renderInspector(); };
     const input = (r, c) => {
-      const cell = h("input", { value: rows[r][c], spellcheck: false, dataset: { key: `cell.${r}.${c}` },
+      const cell = h("input", { value: rows[r][c], dataset: { key: `cell.${r}.${c}` },
         oninput: () => { rows[r][c] = cell.value; write(); },
         onpaste: (event) => {
           const text = event.clipboardData.getData("text/plain");
@@ -2070,6 +2070,7 @@ export function mount(studio, container) {
           })));
           toast(`Pasted ${grid.length} × ${Math.max(...grid.map((line) => line.length))} cells`, { icon: "table", seconds: 2 });
         } });
+      cell.spellcheck = false;  // h() leaves out what is false
       return cell;
     };
     const alignRow = h("tr", {}, h("th.corner"), Array.from({ length: columns }, (_, c) => h("th", {},
