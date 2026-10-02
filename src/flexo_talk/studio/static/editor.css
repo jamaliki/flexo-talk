@@ -49,7 +49,7 @@
 .deck-stage { position: relative; overflow: auto; display: grid; place-items: center; padding: 28px 40px 32px; }
 .slide-wrap { position: relative; width: 100%; max-width: var(--slide-max, 1400px); }
 .slide-page { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #fff; box-shadow: var(--shadow-page); border-radius: 3px; line-height: 0; cursor: default; }
-.slide-page > svg { width: 100%; height: 100%; display: block; border-radius: 3px; }
+.slide-page > svg { width: 100%; height: 100%; display: block; border-radius: 3px; -webkit-user-select: none; user-select: none; }
 .slide-page.pending > svg { opacity: 0.6; transition: opacity 0.2s 0.3s; }
 .slide-page.error { outline: 2px solid var(--error); outline-offset: 3px; }
 .slide-page .placeholder { display: grid; place-items: center; height: 100%; }
@@ -79,16 +79,27 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .here-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 3px; border: 1.5px solid; border-radius: 99px; color: var(--ink); font-weight: 560; background: var(--raised); }
 .here-chip .muted { color: var(--ink-3); font-weight: 400; }
 .slide-messages { display: grid; gap: 4px; margin-top: 10px; }
+/* A note asks nothing of anyone: a quiet line, not a box. */
+.slide-messages .message.note { background: none; padding: 1px 2px; color: var(--ink-3); font-size: 11.5px; }
+.slide-messages .message.note svg { width: 13px; height: 13px; }
+.slide-messages .message.note .where { display: none; }
 .deck-error { position: absolute; top: 12px; left: 40px; right: 40px; z-index: 3; }
 .stage-empty { display: grid; gap: 16px; justify-items: center; text-align: center; color: var(--ink-2); max-width: 680px; }
 .stage-empty h2 { margin: 0; font-size: 20px; color: var(--ink); letter-spacing: -0.01em; }
-.drop-note { position: absolute; inset: 12px; border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 600; font-size: 14px; z-index: 5; pointer-events: none; }
+/* Files over the slide: a banner says what may be dropped; the slide stays in view. */
+.drop-note { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); padding: 7px 14px; border: 1.5px dashed var(--accent); border-radius: 99px; background: var(--raised); color: var(--accent); font-weight: 600; font-size: 12.5px; z-index: 5; pointer-events: none; box-shadow: var(--shadow-2); white-space: nowrap; }
 
 .inline-editor { position: absolute; z-index: 20; background: var(--raised); border-radius: 10px; box-shadow: var(--shadow-2), 0 0 0 1px var(--accent-line); padding: 6px; display: grid; gap: 4px; animation: pop 0.1s ease-out; }
 .inline-editor .markup { border: 0; box-shadow: none; }
 .inline-editor .markup .textarea { font-size: 14px; }
 .inline-editor > .textarea { border: 0; box-shadow: none; }
 .inline-foot { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--ink-3); padding: 0 6px 2px; }
+/* Typed in place: over the words, as they look on the slide; the tools float above. */
+.inline-editor.in-place { background: transparent; padding: 0; border-radius: 4px; box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 5px var(--accent-soft); animation: none; }
+.inline-editor.in-place .markup { background: transparent; }
+.inline-editor.in-place .textarea { background: transparent; border: 0; box-shadow: none; padding: 5px; line-height: 1.22; letter-spacing: normal; resize: none; overflow: hidden; caret-color: var(--accent); }
+.inline-editor.in-place .textarea:focus { box-shadow: none; outline: none; }
+.inline-editor.in-place .markup-tools { position: absolute; bottom: calc(100% + 8px); left: -2px; opacity: 1; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); }
 
 /* -- notes -- */
 .notes { border-top: 1px solid var(--line); background: var(--panel); }

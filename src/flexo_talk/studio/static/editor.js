@@ -165,7 +165,7 @@ function summary(block) {
     case "table": return Array.isArray(value) ? `${value.length} rows × ${Math.max(0, ...value.map((row) => (Array.isArray(row) ? row.length : 1)))} columns` : "";
     case "stats": return Array.isArray(value) ? value.map((item) => item?.value ?? item?.[0] ?? item).join("  ·  ") : "";
     case "gallery": { const n = Array.isArray(value) ? value.length : 0; return `${n} picture${n === 1 ? "" : "s"}`; }
-    case "figure": return typeof value === "string" ? value : `Drawn here · ${(value?.nodes || []).length} parts`;
+    case "figure": return typeof value === "string" ? value : `Drawn here · ${count((value?.nodes || []).length, "part")}`;
     case "image": case "plot": return value || "Not chosen yet";
     case "callout": return plain(block.title) || plain(value);
     case "math": return mathWords(value) || "An empty equation";
@@ -177,6 +177,8 @@ function summary(block) {
     default: return plain(value);
   }
 }
+
+const count = (number, word) => `${number} ${word}${number === 1 ? "" : "s"}`;
 
 function slideTitle(slide) {
   return plain(slide?.words || slide?.title) || LAYOUT_NAMES[layoutOf(slide)];
@@ -639,7 +641,8 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
-    if (figure?.parts.dragging || carry?.started) return;
+    if (figure?.parts.inline) hover.hidden = true;
+    if (figure?.parts.dragging || carry?.started || inline || figure?.parts.inline) return;
     if (inFigure(event)) {
       const id = figure.parts.idAt(event);
       const box = id && figure.parts.model ? boxOf(figurePrefix() + id) : null;
@@ -933,6 +936,7 @@ export function mount(studio, container) {
 
   function onEdit(event) {
     if (event.target.closest(".fig-inline, .figure-bar")) return;
+    hover.hidden = true;
     if (inFigure(event)) { whenFigure(() => figure.parts.dblclick(event)); return; }
     const part = partAt(event);
     if (!part) return;
@@ -946,7 +950,7 @@ export function mount(studio, container) {
 
   function placeChosen() {
     const focus = state.focus;
-    if (!focus || !pageNode || moving || landing || carry?.started) { chosen.hidden = true; return; }
+    if (!focus || !pageNode || moving || landing || carry?.started || inline) { chosen.hidden = true; return; }
     const region = regionsOf(slideAt()).find((r) => r.key === focus.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${focus.index}`);
     const block = blocksAt(slideAt() || {}, focus.region)[focus.index];
@@ -1143,9 +1147,23 @@ export function mount(studio, container) {
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
     group.classList.add("group");
-    // Over the figure's right end: its left end carries the part's own tag.
+    // Over the figure's right end (its left end carries the part's own tag) -- or under
+    // it, when the words or parts just above would be covered and there is room below.
     const left = Math.max(4, Math.min(box.left + box.width - figureBar.offsetWidth, pageNode.clientWidth - figureBar.offsetWidth - 4));
-    Object.assign(figureBar.style, { left: `${left}px`, top: `${box.top > 44 ? box.top - 40 : box.top + 6}px` });
+    const height = figureBar.offsetHeight || 36;
+    const above = box.top > height + 8 ? box.top - height - 4 : box.top + 6;
+    // Under it, clear of the + beneath the part chosen.
+    const below = box.top + box.height + (figureMarks.querySelector(".fig-next.bottom") ? 26 : 4);
+    const span = (top) => ({ left, right: left + (figureBar.offsetWidth || 300), top, bottom: top + height });
+    const covers = (bar) => [...pageNode.querySelectorAll("[id]")].some((node) => {
+      if (!BLOCK_ID.test(node.id) && !WORDS.test(node.id)) return false;
+      if (node.id === `slide${state.slide + 1}.${region.svg}.${figure.index}`) return false;
+      const other = boxOf(node.id);
+      return other && bar.left < other.left + other.width && bar.right > other.left && bar.top < other.top + other.height && bar.bottom > other.top;
+    });
+    const roomBelow = below + height < pageNode.clientHeight - 4;
+    const top = covers(span(above)) && roomBelow && !covers(span(below)) ? below : above;
+    Object.assign(figureBar.style, { left: `${left}px`, top: `${top}px` });
     stage.classList.toggle("connecting", Boolean(words));
   }
 
@@ -1179,13 +1197,13 @@ export function mount(studio, container) {
       reportFocus();
     }
     const area = editor.area || editor;
-    const node = h("div.inline-editor", { onmousedown: (event) => event.stopPropagation() }, editor,
-      h("div.inline-foot", {}, h("span", {}, bullets ? "Tab sets a line a level below · " : "", target.kind === "field" ? "Enter or Esc when done" : "Esc when done")));
+    const node = h("div.inline-editor.in-place", { onmousedown: (event) => event.stopPropagation(),
+      title: `${bullets ? "Tab sets a line a level below. " : ""}${target.kind === "field" ? "Enter or Esc when done" : "Esc when done"}` }, editor);
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeInline(); }
       if (event.key === "Enter" && !event.shiftKey && target.kind === "field") { event.preventDefault(); closeInline(); }
     });
-    inline = { node, id };
+    inline = { node, id, area, bullets };
     center.append(node);
     positionInline();
     area.focus();
@@ -1193,20 +1211,41 @@ export function mount(studio, container) {
     setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
   }
 
-  // The editor floats over the slide, beside the words it edits, and stays put
-  // (keeping its caret) when the slide is drawn again underneath it.
+  // Words are typed where they are on the slide, as they look there: the editor lies
+  // over them in their face, size and colour, and the drawn words step aside while it
+  // is open. It stays put (keeping its caret) when the slide is drawn again under it.
+  function wordsLook(element) {
+    const text = element?.matches("text") ? element : element?.querySelector("text");
+    if (!text) return null;
+    const style = getComputedStyle(text);
+    const scale = text.getScreenCTM()?.a || 1;
+    const first = text.getBoundingClientRect();
+    return { size: parseFloat(style.fontSize) * scale, family: style.fontFamily, weight: style.fontWeight,
+      colour: style.fill && style.fill !== "none" ? style.fill : "", anchor: text.getAttribute("text-anchor") || style.textAnchor || "start", left: first.left };
+  }
   function positionInline() {
     if (!inline || !pageNode?.isConnected) return;
     const outer = center.getBoundingClientRect();
     const slide = pageNode.getBoundingClientRect();
+    const element = pageNode.querySelector(`[id="${CSS.escape(inline.id)}"]`);
     const box = boxOf(inline.id);
-    const width = Math.min(Math.max(box ? box.width : 420, 380), slide.width);
-    const left = slide.left - outer.left + Math.max(0, Math.min(box ? box.left : 40, slide.width - width));
-    const height = inline.node.offsetHeight || 120;
-    const below = slide.top - outer.top + (box ? box.top + box.height + 6 : 60);
-    const above = slide.top - outer.top + (box ? box.top - height - 6 : 0);
-    const top = below + height > outer.height - 8 && above > 8 ? above : below;
-    Object.assign(inline.node.style, { left: `${left}px`, top: `${Math.max(8, top)}px`, width: `${width}px` });
+    const look = wordsLook(element) || inline.look;
+    if (look) inline.look = look;
+    if (element && inline.hidden !== element) { inline.hidden?.style.removeProperty("visibility"); element.style.visibility = "hidden"; inline.hidden = element; }
+    // The words being typed are what is chosen: no frame over them.
+    chosen.hidden = true;
+    hover.hidden = true;
+    const size = look?.size || 16;
+    const centred = look?.anchor === "middle";
+    // As wide as the room the words have on the slide: to its margin, both sides for centred words.
+    const margin = box ? Math.max(12, centred ? Math.min(box.left, slide.width - box.left - box.width) : box.left) : 40;
+    const width = box ? (centred ? slide.width - 2 * margin : Math.max(box.width, slide.width - box.left - margin)) : 420;
+    const left = slide.left - outer.left + (box ? (centred ? margin : box.left) : 40);
+    const top = slide.top - outer.top + (box ? box.top : 60);
+    const indent = inline.bullets && look && box ? Math.max(0, look.left - slide.left - box.left - 5) : 0;
+    Object.assign(inline.node.style, { left: `${left}px`, top: `${Math.max(8, top)}px`, width: `${width}px`, minHeight: box ? `${box.height}px` : "" });
+    Object.assign(inline.area.style, { fontSize: `${size}px`, fontFamily: look?.family || "", fontWeight: look?.weight || "",
+      color: look?.colour || "", textAlign: centred ? "center" : "left", paddingLeft: `${5 + indent}px` });
   }
   stage.addEventListener("scroll", () => { if (inline) positionInline(); });
 
@@ -1217,8 +1256,12 @@ export function mount(studio, container) {
   function closeInline() {
     if (!inline) return;
     inline.node.remove();
+    pageNode?.querySelector(`[id="${CSS.escape(inline.id)}"]`)?.style.removeProperty("visibility");
     inline = null;
     document.removeEventListener("mousedown", closeOnOutside, true);
+    // What was typed is shown in the panel too.
+    renderInspector();
+    placeChosen();
   }
 
   // Files dropped on the slide are added to it: pictures as pictures, and structures
@@ -1230,30 +1273,168 @@ export function mount(studio, container) {
     if (![...(event.dataTransfer?.types || [])].includes("Files") || !regionsOf(slideAt()).length) return;
     event.preventDefault();
     if (!dropNote) { dropNote = h("div.drop-note", {}, "Drop pictures or structures (PDB, mmCIF) to add them to this slide"); center.append(dropNote); }
+    // Where structures would go: after the figure's part under the pointer, into the
+    // figure, or a figure of their own. (Pictures always come as pictures.)
+    const pictures = [...(event.dataTransfer?.items || [])].every((item) => item.type.startsWith("image/") || item.type === "application/pdf");
+    const part = pictures ? null : partAt(event);
+    const block = part?.kind === "block" ? blocksAt(slideAt(), part.region)[part.index] : null;
+    if (block && kindOf(block) === "figure" && editable(block)) {
+      const inner = figurePartAt(event, part) || (figure && inFigure(event) && figure.parts.model && figure.parts.idAt(event)
+        ? { element: pageNode.querySelector(`[id="${CSS.escape(figurePrefix() + figure.parts.idAt(event))}"]`), name: figure.parts.nameOf(figure.parts.idAt(event)) } : null);
+      if (inner?.element) place(hover, boxOf(inner.element.id), `Joins after ${inner.name}`);
+      else place(hover, boxOf(part.id), "Joins this figure");
+    } else hover.hidden = true;
   });
-  stage.addEventListener("dragleave", (event) => { if (!stage.contains(event.relatedTarget)) { dropNote?.remove(); dropNote = null; } });
+  stage.addEventListener("dragleave", (event) => { if (!stage.contains(event.relatedTarget)) { dropNote?.remove(); dropNote = null; hover.hidden = true; } });
   stage.addEventListener("drop", async (event) => {
     dropNote?.remove(); dropNote = null;
-    const all = [...(event.dataTransfer?.files || [])];
+    hover.hidden = true;
+    if (await addFiles([...(event.dataTransfer?.files || [])], partAt(event), event)) event.preventDefault();
+  });
+
+  // Files added to the slide, dropped or pasted: pictures, and structures into the figure
+  // `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
+  async function addFiles(all, part, at = null) {
     const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|pdf|ai)$/i.test(file.name));
     const structures = all.filter((file) => STRUCTURE_FILE.test(file.name));
     if (!pictures.length && !structures.length) {
-      if (all.length) { event.preventDefault(); toast("Only pictures and structures (PDB, mmCIF) can be dropped on a slide.", { icon: "info" }); }
-      return;
+      if (all.length) toast("Only pictures and structures (PDB, mmCIF) can be added to a slide.", { icon: "info" });
+      return all.length > 0;
     }
-    event.preventDefault();
-    const part = partAt(event);
     for (const file of pictures) await insertBlock("image", { image: await studio.upload(file) });
     if (structures.length) {
       const sources = [];
       for (const file of structures) sources.push(await studio.upload(file));
       const block = part?.kind === "block" && !pictures.length ? blocksAt(slideAt(), part.region)[part.index] : null;
-      if (block && kindOf(block) === "figure" && editable(block)) addStructures(part.region, part.index, sources, event);
+      if (block && kindOf(block) === "figure" && editable(block)) addStructures(part.region, part.index, sources, at);
       else await insertBlock("structure", structureFigure(sources));
     }
     const said = [pictures.length ? `${pictures.length} picture${pictures.length > 1 ? "s" : ""}` : "", structures.length ? `${structures.length} structure${structures.length > 1 ? "s" : ""}` : ""].filter(Boolean);
     toast(`Added ${said.join(" and ")}`, { icon: structures.length ? "structure" : "image" });
+    return true;
+  }
+
+  // -- copy, cut and paste (⌘C, ⌘X, ⌘V) --
+  // What is chosen is copied: a figure's parts, a part of the slide, or else the slide
+  // (always the slide when the list of slides has the keys). Pasted, it comes after
+  // what is chosen: parts into the figure chosen (or a new figure of their own), a part
+  // onto the slide, a slide after this one. Pictures, structure files and words copied
+  // elsewhere paste onto the slide too.
+  const CLIP = "application/x-flexo-deck";
+  let clipboard = null;
+  // Words chosen to copy in the panel, a field, or a note -- not on the slide, a drawing.
+  const wordsChosen = () => { const chosenWords = window.getSelection(); return Boolean(chosenWords?.toString()) && !pageNode?.contains(chosenWords.anchorNode); };
+  const typingNow = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable
+    || Boolean(document.querySelector(".scrim, .present"));
+  function clipOf() {
+    if (figure && figureBlock() && figure.parts.selected.length) {
+      const parts = figure.parts.clip();
+      if (parts) return { what: "parts", parts, label: parts.top.length > 1 ? `${parts.top.length} parts` : "part" };
+    }
+    const slide = slideAt();
+    if (!slide) return null;
+    const block = state.focus && !railList.contains(document.activeElement) && blocksAt(slide, state.focus.region)[state.focus.index];
+    if (block) return { what: "block", block: structuredClone(block), label: BLOCKS[kindOf(block)].label.toLowerCase() };
+    return { what: "slide", slide: structuredClone(slide), label: "slide" };
+  }
+  function plainOf(clip) {
+    if (clip.what === "slide") return plain(slideTitle(clip.slide));
+    if (clip.what === "parts") return clip.parts.nodes.map((node) => plain(Array.isArray(node.label) ? node.label.map((run) => run?.text ?? "").join("") : node.label || node.id)).join("\n");
+    const block = clip.block;
+    return block.bullets ? bulletsText(block.bullets) : String(block.text ?? block.quote ?? block.callout ?? block.code ?? block.math ?? "");
+  }
+  function copyNow(event) {
+    if (!studio.active || typingNow() || wordsChosen()) return null;
+    const clip = clipOf();
+    if (!clip) return null;
+    event.preventDefault();
+    clipboard = clip;
+    event.clipboardData?.setData(CLIP, JSON.stringify(clip));
+    event.clipboardData?.setData("text/plain", plainOf(clip));
+    return clip;
+  }
+  const copied = (clip) => toast(`Copied the ${clip.label}`, { icon: "copy", seconds: 1.5 });
+  function cutAway(clip) {
+    if (clip.what === "parts") figure.parts.remove();
+    else if (clip.what === "block") deleteBlock(state.focus);
+    else deleteSlide(state.slide);
+  }
+  document.addEventListener("copy", (event) => {
+    keyed = null;
+    const clip = copyNow(event);
+    if (clip) copied(clip);
   });
+  document.addEventListener("cut", (event) => {
+    keyed = null;
+    const clip = copyNow(event);
+    if (clip) cutAway(clip);
+  });
+  // A web view that gives no copy, cut or paste to a page with nothing to type in (a
+  // Mac app's, whose Edit menu waits for a selection) still passes the keys: if no such
+  // event follows them, the page does it itself, with what it copied.
+  let keyed = null;
+  function clipKey(event) {
+    const letter = event.key.toLowerCase();
+    if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || !["c", "x", "v"].includes(letter)) return;
+    if (!studio.active || typingNow() || wordsChosen()) return;
+    keyed = letter;
+    setTimeout(async () => {
+      if (keyed !== letter) return;
+      keyed = null;
+      if (letter === "v") {
+        if (clipboard) pasteClip(clipboard);
+        return;
+      }
+      const clip = clipOf();
+      if (!clip) return;
+      clipboard = clip;
+      navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
+      if (letter === "c") copied(clip); else cutAway(clip);
+    }, 80);
+  }
+  document.addEventListener("keydown", clipKey, true);
+  document.addEventListener("paste", async (event) => {
+    keyed = null;
+    if (!studio.active || typingNow()) return;
+    const data = event.clipboardData;
+    let clip = null;
+    try { clip = JSON.parse(data?.getData(CLIP) || "null"); } catch { clip = null; }
+    // A clipboard that keeps only words: what was copied here, if they are its words.
+    if (!clip && clipboard && data?.getData("text/plain") === plainOf(clipboard)) clip = clipboard;
+    if (clip) { event.preventDefault(); pasteClip(clip); return; }
+    const files = [...(data?.files || [])];
+    if (files.length) { event.preventDefault(); await addFiles(files, state.focus ? { kind: "block", ...state.focus } : null); return; }
+    const text = (data?.getData("text/plain") || "").replace(/\r/g, "").trim();
+    if (!text) return;
+    if (!regionsOf(slideAt()).length) { toast("This slide's layout has no room for words: choose another layout first.", { icon: "info" }); return; }
+    event.preventDefault();
+    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+    insertBlock(lines.length > 1 ? "bullets" : "text", lines.length > 1 ? { bullets: lines.map((line) => line.replace(/^[-*•·]\s+/, "")) } : { text });
+  });
+  function pasteClip(clip) {
+    if (clip.what === "slide") {
+      const at = Math.min(state.slide + 1, slides().length);
+      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, structuredClone(clip.slide)); });
+      select(at);
+    } else if (clip.what === "block") {
+      if (!regionsOf(slideAt()).length) { toast("This slide's layout has no room for parts: choose another layout first.", { icon: "info" }); return; }
+      insertBlock(kindOf(clip.block), structuredClone(clip.block));
+    } else if (clip.what === "parts") {
+      if (figure && figureBlock() && editable(figureBlock())) figure.parts.paste(clip.parts);
+      else insertBlock("figure", { figure: figureOfParts(clip.parts) });
+    }
+  }
+  // Parts pasted where no figure is chosen: a figure of their own.
+  function figureOfParts(parts) {
+    const nodes = parts.nodes.map((node) => {
+      const copy = structuredClone(node);
+      if (Array.isArray(copy.ports) && copy.ports.every((port) => typeof port === "string")) delete copy.ports;
+      return copy;
+    });
+    const groups = parts.groups.map(({ implied, ...group }) => structuredClone(group));
+    const edges = parts.edges.map(({ id, ...edge }) => structuredClone(edge));
+    return { figure: { id: `figure-${Date.now().toString(36)}` }, nodes, ...(groups.length ? { groups } : {}), ...(edges.length ? { edges } : {}) };
+  }
 
   // Structures added to a figure on the slide, one after another: each after the part
   // chosen (the one added before it, from the second on), a line from it.
@@ -2166,7 +2347,7 @@ export function mount(studio, container) {
       ui.button(label, () => exportFigure(at, formats), { small: true, icon: "export", title: hint }))));
     if (mode === "inline") {
       parts.push(h("div.figure-card", {},
-        h("div", {}, h("b", {}, `${(value?.nodes || []).length} parts, ${(value?.edges || []).length} lines`), h("div.hint-line", {}, "Written in the deck, drawn in its theme."))));
+        h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "part")}, ${count((value?.edges || []).length, "line")}`), h("div.hint-line", {}, "Written in the deck, drawn in its theme."))));
       const area = ui.textarea({ value: JSON.stringify(value, null, 2), rows: 8, mono: true, key: "figure.json", onInput: (text) => {
         try { const parsed = JSON.parse(text); area.style.borderColor = ""; edit((b) => { b.figure = parsed; }, "figure"); }
         catch { area.style.borderColor = "var(--error)"; }
