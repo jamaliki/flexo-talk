@@ -5,13 +5,15 @@
 // the slides they touch flash in their colour.
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
-import { figureParts, widenLines } from "/static/kinds/figure/parts.js";
+import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph" },
   bullets: { icon: "list", label: "List", hint: "Bullets or numbers, nested" },
   figure: { icon: "figure", label: "Figure", hint: "A flexo figure, laid out for its place" },
+  flow: { icon: "flow", label: "Flow chart", hint: "Steps and a decision, joined by arrows" },
+  structure: { icon: "structure", label: "Structure", hint: "A protein from a PDB or mmCIF file (or a PDB ID), drawn by mol-sketch" },
   image: { icon: "image", label: "Picture", hint: "PNG, JPEG, or SVG (drawn as vectors)" },
   table: { icon: "table", label: "Table", hint: "Ruled as in a paper" },
   stats: { icon: "stats", label: "Numbers", hint: "Numbers to remember, very large" },
@@ -23,7 +25,8 @@ const BLOCKS = {
   math: { icon: "math", label: "Equation", hint: "LaTeX, on a line of its own" },
   mechanism: { icon: "mechanism", label: "Mechanism", hint: "Structures in SMILES and their curly arrows, checked" },
 };
-const MAIN_BLOCKS = ["text", "bullets", "figure", "image", "table"];
+// Flow charts and structures are figures: they are offered by name, and made as figures.
+const MAIN_BLOCKS = ["text", "bullets", "figure", "flow", "structure", "image", "table"];
 const MORE_BLOCKS = ["math", "mechanism", "stats", "quote", "callout", "code", "gallery", "plot"];
 
 // What an equation's snippet buttons put in: [label, title, LaTeX]; "|" is where the cursor goes.
@@ -73,6 +76,12 @@ const NEW_BLOCKS = {
     { id: "model", label: "Model", properties: { tone: "encoder" } },
     { id: "y", kind: "text", label: "Output $y$" }],
     edges: [{ from: "x", to: "model" }, { from: "model", to: "y" }] } }),
+  flow: () => ({ figure: { figure: { id: `flow-${Date.now().toString(36)}` }, nodes: [
+    { id: "start", kind: "terminal", label: "Start" },
+    { id: "step", label: "Do the next step" },
+    { id: "check", kind: "decision", label: "Done?" },
+    { id: "end", kind: "terminal", label: "End" }],
+    edges: [{ from: "start", to: "step" }, { from: "step", to: "check" }, { from: "check", to: "end", label: "yes" }, { from: "check", to: "step", label: "no" }] } }),
   image: () => ({ image: "" }),
   table: () => ({ table: [["Model", "Params", "Score"], ["Baseline", "25.6M", "76.1"], ["Ours", "24.0M", "**81.2**"]] }),
   stats: () => ({ stats: [{ value: "93%", label: "accuracy" }, { value: "4×", label: "faster" }] }),
@@ -86,6 +95,25 @@ const NEW_BLOCKS = {
     { smiles: "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", arrows: ["5 -> 2", "2=3 -> 3"], reagents: "NaOH" },
     { arrows: ["3 -> 2", "2-4 -> 4"], label: "tetrahedral intermediate" }] }),
 };
+
+// A structure file, as a figure's part: named for its file or PDB ID, its id made from that.
+const STRUCTURE_FILE = /\.(pdb|cif|mmcif|ent)$/i;
+function structureNode(source, taken = new Set()) {
+  const stem = source.split("/").pop().replace(STRUCTURE_FILE, "");
+  let slug = stem.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 24) || "structure";
+  if (!/^[a-z]/.test(slug)) slug = `pdb-${slug}`;
+  let id = slug;
+  for (let number = 2; taken.has(id); number += 1) id = `${slug}-${number}`;
+  taken.add(id);
+  return { id, kind: "structure", label: fileLabel(source), properties: { source } };
+}
+// Structures on a slide: one after another, an arrow from each to the next.
+function structureFigure(sources) {
+  const taken = new Set();
+  const nodes = sources.map((source) => structureNode(source, taken));
+  const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index].id, to: node.id }));
+  return { figure: { figure: { id: `structures-${Date.now().toString(36)}` }, nodes, ...(edges.length ? { edges } : {}) } };
+}
 
 // -- the document ---------------------------------------------------------------------
 
@@ -372,6 +400,7 @@ export function mount(studio, container) {
     railList.querySelector(".thumb.on")?.scrollIntoView({ block: "nearest" });
     if (pages[state.slide]?.stale) studio.requestDraw(0);
     reportFocus();
+    readSlideAhead();
   }
 
   function reportFocus() {
@@ -504,6 +533,8 @@ export function mount(studio, container) {
       const svg = pageNode.querySelector("svg");
       if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
       if (svg) widenLines(svg);
+      // What the pointer was over has moved, or gone: shown again when it moves.
+      hover.hidden = true;
       pageNode.append(hover, chosen);
       pageNode.addEventListener("mousemove", onHover);
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
@@ -609,14 +640,23 @@ export function mount(studio, container) {
       return;
     }
     const part = partAt(event);
+    // A figure's parts are shown one by one, as they will be chosen: by the first click.
+    const inner = part && figurePartAt(event, part);
+    if (inner) { place(hover, boxOf(inner.element.id), inner.name); return; }
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
   // A part of the chosen figure, pressed and moved, is dragged to another place in it;
-  // any other part of the slide, to another place on the slide.
+  // the figure itself -- pressed where none of its parts is, or before it is chosen, or
+  // when it has one part only -- and any other part of the slide, to another place on the slide.
   function onPress(event) {
     if (event.target.closest(".fig-inline, .figure-bar")) return;
-    if (figureBlock() && editable(figureBlock()) && inFigure(event)) { figure.parts.pointerdown(event); return; }
+    if (figureBlock() && editable(figureBlock()) && inFigure(event) && figure.parts.model) {
+      const id = figure.parts.idAt(event);
+      const holder = id && figure.parts.parentOf(id);
+      const alone = holder?.id === figure.parts.model.root && (holder.children || []).length < 2;
+      if (figure.parts.connecting || (id && holder && !alone)) { figure.parts.pointerdown(event); return; }
+    }
     pressBlock(event, partAt(event));
   }
 
@@ -875,7 +915,8 @@ export function mount(studio, container) {
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
     if (!part) { state.focus = null; placeChosen(); renderInspector(); reportFocus(); return; }
-    if (part.kind === "block") focusBlock(part.region, part.index);
+    // A click on a figure's part chooses that part, the figure not chosen first.
+    if (part.kind === "block") focusBlock(part.region, part.index, () => figure.parts.click(event));
     else {
       state.focus = null; state.tab = "slide"; placeChosen(); renderInspector(); reportFocus();
       const field = part.field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : part.field;
@@ -885,13 +926,14 @@ export function mount(studio, container) {
 
   function onEdit(event) {
     if (event.target.closest(".fig-inline, .figure-bar")) return;
-    if (inFigure(event)) { figure.parts.dblclick(event); return; }
+    if (inFigure(event)) { whenFigure(() => figure.parts.dblclick(event)); return; }
     const part = partAt(event);
     if (!part) return;
     if (part.kind === "field") openInline({ kind: "field", field: part.field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : part.field });
     else {
       const block = blocksAt(slideAt(), part.region)[part.index];
       if (block && INLINE.has(kindOf(block))) openInline({ kind: "block", region: part.region, index: part.index });
+      else if (block && kindOf(block) === "figure") focusBlock(part.region, part.index, () => figure.parts.dblclick(event));
     }
   }
 
@@ -902,9 +944,14 @@ export function mount(studio, container) {
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${focus.index}`);
     const block = blocksAt(slideAt() || {}, focus.region)[focus.index];
     place(chosen, box, block ? BLOCKS[kindOf(block)].label : "");
+    holding();
   }
+  // A figure whose part is chosen is only outlined round it: the part is what is chosen.
+  const holding = () => chosen.classList.toggle("holder", Boolean(figureBlock() && figure.parts.selected.length));
 
-  function focusBlock(region, index) {
+  // A figure chosen is edited at once: `then` (a click, a double-click on one of its
+  // parts) is done to it as soon as its parts are known.
+  function focusBlock(region, index, then = null) {
     closeInline();
     state.tab = "slide";
     state.focus = { region, index };
@@ -914,6 +961,7 @@ export function mount(studio, container) {
     renderInspector();
     placeChosen();
     reportFocus();
+    if (then && figureBlock()) whenFigure(then);
   }
 
   // -- a figure's parts, edited on the slide --
@@ -935,6 +983,18 @@ export function mount(studio, container) {
     const value = block?.figure;
     return Boolean(value) && (typeof value === "object" || (typeof value === "string" && !value.includes(".py:")));
   };
+  // Files a figure names are found beside it: a figure file in a folder of its own
+  // names them from there, not from the deck's folder.
+  function figureFolder() {
+    const value = figureBlock()?.figure;
+    return typeof value === "string" && value.includes("/") ? value.slice(0, value.lastIndexOf("/") + 1) : "";
+  }
+  function relativeTo(folder, path) {
+    if (!folder || !path || (!path.includes("/") && !/\.[A-Za-z0-9]+$/.test(path))) return path;  // a PDB ID
+    const from = folder.split("/").filter(Boolean), to = path.split("/");
+    while (from.length && to.length > 1 && from[0] === to[0]) { from.shift(); to.shift(); }
+    return [...from.map(() => ".."), ...to].join("/");
+  }
   function figurePrefix() {
     const region = figure && regionsOf(slideAt()).find((r) => r.key === figure.region);
     return region ? `slide${state.slide + 1}.${region.svg}.${figure.index}.` : null;
@@ -945,11 +1005,63 @@ export function mount(studio, container) {
     return part?.kind === "block" && part.region === figure.region && part.index === figure.index;
   }
 
+  // Figures' parts are read ahead -- those on the slide shown, and any the pointer
+  // passes over -- so the first click on a part chooses it, as on any other part of
+  // the slide, with no step into the figure first.
+  const known = new Map();
+  const reading = new Set();
+  const knownKey = (slide, region, index) => {
+    const block = blocksAt(slides()[slide] || {}, region)[index];
+    return editable(block) ? `${slide}|${region}|${index}|${JSON.stringify(block.figure)}` : null;
+  };
+  async function readAhead(region, index, slide = state.slide) {
+    const key = knownKey(slide, region, index);
+    if (!key || known.has(key) || reading.has(key)) return;
+    reading.add(key);
+    try {
+      const result = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "figure", at: { slide, region, index }, edit: { do: "read" } } });
+      if (result?.model) {
+        if (known.size > 40) known.delete(known.keys().next().value);
+        known.set(key, result.model);
+      }
+    } catch { /* a figure that does not read is said when it is drawn */ } finally {
+      reading.delete(key);
+    }
+  }
+  function readSlideAhead() {
+    for (const region of regionsOf(slideAt())) {
+      blocksAt(slideAt(), region.key).forEach((block, index) => { if (kindOf(block) === "figure") readAhead(region.key, index); });
+    }
+  }
+  // The part of a figure not chosen yet under the pointer: its drawing, and its name.
+  function figurePartAt(event, part) {
+    if (part.kind !== "block" || (figure && inFigure(event))) return null;
+    const block = blocksAt(slideAt(), part.region)[part.index];
+    if (kindOf(block) !== "figure" || !editable(block)) return null;
+    readAhead(part.region, part.index);
+    const model = known.get(knownKey(state.slide, part.region, part.index));
+    if (!model) return null;
+    const prefix = `${part.id}.`;
+    for (let at = event.target; at && at !== pageNode; at = at.parentElement) {
+      if (!at.matches?.("[data-flexo-entity][id]") || !at.id.startsWith(prefix)) continue;
+      const node = model.nodes.find((item) => item.id === at.id.slice(prefix.length));
+      if (node) return { element: at, name: plain(Array.isArray(node.label) ? node.label.map((run) => run?.text ?? "").join("") : node.label) || catalog.figure_editor.parts[node.kind || "block"]?.title || node.kind };
+    }
+    return null;
+  }
+  // `then` is done once the chosen figure's parts are known: at once if they are.
+  function whenFigure(then) {
+    if (!figure) return;
+    if (figure.parts.model) then();
+    else figure.waiting = then;
+  }
+
   function enterFigure(region, index) {
     const block = blocksAt(slideAt(), region)[index];
     if (!editable(block)) { leaveFigure(false); return; }
     if (figure && figure.slide === state.slide && figure.region === region && figure.index === index) return;
     leaveFigure(false);
+    const ahead = known.get(knownKey(state.slide, region, index));
     figure = { slide: state.slide, region, index };
     figure.parts = figureParts({
       catalog: catalog.figure_editor,
@@ -959,7 +1071,7 @@ export function mount(studio, container) {
       box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
       changed: () => { renderInspector(); placeFigure(); },
       settled: () => placeFigure(),
-      chooseFile,
+      chooseFile: async (options) => relativeTo(figureFolder(), await chooseFile(options)),
       tones: () => studio.info?.tones,
       addAnchor: () => figureBar.querySelector(".add") || figureBar,
       groupAnchor: () => figureBar.querySelector(".group") || figureBar,
@@ -967,7 +1079,11 @@ export function mount(studio, container) {
       nothing: () => [...blockPanel(slideAt(), figureBlock()), figure.parts.howTo()],
       run: runFigure,
     });
-    figure.parts.act({ do: "read" }, { select: false });
+    // Its parts as read ahead are good to choose from at once; the read brings them up to date.
+    if (ahead) figure.parts.setModel(ahead);
+    const mine = figure;
+    const ready = () => { if (figure === mine && mine.waiting && mine.parts.model) { const then = mine.waiting; mine.waiting = null; then(); } };
+    figure.parts.act({ do: "read" }, { select: false, then: ready, failed: () => { if (figure === mine) mine.waiting = null; } });
   }
 
   function leaveFigure(render = true) {
@@ -997,11 +1113,10 @@ export function mount(studio, container) {
   }
 
   function placeFigure() {
+    holding();
     const block = figureBlock();
     if (!block || !figure.parts.model || !pageNode) { clear(figureMarks); figureBar.hidden = true; return; }
-    clear(figureMarks, figure.parts.marks().map(({ box, group, name }) => h(`div.fig-mark${group ? ".group" : ""}`, { style: {
-      left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` } },
-    group ? h("span.fig-mark-label", {}, name) : null)));
+    clear(figureMarks, figure.parts.markViews());
     const region = regionsOf(slideAt()).find((r) => r.key === figure.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${figure.index}`);
     figureBar.hidden = !box;
@@ -1097,29 +1212,67 @@ export function mount(studio, container) {
     document.removeEventListener("mousedown", closeOnOutside, true);
   }
 
-  // Pictures dropped on the slide become picture parts.
+  // Files dropped on the slide are added to it: pictures as pictures, and structures
+  // (PDB, mmCIF) drawn by mol-sketch -- into the figure they are dropped on, after its
+  // part chosen and joined to it, or else as a figure of their own, an arrow from each
+  // to the next.
   let dropNote = null;
   stage.addEventListener("dragover", (event) => {
     if (![...(event.dataTransfer?.types || [])].includes("Files") || !regionsOf(slideAt()).length) return;
     event.preventDefault();
-    if (!dropNote) { dropNote = h("div.drop-note", {}, "Drop pictures to add them to this slide"); center.append(dropNote); }
+    if (!dropNote) { dropNote = h("div.drop-note", {}, "Drop pictures or structures (PDB, mmCIF) to add them to this slide"); center.append(dropNote); }
   });
   stage.addEventListener("dragleave", (event) => { if (!stage.contains(event.relatedTarget)) { dropNote?.remove(); dropNote = null; } });
   stage.addEventListener("drop", async (event) => {
     dropNote?.remove(); dropNote = null;
-    const files = [...(event.dataTransfer?.files || [])].filter((file) => /\.(png|jpe?g|svg|gif|webp)$/i.test(file.name));
-    if (!files.length) return;
+    const all = [...(event.dataTransfer?.files || [])];
+    const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|pdf|ai)$/i.test(file.name));
+    const structures = all.filter((file) => STRUCTURE_FILE.test(file.name));
+    if (!pictures.length && !structures.length) {
+      if (all.length) { event.preventDefault(); toast("Only pictures and structures (PDB, mmCIF) can be dropped on a slide.", { icon: "info" }); }
+      return;
+    }
     event.preventDefault();
-    for (const file of files) await insertBlock("image", { image: await studio.upload(file) });
-    toast(`Added ${files.length} picture${files.length > 1 ? "s" : ""}`, { icon: "image" });
+    const part = partAt(event);
+    for (const file of pictures) await insertBlock("image", { image: await studio.upload(file) });
+    if (structures.length) {
+      const sources = [];
+      for (const file of structures) sources.push(await studio.upload(file));
+      const block = part?.kind === "block" && !pictures.length ? blocksAt(slideAt(), part.region)[part.index] : null;
+      if (block && kindOf(block) === "figure" && editable(block)) addStructures(part.region, part.index, sources, event);
+      else await insertBlock("structure", structureFigure(sources));
+    }
+    const said = [pictures.length ? `${pictures.length} picture${pictures.length > 1 ? "s" : ""}` : "", structures.length ? `${structures.length} structure${structures.length > 1 ? "s" : ""}` : ""].filter(Boolean);
+    toast(`Added ${said.join(" and ")}`, { icon: structures.length ? "structure" : "image" });
   });
+
+  // Structures added to a figure on the slide, one after another: each after the part
+  // chosen (the one added before it, from the second on), a line from it.
+  function addStructures(region, index, sources, dropped = null) {
+    focusBlock(region, index);
+    if (!figureBlock()) return;
+    // Dropped on one of its parts: they come after that one.
+    const on = () => { const id = dropped && figure.parts.idAt(dropped); if (id && figure.parts.nodeOf(id)) figure.parts.select([id]); };
+    const taken = new Set([...(figure.parts.model?.nodes || []).map((node) => node.id)]);
+    const prefix = figureFolder();
+    const next = (at) => {
+      if (at >= sources.length || !figureBlock()) return;
+      const chosen = figure.parts.selected.length === 1 ? figure.parts.selected[0] : null;
+      const node = structureNode(relativeTo(prefix, sources[at]), taken);
+      const where = chosen && figure.parts.nodeOf(chosen) ? { after: chosen, source: chosen }
+        : chosen && figure.parts.groupOf(chosen) ? { parent: chosen } : {};
+      figure.parts.act({ do: "add", kind: "structure", parent: where.parent || null, after: where.after || null, source: where.source || null,
+        node: { id: node.id, label: node.label, properties: node.properties } }, { then: () => next(at + 1), failed: () => next(at + 1) });
+    };
+    whenFigure(() => { on(); next(0); });
+  }
 
   // -- adding parts --
   async function insertBlock(kind, given = null, where = null) {
     const slide = slideAt();
     const regions = regionsOf(slide);
     if (!regions.length) { toast("This slide's layout has no room for parts: choose another layout first.", { icon: "info" }); return; }
-    let block = given || NEW_BLOCKS[kind]();
+    let block = given || NEW_BLOCKS[kind]?.();
     if (!given && kind === "image") {
       const path = await chooseFile({ title: "Choose a picture", types: ["image"] });
       if (!path) return;
@@ -1132,6 +1285,10 @@ export function mount(studio, container) {
       const path = await chooseFile({ title: "The gallery's first picture", types: ["image"] });
       if (!path) return;
       block = { gallery: [path] };
+    } else if (!given && kind === "structure") {
+      const path = await chooseFile({ title: "Choose a structure", types: ["structure"] });
+      if (!path) return;
+      block = structureFigure([path]);
     }
     const anchor = where || state.focus;
     const region = anchor && regions.some((r) => r.key === anchor.region) ? anchor.region : regions[0].key;
@@ -1972,6 +2129,7 @@ export function mount(studio, container) {
   function figureForm(block, at, edit) {
     const value = block.figure;
     const mode = typeof value === "string" ? (value.includes(".py:") ? "python" : "file") : "inline";
+    const turn = ui.toggle({ value: block.turn !== false, label: "May turn to fit the slide", onChange: (on) => editBlock(at, (b) => setOption(b, "turn", on ? null : false)) });
     const parts = [ui.field("Made from", ui.segmented({ value: mode, options: [
       { value: "inline", label: "Here" }, { value: "file", label: "A figure file" }, { value: "python", label: "Python" }],
     onChange: async (next) => {
@@ -2005,6 +2163,8 @@ export function mount(studio, container) {
       } });
       area.classList.remove("grow"); area.style.maxHeight = "300px"; area.style.overflow = "auto";
       parts.push(h("details.more", {}, h("summary", {}, icon("chevron"), "Its document (JSON)"), h("div.inner", {}, area)));
+      // Written in the deck, it is edited where it is drawn: where it is kept is put by.
+      return [turn, h("details.more", {}, h("summary", {}, icon("chevron"), "Where it is kept"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
       parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"),
         h("div", {}, ui.button("Open in the figure editor", () => studio.workspace.open(studio.folder() + value), { icon: "external" })),
@@ -2013,7 +2173,7 @@ export function mount(studio, container) {
       parts.push(functionInput(value, (text) => edit((b) => { b.figure = text; }, "figure")),
         h("div.hint-line", {}, "A function returning a ", h("code", {}, "flexo.Figure"), "; it runs again when its file changes."));
     }
-    parts.push(ui.toggle({ value: block.turn !== false, label: "May turn to fit the slide", onChange: (on) => editBlock(at, (b) => setOption(b, "turn", on ? null : false)) }));
+    parts.push(turn);
     return parts;
   }
 
@@ -2042,7 +2202,11 @@ export function mount(studio, container) {
       const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
         onchange: async () => { const file = upload.files[0]; if (file) finish(await studio.upload(file)); } });
       const actions = [];
-      if (types.includes("image") || types.includes("figure")) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });
+      if (types.some((type) => ["image", "figure", "structure"].includes(type))) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });
+      if (types.includes("structure")) actions.push({ label: "PDB ID…", run: () => {
+        ask("A PDB ID, fetched from the PDB when it is drawn", "1UBQ").then((id) => { if (id) finish(id.toUpperCase()); });
+        return false;
+      } });
       if (create === "figure") actions.push({ label: "New figure file…", run: () => {
         ask("Name the new figure file", "figures/figure.yaml").then(async (name) => {
           if (!name) return;
@@ -2056,9 +2220,9 @@ export function mount(studio, container) {
       studio.files(types).then((files) => {
         const shown = files.filter((file) => file !== studio.file.split("/").pop());
         clear(list, shown.length ? shown.map((file) => h("button.menu-item", { type: "button", onclick: () => finish(file) },
-          types.includes("image") ? h("img.pic", { src: studio.raw(file), alt: "" }) : icon(types.includes("python") ? "code" : "figure"),
+          types.includes("image") ? h("img.pic", { src: studio.raw(file), alt: "" }) : icon(types.includes("python") ? "code" : types.includes("structure") ? "structure" : "figure"),
           h("span.menu-text", {}, h("span", {}, file.split("/").pop()), h("span.menu-hint", {}, file))))
-          : h("div.empty", {}, "No files of this kind beside the deck yet."));
+          : h("div.empty", {}, types.includes("structure") ? "No structures beside the deck yet: upload a PDB or mmCIF file, or give a PDB ID." : "No files of this kind beside the deck yet."));
       });
     });
   }
@@ -2280,6 +2444,7 @@ export function mount(studio, container) {
     messages = result.messages || [];
     renderRail();
     renderStage();
+    readSlideAhead();
     if (mathNotes && document.contains(inspectorBody.querySelector(".math-notes"))) mathNotes();
     if (figure && typeof figureBlock()?.figure === "string") figure.parts.act({ do: "read" }, { select: false });
     const key = JSON.stringify(studio.info?.palette || {});

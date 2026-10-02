@@ -364,13 +364,22 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
 - **The slide is where you work.** Click a part to choose it; double-click words
   (a title, a list, a paragraph) to edit them in place, on the slide. The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
-  a figure, a picture, a table, and more -- after the one chosen. Pictures dropped
-  on the slide are added to it.
-- **Figures are edited on their slides.** Choose a figure and its parts can be
-  chosen, typed on (double-click), connected, gathered, and dragged to another
-  place in their row or into another group where they are drawn, as in flexo's
-  figure editor: a bar above the figure adds parts (A) and draws
-  lines (C), and the inspector shows the part chosen. A figure written in the deck
+  a figure, a flow chart, a structure, a picture, a table, and more -- after the
+  one chosen. Pictures dropped on the slide are added to it, and so are structures
+  (PDB or mmCIF files), drawn by mol-sketch: several dropped at once make one
+  figure, an arrow from each to the next, and one dropped on a figure joins it,
+  after the part it lands on. **Structure** takes a file beside the deck, one
+  uploaded, or a PDB ID.
+- **Figures are edited on their slides**, as any other part of the slide is: one
+  click on a box, a structure or a line chooses it, a double-click types on it,
+  and a click where none of a figure's parts is chooses the figure. A part chosen
+  can be connected, gathered, and dragged to another place in its row or into
+  another group where it is drawn (dragged before anything in it is chosen, the
+  figure moves on the slide), as in flexo's figure editor: a bar above the
+  figure adds parts (A) and draws lines (C), a **+** beside the part chosen adds
+  the next step, joined to it, its words typed at once, and the inspector shows
+  the part chosen. A part added after one whose single line runs on to the next
+  goes into that line, as a step into a flow chart. A figure written in the deck
   changes in the deck, and undoes with it; a figure file changes in its file,
   comments and all. Esc steps out, a part at a time. A figure made in Python is
   changed in its Python.
