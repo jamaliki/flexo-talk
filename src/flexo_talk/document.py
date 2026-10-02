@@ -626,7 +626,8 @@ _FIGURES_LOCK = threading.Lock()
 
 
 def _figure(base: Path, value: object, where: str, region: Region) -> object:
-    from flexo.serialization import load_figure, parse_figure
+    from flexo.serialization import parse_figure
+    from flexo.studio.figure_kind import parse
 
     if isinstance(value, dict):
         # A figure is read once for each version of it: the studio reads the deck on every edit.
@@ -649,7 +650,10 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
     if _is_code(value):
         return Reference(value, _maker(base, value, where, lambda made: _as_figure(made, value, where), kind="figure"))
     try:
-        return load_figure(_file(base, value, where))
+        path = _file(base, value, where)
+        # Its theme, and the pictures and structures its parts draw, found beside the file
+        # (as they are found beside the deck for a figure written in it).
+        return parse(path.read_text(encoding="utf-8"), path.parent, suffix=path.suffix.lower())
     except DeckDocumentError:
         raise
     except Exception as error:

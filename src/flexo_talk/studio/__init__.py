@@ -346,7 +346,9 @@ class DeckKind:
         """An edit to a figure on a slide, made where the figure is written: in the deck
         (a figure written inline) or in its own file. ``action`` is ``{"do": "figure",
         "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}`` -- or
-        ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``)."""
+        ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``), or
+        ``{"do": "inline", "at"}``, a figure file's figure written into the deck
+        (``_inline``)."""
 
         import copy
 
@@ -354,6 +356,8 @@ class DeckKind:
 
         if action.get("do") == "mechanism":
             return _mechanism(document, action, base)
+        if action.get("do") == "inline":
+            return _inline(document, action, base)
         if action.get("do") != "figure":
             raise EditError(f'unknown deck edit "{action.get("do")}"')
         at = action.get("at") or {}
@@ -381,6 +385,76 @@ class DeckKind:
         result = deck.build(base / "build", formats=tuple(formats))
         written = [result.pptx, result.pdf, *result.svgs, *result.pngs]
         return [path for path in written if path]
+
+    def export_part(
+        self, document: dict[str, Any], base: Path, stem: str, part: dict[str, Any], formats: list[str]
+    ) -> list[Path]:
+        """A figure on a slide written out as a figure of its own, in the deck's look: its
+        document (``yaml``, a flexo figure file) and what flexo builds of it (``editable``
+        and ``portable`` SVG, ``pdf``, ``png``). It is laid out as written, not as fitted
+        to the slide. Files go in ``build/`` beside the deck, the files the figure names
+        (a theme, structures, pictures) named from there."""
+
+        import os
+        from dataclasses import replace
+
+        import yaml
+        from flexo.export import build
+        from flexo.serialization import figure_to_document, parse_figure
+        from flexo.studio.figure_edit import EditError
+
+        from flexo_talk.deck import made
+        from flexo_talk.document import _figure, make_deck
+
+        block = _block_at(document, part)
+        if not isinstance(block, dict) or "figure" not in block:
+            raise EditError("that part of the slide is not a figure")
+        deck = make_deck(document.get("deck") or {}, base)
+        where = f"slides[{part.get('slide')}].{part.get('region')}[{part.get('index')}]"
+        figure = made(_figure(base, block["figure"], where, None))
+        spec = getattr(figure, "spec", figure)
+        spec = replace(
+            spec, style=deck.theme, palette=deck.palette_name,
+            font=deck.figure_font or deck.font or spec.font,
+        )
+        # The files its parts draw, wherever it names them from (a figure file names them
+        # from its own folder), found once and for all.
+        value = block["figure"]
+        origin = (base / value).parent if isinstance(value, str) and ".py:" not in value else base
+        data = figure_to_document(spec)
+        for node in data.get("nodes") or []:
+            properties = node.get("properties") or {}
+            source = properties.get("source")
+            if isinstance(source, str) and source and not Path(source).is_absolute() and (origin / source).is_file():
+                properties["source"] = str((origin / source).resolve())
+        spec = parse_figure(data)
+        folder = base / "build"
+        folder.mkdir(parents=True, exist_ok=True)
+        name = f"{stem}-{spec.id}"
+        written: list[Path] = []
+        if "yaml" in formats:
+
+            def beside(value: object) -> object:
+                # A file inside the folder is named from where the figure file is.
+                if isinstance(value, str) and Path(value).is_absolute() and Path(value).is_relative_to(base.resolve()):
+                    return os.path.relpath(value, folder)
+                return value
+
+            for key in ("style", "theme", "palette"):
+                if key in data["figure"]:
+                    data["figure"][key] = beside(data["figure"][key])
+            for node in data.get("nodes") or []:
+                properties = node.get("properties") or {}
+                if "source" in properties:
+                    properties["source"] = beside(properties["source"])
+            target = folder / f"{name}.yaml"
+            target.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+            written.append(target)
+        built = [item for item in formats if item != "yaml"]
+        if built:
+            result = build(spec, folder, stem=name, formats=tuple(built))
+            written += list(result.outputs.existing())
+        return written
 
     def text(self, document: dict[str, Any]) -> str:
         return dump_document(document)
@@ -437,6 +511,47 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> 
         look = {}
     drawn = sheet(block["mechanism"], step=step, holding=holding, options=options, look=look)
     return {"document": changed, "sheet": drawn, **said}
+
+
+def _inline(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+    """The figure a slide takes from a figure file, written into the deck as it is, so it
+    is kept with the slide: the files it names (structures, pictures, a theme) named from
+    the deck's folder. The file is left as it was."""
+
+    import os
+
+    import yaml
+    from flexo.studio.figure_edit import EditError
+
+    changed = copy.deepcopy(document)
+    block = _block_at(changed, action.get("at") or {})
+    value = block.get("figure") if isinstance(block, dict) else None
+    if isinstance(value, dict):
+        return {"document": document}
+    if not isinstance(value, str) or not value or ".py:" in value:
+        raise EditError("only a figure kept in a figure file can be written into the deck")
+    path = (base / value).resolve()
+    if not path.is_file() or not path.is_relative_to(base.resolve()):
+        raise EditError(f"no figure file {value} beside the deck")
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))  # JSON reads as YAML too
+    if not isinstance(data, dict):
+        raise EditError(f"{value} is not a figure")
+
+    def rebased(name: object) -> object:
+        if not isinstance(name, str) or not name or Path(name).is_absolute():
+            return name
+        found = (path.parent / name).resolve()
+        return os.path.relpath(found, base.resolve()) if found.is_file() else name
+
+    for key in ("theme", "style", "palette"):
+        if isinstance(data.get("figure"), dict) and key in data["figure"]:
+            data["figure"][key] = rebased(data["figure"][key])
+    for node in data.get("nodes") or []:
+        properties = node.get("properties") if isinstance(node, dict) else None
+        if isinstance(properties, dict) and "source" in properties:
+            properties["source"] = rebased(properties["source"])
+    block["figure"] = data
+    return {"document": changed}
 
 
 def _written(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:

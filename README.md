@@ -381,8 +381,12 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   the part chosen. A part added after one whose single line runs on to the next
   goes into that line, as a step into a flow chart. A figure written in the deck
   changes in the deck, and undoes with it; a figure file changes in its file,
-  comments and all. Esc steps out, a part at a time. A figure made in Python is
-  changed in its Python.
+  comments and all (**Made from › Here** writes its figure into the deck instead,
+  the file left as it was). Esc steps out, a part at a time. A figure made in
+  Python is changed in its Python. There is no separate figure editor to go to:
+  to use a figure elsewhere, **Export** on the bar above it (or in its panel)
+  writes it out by itself, in the deck's look -- an editable SVG, a PDF, a PNG,
+  or its document as a flexo figure file (YAML).
 - **The inspector shows what is chosen**: a part's own settings, or, with nothing
   chosen, the slide's title, its parts in order (drag to reorder), its layout,
   background, and footnotes. **Design** holds the look, theme, palette, type, and

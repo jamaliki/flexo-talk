@@ -46,6 +46,13 @@ const MATH_SNIPPETS = [
   ["Tt", "Words", "\\text{|}"],
 ];
 const INLINE = new Set(["text", "bullets", "quote", "callout", "code"]);
+// A figure on a slide, exported by itself: what flexo builds of it, or its document.
+const FIGURE_EXPORTS = [
+  { label: "SVG", formats: ["editable"], hint: "Editable SVG: Inkscape layers, live text" },
+  { label: "PDF", formats: ["pdf"], hint: "PDF, fonts embedded" },
+  { label: "PNG", formats: ["png"], hint: "PNG" },
+  { label: "YAML", formats: ["yaml"], hint: "The figure's document: a flexo figure file, in the deck's theme" },
+];
 
 const LAYOUT_NAMES = {
   content: "Content", "two-columns": "Two columns", columns: "Columns", figure: "Figure", title: "Title",
@@ -1130,6 +1137,8 @@ export function mount(studio, container) {
       ui.button("Add part", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add a part to the figure (A)", id: undefined }),
       ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one part to another (C)" }),
       group,
+      ui.button("", (event) => menu(event.currentTarget, FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export ${label}`, hint, run: () => exportFigure(figure, formats) }))),
+        { small: true, kind: "ghost", icon: "export", title: "Export this figure (SVG, PDF, PNG, YAML)" }),
       figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete the chosen parts (⌫)" }) : null,
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
@@ -2135,7 +2144,14 @@ export function mount(studio, container) {
       { value: "inline", label: "Here" }, { value: "file", label: "A figure file" }, { value: "python", label: "Python" }],
     onChange: async (next) => {
       if (next === mode) return;
-      if (next === "inline") editBlock(at, (b) => { b.figure = NEW_BLOCKS.figure().figure; });
+      // A figure file's figure comes into the deck as it is; else a new one starts here.
+      if (next === "inline" && mode === "file") {
+        try {
+          const result = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "inline", at: { slide: state.slide, region: at.region, index: at.index } } });
+          studio.change(() => result.document);
+          toast(`${value} is now written in the deck; the file is left as it was.`, { icon: "check", seconds: 5 });
+        } catch (error) { toast(error.message, { kind: "error", icon: "error" }); }
+      } else if (next === "inline") editBlock(at, (b) => { b.figure = NEW_BLOCKS.figure().figure; });
       else if (next === "file") {
         const path = await chooseFile({ title: "A flexo figure file", types: ["figure"], create: "figure" });
         if (path) editBlock(at, (b) => { b.figure = path; });
@@ -2145,19 +2161,12 @@ export function mount(studio, container) {
       }
       renderInspector();
     } }))];
+    // A figure is made and changed on its slide; to use it elsewhere, it is exported.
+    const exports = ui.field("Export the figure", h("div.row", {}, FIGURE_EXPORTS.map(({ label, formats, hint }) =>
+      ui.button(label, () => exportFigure(at, formats), { small: true, icon: "export", title: hint }))));
     if (mode === "inline") {
       parts.push(h("div.figure-card", {},
-        h("div", {}, h("b", {}, `${(value?.nodes || []).length} parts, ${(value?.edges || []).length} lines`), h("div.hint-line", {}, "Drawn here, in the deck's theme.")),
-        ui.button("Edit as a figure", async () => {
-          const name = await ask("Give the figure a file of its own", `figures/${value?.figure?.id || "figure"}.yaml`);
-          if (!name) return;
-          try {
-            const made = await createFile(name, "figure", value);
-            editBlock(at, (b) => { b.figure = made; });
-            renderInspector();
-            studio.workspace.open(studio.folder() + made);
-          } catch (error) { toast(error.message, { kind: "error", icon: "error" }); }
-        }, { icon: "external", title: "Move it to a figure file and open the figure editor" })));
+        h("div", {}, h("b", {}, `${(value?.nodes || []).length} parts, ${(value?.edges || []).length} lines`), h("div.hint-line", {}, "Written in the deck, drawn in its theme."))));
       const area = ui.textarea({ value: JSON.stringify(value, null, 2), rows: 8, mono: true, key: "figure.json", onInput: (text) => {
         try { const parsed = JSON.parse(text); area.style.borderColor = ""; edit((b) => { b.figure = parsed; }, "figure"); }
         catch { area.style.borderColor = "var(--error)"; }
@@ -2165,17 +2174,21 @@ export function mount(studio, container) {
       area.classList.remove("grow"); area.style.maxHeight = "300px"; area.style.overflow = "auto";
       parts.push(h("details.more", {}, h("summary", {}, icon("chevron"), "Its document (JSON)"), h("div.inner", {}, area)));
       // Written in the deck, it is edited where it is drawn: where it is kept is put by.
-      return [turn, h("details.more", {}, h("summary", {}, icon("chevron"), "Where it is kept"), h("div.inner", {}, parts))];
+      return [exports, turn, h("details.more", {}, h("summary", {}, icon("chevron"), "Where it is kept"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
       parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"),
-        h("div", {}, ui.button("Open in the figure editor", () => studio.workspace.open(studio.folder() + value), { icon: "external" })),
-        h("div.hint-line", {}, "Changes there are drawn here as they happen."));
+        h("div.hint-line", {}, "Edited here, on the slide; the file changes as you edit, and changes made to it are drawn here."));
     } else {
       parts.push(functionInput(value, (text) => edit((b) => { b.figure = text; }, "figure")),
         h("div.hint-line", {}, "A function returning a ", h("code", {}, "flexo.Figure"), "; it runs again when its file changes."));
     }
     parts.push(turn);
-    return parts;
+    return [exports, ...parts];
+  }
+
+  // The figure on the slide written out by itself, in the deck's look, laid out as written.
+  function exportFigure(at, formats) {
+    return studio.exportFiles(formats, { slide: state.slide, region: at.region, index: at.index });
   }
 
   // -- files --
@@ -2211,7 +2224,7 @@ export function mount(studio, container) {
       if (create === "figure") actions.push({ label: "New figure file…", run: () => {
         ask("Name the new figure file", "figures/figure.yaml").then(async (name) => {
           if (!name) return;
-          try { const made = await createFile(name, "figure"); finish(made); studio.workspace.open(studio.folder() + made, { activate: false }); }
+          try { finish(await createFile(name, "figure")); }
           catch (error) { toast(error.message, { kind: "error", icon: "error" }); }
         });
         return false;
@@ -2409,6 +2422,7 @@ export function mount(studio, container) {
     ...Object.entries(BLOCKS).map(([kind, info]) => ({ icon: info.icon, label: `Add ${info.label.toLowerCase()}`, hint: info.hint, run: () => insertBlock(kind) })),
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${look.name}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
     { icon: "theme", label: "Customise the theme…", run: () => customiseTheme(doc().deck || {}) },
+    ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export this figure as ${label}`, hint, run: () => exportFigure(figure, formats) })) : []),
     { icon: "play", label: "Present", keys: "⌘⏎", run: () => present() },
     { icon: "export", label: "Export PowerPoint", run: () => studio.exportFiles(["pptx"]) },
     { icon: "export", label: "Export PDF", run: () => studio.exportFiles(["pdf"]) },

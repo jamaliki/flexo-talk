@@ -378,6 +378,50 @@ def test_the_studio_offers_the_figure_editor_for_figures_on_slides() -> None:
     assert {"block", "protein", "plasmid", "attention"} <= set(parts)
 
 
+def test_a_figure_on_a_slide_is_exported_by_itself_in_the_decks_look(tmp_path: Path) -> None:
+    (tmp_path / "logo.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>'
+    )
+    figure = {"figure": {"id": "pic"}, "nodes": [
+        {"id": "logo", "kind": "image", "properties": {"source": "logo.svg"}}, {"id": "m", "label": "Model"}]}
+    document = {"schema_version": 1, "deck": {"id": "t", "theme": "dark"},
+                "slides": [{"title": "Logo", "body": [{"text": "Words"}, {"figure": figure}]}]}
+    at = {"slide": 0, "region": "body", "index": 1}
+    written = DeckKind().export_part(document, tmp_path, "talk", at, ["yaml", "editable"])
+    assert sorted(path.name for path in written) == ["talk-pic.editable.svg", "talk-pic.yaml"]
+    exported = yaml.safe_load((tmp_path / "build" / "talk-pic.yaml").read_text())
+    # In the deck's theme, and naming its picture from where it is written.
+    assert exported["figure"]["style"] == "dark"
+    assert exported["nodes"][0]["properties"]["source"] == "../logo.svg"
+    from flexo.serialization import load_figure
+
+    assert load_figure(tmp_path / "build" / "talk-pic.yaml").id == "pic"
+    from flexo.studio.figure_edit import EditError
+
+    with pytest.raises(EditError, match="not a figure"):
+        DeckKind().export_part(document, tmp_path, "talk", {**at, "index": 0}, ["yaml"])
+
+
+def test_a_figure_file_is_written_into_the_deck_its_files_named_from_there(tmp_path: Path) -> None:
+    (tmp_path / "figures").mkdir()
+    (tmp_path / "logo.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>'
+    )
+    text = "# its own\nfigure: {id: pic}\nnodes:\n- {id: logo, kind: image, properties: {source: ../logo.svg}}\n"
+    (tmp_path / "figures" / "pic.yaml").write_text(text)
+    document = {"schema_version": 1, "deck": {"id": "t"},
+                "slides": [{"title": "Logo", "body": [{"figure": "figures/pic.yaml"}]}]}
+    # Drawn from its file, its picture is found beside the file.
+    deck = deck_from_document(document, tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
+    result = DeckKind().act(document, {"do": "inline", "at": {"slide": 0, "region": "body", "index": 0}}, tmp_path)
+    inline = result["document"]["slides"][0]["body"][0]["figure"]
+    assert inline["nodes"][0]["properties"]["source"] == "logo.svg"
+    assert (tmp_path / "figures" / "pic.yaml").read_text() == text  # the file is left as it was
+    deck = deck_from_document(result["document"], tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
+
+
 def test_a_picture_in_a_figure_written_in_the_deck_is_found_beside_the_deck(tmp_path: Path) -> None:
     (tmp_path / "logo.svg").write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>'
