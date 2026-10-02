@@ -664,6 +664,8 @@ export function mount(studio, container) {
   function onPress(event) {
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     if (figureBlock() && editable(figureBlock()) && inFigure(event) && figure.parts.model) {
+      // A molecule chosen is grabbed to turn it.
+      if (figure.parts.turnable(event)) { figure.parts.pointerdown(event); return; }
       const id = figure.parts.idAt(event);
       const holder = id && figure.parts.parentOf(id);
       const alone = holder?.id === figure.parts.model.root && (holder.children || []).length < 2;
@@ -908,10 +910,13 @@ export function mount(studio, container) {
       const box = drawnBox(element);
       if (!box) continue;
       const dx = cornerOf(was).x - cornerOf(box).x, dy = cornerOf(was).y - cornerOf(box).y;
-      if (Math.hypot(dx, dy) < 0.5) continue;
+      // A part just sized grows or shrinks the rest of the way, too.
+      const grown = was.width / (box.width || 1);
+      if (Math.hypot(dx, dy) < 0.5 && Math.abs(grown - 1) < 0.01) continue;
       const wrap = mover(element);
       const scale = scaleOf(wrap);
-      glides.push(wrap.animate([{ transform: `translate(${dx * scale}px, ${dy * scale}px)` }, { transform: "translate(0px, 0px)" }],
+      Object.assign(wrap.style, { transformBox: "fill-box", transformOrigin: "0 0" });
+      glides.push(wrap.animate([{ transform: `translate(${dx * scale}px, ${dy * scale}px) scale(${grown})` }, { transform: "translate(0px, 0px) scale(1)" }],
         { duration: 300, easing: "cubic-bezier(.2,.8,.2,1)" }).finished.catch(() => {}));
     }
     // The chosen part's frame waits for the parts to arrive: one drawn while they glide
@@ -921,9 +926,197 @@ export function mount(studio, container) {
     Promise.all(glides).then(() => { if (landing === mine) { landing = null; placeChosen(); } });
   }
 
+  // -- a figure or picture, sized by its corners --
+  // The chosen figure or picture has a handle at each corner. Dragged, it grows or
+  // shrinks about the point the slide keeps still as it does -- its middle across; its
+  // top, or nearer its middle when it stands alone -- no larger than its place allows.
+  // Let go, it is drawn that wide: an edit like any other, ⌘Z undoes it. A handle
+  // double-clicked sizes it to its place again.
+  const SIZED = new Set(["figure", "image"]);
+  const STANDING = new Set(["figure", "mechanism", "image", "plot", "gallery", "quote", "table", "code", "stats"]);
+  let sizing = null;
+  chosen.append(...["nw", "ne", "sw", "se"].map((corner) => h(`span.size-handle.${corner}`, {
+    title: "Drag to size it · double-click to fit its place",
+    onpointerdown: (event) => sizeStart(event, corner),
+    ondblclick: (event) => { event.stopPropagation(); sizeFit(); },
+  })));
+  const sizeTip = h("div.size-tip", { hidden: true });
+
+  // Where the slide draws the part at `scale` times its size: centred across its place,
+  // and down it as the slide aligns its places (compose.py's `_region_row`): parts with
+  // words among them from the top; pictures alone a little above the middle of the body;
+  // pictures beside words centred against them while they are the shorter.
+  function placerOf(region, regions, box) {
+    const slide = slideAt();
+    const standing = (item) => item.blocks.length && blocksAt(slide, item.key).every((block) => STANDING.has(kindOf(block)));
+    const extent = (item) => {
+      const boxes = item.blocks.map((block) => block.box).filter(Boolean);
+      return boxes.length ? { top: Math.min(...boxes.map((b) => b.top)), bottom: Math.max(...boxes.map((b) => b.bottom)) } : null;
+    };
+    const { room } = region, own = extent(region);
+    const used = own.bottom - own.top, below = box.top - own.top;
+    const align = slide.align || studio.doc?.style?.align || "auto";
+    const others = regions.filter((item) => item !== region && item.blocks.length && item.room);
+    const tallest = (list, from) => Math.max(0, ...list.map((item) => { const e = extent(item); return e ? e.bottom - from(item, e) : 0; }));
+    const words = tallest(others.filter((item) => !standing(item)), (item) => item.room.top);
+    const pictures = tallest(others.filter(standing), (_, e) => e.top);
+    const height = room.bottom - room.top, centre = (room.left + room.right) / 2;
+    const alone = standing(region) && align !== "top";
+    return (scale) => {
+      const width = box.width * scale, tall = box.height * scale, now = used - box.height + tall;
+      let top = own.top;
+      if (alone && !words) top = room.top + Math.max(height - now, 0) * (align === "middle" ? 0.5 : 0.4);
+      else if (alone) {
+        const band = Math.max(now, words, pictures);
+        top = room.top + (align === "middle" ? Math.max(height - band, 0) / 2 : 0) + (band - now) / 2;
+      }
+      return { left: centre - width / 2, top: top + below, width, height: tall };
+    };
+  }
+
+  function sizeStart(event, corner) {
+    if (event.button !== 0 || sizing || carry) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const focus = state.focus;
+    const block = focus && blocksAt(slideAt() || {}, focus.region)[focus.index];
+    if (!block || !SIZED.has(kindOf(block))) return;
+    const element = blockElement(focus.region, focus.index);
+    const unit = pageNode?.querySelector("svg")?.getScreenCTM?.()?.a;
+    if (!element || !unit) return;
+    const wrap = mover(element);
+    // It follows the pointer at once, not gliding after it.
+    wrap.classList.add("block-sized");
+    Object.assign(wrap.style, { transformBox: "fill-box", transformOrigin: "0 0", transform: "" });
+    const regions = regionsDrawn();
+    const region = regions.find((item) => item.key === focus.region);
+    const box = drawnBox(element);
+    if (!region?.room || !box) return;
+    closeInline();
+    hover.hidden = true;
+    // No wider than its place, nor taller than the room the parts above and below it leave.
+    const across = region.room.right - region.room.left;
+    const boxes = region.blocks.map((item) => item.box).filter(Boolean);
+    const others = Math.max(...boxes.map((b) => b.bottom)) - Math.min(...boxes.map((b) => b.top)) - box.height;
+    const most = Math.max(1, Math.min(across / box.width, (region.room.bottom - region.room.top - others) / box.height));
+    const least = Math.min(1, 24 / Math.min(box.width, box.height));
+    // Its width as the slide sets it (its ink, not the box round all it draws), in points.
+    const points = Number(element.getAttribute("data-flexo-width")) || box.width / unit;
+    sizing = { at: { ...focus }, block, wrap, box, corner, most, least, across, unit, points, place: placerOf(region, regions, box),
+      scale: 1, moved: false, start: { x: event.clientX, y: event.clientY }, column: regions.length > 1 ? "column" : "slide" };
+    pageNode.classList.add("block-sizing");
+    if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
+    window.addEventListener("pointermove", sizeMove);
+    window.addEventListener("pointerup", sizeEnd);
+    window.addEventListener("pointercancel", sizeCancel);
+    window.addEventListener("keydown", sizeKey, true);
+  }
+
+  // The size that puts the corner held nearest the pointer, as the slide will draw it.
+  function scaleFor(x, y) {
+    const { least, most, place, corner } = sizing;
+    const miss = (scale) => {
+      const at = place(scale);
+      return Math.hypot(x - (corner.endsWith("w") ? at.left : at.left + at.width), y - (corner.startsWith("n") ? at.top : at.top + at.height));
+    };
+    let best = 1, far = miss(1);
+    const steps = 160, ratio = most / least;
+    for (let i = 0; i <= steps; i++) {
+      const scale = least * ratio ** (i / steps), d = miss(scale);
+      if (d < far) { far = d; best = scale; }
+    }
+    // Then closer, between the steps either side.
+    const step = ratio ** (1 / steps);
+    for (let i = -20; i <= 20; i++) {
+      const scale = Math.min(Math.max(best * step ** (i / 20), least), most), d = miss(scale);
+      if (d < far) { far = d; best = scale; }
+    }
+    return best;
+  }
+
+  function sizeMove(event) {
+    if (!sizing) return;
+    const { box, most, across } = sizing;
+    if (!sizing.moved && Math.hypot(event.clientX - sizing.start.x, event.clientY - sizing.start.y) < 3) return;
+    sizing.moved = true;
+    let scale = scaleFor(event.clientX, event.clientY);
+    // It catches at the width of its place, and at the size it was.
+    const full = across / box.width;
+    if (full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
+    if (Math.abs(scale - 1) * box.width < 4) scale = 1;
+    sizing.scale = scale;
+    const at = sizing.place(scale), k = scaleOf(sizing.wrap);
+    sizing.wrap.style.transform = `translate(${(at.left - box.left) * k}px, ${(at.top - box.top) * k}px) scale(${scale})`;
+    const id = `slide${state.slide + 1}.${regionsOf(slideAt()).find((r) => r.key === sizing.at.region).svg}.${sizing.at.index}`;
+    place(chosen, boxOf(id));
+    const share = Math.round((100 * scale * sizing.points * sizing.unit) / across);
+    sizeTip.textContent = scale === full ? `As wide as the ${sizing.column}` : scale === most ? `As tall as it can be` : `${share}% of the ${sizing.column}'s width`;
+    const outer = pageNode.getBoundingClientRect();
+    Object.assign(sizeTip.style, { left: `${event.clientX - outer.left + 14}px`, top: `${event.clientY - outer.top + 16}px` });
+    sizeTip.hidden = false;
+  }
+
+  function sizeFinish() {
+    const was = sizing;
+    sizing = null;
+    window.removeEventListener("pointermove", sizeMove);
+    window.removeEventListener("pointerup", sizeEnd);
+    window.removeEventListener("pointercancel", sizeCancel);
+    window.removeEventListener("keydown", sizeKey, true);
+    pageNode?.classList.remove("block-sizing");
+    sizeTip.hidden = true;
+    if (was?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    return was;
+  }
+
+  function sizeEnd() {
+    const was = sizeFinish();
+    if (!was) return;
+    const width = Math.round(was.points * was.scale);
+    if (!was.moved || Math.abs(was.scale - 1) < 0.005 || width === was.block.width) { sizeCancelled(was); return; }
+    resized(was.at, [was.wrap], (b) => setOption(b, "width", width));
+  }
+
+  // The parts of its place glide to where the slide is drawn with it sized.
+  function resized(at, wraps, change) {
+    const count = blocksAt(slideAt(), at.region).length;
+    const plan = Array.from({ length: count }, (_, index) => [{ region: at.region, index }, { region: at.region, index }]);
+    moving = { slide: state.slide, at: Date.now(), plan, wraps };
+    chosen.hidden = true;
+    const mine = moving;
+    setTimeout(() => { if (moving === mine) { moving = null; for (const wrap of mine.wraps) wrap.style.transform = ""; placeChosen(); } }, 6000);
+    editBlock(at, change);
+    renderInspector();
+  }
+
+  function sizeCancel() {
+    const was = sizeFinish();
+    if (was) sizeCancelled(was);
+  }
+  // It glides back to the size it was.
+  function sizeCancelled(was) {
+    was.wrap.classList.remove("block-sized");
+    was.wrap.style.transform = "";
+    placeChosen();
+  }
+  function sizeKey(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    sizeCancel();
+  }
+
+  // Sized to its place again, as it was before it was given a width.
+  function sizeFit() {
+    const focus = state.focus;
+    const block = focus && blocksAt(slideAt() || {}, focus.region)[focus.index];
+    if (!block || !SIZED.has(kindOf(block)) || block.width == null) return;
+    resized({ ...focus }, [], (b) => setOption(b, "width", null));
+  }
+
   function onPick(event) {
     if (figure?.parts.justDragged || swallowClick) return;
-    if (event.target.closest(".fig-inline, .figure-bar")) return;
+    if (event.target.closest(".fig-inline, .figure-bar, .size-handle")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
     if (!part) { state.focus = null; placeChosen(); renderInspector(); reportFocus(); return; }
@@ -952,11 +1145,13 @@ export function mount(studio, container) {
 
   function placeChosen() {
     const focus = state.focus;
+    if (sizing) return;  // its frame follows it as it is sized
     if (!focus || !pageNode || moving || landing || carry?.started || inline) { chosen.hidden = true; return; }
     const region = regionsOf(slideAt()).find((r) => r.key === focus.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${focus.index}`);
     const block = blocksAt(slideAt() || {}, focus.region)[focus.index];
     place(chosen, box, block ? BLOCKS[kindOf(block)].label : "");
+    chosen.classList.toggle("sizable", Boolean(block && SIZED.has(kindOf(block))));
     holding();
   }
   // A figure whose part is chosen is only outlined round it: the part is what is chosen.
@@ -2306,7 +2501,15 @@ export function mount(studio, container) {
     return [preview,
       fileRow(block.image, ["image"], (path) => { editBlock(at, (b) => { b.image = path; }, {}); preview.src = studio.raw(path); preview.hidden = false; }, "picture.png"),
       h("div.hint-line", {}, "An SVG is drawn as vectors: native shapes and text in the PowerPoint."),
-      ui.field("Width", ui.number({ value: block.width, placeholder: "as wide as fits", min: 10, step: 10, key: "block.width", onChange: (value) => editBlock(at, (b) => setOption(b, "width", value)) }), { hint: "pt" })];
+      widthField(block, at)];
+  }
+
+  // A figure's or picture's width: as its place sets it, or as its corners were dragged to.
+  function widthField(block, at) {
+    return ui.field("Width", h("div.row", {},
+      ui.number({ value: block.width, placeholder: "fits its place", min: 10, step: 10, key: "block.width", onChange: (value) => editBlock(at, (b) => setOption(b, "width", value)) }),
+      block.width != null ? ui.button("Fit its place", () => { editBlock(at, (b) => setOption(b, "width", null)); renderInspector(); }, { small: true, kind: "ghost" }) : null),
+    { hint: "pt · or drag a corner on the slide" });
   }
 
   function galleryForm(block, at, edit, size) {
@@ -2370,7 +2573,7 @@ export function mount(studio, container) {
       area.classList.remove("grow"); area.style.maxHeight = "300px"; area.style.overflow = "auto";
       parts.push(h("details.more", {}, h("summary", {}, icon("chevron"), "Its document (JSON)"), h("div.inner", {}, area)));
       // Written in the deck, it is edited where it is drawn: where it is kept is put by.
-      return [exports, turn, h("details.more", {}, h("summary", {}, icon("chevron"), "Where it is kept"), h("div.inner", {}, parts))];
+      return [exports, widthField(block, at), turn, h("details.more", {}, h("summary", {}, icon("chevron"), "Where it is kept"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
       parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"),
         h("div.hint-line", {}, "Edited here, on the slide; the file changes as you edit, and changes made to it are drawn here."));
@@ -2378,7 +2581,7 @@ export function mount(studio, container) {
       parts.push(functionInput(value, (text) => edit((b) => { b.figure = text; }, "figure")),
         h("div.hint-line", {}, "A function returning a ", h("code", {}, "flexo.Figure"), "; it runs again when its file changes."));
     }
-    parts.push(turn);
+    parts.push(widthField(block, at), turn);
     return [exports, ...parts];
   }
 

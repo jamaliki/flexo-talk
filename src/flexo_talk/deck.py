@@ -230,6 +230,12 @@ def _number(value: object, what: str, low: float, high: float, example: str) -> 
     return float(value)
 
 
+def _width(value: object) -> float | None:
+    """A width in points, or None for the width the place sets."""
+
+    return None if value is None else _number(value, "width", 1.0, 4032.0, "300 (points)")
+
+
 def _size(value: object, what: str = "size") -> float | None:
     """A size in points, or None for the size the place sets."""
 
@@ -333,6 +339,8 @@ class _Figure:
     figure: flexo.Figure | FigureSpec
     turn: bool = True
     """Whether flexo may lay the figure out turned when that fits its place better."""
+    width: float | None = None
+    """The width it is drawn at (points), as its place allows; ``None`` sizes it to its place."""
     said: tuple[str, ...] = ()
     """What is wrong with it that it is drawn despite: said when the slide is drawn."""
 
@@ -770,7 +778,7 @@ class Region:
             said = error.diagnostics[0]
             raise ValueError(f"{said.message}{' ' + said.hint if said.hint else ''}") from None
         wrong = () if problem is None else (f"{problem.message}{' ' + problem.hint if problem.hint else ''}",)
-        self.blocks.append(_Figure(figure, False, wrong))
+        self.blocks.append(_Figure(figure, False, said=wrong))
         self._record(
             "mechanism", steps if isinstance(steps, str) else [dict(step) if isinstance(step, dict) else step
                                                                for step in written],
@@ -874,35 +882,44 @@ class Region:
         )
         return self
 
-    def figure(self, id: str | None = None, *, turn: bool = True, **options: object) -> flexo.Figure:
+    def figure(
+        self, id: str | None = None, *, turn: bool = True, width: float | None = None, **options: object
+    ) -> flexo.Figure:
         """A flexo figure in the deck's theme, laid out for this place: use it as a
-        ``with`` block. ``turn=False`` keeps it as written (see ``add``)."""
+        ``with`` block. ``turn=False`` keeps it as written, and ``width`` draws it that
+        wide (see ``add``)."""
 
         deck = self._slide.deck
         turn = _flag(turn, "turn")
+        width = _width(width)
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
-        self.blocks.append(_Figure(figure, turn))
-        self._record("figure", None, turn=None if turn else False)
+        self.blocks.append(_Figure(figure, turn, width))
+        self._record("figure", None, turn=None if turn else False, width=width)
         return figure
 
-    def add(self, figure: flexo.Figure | FigureSpec, *, turn: bool = True) -> Region:
+    def add(
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None
+    ) -> Region:
         """An existing flexo figure, laid out again in the deck's theme for this place.
 
         Flexo lays it out for the place's width *and* height: as written, or turned
         (a tall stack read left to right) or spaced closer when that lets its words
-        be larger -- ``turn=False`` keeps it as written.
+        be larger -- ``turn=False`` keeps it as written. It is drawn as large as its
+        place lets its words be the size of the words round it; ``width`` (points)
+        draws it that wide instead, smaller or larger, as far as its place allows.
         """
 
-        self.blocks.append(_Figure(figure, _flag(turn, "turn")))
-        self._record("figure", None, turn=None if turn else False)
+        width = _width(width)
+        self.blocks.append(_Figure(figure, _flag(turn, "turn"), width))
+        self._record("figure", None, turn=None if turn else False, width=width)
         return self
 
     def image(self, source: str | Path, *, width: float | None = None) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture."""
 
-        width = None if width is None else _number(width, "width", 1.0, 4032.0, "300 (points)")
+        width = _width(width)
         self.blocks.append(_Image(str(source), width))
         self._record("image", str(source), width=width)
         return self
@@ -1130,11 +1147,15 @@ class Slide:
         next(iter(self.regions.values())).text(words, **options)  # type: ignore[arg-type]
         return self
 
-    def figure(self, id: str | None = None, *, turn: bool = True, **options: object) -> flexo.Figure:
-        return next(iter(self.regions.values())).figure(id, turn=turn, **options)
+    def figure(
+        self, id: str | None = None, *, turn: bool = True, width: float | None = None, **options: object
+    ) -> flexo.Figure:
+        return next(iter(self.regions.values())).figure(id, turn=turn, width=width, **options)
 
-    def add(self, figure: flexo.Figure | FigureSpec, *, turn: bool = True) -> Slide:
-        next(iter(self.regions.values())).add(figure, turn=turn)
+    def add(
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None
+    ) -> Slide:
+        next(iter(self.regions.values())).add(figure, turn=turn, width=width)
         return self
 
     def image(self, source: str | Path, *, width: float | None = None) -> Slide:

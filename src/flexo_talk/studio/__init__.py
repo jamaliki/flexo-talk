@@ -362,6 +362,8 @@ class DeckKind:
             raise EditError(f'unknown deck edit "{action.get("do")}"')
         at = action.get("at") or {}
         edit = action.get("edit") or {}
+        if edit.get("do") == "structure-view":
+            return {"document": document, "view": _structure_view(document, at, str(edit.get("id")), base)}
         changed = copy.deepcopy(document)
         block = _block_at(changed, at)
         value = block.get("figure") if isinstance(block, dict) else None
@@ -511,6 +513,27 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> 
         look = {}
     drawn = sheet(block["mechanism"], step=step, holding=holding, options=options, look=look)
     return {"document": changed, "sheet": drawn, **said}
+
+
+def _structure_view(document: dict[str, Any], at: dict[str, Any], identifier: str, base: Path) -> Any:
+    """A structure's trace and turn on a slide, in the deck's look, as the slide draws it."""
+
+    from dataclasses import replace
+
+    from flexo.studio.figure_edit import EditError
+    from flexo.studio.figure_kind import view_of
+
+    from flexo_talk.deck import made
+    from flexo_talk.document import _figure, make_deck
+
+    block = _block_at(document, at)
+    if not isinstance(block, dict) or "figure" not in block:
+        raise EditError("that part of the slide is not a figure any more")
+    deck = make_deck(document.get("deck") or {}, base)
+    figure = made(_figure(base, block["figure"], "figure", None))
+    spec = getattr(figure, "spec", figure)
+    spec = replace(spec, style=deck.theme, palette=deck.palette_name, font=deck.figure_font or deck.font or spec.font)
+    return view_of(spec, identifier)
 
 
 def _inline(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:

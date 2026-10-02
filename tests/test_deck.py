@@ -529,6 +529,25 @@ def test_figures_side_by_side_set_their_words_at_one_size(tmp_path: Path) -> Non
     assert max(sizes["slide1.left"]) < deck.style.body_size
 
 
+def test_a_figure_given_a_width_is_drawn_that_wide_as_far_as_its_place_allows(tmp_path: Path) -> None:
+    def sizes(width: float | None) -> set[float]:
+        deck = Deck(f"wide{width}")
+        with deck.slide("Sized", layout="two-columns") as slide:
+            slide.left.bullets("A point")
+            with slide.right.figure(width=width) as figure:
+                a = figure.block("a", label="Short")
+                figure.block("b", label="Pair", input=a)
+        result = deck.build(tmp_path / str(width), formats=("svg",))
+        return _word_sizes(result.svgs[0].read_text())["slide1.right"]
+
+    (narrow,), (twice,), (auto,), (huge,) = sizes(100), sizes(200), sizes(None), sizes(4000)
+    # Its words are as large as that width makes them: past the body size too.
+    assert twice == pytest.approx(2 * narrow, rel=0.02)
+    assert auto <= Deck("x").style.body_size < huge
+    # No wider than its column.
+    assert huge == sizes(3000).pop()
+
+
 def test_a_column_of_numbers_with_gaps_is_still_set_flush_right() -> None:
     deck = Deck("gaps")
     with deck.slide("Results") as slide:

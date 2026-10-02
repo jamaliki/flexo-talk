@@ -723,7 +723,8 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
         if any(isinstance(block, _Figure) for block in slide.regions[name].blocks)
     ]
     if len(figured) > 1:
-        shared = min(_figure_words(canvas, region, box) for region, box in figured)
+        sizes = [size for region, box in figured if (size := _figure_words(canvas, region, box))]
+        shared = min(sizes) if sizes else None
     panels = _panel_row(canvas, slide, names, boxes)
     placed = []
     outer = canvas.layer
@@ -835,22 +836,24 @@ def _panel_row(canvas: _Canvas, slide: Slide, names: list[str], boxes: list[Box]
     return dict.fromkeys(heights, max(heights.values())) if len(heights) > 1 else {}
 
 
-def _figure_words(canvas: _Canvas, region: Region, box: Box) -> float:
-    """The size a region's figures would set their words at on their own, in points."""
+def _figure_words(canvas: _Canvas, region: Region, box: Box) -> float | None:
+    """The size a region's figures would set their words at on their own, in points
+    (``None`` when every one is drawn at a width of its own)."""
 
     # A trial: what it would note or warn of is said when the region is set.
     diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
     blocks = _fitted(canvas, region, box)
-    prepared, scale, _ = _plan_figures(canvas, blocks, box, None)
+    prepared, scales, _ = _plan_figures(canvas, blocks, box, None)
     del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
-    return min(item.size for item in prepared.values()) * scale
+    sizes = [item.size * scales[index] for index, item in prepared.items() if blocks[index].width is None]
+    return min(sizes) if sizes else None
 
 
 def _plan_figures(
     canvas: _Canvas, blocks: list, box: Box, words: float | None
-) -> tuple[dict[int, _Prepared], float, float]:
-    """The region's figures laid out for their places, the one scale they take,
-    and the height each other picture has."""
+) -> tuple[dict[int, _Prepared], dict[int, float], float]:
+    """The region's figures laid out for their places, the scale each takes, and the
+    height each other picture has."""
 
     style = canvas.deck.style
     worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot | _Gallery)]
@@ -868,33 +871,48 @@ def _plan_figures(
     # closer if that lets its words be larger -- then all take one scale.
     place = Box(box.x, 0.0, box.width, figure_room / count) if count else box
 
-    def laid(largest: float) -> tuple[dict[int, _Prepared], float]:
+    def laid(largest: float) -> tuple[dict[int, _Prepared], dict[int, float]]:
         prepared = {
             index: _prepare(canvas, block, place, largest)
             for index, block in enumerate(blocks)
             if isinstance(block, _Figure)
         }
-        if not prepared:
-            return prepared, 0.0
-        return prepared, min(
-            min(item.most for item in prepared.values()),
-            min(box.width / item.width for item in prepared.values()),
-            figure_room / sum(item.height for item in prepared.values()),
-        )
+        # A figure given a width is drawn that wide, as far as its place allows, its
+        # words whatever size that makes them; the others share the height it leaves.
+        sized = {index: item for index, item in prepared.items() if blocks[index].width is not None}
+        free = {index: item for index, item in prepared.items() if index not in sized}
+        scales = {
+            index: min(blocks[index].width, box.width) / item.width for index, item in sized.items()
+        }
+        tall = sum(item.height * scales[index] for index, item in sized.items())
+        most = figure_room - 40.0 * len(free)
+        if sized and tall > most:
+            scales = {index: scale * max(most, 1.0) / tall for index, scale in scales.items()}
+        if free:
+            left = figure_room - sum(item.height * scales[index] for index, item in sized.items())
+            scale = min(
+                min(item.most for item in free.values()),
+                min(box.width / item.width for item in free.values()),
+                max(left, 40.0 * len(free)) / sum(item.height for item in free.values()),
+            )
+            scales |= dict.fromkeys(free, scale)
+        return prepared, scales
 
     # A figure's words are the size of the words around it at most; a figure slide's,
     # its title's, so a small figure there fills the slide rather than floating in it.
     most = style.title_size if canvas.slide.layout == "figure" else style.body_size
     diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
-    prepared, scale = laid(min(most, words) if words else most)
-    if words and prepared and min(item.size for item in prepared.values()) * scale < words * 0.97:
+    prepared, scales = laid(min(most, words) if words else most)
+    free = [index for index in prepared if blocks[index].width is None]
+    if words and free and min(prepared[index].size * scales[index] for index in free) < words * 0.97:
         # Held to the size of the figures beside them, these fall short of it as
         # laid out for that size: take the layout that reaches it (folded, say),
         # drawn at that size.
         del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
-        prepared, scale = laid(most)
-        scale = min(scale, words / max(item.size for item in prepared.values()))
-    return prepared, scale, share
+        prepared, scales = laid(most)
+        cap = words / max(prepared[index].size for index in free)
+        scales |= {index: min(scales[index], cap) for index in free}
+    return prepared, scales, share
 
 
 def _region(
@@ -909,9 +927,8 @@ def _region(
     blocks = _fitted(canvas, region, box)
     # A block with its place to itself is centred across it (a table narrower than the place).
     canvas.alone = len(blocks) == 1
-    prepared, scale, share = _plan_figures(canvas, blocks, box, words)
-    if prepared:
-        _check_legible(canvas, prepared.values(), scale)
+    prepared, scales, share = _plan_figures(canvas, blocks, box, words)
+    _check_legible(canvas, prepared, scales)
     top = box.y
     for index, block in enumerate(blocks):
         identifier = f"{canvas.slide.id}.{region.name}.{index}"
@@ -927,6 +944,7 @@ def _region(
         elif isinstance(block, _Gallery):
             top += _gallery(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Figure):
+            scale = scales[index]
             height = prepared[index].height * scale
             top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
         elif isinstance(block, _Image):
@@ -1991,9 +2009,9 @@ def _store_fit(key: tuple, laid: dict) -> None:
         return
 
 
-def _check_legible(canvas: _Canvas, prepared, scale: float) -> None:
-    for item in prepared:
-        drawn = item.size * scale
+def _check_legible(canvas: _Canvas, prepared: dict[int, _Prepared], scales: dict[int, float]) -> None:
+    for index, item in prepared.items():
+        drawn = item.size * scales[index]
         if drawn < LEGIBLE:
             canvas.diagnostics.append(
                 f"{canvas.slide.id} {item.id}: its words are {drawn:.1f}pt, too small to read -- "
@@ -2006,7 +2024,8 @@ def _place_figure(canvas: _Canvas, identifier: str, item: _Prepared, box: Box, s
 
     x = box.x + (box.width - item.width * scale) / 2.0 - item.left * scale
     y = box.y + (box.height - item.height * scale) / 2.0 - item.top * scale
-    _place_svg(canvas, identifier, _slide_inks(item.svg, canvas.deck.palette, canvas.palette, black=False), x, y, scale)
+    inks = _slide_inks(item.svg, canvas.deck.palette, canvas.palette, black=False)
+    _place_svg(canvas, identifier, inks, x, y, scale, item.width * scale)
     return box.height
 
 
@@ -2761,11 +2780,15 @@ def _ink(svg: str) -> tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _place_svg(canvas: _Canvas, identifier: str, svg: str, x: float, y: float, scale: float) -> None:
+def _place_svg(
+    canvas: _Canvas, identifier: str, svg: str, x: float, y: float, scale: float, width: float | None = None
+) -> None:
     """Put an SVG on the slide at ``(x, y)``, scaled; its ids take a prefix.
 
     A ``*`` rule in its stylesheet (matplotlib writes one) becomes attributes on
-    the group, so it applies to this drawing only, not to the whole slide.
+    the group, so it applies to this drawing only, not to the whole slide. ``width``
+    is the width it is drawn at, as its ``width`` option means it: an editor sizing it
+    starts from that.
     """
 
     source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
@@ -2789,7 +2812,7 @@ def _place_svg(canvas: _Canvas, identifier: str, svg: str, x: float, y: float, s
     group = element(
         canvas.layer, "g", id=identifier,
         transform=f"translate({number(x)},{number(y)}) scale({number(scale)})",
-        data__flexo__talk="figure",
+        data__flexo__talk="figure", data__flexo__width=None if width is None else number(width),
     )
     for name, value in universal.items():
         group.set(name, value)
@@ -2821,7 +2844,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         # Vectors the drawing reader draws exactly: placed as shapes and text.
         view = [float(v) for v in re.split(r"[ ,]+", ET.fromstring(art.markup).get("viewBox", "").strip()) if v]
         units = (natural_w / view[2]) if len(view) == 4 and view[2] else 1.0
-        _place_svg(canvas, identifier, art.markup, box.x + (box.width - width) / 2.0, box.y, scale * units)
+        _place_svg(canvas, identifier, art.markup, box.x + (box.width - width) / 2.0, box.y, scale * units, width)
         return height
     if art.format == "svg":
         import base64
@@ -2831,6 +2854,6 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         href = picture_href(art)
     element(
         canvas.layer, "image", id=identifier, x=box.x + (box.width - width) / 2.0, y=box.y,
-        width=width, height=height, href=href,
+        width=width, height=height, href=href, data__flexo__width=number(width),
     )
     return height

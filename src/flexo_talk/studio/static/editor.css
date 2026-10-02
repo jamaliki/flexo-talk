@@ -60,9 +60,21 @@
 .hit.hover .hit-label { background: var(--raised); color: var(--accent); border: 1px solid var(--accent-line); line-height: 17px; }
 .hit.selected.holder { border: 1.5px dashed var(--accent-line); background: none; }
 .hit.selected.holder .hit-label { display: none; }
+.size-handle { display: none; position: absolute; width: 9px; height: 9px; box-sizing: border-box; background: var(--raised); border: 1.5px solid var(--accent); border-radius: 2px; pointer-events: auto; touch-action: none; }
+.size-handle::before { content: ""; position: absolute; inset: -6px; }
+.hit.selected.sizable .size-handle { display: block; }
+.size-handle.nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.size-handle.ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.size-handle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.size-handle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.size-handle:hover { background: var(--accent); }
+.slide-page.block-sizing .hit { transition: none; }
+.slide-page.block-sizing .hit.hover, .slide-page.block-sizing .fig-marks, .slide-page.block-sizing .figure-bar { visibility: hidden; }
+.size-tip { position: absolute; z-index: 30; pointer-events: none; white-space: nowrap; font: 600 11px/18px var(--font); color: var(--accent-ink); background: var(--accent); padding: 0 8px; border-radius: 99px; box-shadow: var(--shadow-2); }
 /* The slide's parts, dragged on it: lifted, the others stepping aside, a frame or a line where it goes. */
 .figure-grip { cursor: grab; }
 .block-mover { transition: transform 0.2s cubic-bezier(.2, .8, .2, 1); }
+.block-mover.block-sized { transition: none; }
 .block-mover.block-lifted { transition: none; filter: drop-shadow(0 6px 10px rgba(30, 25, 20, 0.22)); }
 .block-mover.block-astray { opacity: 0.55; }
 .slide-page.block-dragging .hit { opacity: 0; }
@@ -78,7 +90,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .drawing { gap: 6px; }
 .here-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 3px; border: 1.5px solid; border-radius: 99px; color: var(--ink); font-weight: 560; background: var(--raised); }
 .here-chip .muted { color: var(--ink-3); font-weight: 400; }
-.slide-messages { display: grid; gap: 4px; margin-top: 10px; }
+/* Below the slide, out of its centring: a warning coming or going leaves the slide where it is. */
+.slide-messages { display: grid; gap: 4px; position: absolute; top: 100%; left: 0; right: 0; margin-top: 6px; padding-bottom: 24px; }
+.slide-messages[hidden] { display: none; }
 /* A note asks nothing of anyone: a quiet line, not a box. */
 .slide-messages .message.note { background: none; padding: 1px 2px; color: var(--ink-3); font-size: 11.5px; }
 .slide-messages .message.note svg { width: 13px; height: 13px; }
