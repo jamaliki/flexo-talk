@@ -1140,6 +1140,10 @@ export function mount(studio, container) {
     else {
       const block = blocksAt(slideAt(), part.region)[part.index];
       if (block && INLINE.has(kindOf(block))) openInline({ kind: "block", region: part.region, index: part.index });
+      else if (block && kindOf(block) === "table") {
+        const cell = cellAt(part.id, event);
+        if (cell) openInline({ kind: "cell", region: part.region, index: part.index, ...cell });
+      }
       else if (block && kindOf(block) === "figure") focusBlock(part.region, part.index, () => figure.parts.dblclick(event));
     }
   }
@@ -1397,6 +1401,19 @@ export function mount(studio, container) {
       editor = ui.markup({ value: slide[key] ?? "", rows: 1, placeholder: { title: "Title", subtitle: "Subtitle", words: "Words", author: "Author" }[key],
         onInput: (text) => editSlide((s) => setOption(s, key, text), { quiet: true, merge: `${state.slide}-${key}` }) });
       id = `slide${state.slide + 1}.${key === "author" ? "byline" : key === "words" ? "title" : key}`;
+    } else if (target.kind === "cell") {
+      const block = blocksAt(slide, target.region)[target.index];
+      const rows = tableRows(block);
+      if (!rows[target.row] || target.col >= rows[target.row].length) return;
+      const at = { region: target.region, index: target.index };
+      editor = ui.markup({ value: rows[target.row][target.col], rows: 1,
+        onInput: (text) => editBlock(at, (b) => { const cells = tableRows(b); cells[target.row][target.col] = text; b.table = cells; },
+          { merge: `${state.slide}-${at.region}-${at.index}-cell-${target.row}-${target.col}` }) });
+      const region = regionsOf(slide).find((r) => r.key === at.region);
+      id = `slide${state.slide + 1}.${region.svg}.${at.index}.${target.row}.${target.col}`;
+      state.focus = at;
+      renderInspector();
+      reportFocus();
     } else {
       const block = blocksAt(slide, target.region)[target.index];
       if (!block) return;
@@ -1415,18 +1432,87 @@ export function mount(studio, container) {
       reportFocus();
     }
     const area = editor.area || editor;
-    const node = h("div.inline-editor.in-place", { onmousedown: (event) => event.stopPropagation(),
-      title: `${bullets ? "Tab sets a line a level below. " : ""}${target.kind === "field" ? "Enter or Esc when done" : "Esc when done"}` }, editor);
+    const cell = target.kind === "cell";
+    const node = h(`div.inline-editor.in-place${cell ? ".cell" : ""}`, { onmousedown: (event) => event.stopPropagation(),
+      title: cell ? "Tab: the next cell · Enter: the one below · ⌘B bold, ⌘I italic · Esc when done"
+        : `${bullets ? "Tab sets a line a level below. " : ""}${target.kind === "field" ? "Enter or Esc when done" : "Esc when done"}` }, editor);
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeInline(); }
       if (event.key === "Enter" && !event.shiftKey && target.kind === "field") { event.preventDefault(); closeInline(); }
+      if (target.kind === "cell" && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) { event.preventDefault(); nextCell(target, event.key, event.shiftKey); }
     });
-    inline = { node, id, area, bullets };
+    inline = { node, id, area, bullets, cell };
     center.append(node);
     positionInline();
     area.focus();
     if (selectAll) area.select(); else area.setSelectionRange(area.value.length, area.value.length);
     setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
+  }
+
+  // A table's cells, typed in on the slide as in a spreadsheet: Tab goes to the next
+  // cell (a new row after the last, as in PowerPoint), Enter to the one below.
+  function tableRows(block) {
+    const source = Array.isArray(block?.table) && block.table.length ? block.table : [[typeof block?.table === "string" ? block.table : ""]];
+    const rows = source.map((row) => (Array.isArray(row) ? row : [row]).map((cell) => String(cell ?? "")));
+    const columns = Math.max(1, ...rows.map((row) => row.length));
+    rows.forEach((row) => { while (row.length < columns) row.push(""); });
+    return rows;
+  }
+  // The cell under the pointer: the one whose words it is on, else the one whose
+  // column and row it is in (by the words drawn in them).
+  function cellAt(tableId, event) {
+    const cells = [...pageNode.querySelectorAll("[id]")].map((node) => ({ node, match: node.id.startsWith(`${tableId}.`) && /^(\d+)\.(\d+)$/.exec(node.id.slice(tableId.length + 1)) }))
+      .filter((item) => item.match).map(({ node, match }) => ({ row: Number(match[1]), col: Number(match[2]), box: node.getBoundingClientRect() }));
+    if (!cells.length) return null;
+    const hit = cells.find(({ box }) => event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom);
+    if (hit) return { row: hit.row, col: hit.col };
+    const nearest = (key, centre) => cells.reduce((best, cell) => (Math.abs(centre(cell.box) - (key === "x" ? event.clientX : event.clientY)) < Math.abs(centre(best.box) - (key === "x" ? event.clientX : event.clientY)) ? cell : best));
+    return { row: nearest("y", (box) => (box.top + box.bottom) / 2).row, col: nearest("x", (box) => (box.left + box.right) / 2).col };
+  }
+  // Where a cell is on the slide (as boxOf gives it): across, as its column's words
+  // are; down, as its row's are -- or a row's pitch below the last, for a row just added.
+  function cellBox(id) {
+    const [, tableId, row, col] = /^(.*)\.(\d+)\.(\d+)$/.exec(id) || [];
+    if (!tableId) return null;
+    const own = boxOf(id);
+    if (own) return own;
+    const cells = [...pageNode.querySelectorAll("[id]")].map((node) => ({ id: node.id, match: node.id.startsWith(`${tableId}.`) && /^(\d+)\.(\d+)$/.exec(node.id.slice(tableId.length + 1)) }))
+      .filter((item) => item.match).map(({ id: cell, match }) => ({ row: Number(match[1]), col: Number(match[2]), box: boxOf(cell) })).filter((cell) => cell.box);
+    const across = cells.filter((cell) => cell.col === Number(col)), down = cells.filter((cell) => cell.row === Number(row));
+    if (!across.length) return null;
+    const left = Math.min(...across.map((cell) => cell.box.left)), width = Math.max(...across.map((cell) => cell.box.left + cell.box.width)) - left;
+    if (down.length) return { left, width, top: Math.min(...down.map((cell) => cell.box.top)), height: Math.max(...down.map((cell) => cell.box.height)) };
+    const rows = [...new Set(cells.map((cell) => cell.row))].sort((a, b) => a - b);
+    const topOf = (r) => Math.min(...cells.filter((cell) => cell.row === r).map((cell) => cell.box.top));
+    const last = rows[rows.length - 1], pitch = rows.length > 1 ? (topOf(last) - topOf(rows[0])) / (last - rows[0]) : 30;
+    const height = Math.max(...cells.filter((cell) => cell.row === last).map((cell) => cell.box.height));
+    return { left, width, top: topOf(last) + pitch * (Number(row) - last), height };
+  }
+
+  // An empty cell, drawn with no words, is typed in as the cells about it are set.
+  function cellLook(id) {
+    const [, tableId, row, col] = /^(.*)\.(\d+)\.(\d+)$/.exec(id) || [];
+    for (const [r, c] of [[+row - 1, +col], [+row + 1, +col], [+row, +col - 1], [+row, +col + 1], [+row - 1, +col - 1]]) {
+      const look = r > 0 && wordsLook(pageNode.querySelector(`[id="${CSS.escape(`${tableId}.${r}.${c}`)}"]`));
+      if (look) return look;
+    }
+    return null;
+  }
+
+  function nextCell(target, key, back) {
+    const at = { region: target.region, index: target.index };
+    const rows = tableRows(blocksAt(slideAt(), at.region)[at.index]);
+    const columns = rows[0].length;
+    let { row, col } = target;
+    if (key === "Enter") row += 1;
+    else if (back) { col -= 1; if (col < 0) { col = columns - 1; row -= 1; } }
+    else { col += 1; if (col >= columns) { col = 0; row += 1; } }
+    if (row < 0) { closeInline(); return; }
+    if (row >= rows.length) {
+      if (key === "Enter") { closeInline(); return; }
+      editBlock(at, (b) => { const cells = tableRows(b); cells.push(Array(columns).fill("")); b.table = cells; });
+    }
+    openInline({ kind: "cell", ...at, row, col }, { selectAll: true });
   }
 
   // Words are typed where they are on the slide, as they look there: the editor lies
@@ -1447,13 +1533,23 @@ export function mount(studio, container) {
     const slide = pageNode.getBoundingClientRect();
     const element = pageNode.querySelector(`[id="${CSS.escape(inline.id)}"]`);
     const box = boxOf(inline.id);
-    const look = wordsLook(element) || inline.look;
+    const look = wordsLook(element) || inline.look || (inline.cell ? cellLook(inline.id) : null);
     if (look) inline.look = look;
     if (element && inline.hidden !== element) { inline.hidden?.style.removeProperty("visibility"); element.style.visibility = "hidden"; inline.hidden = element; }
     // The words being typed are what is chosen: no frame over them.
     chosen.hidden = true;
     hover.hidden = true;
     const size = look?.size || 16;
+    if (inline.cell) {
+      const box = cellBox(inline.id);
+      if (!box) return;
+      const right = look?.anchor === "end", width = Math.max(box.width + 16, 60);
+      const left = slide.left - outer.left + (right ? box.left + box.width - width : look?.anchor === "middle" ? box.left + box.width / 2 - width / 2 : box.left);
+      Object.assign(inline.node.style, { left: `${left}px`, top: `${slide.top - outer.top + box.top}px`, width: `${width}px`, minHeight: `${box.height}px` });
+      Object.assign(inline.area.style, { fontSize: `${size}px`, fontFamily: look?.family || "", fontWeight: look?.weight || "", color: look?.colour || "",
+        textAlign: right ? "right" : look?.anchor === "middle" ? "center" : "left", paddingLeft: "5px" });
+      return;
+    }
     const centred = look?.anchor === "middle";
     // As wide as the room the words have on the slide: to its margin, both sides for centred words.
     const margin = box ? Math.max(12, centred ? Math.min(box.left, slide.width - box.left - box.width) : box.left) : 40;
