@@ -46,6 +46,8 @@ const MATH_SNIPPETS = [
   ["Tt", "Words", "\\text{|}"],
 ];
 const INLINE = new Set(["text", "bullets", "quote", "callout", "code"]);
+// Parts that are drawn rather than read: they take the right of a slide with words.
+const VISUAL = new Set(["figure", "image", "plot", "table", "gallery", "mechanism"]);
 // A figure on a slide, exported by itself: what flexo builds of it, or its document.
 const FIGURE_EXPORTS = [
   { label: "SVG", formats: ["editable"], hint: "Editable SVG: Inkscape layers, live text" },
@@ -1614,8 +1616,21 @@ export function mount(studio, container) {
       if (layout === "content") delete slide.layout; else slide.layout = layout;
       if (layout === "statement") { if (words) slide.words = words; delete slide.title; }
       else if (words) { slide.title = words; delete slide.words; }
-      if (layout === "two-columns") { slide.left = blocks[0] || []; slide.right = blocks.slice(1).flat(); }
-      else if (layout === "columns") slide.columns = blocks.length > 1 ? blocks : [all, [], []];
+      // One body made two or more columns: words on the left and what is drawn on the
+      // right, as a slide with both is set out; else what is drawn shared across them.
+      const drawn = (block) => VISUAL.has(kindOf(block));
+      if (layout === "two-columns" && blocks.length === 1 && all.some(drawn) && !all.every(drawn)) {
+        slide.left = all.filter((block) => !drawn(block));
+        slide.right = all.filter(drawn);
+      } else if (layout === "two-columns" && blocks.length === 1 && all.length > 1 && all.every(drawn)) {
+        const half = Math.ceil(all.length / 2);
+        slide.left = all.slice(0, half);
+        slide.right = all.slice(half);
+      } else if (layout === "two-columns") { slide.left = blocks[0] || []; slide.right = blocks.slice(1).flat(); }
+      else if (layout === "columns" && blocks.length === 1 && all.length > 1) {
+        const count = Math.min(all.length, 3), size = Math.ceil(all.length / count);
+        slide.columns = Array.from({ length: count }, (_, index) => all.slice(index * size, (index + 1) * size));
+      } else if (layout === "columns") slide.columns = blocks.length > 1 ? blocks : [all, [], []];
       else if (!WORDLESS.has(layout)) slide.body = all;
       const allowed = new Set(catalog.slide_keys[layout]);
       for (const key of Object.keys(slide)) if (!allowed.has(key)) delete slide[key];
@@ -2582,8 +2597,21 @@ export function mount(studio, container) {
     const key = event.key;
     if (mod && key.toLowerCase() === "d") { event.preventDefault(); if (slides().length) duplicateSlide(state.slide); }
     else if (mod) return;
-    else if (["ArrowDown", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
-    else if (["ArrowUp", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
+    // With a part of the slide chosen, arrows move it: up and down its column, across to
+    // the next; a figure's part chosen, they leave the slide alone. Else they turn slides.
+    else if (key.startsWith("Arrow") && state.focus) {
+      event.preventDefault();
+      if (figure && figureBlock() && figure.parts.selected.length) return;
+      const at = state.focus, regions = regionsOf(slideAt()), count = blocksAt(slideAt(), at.region).length;
+      const side = regions.findIndex((region) => region.key === at.region) + (key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0);
+      if (key === "ArrowUp" && at.index > 0) moveBlock(at, { region: at.region, index: at.index - 1 });
+      else if (key === "ArrowDown" && at.index < count - 1) moveBlock(at, { region: at.region, index: at.index + 2 });
+      else if ((key === "ArrowLeft" || key === "ArrowRight") && regions[side] && side !== regions.findIndex((region) => region.key === at.region)) {
+        moveBlock(at, { region: regions[side].key, index: blocksAt(slideAt(), regions[side].key).length });
+      }
+    }
+    else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
+    else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
     else if (key === "Escape" && state.focus) { state.focus = null; leaveFigure(false); renderInspector(); placeChosen(); reportFocus(); }
     else if (key === "Enter" && state.focus) {
       event.preventDefault();
