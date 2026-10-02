@@ -1117,7 +1117,7 @@ export function mount(studio, container) {
 
   function onPick(event) {
     if (figure?.parts.justDragged || swallowClick) return;
-    if (event.target.closest(".fig-inline, .figure-bar, .size-handle")) return;
+    if (event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
     if (!part) { state.focus = null; placeChosen(); renderInspector(); reportFocus(); return; }
@@ -3057,6 +3057,7 @@ export function mount(studio, container) {
       const keys = differing(was.properties, now.properties);
       if (keys.length && keys.every((key) => ["yaw", "pitch", "roll"].includes(key))) return `Turned ${call(id)}`;
       if (keys.length && keys.every((key) => key === "zoom")) return `Zoomed ${call(id)}`;
+      if (keys.length && keys.every((key) => key === "width" || key === "height")) return `Sized ${call(id)}`;
       if (!same(was.kind, now.kind)) return `Made ${call(id)} a ${now.kind || "block"}`;
       return `Changed ${call(id)}`;
     }
