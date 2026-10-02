@@ -551,6 +551,7 @@ export function mount(studio, container) {
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
       pageNode.addEventListener("click", onPick);
       pageNode.addEventListener("dblclick", onEdit);
+      pageNode.addEventListener("contextmenu", onContext);
       pageNode.addEventListener("pointerdown", onPress);
     }
     pageNode.classList.toggle("error", Boolean(page?.error));
@@ -1146,6 +1147,79 @@ export function mount(studio, container) {
       }
       else if (block && kindOf(block) === "figure") focusBlock(part.region, part.index, () => figure.parts.dblclick(event));
     }
+  }
+
+  // -- right-click, as in PowerPoint --
+  // What is under the pointer is chosen, and a menu offers what can be done with it: a
+  // part of a figure, a part of the slide, or the slide itself.
+  function onContext(event) {
+    if (event.target.closest(".fig-inline, .figure-bar, .inline-editor, .size-handle, .fig-size")) return;
+    event.preventDefault();
+    closeInline();
+    hover.hidden = true;
+    const point = { x: event.clientX, y: event.clientY };
+    const part = partAt(event);
+    if (part?.kind !== "block") {
+      if (part?.kind === "field") { state.focus = null; placeChosen(); }
+      menu(point, slideItems(part));
+      return;
+    }
+    const block = blocksAt(slideAt(), part.region)[part.index];
+    if (block && kindOf(block) === "figure" && editable(block)) {
+      // Into the figure: the part under the pointer is chosen, with its own menu.
+      const show = () => {
+        const id = figure?.parts.model ? figure.parts.idAt(event) : null;
+        if (id && id !== figure.parts.model.root) { menu(point, [...figure.parts.menuOf(id, point), "-", ...clipItems()]); return; }
+        figure?.parts.select([]);
+        blockMenu(point, part);
+      };
+      if (figureBlock() && figure.region === part.region && figure.index === part.index && figure.parts.model) show();
+      else focusBlock(part.region, part.index, show);
+      return;
+    }
+    focusBlock(part.region, part.index);
+    blockMenu(point, part);
+  }
+  const clipItems = () => [
+    { icon: "cut", label: "Cut", keys: "⌘X", run: () => { const clip = clipOf(); if (clip) { clipboard = clip; navigator.clipboard?.writeText(plainOf(clip)).catch(() => {}); cutAway(clip); } } },
+    { icon: "copy", label: "Copy", keys: "⌘C", run: () => { const clip = clipOf(); if (clip) { clipboard = clip; navigator.clipboard?.writeText(plainOf(clip)).catch(() => {}); copied(clip); } } },
+    clipboard ? { icon: "paste", label: `Paste the ${clipboard.label}`, keys: "⌘V", run: () => pasteClip(clipboard) } : null,
+  ].filter(Boolean);
+  function blockMenu(point, at) {
+    const slide = slideAt(), block = blocksAt(slide, at.region)[at.index];
+    if (!block) return;
+    const kind = kindOf(block), count = blocksAt(slide, at.region).length;
+    const items = [];
+    if (INLINE.has(kind)) items.push({ icon: "pencil", label: kind === "math" ? "Edit the equation" : "Edit its words", run: () => openInline({ kind: "block", ...at }) });
+    if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add a part", keys: "A", run: () => whenFigure(() => figure.parts.addPalette(point)) });
+    if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Fit its place", run: () => sizeFit() });
+    if (kind === "figure") items.push(...FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export as ${label}`, hint, run: () => exportFigure(at, formats) })));
+    if (items.length) items.push("-");
+    items.push(...clipItems(), { icon: "copy", label: "Duplicate", run: () => insertBlock(kind, structuredClone(block), at) });
+    if (at.index > 0) items.push({ icon: "up", label: "Earlier", run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) });
+    if (at.index < count - 1) items.push({ icon: "down", label: "Later", run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
+    for (const other of regionsOf(slide)) {
+      if (other.key !== at.region) items.push({ icon: "right", label: `To the ${other.label.toLowerCase()}`, run: () => moveBlock(at, { region: other.key, index: blocksAt(slide, other.key).length }) });
+    }
+    items.push("-", { icon: "trash", label: "Delete", keys: "⌫", danger: true, run: () => deleteBlock(at) });
+    menu(point, items);
+  }
+  // The slide's own: its words, what may be added to it, and the slide.
+  function slideItems(part) {
+    const index = state.slide, room = regionsOf(slideAt()).length > 0;
+    const field = part?.kind === "field" ? part.field : null;
+    return [
+      field ? { icon: "pencil", label: `Edit the ${field === "byline" ? "byline" : field}`, run: () => openInline({ kind: "field", field: field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : field }) } : null,
+      room ? { icon: "text", label: "Add text", run: () => insertBlock("text") } : null,
+      room ? { icon: "flow", label: "Add a flow chart", run: () => insertBlock("flow") } : null,
+      room ? { icon: "structure", label: "Add a structure…", run: () => insertBlock("structure") } : null,
+      room ? { icon: "image", label: "Add a picture…", run: () => insertBlock("image") } : null,
+      "-",
+      clipboard ? { icon: "paste", label: `Paste the ${clipboard.label}`, keys: "⌘V", run: () => pasteClip(clipboard) } : null,
+      { icon: "plus", label: "New slide after this", keys: "N", run: () => addSlide(layoutOf(slideAt()) === "title" ? "content" : layoutOf(slideAt()), index + 1) },
+      { icon: "copy", label: "Duplicate the slide", keys: "⌘D", run: () => duplicateSlide(index) },
+      { icon: "trash", label: "Delete the slide", danger: true, run: () => deleteSlide(index) },
+    ].filter(Boolean);
   }
 
   function placeChosen() {
