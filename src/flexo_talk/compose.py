@@ -729,7 +729,11 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     outer = canvas.layer
     for name, box in zip(names, boxes, strict=True):
         region = slide.regions[name]
-        group = element(outer, "g", id=f"{slide.id}.{name}", data__flexo__talk="region")
+        # Its room, in the slide's units: where an editor drops a part into it, empty too.
+        room = " ".join(number(value) for value in (box.x, box.y, box.width, box.height))
+        group = element(
+            outer, "g", id=f"{slide.id}.{name}", data__flexo__talk="region", data__flexo__box=room
+        )
         lists, tables = len(canvas.lists), (len(canvas.tables), len(canvas.worded))
         canvas.layer = group
         try:
