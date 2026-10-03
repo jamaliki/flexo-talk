@@ -1737,7 +1737,7 @@ export function mount(studio, container) {
       mirror = `block.${kind}`;
       bullets = kind === "bullets";
       if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered), placeholder: "Text" }, (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }));
-      else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
+      else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, indent: true, onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
       else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, onInput: (text) => editBlock(at, (b) => { b.math = text; }, { merge }) });
       else editor = rich(block[kind] ?? "", { placeholder: kind === "text" ? "Text" : "" }, (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }));
       idOf = () => blockId(at);
@@ -2800,7 +2800,7 @@ export function mount(studio, container) {
           ui.field("Text", richField({ value: block.callout ?? "", key: key("callout"), onInput: (text) => edit((b) => { b.callout = text; }, "words") })),
           ui.field("Colour", toneSwatches("colour", { none: false, fallback: "accent" })), size()];
       case "code":
-        return [ui.textarea({ value: block.code, rows: 5, mono: true, key: key("code"), onInput: (text) => edit((b) => { b.code = text; }, "code") }),
+        return [ui.textarea({ value: block.code, rows: 5, mono: true, indent: true, key: key("code"), onInput: (text) => edit((b) => { b.code = text; }, "code") }),
           h("div.hint-line", {}, "Shown exactly as typed. Whole-line comments are dimmed."), size()];
       case "stats": return statsForm(block, at, edit, toneSwatches, size);
       case "table": return tableForm(block, at, edit, size);
@@ -3361,7 +3361,7 @@ export function mount(studio, container) {
     if (mode === "inline") {
       parts.push(h("div.figure-card", {},
         h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`), h("div.hint-line", {}, "Stored in the deck, using the deck's theme"))));
-      const area = ui.textarea({ value: JSON.stringify(value, null, 2), rows: 8, mono: true, key: "figure.json", onInput: (text) => {
+      const area = ui.textarea({ value: JSON.stringify(value, null, 2), rows: 8, mono: true, indent: true, key: "figure.json", onInput: (text) => {
         try { const parsed = JSON.parse(text); area.style.borderColor = ""; edit((b) => { b.figure = parsed; }, "figure"); }
         catch { area.style.borderColor = "var(--error)"; }
       } });
