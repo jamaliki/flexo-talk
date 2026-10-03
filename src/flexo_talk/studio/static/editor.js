@@ -351,16 +351,20 @@ export function mount(studio, container) {
   const newSlideButton = ui.button("Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide (N)" });
   newSlideButton.classList.add("keep-label");
   studio.tools.append(newSlideButton, layoutButton, h("span.sep"), ...insertButtons, moreButton);
-  studio.actions.append(
-    ui.button("Present", () => present(), { kind: "ghost", icon: "play", title: "Present (⌘↩)" }),
-    ui.button("Export", (event) => menu(event.currentTarget, [
-      { icon: "export", label: "PowerPoint", hint: "Editable shapes and text", run: () => studio.exportFiles(["pptx"]) },
-      { icon: "export", label: "PDF", hint: "One page per slide, with embedded fonts", run: () => studio.exportFiles(["pdf"]) },
-      { icon: "image", label: "PNG Images", hint: "One image per slide", run: () => studio.exportFiles(["png"]) },
-      { icon: "image", label: "SVG Images", hint: "One image per slide", run: () => studio.exportFiles(["svg"]) },
-      "-",
-      { icon: "export", label: "All Formats", hint: "PPTX, PDF, SVG and PNG", run: () => studio.exportFiles(["pptx", "pdf", "svg", "png"]) },
-    ], { align: "end" }), { kind: "ghost", icon: "export" }));
+  // Export lists what File › Export To does in the Mac app (`studio.exports`); each asks
+  // where to save once. A deck with no slides has nothing to present or export.
+  const presentButton = ui.button("Present", () => present(), { kind: "ghost", icon: "play" });
+  const exportButton = ui.button("Export", (event) => menu(event.currentTarget, studio.exports.map(({ format, label, hint, icon: glyph }) =>
+    ({ icon: glyph || "export", label, hint, run: () => studio.exportFiles([format]) })), { align: "end" }), { kind: "ghost", icon: "export" });
+  studio.actions.append(presentButton, exportButton);
+  const showable = () => {
+    const none = !slides().length;
+    presentButton.disabled = exportButton.disabled = none;
+    presentButton.title = none ? "This deck has no slides to present" : "Present from this slide (⌘↩), or from the start (⌥⌘↩)";
+    exportButton.title = none ? "This deck has no slides to export" : "Export to PDF, PowerPoint or images";
+  };
+  studio.on("change", showable);
+  showable();
 
   const renderBar = () => {
     const slide = slideAt();
@@ -385,7 +389,9 @@ export function mount(studio, container) {
   function addSlide(layout, at = slides().length) {
     studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, NEW_SLIDES[layout]()); });
     select(at);
-    if (layout !== "agenda") setTimeout(() => openInline({ kind: "field", field: layout === "statement" ? "words" : "title" }, { selectAll: true }), 300);
+    // Its first words are ready to type over: the title, or a blank slide's text (it draws no title).
+    if (layout === "blank") setTimeout(() => openInline({ kind: "block", region: "body", index: 0 }, { selectAll: true }), 300);
+    else if (layout !== "agenda") setTimeout(() => openInline({ kind: "field", field: layout === "statement" ? "words" : "title" }, { selectAll: true }), 300);
   }
 
   function moveSlide(from, to) {
@@ -2204,6 +2210,8 @@ export function mount(studio, container) {
   function slidePanel(slide) {
     const layout = layoutOf(slide);
     const allowed = new Set(catalog.slide_keys[layout]);
+    // A blank slide draws no title: its title and subtitle are offered only once they are set.
+    if (layout === "blank") for (const key of ["title", "subtitle"]) if (!slide[key]) allowed.delete(key);
     const text = (key, label, { placeholder = "", markup = true, rows = 1 } = {}) => allowed.has(key)
       ? ui.field(label, (markup ? ui.markup : ui.input)({ value: slide[key] ?? "", rows, placeholder, key: `slide.${key}`,
         onInput: (value) => editSlide((s) => setOption(s, key, value), { quiet: true, merge: `${state.slide}-${key}` }) }))
@@ -2214,7 +2222,8 @@ export function mount(studio, container) {
         text("subtitle", "Subtitle"),
         layout === "title" ? h("div.grid2", {}, text("author", "Author", { markup: false }), text("date", "Date", { markup: false })) : null,
         text("by", "Attribution", { markup: false }),
-        layout === "agenda" ? h("div.hint-line", {}, "Lists the titles of the deck's section slides automatically.") : null),
+        layout === "agenda" ? h("div.hint-line", {}, "Lists the titles of the deck's section slides automatically.") : null,
+        layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn't show its title.") : null),
     ];
     const regions = regionsOf(slide);
     if (regions.length) parts.push(h("div.section", {}, h("div.section-title", {}, "Objects"), regions.map((region) => regionView(slide, region))));
@@ -2239,11 +2248,28 @@ export function mount(studio, container) {
     return ui.field("Left Column Width", h("div.slider", {}, range, value));
   }
 
+  // A layout tried and left keeps what it could not show: going back to the layout before
+  // gives the slide back as it was there (if it was not changed in between), and objects
+  // a layout without room for them set aside come back with the next layout that has room.
+  const layoutStash = new Map();
   function changeLayout(layout) {
-    const before = slideAt();
+    const current = slideAt();
+    if (!current || layoutOf(current) === layout) return;
+    const earlier = layoutStash.get(JSON.stringify(current));
+    if (earlier && layoutOf(earlier) === layout) {
+      editSlide((slide) => { for (const key of Object.keys(slide)) delete slide[key]; Object.assign(slide, structuredClone(earlier)); });
+      layoutStash.set(JSON.stringify(slideAt()), current);
+      state.focus = null;
+      renderInspector();
+      renderBar();
+      return;
+    }
+    // What the slide had: from before a layout without room, if it came from one.
+    const before = earlier && !regionsOf(current).length ? earlier : current;
     const blocks = regionsOf(before).map((region) => blocksAt(before, region.key));
     const lost = WORDLESS.has(layout) && blocks.flat().length;
     editSlide((slide) => {
+      for (const [key, value] of Object.entries(before)) if (!(key in slide) && !["layout", "body", "left", "right", "columns"].includes(key)) slide[key] = structuredClone(value);
       const all = blocks.flat();
       const words = layoutOf(slide) === "statement" ? slide.words : slide.title;
       for (const key of ["body", "left", "right", "columns", "split", "widths"]) delete slide[key];
@@ -2266,13 +2292,14 @@ export function mount(studio, container) {
         slide.columns = Array.from({ length: count }, (_, index) => all.slice(index * size, (index + 1) * size));
       } else if (layout === "columns") slide.columns = blocks.length > 1 ? blocks : [all, [], []];
       else if (!WORDLESS.has(layout)) slide.body = all;
-      const allowed = new Set(catalog.slide_keys[layout]);
+      const allowed = new Set([...catalog.slide_keys[layout], "layout"]);
       for (const key of Object.keys(slide)) if (!allowed.has(key)) delete slide[key];
     });
+    layoutStash.set(JSON.stringify(slideAt()), current);
     state.focus = null;
     renderInspector();
     renderBar();
-    if (lost) undoNote(`Objects deleted: the ${LAYOUT_NAMES[layout]} layout has no room for them`, { icon: "info", seconds: 6 });
+    if (lost) undoNote(`Objects removed: the ${LAYOUT_NAMES[layout]} layout has no room for them`, { icon: "info", seconds: 6 });
   }
 
   function columnsControls(slide) {
@@ -3282,7 +3309,11 @@ export function mount(studio, container) {
   });
 
   // -- the palette's commands, and following --
-  studio.exports = [{ format: "pdf", label: "PDF" }, { format: "pptx", label: "PowerPoint" }, { format: "png", label: "PNG Images" }];
+  studio.exports = [
+    { format: "pdf", label: "PDF…", hint: "One page per slide, with embedded fonts", options: [{ name: "steps", label: "Include each stage of builds", value: false }] },
+    { format: "pptx", label: "PowerPoint…", hint: "Editable shapes and text" },
+    { format: "png", label: "Images…", icon: "image", hint: "A PNG or SVG image of each slide", choose: [{ format: "png", label: "PNG" }, { format: "svg", label: "SVG" }] },
+  ];
   studio.present = () => present();
   studio.commands = () => [
     ...slides().map((slide, index) => ({ icon: "slide", label: `Slide ${index + 1}: ${slideTitle(slide)}`, run: () => select(index) })),
