@@ -541,7 +541,8 @@ export function mount(studio, container) {
   function deleteSlides(indices, done = "deleted") {
     if (indices.length === 1) { deleteSlide(indices[0], done); return; }
     const noted = noteDeleted(indices);
-    studio.change((d) => { for (const index of [...indices].sort((a, b) => b - a)) d.slides.splice(index, 1); });
+    studio.change((d) => { for (const index of [...indices].sort((a, b) => b - a)) d.slides.splice(index, 1); },
+      done === "cut" ? { label: `Cut ${indices.length} Slides` } : {});
     noted.entry(studio.past[studio.past.length - 1]);
     select(Math.min(indices[0], slides().length - 1));
     undoNote(`${indices.length} slides ${done}`, { icon: done === "cut" ? "cut" : "trash" });
@@ -576,7 +577,7 @@ export function mount(studio, container) {
   };
   function deleteSlide(index, done = "deleted") {
     const noted = noteDeleted([index]);
-    studio.change((d) => { d.slides.splice(index, 1); });
+    studio.change((d) => { d.slides.splice(index, 1); }, done === "cut" ? { label: "Cut Slide" } : {});
     noted.entry(studio.past[studio.past.length - 1]);
     select(Math.min(index, slides().length - 1));
     undoNote(`Slide ${done}`, { icon: done === "cut" ? "cut" : "trash" });
@@ -1446,7 +1447,7 @@ export function mount(studio, container) {
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
     if (items.length) items.push("-");
-    items.push(...clipItems(), { icon: "copy", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, copyOf(block), at) });
+    items.push(...clipItems(), { icon: "copy", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, copyOf(block), at, `Duplicate ${blockLabel(block)}`) });
     items.push({ icon: "up", label: "Move Up", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
       { icon: "down", label: "Move Down", disabled: at.index >= count - 1, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
     for (const other of regionsOf(slide)) {
@@ -1681,12 +1682,15 @@ export function mount(studio, container) {
 
   // The server makes the edit where the figure is written; if the deck changed while
   // it did, the edit is made again on the deck as it is now.
+  let figureCut = false;  // the figure's next delete is a cut (⌘X), and said so
   async function runFigure(action, { merge, label: told = null }) {
     if (!figure) return null;
     const at = { slide: figure.slide, region: figure.region, index: figure.index };
     // What changed is read from the figure before and after, but for a part moved: a swap
     // read from the figure alone could be either part's, so it is said as the parts say it.
-    const label = action.do === "move" || action.do === "step" ? told : null;
+    // A duplicate or a paste is said as such, not as the shapes it adds; a cut, as a cut.
+    let label = ["move", "step", "duplicate", "paste"].includes(action.do) ? told : null;
+    if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
       const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } });
@@ -2520,7 +2524,7 @@ export function mount(studio, container) {
   }
   const copied = (clip) => toast(`${clip.label.charAt(0).toUpperCase()}${clip.label.slice(1)} copied`, { icon: "copy", seconds: 1.5 });
   function cutAway(clip) {
-    if (clip.what === "parts") figure.parts.remove();
+    if (clip.what === "parts") { figureCut = true; figure.parts.remove(); }
     else if (clip.what === "block") deleteBlock(state.focus, "cut");
     else if (clip.what === "slides") deleteSlides(clip.indices, "cut");
     else deleteSlide(state.slide, "cut");
@@ -2589,20 +2593,21 @@ export function mount(studio, container) {
   function pasteClip(clip) {
     if (clip.what === "slides") {
       const at = Math.min(Math.max(...chosenSlides()) + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => copyOf(slide))); });
+      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => copyOf(slide))); },
+        { label: clip.slides.length === 1 ? "Paste Slide" : `Paste ${clip.slides.length} Slides` });
       select(at);
       state.picked = clip.slides.map((_, n) => at + n);
       renderRail();
     } else if (clip.what === "slide") {
       const at = Math.min(state.slide + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, copyOf(clip.slide)); });
+      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, copyOf(clip.slide)); }, { label: "Paste Slide" });
       select(at);
     } else if (clip.what === "block") {
       if (!regionsOf(slideAt()).length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
-      insertBlock(kindOf(clip.block), copyOf(clip.block));
+      insertBlock(kindOf(clip.block), copyOf(clip.block), null, `Paste ${blockLabel(clip.block)}`);
     } else if (clip.what === "parts") {
       if (figure && figureBlock() && editable(figureBlock())) figure.parts.paste(clip.parts);
-      else insertBlock("figure", { figure: figureOfParts(clip.parts) });
+      else insertBlock("figure", { figure: figureOfParts(clip.parts) }, null, "Paste Figure");
     }
   }
   // Parts pasted where no figure is chosen: a figure of their own.
@@ -2639,7 +2644,8 @@ export function mount(studio, container) {
   }
 
   // -- adding parts --
-  async function insertBlock(kind, given = null, where = null) {
+  // `label` names it in the history when it is not a new object: "Paste Text", "Duplicate Figure".
+  async function insertBlock(kind, given = null, where = null, label = null) {
     const slide = slideAt();
     const regions = regionsOf(slide);
     if (!regions.length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
@@ -2672,7 +2678,7 @@ export function mount(studio, container) {
       if (list.length && list.every(blank)) { list.splice(0, list.length, block); index = 0; return; }
       index = anchor?.region === region ? Math.min(anchor.index + 1, list.length) : list.length;
       list.splice(index, 0, block);
-    });
+    }, label ? { label } : {});
     // A new text or list left empty goes again when it is left, as Keynote's does.
     fresh = !given && blank(block) ? { entry: studio.past[studio.past.length - 1], slide: state.slide, region, index } : null;
     focusBlock(region, index);
@@ -3862,7 +3868,7 @@ export function mount(studio, container) {
   function duplicateChosen() {
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
     const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
-    if (block) insertBlock(kindOf(block), copyOf(block), { ...state.focus });
+    if (block) insertBlock(kindOf(block), copyOf(block), { ...state.focus }, `Duplicate ${blockLabel(block)}`);
     else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
     else if (slides().length) duplicateSlide(state.slide);
   }
