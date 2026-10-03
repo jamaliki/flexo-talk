@@ -227,7 +227,8 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .layout-card.on { border-color: var(--accent); background: var(--accent-soft); }
 .layout-card .glyph { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 4px; background: var(--deck-canvas, var(--sunken)); }
 .layout-card .glyph i { background: var(--deck-muted, var(--ink-3)); opacity: 0.6; }
-.layout-card .glyph i.a { background: var(--deck-accent, var(--accent)); opacity: 1; }
+/* Grey until the deck's colours are known: never the app's blue, then the deck's. */
+.layout-card .glyph i.a { background: var(--deck-accent, var(--ink-3)); opacity: 1; }
 .layout-card .name { font-size: 11px; font-weight: 560; color: var(--ink-2); white-space: nowrap; letter-spacing: -0.005em; }
 .layout-card .note { font-size: 11px; color: var(--ink-3); }
 .layout-grid.big { width: min(620px, 90vw); gap: 10px; }

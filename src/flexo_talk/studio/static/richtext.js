@@ -186,30 +186,47 @@ const address = (href) => href.replace(/[\s()]/g, (mark) => `%${mark.charCodeAt(
 // Runs as markup: emphasis opened and closed only where it changes, each mark against
 // a word (spaces kept outside it), so ** and * pair as written.
 function markupOf(runs) {
+  // Marks open now, the innermost last ("**" bold, "*" italic): kept nested, so that
+  // Markdown reads them as we do -- one that ends inside another closes what was opened
+  // after it and opens it again, never crossing it.
   let out = "", pending = "";
-  const open = { bold: false, italic: false };
-  const close = () => {
-    let marks = "";
-    if (open.italic) marks += "*";
-    if (open.bold) marks += "**";
-    open.bold = open.italic = false;
-    return marks;
+  const stack = [];
+  const closeAll = () => { let marks = ""; while (stack.length) marks += stack.pop(); return marks; };
+  const lasts = (from, mark) => {
+    let count = 0;
+    for (let k = from; k < runs.length; k += 1) {
+      const run = runs[k];
+      if (run.raw !== undefined && !run.wrap) break;
+      if (!(mark === "**" ? run.bold : run.italic)) break;
+      count += 1;
+    }
+    return count;
   };
-  for (const run of runs) {
-    if (run.raw !== undefined && !run.wrap) { out += close() + pending + run.raw; pending = ""; continue; }
+  runs.forEach((run, index) => {
+    if (run.raw !== undefined && !run.wrap) { out += closeAll() + pending + run.raw; pending = ""; return; }
     const text = run.raw ?? escaped(run.text);
     const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
-    if (!core) { pending += text; continue; }
+    if (!core) { pending += text; return; }
+    const want = { "**": Boolean(run.bold), "*": Boolean(run.italic) };
     let marks = "";
-    if (open.italic && !run.italic) { marks += "*"; open.italic = false; }
-    if (open.bold && !run.bold) { marks += "**"; open.bold = false; }
+    const reopen = [];
+    const lowest = stack.findIndex((mark) => !want[mark]);
+    if (lowest >= 0) {
+      while (stack.length > lowest) {
+        const mark = stack.pop();
+        marks += mark;
+        if (want[mark]) reopen.unshift(mark);
+      }
+    }
     out += marks + pending + lead;
-    if (!open.bold && run.bold) { out += "**"; open.bold = true; }
-    if (!open.italic && run.italic) { out += "*"; open.italic = true; }
+    // What opens here opens longest-lasting first, so it is the outer one.
+    const opening = ["**", "*"].filter((mark) => want[mark] && !stack.includes(mark) && !reopen.includes(mark))
+      .sort((a, b) => lasts(index, b) - lasts(index, a));
+    for (const mark of [...reopen, ...opening]) { out += mark; stack.push(mark); }
     out += core;
     pending = trail;
-  }
-  return out + close() + pending;
+  });
+  return out + closeAll() + pending;
 }
 
 function serialise(node, style = { bold: false, italic: false }, names = (colour) => colour) {

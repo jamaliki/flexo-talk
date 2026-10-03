@@ -305,7 +305,7 @@ function glyph(layout) {
 // In the deck's own colours, when it is tinted (tinted below).
 function lookArt(name) {
   const bar = (x, y, w, hgt, colour, opacity = 1) => h("i", { style: { left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${hgt}%`, background: colour, opacity } });
-  const ink = "var(--deck-ink, #3b3834)", accent = "var(--deck-accent, #3d5afe)";
+  const ink = "var(--deck-ink, #3b3834)", accent = "var(--deck-accent, #8f8a83)";
   const soft = "var(--deck-muted, #8f8a83)";
   const body = (x = 10, centred = false) => [0, 1, 2].map((i) => bar(centred ? 22 + i * 3 : x, 48 + i * 13, centred ? 56 - i * 6 : 64 - i * 10, 6, soft, 0.45));
   const art = {
