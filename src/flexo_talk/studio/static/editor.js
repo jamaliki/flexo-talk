@@ -372,8 +372,12 @@ export function mount(studio, container) {
     clear(layoutButton, glyph(layoutOf(slide)), h("span.bar-label", {}, LAYOUT_NAMES[layoutOf(slide)] || "Layout"), icon("chevron-down"));
     layoutButton.disabled = !slide;
     const room = regionsOf(slide).length > 0;
-    for (const button of [...insertButtons, moreButton]) button.disabled = !room;
-    moreButton.title = room ? "More objects" : "This layout has no room for objects";
+    // Greyed out, each says why: the layout has no room (a title slide, a section).
+    for (const button of [...insertButtons, moreButton]) {
+      button.dataset.title ||= button.title || "More objects";
+      button.disabled = !room;
+      button.title = room ? button.dataset.title : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide's"} layout has no room for objects`;
+    }
   };
 
   function layoutPopover(anchor) {
