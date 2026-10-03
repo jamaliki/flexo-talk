@@ -23,6 +23,7 @@ from flexo_talk.pptx import (
     add_reveals,
     add_table,
     linking,
+    plain_names,
     slide_pictures,
 )
 from flexo_talk.pptx import editable_maths as editable_maths_of
@@ -154,12 +155,14 @@ def write_pptx(
             # The headings' words as written, for the breaks typed in them.
             written = {f"{item.slide.id}.title": item.slide.title_runs,
                        f"{item.slide.id}.subtitle": item.slide.subtitle_runs}
+            under = any(kind in {"subTitle", "body"} for _, kind in headings)
             for heading, kind in headings:
                 runs = written.get(heading.id or "")
                 add_heading(
                     tree, heading, kind, words=worded.get(heading.id), formulas=_formulas(heading)
                     if isinstance(heading, Group) else None, deck=deck, palette=deck.palette, editable=editable_maths,
                     span=span, source="".join(run.text for run in runs) if runs else None,
+                    above=under and kind in {"ctrTitle", "title"},
                 )
             add_drawing(tree, drawing, Placement(), **drawn)
             _describe(tree, item.slide)
@@ -180,6 +183,9 @@ def write_pptx(
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
             add_reveals(slide._element, reveals)
+            # Last, as nothing more finds a shape by its id: each named as a person would.
+            plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
+                               for region in item.slide.regions.values() for index, block in enumerate(region.blocks)})
     buffer = BytesIO()
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())
@@ -189,44 +195,140 @@ def write_pptx(
 _PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
-def _figure_said(block: _Figure) -> str:
-    """A figure's alt text: what it is, by the words on its shapes, in order ("A figure:
-    Customer, Orders API, Database")."""
-
+def _spec_of(block: _Figure):
     spec = block.figure
-    nodes = getattr(spec, "nodes", None) or getattr(getattr(spec, "spec", None), "nodes", None) or []
-    words = []
-    for node in nodes:
-        label = getattr(node, "label", "")
-        text = label if isinstance(label, str) else "".join(getattr(run, "text", "") for run in label or ())
-        if " ".join(text.split()):
-            words.append(" ".join(text.split()))
-    return f"A figure: {', '.join(words)}" if words else ""
+    return spec if hasattr(spec, "nodes") else getattr(spec, "spec", None)
+
+
+def _said_words(runs: object) -> str:
+    text = runs if isinstance(runs, str) else "".join(getattr(run, "text", "") for run in runs or ())
+    return " ".join(text.split())
+
+
+def _figure_said(block: _Figure) -> str:
+    """A figure's alt text, from its shapes: a figure of lines read along them, in the
+    order they flow, each branch said with its words ("A flow chart: Purify CA → Mix CA
+    with IP6 → Tubes formed? (yes: Cryo-EM grids; no: back to Mix CA with IP6)"); one of
+    shapes alone by their words, in order; one of molecules alone by what each shows."""
+
+    spec = _spec_of(block)
+    nodes = list(getattr(spec, "nodes", ()) or ())
+    if not nodes:
+        return ""
+    if all(node.kind == "structure" for node in nodes):
+        return " ".join(_structures_said(block).values())
+    names = {node.id: _said_words(node.label) or node.id for node in nodes}
+    for group in getattr(spec, "groups", ()) or ():
+        names.setdefault(group.id, _said_words(getattr(group, "text", "")) or group.id)
+    onward: dict[str, list[tuple[str, str]]] = {}
+    for edge in getattr(spec, "edges", ()) or ():
+        onward.setdefault(edge.source.node_id, []).append((edge.target.node_id, _said_words(edge.label)))
+    for net in getattr(spec, "nets", ()) or ():
+        for source in net.sources:
+            for index, target in enumerate(net.targets):
+                label = _said_words(net.label) if not index else ""
+                onward.setdefault(source.node_id, []).append((target.node_id, label))
+    if not onward:
+        words = [names[node.id] for node in nodes if _said_words(node.label)]
+        return f"A figure: {', '.join(words)}" if words else ""
+    seen: set[str] = set()
+
+    def along(node: str, path: tuple[str, ...]) -> str:
+        seen.add(node)
+        said = names.get(node, node)
+        branches = onward.get(node, [])
+
+        def towards(target: str) -> str:
+            if target in path or target == node:
+                return f"back to {names.get(target, target)}"
+            return names.get(target, target) if target in seen else along(target, (*path, node))
+
+        if len(branches) == 1:
+            target, label = branches[0]
+            return f"{said}{f' ({label})' if label else ''} → {towards(target)}"
+        if branches:
+            ways = [f"{label}: {towards(target)}" if label else towards(target) for target, label in branches]
+            # A question's branches are said by their answers; a fan's, as where it leads.
+            onto = " → " if not any(label for _, label in branches) else " "
+            return f"{said}{onto}({'; '.join(ways)})"
+        return said
+
+    reached = {target for branches in onward.values() for target, _ in branches}
+    starts = [node.id for node in nodes if node.id in onward and node.id not in reached] or [nodes[0].id]
+    walks = [along(start, ()) for start in starts]
+    walks += [along(node.id, ()) for node in nodes if node.id not in seen and node.id in onward]
+    walks += [names[node.id] for node in nodes if node.id not in seen and _said_words(node.label)]
+    kind = "flow chart" if any(node.kind in {"terminal", "decision"} for node in nodes) else "figure"
+    return f"A {kind}: {'; '.join(walks)}"
 
 
 def _structures_said(block: _Figure) -> dict[str, str]:
     """The alt text of each molecule a figure draws as a picture, by the picture's id in
-    the figure: what the figure calls it, and which structure it is, from where ("Trypsin
-    with its inhibitor: the molecular structure 1GBT, from 1gbt.cif")."""
+    the figure: what it is, by its file's own title where it has one, and which entry it is
+    ("Molecular structure: HIV capsid C-terminal domain (1A8O)") -- or what the figure calls
+    it, where the file says nothing."""
 
     import re
 
-    spec = block.figure
-    nodes = getattr(spec, "nodes", None) or getattr(getattr(spec, "spec", None), "nodes", None) or []
     said = {}
-    for node in nodes:
+    for node in getattr(_spec_of(block), "nodes", ()) or ():
         if getattr(node, "kind", "") != "structure":
             continue
         source = str(node.property("source") or "").strip()
         name = Path(source).name
         stem = re.sub(r"\.(pdb|cif|mmcif|ent)$", "", name, flags=re.IGNORECASE)
-        entry = re.fullmatch(r"[0-9][A-Za-z0-9]{3}", stem)
-        what = f"the molecular structure {stem.upper() if entry else name}" if name else "a molecular structure"
-        where = (", from the Protein Data Bank" if entry and stem == name else f", from {name}") if name else ""
-        label = " ".join("".join(run.text for run in node.label).split())
-        text = f"{label}: {what}{where}." if label else f"{what[0].upper()}{what[1:]}{where}."
+        entry = stem.upper() if re.fullmatch(r"[0-9][A-Za-z0-9]{3}", stem) else ""
+        title = _structure_title(source)
+        label = _said_words(node.label)
+        # The figure's own name for it, unless that is only the entry's id or the title.
+        own = label if label and label.upper() not in {entry, title.upper()} else ""
+        named = f"{own}: {title}" if own and title else own or title
+        if not named:
+            text = f"Molecular structure {entry}." if entry else f"Molecular structure, from {name}."
+        else:
+            text = f"Molecular structure: {named}{f' ({entry})' if entry and entry not in named.upper() else ''}."
         said[f"{node.id}.molecule"] = text
     return said
+
+
+_SMALL_WORDS = frozenset({
+    "A", "AN", "THE", "OF", "IN", "ON", "AT", "TO", "BY", "FOR", "AND", "OR", "WITH", "FROM", "ITS", "AS",
+    "IS", "ARE", "INTO", "ONTO", "VIA", "PER", "BOUND",
+})
+"""Words a title set in capitals has that are words, not names (HIV, DNA, E2)."""
+
+
+def _structure_title(source: str) -> str:
+    """The title a structure's file gives it (a PDB file's TITLE, an mmCIF file's
+    ``_struct.title``, else its molecule's name), in sentence case where it is set in
+    capitals, as the Protein Data Bank's files are: names (HIV, DNA, E2) stay as they are."""
+
+    import re
+
+    try:
+        with open(source, encoding="utf-8", errors="replace") as handle:
+            head = handle.read(400_000)
+    except OSError:
+        return ""
+    title = " ".join(re.sub(r"^TITLE\s+(\d+\s)?", "", line).strip()
+                     for line in head.splitlines() if line.startswith("TITLE "))
+    if not title:
+        found = re.search(r"^_struct\.title\s+(?:'([^']*)'|\"([^\"]*)\"|;\s*\n(.*?)\n;|(\S+))", head, re.M | re.S)
+        title = next((group for group in found.groups() if group), "") if found else ""
+    if not title:
+        found = re.search(r"^COMPND\s+\d*\s*MOLECULE:\s*([^;\n]*)", head, re.M)
+        title = found.group(1) if found else ""
+    title = " ".join(title.split()).strip(" .")
+    if not title or title.upper() != title:
+        return title
+
+    def word(part: str) -> str:
+        if any(character.isdigit() for character in part) or (len(part) <= 3 and part not in _SMALL_WORDS):
+            return part
+        return part.lower()
+
+    said = " ".join("-".join(word(part) for part in token.split("-")) for token in title.split())
+    return said[:1].upper() + said[1:]
 
 
 def _describe(tree: etree._Element, slide: Slide) -> None:
@@ -244,18 +346,29 @@ def _descriptions(slide: Slide) -> dict[str, str]:
     picture's own description, a figure's words, each molecule's in a figure."""
 
     described = {
-        f"{slide.id}.{region.name}.{index}": block.description if isinstance(block, _Image) else _figure_said(block)
+        # A description given (a picture's, a figure's) is said in place of one made up.
+        f"{slide.id}.{region.name}.{index}": block.description or (
+            _figure_said(block) if isinstance(block, _Figure) else "")
         for region in slide.regions.values()
         for index, block in enumerate(region.blocks)
-        if (isinstance(block, _Image) and block.description) or isinstance(block, _Figure)
+        if isinstance(block, _Image | _Figure)
     }
     for region in slide.regions.values():
         for index, block in enumerate(region.blocks):
             if isinstance(block, _Figure):
-                described |= {f"{slide.id}.{region.name}.{index}.{key}": text
-                              for key, text in _structures_said(block).items()}
+                molecules = _structures_said(block)
+                if block.description and len(molecules) == 1:
+                    molecules = dict.fromkeys(molecules, block.description)
+                described |= {f"{slide.id}.{region.name}.{index}.{key}": text for key, text in molecules.items()}
     return {key: text for key, text in described.items() if text}
 
+
+_BLOCK_NAMES = {
+    "_Bullets": "List", "_Words": "Text", "_Figure": "Figure", "_Image": "Picture", "_Plot": "Plot", "_Table": "Table",
+    "_Gallery": "Gallery", "_Code": "Code", "_Quote": "Quote", "_Stats": "Numbers", "_Callout": "Callout",
+    "_Missing": "Missing Picture", "_Math": "Equation",
+}
+"""What PowerPoint's Selection Pane calls each kind of block on a slide."""
 
 _BLOCKS = {"figure": "Figure", "bullets": "L", "table": "Table", "code": "P", "quote": "BlockQuote",
            "stats": "Div", "callout": "Div", "gallery": "Div", "missing": "Div"}
@@ -312,8 +425,9 @@ def _tagger(rendered: list[RenderedSlide]) -> Tagger:
             block = _BLOCKS.get(item.data.get("data-flexo-talk", ""))
             if block is not None and inside not in {"Figure", "Formula"}:
                 # A figure is described by its words, and by what each molecule in it shows.
-                alt = " ".join([described.get(ident, "A figure"), *(
-                    text for key, text in described.items() if key.startswith(f"{ident}."))])
+                alt = described.get(ident, "A figure")
+                alt = " ".join([alt, *(text for key, text in described.items()
+                                       if key.startswith(f"{ident}.") and text not in alt)])
                 return Tag((*(within.path if within else ()), (block, ident)), alt=alt if block == "Figure" else "")
             # Words with a formula in them (a title's, a paragraph's, an item's) are tagged as
             # words are, the formula read in its place.

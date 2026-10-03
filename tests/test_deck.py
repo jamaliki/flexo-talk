@@ -173,6 +173,14 @@ def test_a_table_is_a_native_table_ruled_as_in_a_paper(tmp_path: Path) -> None:
     assert slide.count(">Model<") == 1
 
 
+def test_a_change_column_of_percentages_and_multiples_is_numbers() -> None:
+    from flexo_talk.deck import _numeric
+
+    # Set flush right with the numbers: a multiple before its number as well as after it.
+    assert all(_numeric(cell) for cell in ["\u221298%", "-97%", "\u00d77", "x7", "7\u00d7", "+5%"])
+    assert not any(_numeric(cell) for cell in ["x", "\u00d7", "Change"])
+
+
 def test_titles_words_and_figures_each_take_their_own_family(tmp_path: Path) -> None:
     from flexo_talk import DeckStyle
 
@@ -260,6 +268,26 @@ def test_a_numbered_list_is_numbered_natively(tmp_path: Path) -> None:
     assert "<a:buChar" not in slide
     svg = result.svgs[0].read_text()
     assert ">1.<" in svg and ">a.<" in svg and ">2.<" in svg
+
+
+def test_a_plain_list_has_no_marks_and_keeps_its_levels(tmp_path: Path) -> None:
+    from flexo_talk.document import deck_document, deck_from_document
+
+    deck = Deck("plain")
+    with deck.slide("Points") as slide:
+        slide.bullets("First", ["a detail"], "Second", plain=True)
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    svg = result.svgs[0].read_text()
+    # No bullets drawn; the detail still a level in.
+    assert "<circle" not in svg and ">1.<" not in svg
+    xs = {n: float(x) for n, x in re.findall(r'id="slide1\.body\.0\.(\d)" x="([\d.]+)"', svg)}
+    assert xs["1"] > xs["0"] == xs["2"]
+    slide_xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "<a:buChar" not in slide_xml and "<a:buAutoNum" not in slide_xml and 'lvl="1"' in slide_xml
+    # Written as it was read.
+    document = {"schema_version": 1, "deck": {"id": "plain"}, "slides": [
+        {"title": "Points", "body": [{"bullets": ["First", ["a detail"]], "plain": True}]}]}
+    assert deck_document(deck_from_document(document))["slides"] == document["slides"]
 
 
 def test_a_list_in_a_colour_of_its_own_keeps_it_in_the_pptx(tmp_path: Path) -> None:
@@ -481,7 +509,7 @@ def test_words_start_at_the_top_and_a_shorter_picture_is_centred_against_them(tm
     assert moved(shorter, "slide2.right") and moved(middle, "slide3.left")
     # The native list moves with its region: its box starts lower on the middle slide.
     first, _, third = _slides(result.pptx)  # type: ignore[arg-type]
-    box = r'name="slide\d\.left\.0".*?<a:off x="\d+" y="(\d+)"'
+    box = r'name="List[^"]*".*?<a:off x="\d+" y="(\d+)"'
     offsets = [int(re.search(box, s, re.S).group(1)) for s in (first, third)]  # type: ignore[union-attr]
     assert offsets[1] > offsets[0]
 
@@ -670,7 +698,7 @@ def test_a_list_opened_for_tall_maths_keeps_its_baselines_in_powerpoint(tmp_path
     assert [count for _, _, count in layout.opened] == [1, 1, 2]
     xml = _slides(deck.build(tmp_path, formats=("pptx",), editable_maths=editable).pptx)[0]
     share = ascent(font_stack(deck.typography(layout.size)).face(400, False))
-    shapes = re.findall(rf'<p:sp>(?:(?!</p:sp>).)*name="{re.escape(layout.id)}".*?</p:sp>', xml, re.S)
+    shapes = re.findall(r'<p:sp>(?:(?!</p:sp>).)*name="List “First.*?</p:sp>', xml, re.S)
     assert len(shapes) == (2 if editable else 1)
     for shape in shapes:
         # PowerPoint sets an exactly spaced line's baseline at the face's share of single
@@ -1039,10 +1067,31 @@ def test_a_title_placeholder_is_where_the_title_was_drawn_and_says_how_it_looks(
         assert "<a:noAutofit/>" in shape and 'lIns="0" tIns="0"' in shape and 'wrap="square"' in shape
 
 
+def test_a_title_with_words_under_it_grows_upward_so_another_font_cannot_cover_them(tmp_path: Path) -> None:
+    deck = Deck("opening")
+    deck.title("Building the HIV-1 capsid from its parts", subtitle="Structure, assembly and maturation")
+    deck.title("Only a title")
+    deck.section("A section", subtitle="With words under it")
+    result = deck.build(tmp_path, formats=("pptx",))
+
+    def anchors(xml: str) -> dict[str, str]:
+        found = {}
+        for shape in re.findall(r"<p:sp>.*?</p:sp>", xml, re.S):
+            if kind := re.search(r'<p:ph type="(\w+)"', shape):
+                found[kind.group(1)] = re.search(r'<a:bodyPr[^>]* anchor="(\w)"', shape).group(1)
+        return found
+
+    # Its box ends where its last line does, so the same font draws it where it was, and a
+    # wider one sets its extra line above it rather than over the subtitle.
+    assert [anchors(xml) for xml in _slides(result.pptx)] == [  # type: ignore[arg-type]
+        {"ctrTitle": "b", "subTitle": "t"}, {"ctrTitle": "t"}, {"title": "b", "body": "t"},
+    ]
+
+
 def test_a_title_is_first_on_its_slide_and_over_what_it_was_drawn_on(tmp_path: Path) -> None:
     from pptx import Presentation
 
-    for look, first in (("classic", ["slide1.title"]), ("band", ["slide1.band", "slide1.title"])):
+    for look, first in (("classic", ["Title"]), ("band", ["Band", "Title"])):
         deck = Deck(look, look=look)
         deck.slide("On the slide").bullets("A point")
         slide = Presentation(str(deck.build(tmp_path / look, formats=("pptx",)).pptx)).slides[0]
@@ -1060,7 +1109,7 @@ def test_a_title_with_maths_is_a_placeholder_with_its_equation_or_room_for_it(tm
     # leaving room for the formula, drawn over them.
     assert '<p:ph type="title"/>' in choice and "<a14:m" in choice
     assert '<p:ph type="title"/>' in fallback and "<a:custGeom>" in fallback and re.search(r'spc="\d+"', fallback)
-    assert xml.index("<mc:AlternateContent") < xml.index('name="slide1.body.0')
+    assert xml.index("<mc:AlternateContent") < xml.index('name="Text')
     drawn = _slides(deck.build(tmp_path / "drawn", formats=("pptx",), editable_maths=False).pptx)[0]  # type: ignore[arg-type]
     assert "AlternateContent" not in drawn and drawn.count('<p:ph type="title"/>') == 1 and "<a:custGeom>" in drawn
 
@@ -1074,7 +1123,7 @@ def test_a_title_s_marks_that_step_back_are_drawn_beside_its_placeholder(tmp_pat
     slide = Presentation(str(result.pptx)).slides[0]  # type: ignore[arg-type]
     # One placeholder for the words; the arrow and the stacked script, each where it was set.
     assert slide.shapes.title.text_frame.text.startswith("The vector v and x")
-    assert [shape.name for shape in slide.shapes][:2] == ["slide1.title", "slide1.title.marks"]
+    assert [shape.name for shape in slide.shapes][:2] == ["Title", "Title Accents"]
     # Nothing steps back by negative spacing, which slide programs set differently.
     assert not re.search(r'spc="-', _slides(result.pptx)[0])  # type: ignore[arg-type]
 
@@ -1217,8 +1266,34 @@ def test_a_molecule_s_picture_says_what_it_shows() -> None:
     ]
     said = _structures_said(SimpleNamespace(figure=SimpleNamespace(nodes=nodes)))  # type: ignore[arg-type]
     assert said == {
-        "pocket.molecule": "Trypsin with its inhibitor: the molecular structure 1GBT, from 1gbt.cif.",
-        "fetched.molecule": "The molecular structure 4HHB, from the Protein Data Bank.",
+        "pocket.molecule": "Molecular structure: Trypsin with its inhibitor (1GBT).",
+        "fetched.molecule": "Molecular structure 4HHB.",
+    }
+
+
+def test_a_molecule_s_picture_is_named_from_its_file_s_title_not_its_id(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from flexo.ir.semantic import NodeSpec
+
+    from flexo_talk.export import _structures_said
+
+    (tmp_path / "1a8o.pdb").write_text(
+        "HEADER    VIRAL PROTEIN\nTITLE     HIV CAPSID C-TERMINAL DOMAIN\n"
+        "COMPND    MOL_ID: 1;\nCOMPND   2 MOLECULE: HIV CAPSID;\n"
+    )
+    (tmp_path / "2xyz.cif").write_text(
+        "data_2XYZ\n_struct.title   'CRYSTAL STRUCTURE OF THE E2 PROTEIN BOUND TO DNA'\n"
+    )
+    nodes = [
+        NodeSpec("pdb", "structure", properties=(("source", str(tmp_path / "1a8o.pdb")),)),
+        NodeSpec("cif", "structure", properties=(("source", str(tmp_path / "2xyz.cif")),)),
+    ]
+    said = _structures_said(SimpleNamespace(figure=SimpleNamespace(nodes=nodes)))  # type: ignore[arg-type]
+    # Its file's title, in sentence case with names kept as they are, and its id said once.
+    assert said == {
+        "pdb.molecule": "Molecular structure: HIV capsid C-terminal domain (1A8O).",
+        "cif.molecule": "Molecular structure: Crystal structure of the E2 protein bound to DNA (2XYZ).",
     }
 
 
@@ -1237,15 +1312,19 @@ def test_a_figure_s_lines_are_connectors_joined_to_what_they_join(tmp_path: Path
     p = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
     a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
     names = {int(nv.get("id")): nv.get("name") for nv in tree.iter(f"{p}cNvPr")}
-    joined = []
+    joined, both = [], 0
     for line in tree.iter(f"{p}cxnSp"):
-        # Each line is the slide program's connector, joined at each end to a block's
-        # shape and ending in its own arrowhead, named for what it joins.
-        start_at, end_at = line.find(f".//{a}stCxn"), line.find(f".//{a}endCxn")
-        assert start_at is not None and end_at is not None and line.find(f".//{a}tailEnd") is not None
-        assert names[int(start_at.get("id"))].endswith(".body") and names[int(end_at.get("id"))].endswith(".body")
+        # Each line is the slide program's connector, ending in its own arrowhead, named for
+        # what it joins, and joined to a block's shape at each end that meets the middle of
+        # a side (its connection site): the two lines between Start and Middle meet theirs
+        # above and below the middle, and are left free there.
+        assert line.find(f".//{a}tailEnd") is not None and line.find(f".//{a}xfrm").get("rot") is None
+        ends = [line.find(f".//{a}{tag}") for tag in ("stCxn", "endCxn")]
+        assert {names[int(end.get("id"))] for end in ends if end is not None} <= {"Start", "Middle", "End"}
+        both += all(end is not None for end in ends)
         joined.append(line.find(f".//{p}cNvPr").get("name"))
     assert sorted(joined) == ["Line from Middle to End", "Line from Middle to Start", "Line from Start to Middle"]
+    assert both == 1
     assert "arrowhead" not in xml and "Line\"" not in xml
 
     # Groups only where they mean something: the figure, each block, a line with its words.
@@ -1256,6 +1335,9 @@ def test_a_figure_s_lines_are_connectors_joined_to_what_they_join(tmp_path: Path
     assert depth(tree.find(f"{p}cSld/{p}spTree")) <= 3
     assert not any(name.endswith((".root", ".components", ".connectors", ".content", ".steps")) or name == "slide1"
                    for name in names.values())
+    # A line's words stand beside it, named for what they say: LibreOffice draws a joined
+    # connector grouped within a group again, and wrongly.
+    assert "Label “again”" in names.values()
 
 
 def test_a_numbered_list_numbers_every_level_in_its_tier(tmp_path: Path) -> None:

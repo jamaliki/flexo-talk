@@ -131,7 +131,7 @@ a picture; words turn light), `dark=` (force light words), and `align=` (see
 
 | Call | Makes |
 | --- | --- |
-| `bullets(*items, numbered=, reveal=, size=)` | A native list; a nested list is the level below; `reveal=True` builds one click at a time |
+| `bullets(*items, numbered=, reveal=, plain=, size=)` | A native list; a nested list is the level below; `reveal=True` builds one click at a time; `plain=True` has no bullets, its levels kept |
 | `text(words, size=, align="start"\|"middle"\|"end", muted=, colour=)` | A paragraph |
 | `with region.figure(**Figure options) as figure:` | A new flexo figure in the deck's theme |
 | `add(flexo_figure, turn=True)` | An existing flexo figure, redrawn in the deck's theme |

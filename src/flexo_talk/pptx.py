@@ -118,6 +118,8 @@ class _Body:
     name: str
     box: tuple[float, float, float, float]
     sites: dict[str, int]
+    own: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    """The shape's own box, whose sides' middles its connection sites are at."""
 
 
 @dataclass(slots=True)
@@ -133,6 +135,9 @@ class _Line:
     connector: etree._Element | None = None
     several: bool = False
     """A net: lines joining several shapes."""
+    drawn: etree._Element | None = None
+    """The line drawn as Flexo drew it, put in the connector's place where no connector
+    would be drawn as it is (``_join``)."""
 
 
 _SITES = {
@@ -154,6 +159,8 @@ class _Ids:
         """The page colour, for drawing a multiply blend (which slide programs lack)."""
         self.component: str | None = None
         """The name of the figure component being written: its shapes are what lines join."""
+        self.formula = False
+        """Whether a formula's drawing is being written: its shapes are its glyphs and lines."""
         self.bodies: list[_Body] = []
         self.lines: list[_Line] = []
 
@@ -222,6 +229,8 @@ def _parts(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids) 
 
     if isinstance(item, Group) and _wrapper(item):
         return [part for child in item.items for part in _parts(child, placement, ids)]
+    if isinstance(item, Group) and item.data.get("data-flexo-entity") in {"connector", "net"}:
+        return _figure_line(item, placement, ids)
     element = _item(item, placement, ids)
     return [] if element is None else [element]
 
@@ -280,14 +289,16 @@ def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | No
         group = _listing(group)
     entity = group.data.get("data-flexo-entity")
     if entity in {"connector", "net"}:
-        return _figure_line(group, placement, ids)
-    outer, first = ids.component, len(ids.bodies)
+        parts = _figure_line(group, placement, ids)
+        return None if not parts else parts[0] if len(parts) == 1 else _wrap(parts, "Line", ids)
+    outer, first, formula = ids.component, len(ids.bodies), ids.formula
     if entity == "component":
         ids.component = _shown_name(group)
+    ids.formula = formula or "data-flexo-math" in group.data
     try:
         children = [part for item in group.items for part in _parts(item, placement, ids)]
     finally:
-        ids.component = outer
+        ids.component, ids.formula = outer, formula
     if not children:
         return None
     if entity == "component" and len(ids.bodies) > first:
@@ -302,7 +313,10 @@ def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | No
         ids.bodies[first:] = [replace(largest, box=(min(across), min(down), max(across), max(down)))]
     if len(children) == 1 and not group.id:
         return children[0]
-    return _wrap(children, _shown_name(group), ids)
+    # A formula within words is an equation; a displayed one keeps its id, which its
+    # editable equation is found by (``editable_maths``), until it is named (``plain_names``).
+    within = "data-flexo-math" in group.data and group.data.get("data-flexo-talk") != "math"
+    return _wrap(children, "Equation" if within else _shown_name(group), ids)
 
 
 def _extent(element: etree._Element) -> tuple[int, int, int, int]:
@@ -334,38 +348,40 @@ def _item(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids):
 # -- a figure's lines ------------------------------------------------------------------
 
 
-def _figure_line(group: Group, placement: Placement, ids: _Ids) -> etree._Element | None:
+def _figure_line(group: Group, placement: Placement, ids: _Ids) -> list[etree._Element]:
     """A figure's line (a connector, or a net of them) with its words. A single line the
     slide program's own connectors draw -- straight, or turning through right angles, ending
     in an arrowhead it has -- is one of them, joined to the shapes it runs between so it
-    follows them when they move; anything else is drawn as Flexo drew it. Named for what it
-    joins (``_join``), once every shape is written."""
+    follows them when they move, its words beside it (LibreOffice draws a connector in a
+    group within a group again, and wrongly); anything else is drawn as Flexo drew it, a
+    group with its words. Named for what it joins (``_join``), once every shape is written."""
 
     paths = [item for item in group.items if isinstance(item, Shape) and item.kind == "path" and item.paint.stroke]
     several = group.data.get("data-flexo-entity") == "net" or len(paths) != 1
     children: list[etree._Element] = []
     named: list[etree._Element] = []
     ends: list[tuple[tuple[float, float], tuple[float, float]]] = []
-    connector = None
+    connector = drawn = None
     for item in group.items:
         if not any(item is path for path in paths):
             children.extend(_parts(item, placement, ids))
             continue
         made = None if several else _connector(item, placement, ids)  # type: ignore[arg-type]
-        connector = connector if made is None else made
+        if made is not None:
+            connector, drawn = made, _shape(item, placement, ids)  # type: ignore[arg-type]
         made = made if made is not None else _shape(item, placement, ids)  # type: ignore[arg-type]
         if made is not None:
             children.append(made)
             named.append(made)
         ends.extend(_ends(item))  # type: ignore[arg-type]
     if not children:
-        return None
-    element = children[0] if len(children) == 1 else _wrap(children, "Line", ids)
-    if element is not children[0] or not named:
-        named.append(element)
+        return []
+    if connector is None and len(children) > 1:
+        children = [_wrap(children, "Line", ids)]
+        named.append(children[0])
     width = max((path.paint.stroke_width for path in paths), default=1.0)
-    ids.lines.append(_Line(named, ends, width, connector, several))
-    return element
+    ids.lines.append(_Line(named, ends, width, connector, several, drawn))
+    return children
 
 
 def _ends(shape: Shape) -> list[tuple[tuple[float, float], tuple[float, float]]]:
@@ -405,8 +421,25 @@ def _join(ids: _Ids) -> None:
 
     for line in ids.lines:
         met = [_met(ids.bodies, point, way, line.width) for point, way in line.ends]
+        if line.connector is not None and met:
+            # A connector is joined only where its end is at the shape's connection site,
+            # as every slide program then draws it from there as it was drawn. One that is
+            # bent and not joined at both ends is drawn as Flexo drew it: LibreOffice draws
+            # such a connector again from its ends, and not always as it was.
+            joins = [found if found is not None and found[2] else None for found in (met[0], met[-1])]
+            bent = line.connector.find(f".//{{{_A}}}prstGeom").get("prst") != "straightConnector1"
+            if bent and not all(joins) and line.drawn is not None and line.connector.getparent() is not None:
+                line.connector.getparent().replace(line.connector, line.drawn)
+                line.named = [line.drawn if element is line.connector else element for element in line.named]
+                line.connector = None
+            else:
+                joined = line.connector.find(f".//{{{_P}}}cNvCxnSpPr")
+                for tag, found in zip(("stCxn", "endCxn"), joins, strict=True):
+                    if found is not None:
+                        body, side, _ = found
+                        etree.SubElement(joined, f"{{{_A}}}{tag}", id=str(body.id), idx=str(body.sites[side]))
         if line.several:
-            names = list(dict.fromkeys(body.name for body, _ in filter(None, met)))
+            names = list(dict.fromkeys(body.name for body, _, _ in filter(None, met)))
             said = f"Lines joining {', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else "Lines"
         else:
             first, last = (met[0], met[-1]) if met else (None, None)
@@ -415,20 +448,14 @@ def _join(ids: _Ids) -> None:
             properties = element.find(f".//{{{_P}}}cNvPr")
             if properties is not None:
                 properties.set("name", said)
-        if line.connector is None or not met:
-            continue
-        joined = line.connector.find(f".//{{{_P}}}cNvCxnSpPr")
-        for tag, found in (("stCxn", met[0]), ("endCxn", met[-1])):
-            if found is not None:
-                body, side = found
-                etree.SubElement(joined, f"{{{_A}}}{tag}", id=str(body.id), idx=str(body.sites[side]))
 
 
 def _met(
     bodies: list[_Body], point: tuple[float, float], way: tuple[float, float], width: float
-) -> tuple[_Body, str] | None:
+) -> tuple[_Body, str, bool] | None:
     """The shape a line's end meets -- the nearest, within the room a line keeps from what
-    it points at -- and the side it goes in by."""
+    it points at -- the side it goes in by, and whether it meets that side's middle (the
+    shape's connection site there)."""
 
     import math
 
@@ -444,7 +471,9 @@ def _met(
         return None
     across = abs(way[0]) >= abs(way[1])
     side = ("left" if way[0] > 0 else "right") if across else ("top" if way[1] > 0 else "bottom")
-    return best[2], side
+    left, top, right, bottom = best[2].own
+    middle = (top + bottom) / 2.0 if across else (left + right) / 2.0
+    return best[2], side, abs((point[1] if across else point[0]) - middle) <= max(1.0, 1.5 * width)
 
 
 _HEADS = {"triangle": "triangle", "latex": "triangle", "stealth": "stealth", "open": "arrow"}
@@ -571,7 +600,10 @@ def _fitted(points: list[tuple[float, float]]):
                     box = (middle[0] - width / 2.0, middle[1] - height / 2.0, width, height)
                     fits.append((preset, box, turn, flip_h, flip_v, adjust))
     # Of the ways of writing it, one as PowerPoint writes its own: LibreOffice draws a bent
-    # connector again from its ends, and draws some of the others the wrong way round.
+    # connector again from its ends, and draws some of the others the wrong way round. A
+    # straight one is only flipped, never turned.
+    if preset == "straightConnector1":
+        return next((fit for fit in fits if not fit[2]), None)
     return min(fits, key=lambda fit: fit[2:5] not in _AS_POWERPOINT_WRITES, default=None)
 
 
@@ -700,7 +732,8 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
     number = ids()
     if ids.component is not None:
         # A component drawn as a picture (a structure) is what the figure's lines join.
-        ids.bodies.append(_Body(number, ids.component, (x, y, x + width, y + height), _SITES["box"]))
+        box = (x, y, x + width, y + height)
+        ids.bodies.append(_Body(number, ids.component, box, _SITES["box"], box))
     return etree.fromstring(
         f'<p:pic {_NS}><p:nvPicPr><p:cNvPr id="{number}" name="{label}"/>'
         f'<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
@@ -841,10 +874,13 @@ def _geometry_shape(
         geometry = _custom(shape.segments, shape.x, shape.y, width, height, placement,
                            filled=paint.fill is not None, sites=body)
     label = escape(name or shape.id or shape.kind, {'"': "&quot;"})
+    if ids.formula and name is None:
+        label = "Equation Line" if shape.kind == "rect" else "Equation Glyph"
     number = ids()
     if body:
         box = (shape.x, shape.y, shape.x + shape.width, shape.y + shape.height)
-        ids.bodies.append(_Body(number, ids.component, box, _SITES["ellipse" if shape.kind == "ellipse" else "box"]))
+        sites = _SITES["ellipse" if shape.kind == "ellipse" else "box"]
+        ids.bodies.append(_Body(number, ids.component, box, sites, box))
     return etree.fromstring(
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{number}\" name=\"{label}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
         f'<p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm>'
@@ -954,6 +990,8 @@ def _run_xml(run, *, size: float | None = None, baseline: int | None = None, spa
             '<ahyp:hlinkClr xmlns:ahyp="http://schemas.microsoft.com/office/drawing/2018/hyperlinkcolor" '
             'val="tx"/></a:ext></a:extLst></a:hlinkClick>'
         )
+        # Underlined, said outright: as the slide and the PDF have it, in every slide program.
+        italic += ' u="sng"'
     return (
         f'<a:r><a:rPr lang="{_lang(run.text)}" sz="{round(size * 100)}"{bold}{italic}{raise_} dirty="0">'
         f"{_fill(run.fill, 1.0)}"
@@ -1351,6 +1389,8 @@ def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None
                 face = escape(_family_name(_ListRun("1", layout.size, 400, False, stack.face(400, False), ink)))
                 tier = ("arabicPeriod", "alphaLcPeriod", "romanLcPeriod")[level % 3]
                 mark = f'<a:buFont typeface="{face}"/><a:buAutoNum type="{tier}"/>'
+            elif layout.plain:
+                mark = "<a:buNone/>"
             else:
                 mark = '<a:buFont typeface="Arial"/><a:buChar char="\u2022"/>'
             colour = accent if level == 0 else muted
@@ -1632,6 +1672,84 @@ def _first_fill(group: Group) -> str | None:
     return None
 
 
+_FURNITURE = {
+    "title": "Title", "subtitle": "Subtitle", "title.marks": "Title Accents", "subtitle.marks": "Subtitle Accents",
+    "byline": "Byline", "number": "Slide Number", "footer": "Footer", "band": "Band", "rule": "Rule",
+    "edge": "Edge", "by": "Attribution", "background": "Background",
+}
+"""What PowerPoint's Selection Pane calls each of a slide's own shapes, by its id's end."""
+
+_PARTS = {"mark": "Quotation Mark", "by": "Attribution", "panel": "Panel", "bar": "Bar"}
+"""What a block's own parts (a quote's, a callout's) are called, by their id's end."""
+
+_GENERIC = {
+    "path": "Shape", "rect": "Rectangle", "ellipse": "Oval", "text": "Text", "run": "Text", "picture": "Picture",
+    "group": "Group", "arrowhead": "Arrowhead", "line": "Line",
+}
+
+
+def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
+    """Every shape on a slide named as a person would name it in PowerPoint's Selection
+    Pane -- "Title", "Purify CA", "Label “yes”", "Equation" -- not by the ids the writers
+    here found it by (``slide8.body.0.purify-ca.body``). ``blocks`` names each block by its
+    id (``slide3.body.0``: "List"). Run last, once nothing looks a shape up by its name."""
+
+    import re
+
+    def words(element: etree._Element) -> str:
+        paragraphs = ("".join(t.text or "" for t in paragraph.iter(f"{{{_A}}}t"))
+                      for paragraph in element.iter(f"{{{_A}}}p"))
+        said = " ".join(" ".join(paragraphs).split())
+        return said if len(said) <= 40 else f"{said[:39]}…"
+
+    def owner(element: etree._Element) -> str:
+        for above in element.iterancestors(f"{{{_P}}}grpSp"):
+            found = above.find(f"{{{_P}}}nvGrpSpPr/{{{_P}}}cNvPr")
+            if found is not None and found.get("name"):
+                return found.get("name")
+        return ""
+
+    for properties in tree.iter(f"{{{_P}}}cNvPr"):
+        name = properties.get("name") or ""
+        element = properties.getparent().getparent()
+        tag = etree.QName(element).localname
+        said = ""
+        if name in _GENERIC:
+            said = _GENERIC[name]
+            if name in {"text", "run"} and words(element):
+                said = f"Text “{words(element)}”"
+        elif match := re.fullmatch(r"slide\d+\.(.+)", name):
+            rest = match.group(1)
+            block = next((key for key in sorted(blocks, key=len, reverse=True)
+                          if name == key or name.startswith(f"{key}.")), None)
+            if rest in _FURNITURE or rest.startswith("footnote"):
+                said = _FURNITURE.get(rest, "Footnote")
+            elif block == name:
+                kind = blocks[block]
+                text = words(element) if kind in {"List", "Text", "Quote", "Callout", "Code"} else ""
+                if kind == "Quote":
+                    # Its words: not the large quotation mark before them, nor who said them.
+                    text = next((words(shape.getparent().getparent()) for shape in element.iter(f"{{{_P}}}cNvPr")
+                                 if (shape.get("name") or "").endswith(".words")), text)
+                said = f"{kind} “{text}”" if text else kind
+            elif name.endswith((".label", ".taken", ".given", ".back-label")) and words(element):
+                said = f"Label “{words(element)}”"
+            elif block and (part := _PARTS.get(name.rsplit(".", 1)[-1])):
+                said = part
+            elif name.endswith((".body", ".molecule")):
+                said = owner(element) or "Shape"
+            elif name.endswith(".listing"):
+                said = "Code"
+            elif tag == "sp" and words(element):
+                said = f"Text “{words(element)}”"
+            else:
+                said = {"pic": "Picture", "grpSp": "Group", "cxnSp": "Line", "graphicFrame": "Table"}.get(tag, "Shape")
+        elif name in {"canvas.background", "layer.background"}:
+            said = "Background"
+        if said:
+            properties.set("name", said)
+
+
 def add_reveals(slide_element: etree._Element, reveals: list[tuple[int, list[tuple[int, int]]]]) -> None:
     """Click-by-click builds: each ``(shape id, [(first, last) paragraph, ...])`` shows
     its paragraph ranges one click at a time, as PowerPoint's "Appear" by paragraph."""
@@ -1734,9 +1852,14 @@ def add_heading(
     editable: bool = False,
     span: tuple[float, float] | None = None,
     source: str | None = None,
+    above: bool = False,
 ) -> None:
     """A slide's heading -- its title, its subtitle -- appended to its shape tree as the
     slide's placeholder of ``kind`` (``PLACEHOLDER_KINDS``), where Flexo drew it and as it drew it.
+
+    A heading ``above`` another (a title over its subtitle) is held at its foot: set in a
+    face wider than the one measured (a reader without the deck's font), it takes another
+    line upwards, rather than over what is under it.
 
     Its words are one paragraph, wrapped by the slide program as they are edited there,
     and broken only where ``source`` (the words as written) breaks them by hand.
@@ -1763,6 +1886,8 @@ def add_heading(
     wrapped = any(join != "\n" for join in joins)
 
     def made(shape: etree._Element) -> etree._Element:
+        if above:
+            shape.find(f".//{{{_A}}}bodyPr").set("anchor", "b")
         return _widened(placeholder(shape, kind), span) if span and not wrapped else placeholder(shape, kind)
 
     if isinstance(heading, Text):

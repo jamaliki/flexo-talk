@@ -328,6 +328,14 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                 stand_in(block, "runs", (TextRun("Text"),), f"{slide.id}.{name}.{index}", "Text")
             elif isinstance(block, _Code) and not any(line.strip() for line in block.lines):
                 stand_in(block, "lines", ["Code"], f"{slide.id}.{name}.{index}", "Code")
+            # A table with nothing in it yet: its header names its columns, faintly.
+            elif isinstance(block, _Table) and block.rows and not any(
+                _worded(cell) for row in block.rows for cell in row
+            ):
+                header = [(TextRun(f"Column {number}"),) for number in range(1, len(block.rows[0]) + 1)]
+                stand_in(block, "rows", [header, *block.rows[1:]], f"{slide.id}.{name}.{index}", "Table")
+            elif isinstance(block, _Math) and not block.source.strip():
+                stand_in(block, "source", "E = mc^2", f"{slide.id}.{name}.{index}", "Equation")
             elif isinstance(block, _Stats) and not any(_worded(value) or _worded(label) 
                                                        for value, label in block.items):
                 stand_in(block, "items", [((TextRun("00"),), (TextRun("Label"),))] * len(block.items),
@@ -404,6 +412,11 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         else:
             _regions(canvas, slide, body)
     _furniture(canvas, slide)
+    if f"{slide.id}.title" in empty and not PLACEHOLDERS.get() and (
+        not slide.subtitle_runs or f"{slide.id}.subtitle" in empty
+    ):
+        # With no heading shown, the band or rule a heading is set on is not shown either.
+        empty |= {f"{slide.id}.{mark}": "Title" for mark in ("band", "rule")}
     if empty:
         _placeholders(canvas.root, empty)
         if not PLACEHOLDERS.get():
@@ -1079,14 +1092,18 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
 
     style = canvas.deck.style
     blocks = [_capped(canvas, block) for block in region.blocks]
-    pictures = sum(isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing) for block in blocks)
-    gaps = style.block_gap * max(0, len(blocks) - 1)
+    # A placeholder (a sample, drawn for an editor and never shown) takes no room from what
+    # is really there: the words are fitted, and said to be, as if it were not.
+    real = [block for index, block in enumerate(blocks) if index not in region.placeholders]
+    shown = [block for block in real if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
+    pictures = len(shown)
+    gaps = style.block_gap * max(0, len(real) - 1)
 
     def needed(scale: float) -> float:
         # Pictures (and galleries) take what is left: only words are fitted here.
         return sum(
             _height(canvas, _sized(block, scale, style), box.width)
-            for block in blocks if not isinstance(block, _Gallery)
+            for block in real if not isinstance(block, _Gallery)
         )
 
     def largest(least: float) -> float:
@@ -1116,9 +1133,16 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
             f"{canvas.slide.id}: Text does not fit, even at the smallest size. Try splitting the slide."
         )
         return [_sized(block, style.small_size / style.body_size, style) for block in blocks]
+    # The advice names what is there: a figure is not a picture.
+    kinds = list(dict.fromkeys(
+        "figure" if isinstance(block, _Figure) else "plot" if isinstance(block, _Plot)
+        else "pictures" if isinstance(block, _Gallery) else "picture" for block in shown
+    ))
+    named = " and ".join(kinds)
+    own = "a column of its own" if len(shown) == 1 else "a column of their own"
     advice = (
-        " For full-size text, give the picture a column of its own (Two Columns) or a slide of its own."
-        if pictures and canvas.slide.layout in {"content", "blank"} else ""
+        f" For full-size text, give the {named} {own} (Two Columns) or a slide of its own."
+        if shown and canvas.slide.layout in {"content", "blank"} else ""
     )
     canvas.diagnostics.append(
         f"{canvas.slide.id}: Text size reduced to {round(scale * 100)}% to fit the slide.{advice}"
@@ -1924,7 +1948,7 @@ def _list_layout(canvas: _Canvas, block: _Bullets, box: Box) -> ListLayout:
     size = block.size or style.body_size
     layout = ListLayout(
         box.x, box.y, box.width, size, size * style.line_height, style.paragraph_gap * size,
-        style.indent, numbered=block.numbered, reveal=block.reveal, palette=canvas.palette,
+        style.indent, numbered=block.numbered, reveal=block.reveal, plain=block.plain, palette=canvas.palette,
     )
     if block.numbered:
         numbers = list(zip(list_numbers([level for level, _ in block.items]), block.items, strict=True))
@@ -1984,7 +2008,7 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
                     0.0, 0.0),
                 size=size, role=role, parent=item, align="end" if rtl else "start",
             )
-        else:
+        elif not block.plain:
             radius = size * (0.15 if level == 0 else 0.12)
             cx = across(style.indent * level + size * 0.3)
             cy = baseline - (metrics.cap_height or size * 0.7) / 2.0

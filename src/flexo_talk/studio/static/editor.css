@@ -15,7 +15,7 @@
 /* -- the rail -- */
 .rail { border-right: 1px solid var(--line); overflow: hidden; }
 .rail-list { height: 100%; overflow: auto; padding: 12px 10px 60px 4px; display: grid; gap: 10px; align-content: start; outline: none; }
-.thumb { display: grid; grid-template-columns: 20px 1fr; gap: 4px; align-items: start; cursor: pointer; position: relative; }
+.thumb { display: grid; grid-template-columns: 20px 1fr; gap: 4px; align-items: start; cursor: pointer; position: relative; scroll-margin-block: 10px; }
 .thumb .num { font-size: 11px; color: var(--ink-3); text-align: right; padding-top: 1px; font-variant-numeric: tabular-nums; font-weight: 560; }
 .thumb .frame { position: relative; aspect-ratio: 16 / 9; border-radius: 5px; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px var(--line-strong); transition: box-shadow 0.12s, transform 0.12s; }
 .thumb:hover .frame { box-shadow: 0 0 0 1px var(--ink-3); }
@@ -189,6 +189,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
   --r: var(--rt-r, 3px); left: calc(var(--rt-mark-x, 0.5em) + var(--rt-at) * var(--rt-step, 1.3em) - var(--r)); top: calc(var(--rt-mark-y, 0.6em) - var(--r)); width: calc(2 * var(--r)); height: calc(2 * var(--r)); }
 .rich .rt-line:not([data-level="0"])::before { --r: var(--rt-r2, 2.4px); background: var(--rt-mark2, var(--rt-mark, currentColor)); }
 /* Numbered, each level in its tier, as the slide numbers it: 1., a., i. */
+/* A plain list (None): no marks, each item at its level's indent. */
+.rich.rt-plain .rt-line::before { display: none; }
+.rich-field .rich.rt-plain .rt-line { --rt-text: 0px; }
 .rich.rt-numbered .rt-line[data-level="0"] { counter-increment: rt; counter-reset: rt1; }
 .rich.rt-numbered .rt-line[data-level="1"] { counter-increment: rt1; counter-reset: rt2; }
 .rich.rt-numbered .rt-line[data-level="2"] { counter-increment: rt2; counter-reset: rt3; }
@@ -203,6 +206,10 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 /* The format bar looks as every text's does (.rt-bar, .markup-tools: studio.css). */
 .rt-bar { position: fixed; z-index: 60; animation: pop 0.1s ease-out; }
 .rt-bar[hidden] { display: none; }
+/* A panel field's bar is in the panel's flow, under its field (richtext.js `docked`). */
+.rt-bar.rt-docked { position: static; width: fit-content; max-width: 100%; flex-wrap: wrap; margin-top: 6px; animation: none; box-shadow: 0 0 0 1px var(--line); }
+/* Words a link is being made of, kept marked while its address is typed. */
+::highlight(rt-chosen) { background-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .rt-bar button.on { background: var(--accent-soft); color: var(--accent); }
 /* What needs words chosen, with only a caret (⌃Tab to the bar): there, but off. */
 .rt-bar button:disabled { opacity: 0.35; cursor: default; background: transparent; }
@@ -474,3 +481,7 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .mech-arrow-row .mech-said { flex: 1; }
 .mech-arrow-row code { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
 .mech-arrow-row.wrong .mech-said { color: var(--error); }
+/* A placeholder's note: in the Objects row in grey, and at the top of its inspector. */
+.block-row .placeholder-words { color: var(--ink-3); font-style: italic; }
+.placeholder-note { display: flex; align-items: center; gap: 6px; }
+.placeholder-note svg { width: 13px; height: 13px; flex: none; }

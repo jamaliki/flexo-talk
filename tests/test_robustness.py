@@ -424,7 +424,7 @@ def test_a_right_to_left_quote_is_written_to_powerpoint_as_it_reads(tmp_path: Pa
     slide = deck.slide("آمار")
     slide.quote("سخن بزرگان با **تأکید** در میانه", by="حافظ")
     xml = zipfile.ZipFile(deck.build(tmp_path, formats=("pptx",)).pptx).read("ppt/slides/slide1.xml").decode()
-    words = re.search(r'name="slide1\.body\.0\.words".*?</p:sp>', xml, re.S).group(0)
+    words = re.search(r'name="Text “سخن.*?</p:sp>', xml, re.S).group(0)
     assert 'rtl="1"' in words
     assert "".join(re.findall(r"<a:t>([^<]*)</a:t>", words)) == "سخن بزرگان با تأکید در میانه"
     date = "\u06f1\u06f5 مهر \u06f1\u06f4\u06f0\u06f5"

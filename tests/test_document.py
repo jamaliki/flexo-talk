@@ -68,6 +68,10 @@ def test_a_slide_background_in_a_theme_colour_follows_the_theme() -> None:
 
     # Named, not written as a colour: a palette changed later repaints it.
     assert drawn("Okabe-Ito") != drawn("Tableau")
+    # In the theme's own colour, not the darker stroke its words and lines take.
+    own = {"deck": {"id": "t", "palette": ["#222e50", "#007991", "#439a86", "#bcd8c1", "#e9d985"]},
+           "slides": [{"title": "A", "background": "accent4"}]}
+    assert deck_from_document(own, ROOT).slides[0].backdrop == "#bcd8c1"
 
 
 def test_the_demo_as_a_document_draws_the_same_slides() -> None:
@@ -298,7 +302,8 @@ def test_the_studio_names_what_a_change_did_slide_by_slide() -> None:
     added = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"table": [["a", "b"]]}], "date": "2026"}]}
     assert [note["text"] for note in kind.describe(pasted, added)] == ["added Table to slide 1"]
     # Added and deleted by the name the studio gives them, never "a numbers" or "a code".
-    numbers = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"stats": [{"value": "", "label": ""}]}]}]}
+    numbers = {"slides": [{"title": "Plan",
+                           "body": [{"bullets": ["One"]}, {"stats": [{"value": "93%", "label": "right"}]}]}]}
     assert [note["text"] for note in kind.describe(pasted, numbers)] == ["added Numbers to slide 1"]
     coded = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"code": "print()"}]}]}
     assert [note["text"] for note in kind.describe(coded, pasted)] == ["deleted Code from slide 1"]
@@ -970,6 +975,33 @@ def test_an_empty_title_or_text_holds_its_place_and_shows_only_in_the_studio() -
     assert not [layout for layout in render_slide(deck, deck.slides[0]).lists if layout.id == "slide1.body.0"]
 
 
+def test_a_slide_with_no_title_has_no_band_when_presented(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    from flexo_talk.compose import PLACEHOLDERS
+    from flexo_talk.export import write_pptx
+
+    document = yaml.safe_load(
+        "deck: {id: banded, look: band}\nslides:\n"
+        "  - {title: '', body: [{text: Words}]}\n  - {title: Titled, body: [{text: Words}]}\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+
+    def marks(svg: str) -> list[str]:
+        return re.findall(r'id="slide\d\.(band|title)"', svg)
+
+    token = PLACEHOLDERS.set(True)
+    try:
+        studio = [marks(render_slide(deck, slide).svg) for slide in deck.slides]
+    finally:
+        PLACEHOLDERS.reset(token)
+    # While editing, the empty title's place is shown on its band; presented, neither is.
+    assert studio == [["band", "title"], ["band", "title"]]
+    assert [marks(render_slide(deck, slide).svg) for slide in deck.slides] == [[], ["band", "title"]]
+    slides = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides
+    assert ["Band" in [shape.name for shape in slide.shapes] for slide in slides] == [False, True]
+
+
 def test_a_powerpoint_file_carries_the_talks_title_and_author_not_the_templates(tmp_path: Path) -> None:
     from pptx import Presentation
 
@@ -1012,8 +1044,9 @@ def test_a_pictures_description_is_read_out_and_is_powerpoints_alt_text(tmp_path
     svg = render_slide(deck, deck.slides[0]).svg
     assert 'aria-label="Latency fell by half"' in svg and 'aria-label="A red bar"' in svg
     slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
-    described = {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
-    assert described == {"slide1.body.0": "Latency fell by half", "slide1.body.1": "A red bar"}
+    described = [(element.get("name"), element.get("descr"))
+                 for element in slide._element.iter() if element.get("descr")]
+    assert described == [("Picture", "Latency fell by half"), ("Picture", "A red bar")]
 
 
 def test_the_studio_draws_a_deck_and_says_the_order_its_tones_take(tmp_path: Path) -> None:
@@ -1078,6 +1111,60 @@ def test_a_sample_table_figure_or_equation_is_a_placeholder_until_changed(tmp_pa
     assert changed["document"]["slides"][0]["body"][0]["placeholder"] is True
 
 
+def test_a_placeholder_takes_no_room_from_the_words_and_a_fit_note_names_what_is_there() -> None:
+    words = {"bullets": ["a sentence that goes on and on across the slide"] * 8}
+    sample = {"figure": {"figure": {"id": "f"}, "nodes": [{"id": "a", "label": "Input"}]}}
+    document = {"deck": {"id": "fit"}, "slides": [
+        {"title": "Samples", "body": [words, {"placeholder": True, **sample},
+                                      {"placeholder": True, "math": "a^2 + b^2 = c^2"}]},
+        {"title": "A figure", "body": [words, sample]},
+    ]}
+    deck = deck_from_document(document, Path("."))
+    samples, figure = (render_slide(deck, slide).diagnostics for slide in deck.slides)
+    # Samples are never presented, so the words keep their size and nothing is said.
+    assert samples == []
+    # A figure is there, and is named: not "the picture".
+    assert figure == [
+        "slide2: Text size reduced to 85% to fit the slide. For full-size text, give the figure "
+        "a column of its own (Two Columns) or a slide of its own."
+    ]
+
+
+def test_a_new_table_equation_or_figure_starts_empty_and_shows_only_while_editing() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    document = yaml.safe_load(
+        'deck: {id: empty}\nslides:\n  - title: New objects\n    body:\n'
+        '      - {table: [["", ""], ["", ""]]}\n'
+        '      - {math: ""}\n'
+        '      - {figure: {figure: {id: f}, nodes: [{id: start, kind: terminal, label: ""}]}}\n'
+        '      - {table: [[Year, ""]]}\n'
+    )
+    deck = deck_from_document(document, Path("."))
+    exported = render_slide(deck, deck.slides[0])
+    token = PLACEHOLDERS.set(True)
+    try:
+        studio = render_slide(deck, deck.slides[0]).svg
+    finally:
+        PLACEHOLDERS.reset(token)
+    placed = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', studio)
+    assert placed == [("slide1.body.0", "Table"), ("slide1.body.1", "Equation"), ("slide1.body.2", "Placeholder")]
+    # Hints while editing ("Column 1", the first step's "Start"); none of it presented.
+    assert ">Column 1<" in studio and ">Start<" in studio
+    assert ">Column 1<" not in exported.svg and ">Start<" not in exported.svg
+    # A table with one cell typed in is the person's own, its empty cells empty.
+    assert ">Year<" in exported.svg and [table.id for table in exported.tables] == ["slide1.body.3"]
+
+
+def test_a_placeholder_added_and_taken_away_is_not_activity() -> None:
+    kind = DeckKind()
+    plain = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}]}]}
+    empty = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}, {"code": ""}]}]}
+    typed = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}, {"code": "print()"}]}]}
+    assert kind.describe(plain, empty) == [] and kind.describe(empty, plain) == []
+    assert [note["text"] for note in kind.describe(empty, typed)] == ["added Code to slide 1"]
+
+
 def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tmp_path: Path) -> None:
     from pptx import Presentation
 
@@ -1093,8 +1180,70 @@ def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tm
     slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
     names = [element.get("name") for element in slide._element.iter() if element.tag.endswith("}cNvPr")]
     described = {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
-    assert described == {"slide1.body.0": "A figure: Customer, Orders API"}
-    assert {"Customer", "Orders API", "Line from Customer to Orders API"} <= set(names)
+    # Read along its line, and every shape named as a person would: no ids.
+    assert described == {"Figure": "A figure: Customer → Orders API"}
+    assert {"Title", "Figure", "Customer", "Orders API", "Line from Customer to Orders API",
+            "Label “Customer”", "Slide Number"} <= set(names)
+    assert not any(name.startswith(("slide", "path", "rect")) for name in names)
+
+
+def test_a_powerpoint_slide_s_shapes_are_named_by_what_they_are(tmp_path: Path) -> None:
+    from collections import Counter
+
+    from pptx import Presentation
+
+    from flexo_talk.export import write_pptx
+
+    document = yaml.safe_load(
+        "deck: {id: parts}\nslides:\n  - title: Parts\n    body:\n"
+        "      - {quote: To be or not to be, by: Hamlet}\n      - callout: Mind the gap\n"
+        "      - math: 'f = 1 + \\frac{a}{4c} - \\sqrt{b}'\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+    slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
+    names = Counter(element.get("name") for element in slide._element.iter()
+                    if element.tag.endswith("}cNvPr") and element.get("name"))
+    # A quote by its words (not its large quotation mark), its parts and a drawn formula's
+    # glyphs and rules by what they are: no ids, no "path" or "rect".
+    assert {"Title", "Quote “To be or not to be”", "Quotation Mark", "Attribution", "Callout “Mind the gap”",
+            "Panel", "Bar", "Equation", "Equation Glyph", "Equation Line", "Slide Number"} <= set(names)
+    assert not [name for name in names if "." in name or name in {"path", "rect", "Shape"}]
+
+
+def test_a_flow_chart_is_read_in_its_order_and_a_description_given_is_said_instead(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    from flexo_talk.export import build_deck, write_pptx
+
+    document = yaml.safe_load(
+        "deck: {id: flows}\nslides:\n  - title: Assay\n    body:\n      - figure:\n"
+        "          figure: {id: f}\n          nodes:\n"
+        "            - {id: check, label: 'Tubes formed?', kind: decision}\n"
+        "            - {id: purify, label: Purify CA, kind: terminal}\n"
+        "            - {id: mix, label: Mix CA with IP6}\n"
+        "            - {id: grids, label: Cryo-EM grids, kind: terminal}\n"
+        "          edges:\n"
+        "            - {from: mix, to: check}\n            - {from: purify, to: mix}\n"
+        "            - {from: check, to: grids, label: 'yes'}\n            - {from: check, to: mix, label: 'no'}\n"
+        "  - title: Given\n    body:\n      - figure:\n          figure: {id: g}\n"
+        "          nodes: [{id: a, label: Customer}, {id: b, label: Orders API}]\n"
+        "          edges: [{from: a, to: b}]\n"
+        "        description: '  The orders   path '\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+    slides = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides
+    described = [
+        {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
+        for slide in slides
+    ]
+    # Read from where it starts, along its lines, its branches said by their labels (not
+    # in the order its file lists them).
+    flow = "A flow chart: Purify CA → Mix CA with IP6 → Tubes formed? (yes: Cryo-EM grids; no: back to Mix CA with IP6)"
+    assert described == [{"Figure": flow}, {"Figure": "The orders path"}]
+    pdf = build_deck(deck, tmp_path / "out", ("pdf",)).pdf.read_bytes()
+    assert b"/Alt (The orders path)" in pdf
+    # Written back as it was read.
+    assert deck_document(deck)["slides"][1]["body"][0]["description"] == "  The orders   path "
 
 
 def test_a_merged_deck_keeps_no_line_to_a_shape_deleted() -> None:
@@ -1117,3 +1266,29 @@ def test_a_merged_deck_keeps_no_line_to_a_shape_deleted() -> None:
     figure = merged["slides"][0]["body"][0]["figure"]
     assert figure["edges"] == [{"from": "a", "to": "b"}]
     assert figure["groups"][0]["children"] == ["a", "b"]
+
+
+def test_a_paragraph_made_a_list_while_typed_in_is_one_list_with_the_words_typed() -> None:
+    from flexo.studio.merge import merge3
+
+    def deck(*body: dict) -> dict:
+        return {"slides": [{"title": "Q", "body": [{"text": "First."}, *body]}]}
+
+    base = deck({"text": "Second paragraph."})
+    typed = deck({"text": "Second paragraph. typed by Alice"})
+    listed = deck({"bullets": ["Second paragraph."], "numbered": True})
+    for ours, theirs in ((typed, listed), (listed, typed)):
+        notes: list = []
+        merged = DeckKind().mended(merge3(base, ours, theirs, notes), notes, base)
+        # Not the paragraph kept beside the list made of it: one list, with every word.
+        assert merged["slides"][0]["body"] == [
+            {"text": "First."},
+            {"bullets": ["Second paragraph. typed by Alice"], "numbered": True},
+        ]
+        assert notes == []  # settled: no one is told it was deleted
+    # A list made words, as its items were typed in.
+    base = deck({"bullets": ["One", "Two"]})
+    notes = []
+    worded, typed = deck({"text": "One\nTwo"}), deck({"bullets": ["One", "Two, typed"]})
+    merged = DeckKind().mended(merge3(base, worded, typed, notes), notes, base)
+    assert merged["slides"][0]["body"] == [{"text": "First."}, {"text": "One\nTwo, typed"}]

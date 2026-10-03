@@ -167,11 +167,15 @@ class DeckKind:
     def claims(self, document: object) -> bool:
         return is_deck_document(document)
 
-    def mended(self, document: object) -> object:
+    def mended(self, document: object, notes: list | None = None, base: object = None) -> object:
         """A deck two edits were merged into: each figure written in it with no line left
-        naming a shape the other side deleted."""
+        naming a shape the other side deleted; and an object one side made another kind (a
+        paragraph a list) while the other typed in it one object, of the new kind, with the
+        words typed -- not the two the merge kept (its note is settled, and left out)."""
 
         from flexo.studio.figure_edit import mend
+
+        _converted(document, notes if notes is not None else [], base)
 
         def walk(value: object) -> None:
             if isinstance(value, dict):
@@ -317,6 +321,10 @@ class DeckKind:
                         best = (1.0, placed)
                     if best[0] > 0.5:
                         unused.remove(best[1])
+                        # A placeholder put there and taken away again (a Code left empty) is
+                        # nothing done: said neither as added nor as deleted.
+                        if _without_placeholders(old[best[1]]) == _without_placeholders(new[index]):
+                            continue
                         verb, what = _what_changed(old[best[1]], new[index])
                         notes.append(_slide_note(verb, new, index, what))
                     else:
@@ -961,13 +969,146 @@ def _objects(old: Any, new: Any) -> tuple[str, str]:
     return "edited", " and ".join(changed[:2]) or "its content"
 
 
+_WORDY = ("text", "bullets")
+
+
+def _lines(block: dict[str, Any]) -> list[str] | None:
+    """An object's words a line each, as a paragraph and a list are made one of the other
+    (each line an item, each item a line), if it is one of those."""
+
+    if isinstance(block.get("text"), str):
+        return [line.strip() for line in block["text"].split("\n") if line.strip()]
+    if "bullets" not in block:
+        return None
+    found: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif str(value or "").strip():
+            found.append(str(value).strip())
+
+    walk(block["bullets"])
+    return found
+
+
+def _alike_lines(first: list[str], second: list[str]) -> float:
+    """How alike two objects' words are, from 0 to 1, by the letters they share at their ends
+    (as the editor's alikeLines)."""
+
+    a, b = "\n".join(first), "\n".join(second)
+    if not a and not b:
+        return 1.0
+    start = 0
+    while start < len(a) and start < len(b) and a[start] == b[start]:
+        start += 1
+    end = 0
+    while end < len(a) - start and end < len(b) - start and a[-1 - end] == b[-1 - end]:
+        end += 1
+    return 2 * (start + end) / (len(a) + len(b))
+
+
+def _converted(document: object, notes: list, base: object) -> None:
+    """An object kept for someone typing in it (merge3's ``{"kept": …}`` note) while the other
+    side made it another kind, beside it: the two made one, of the new kind, with both sides'
+    words. Settled notes are taken out of ``notes``."""
+
+    if not isinstance(document, dict) or not any("kept" in note for note in notes):
+        return
+    from flexo.studio.merge import merge3
+
+    def lists(slide: Any) -> list[list]:
+        if not isinstance(slide, dict):
+            return []
+        found = [slide[key] for key in ("body", "left", "right") if isinstance(slide.get(key), list)]
+        return found + [column for column in slide.get("columns") or [] if isinstance(column, list)]
+
+    slides = base.get("slides") or [] if isinstance(base, dict) else []
+    olds = [block for slide in slides for blocks in lists(slide) for block in blocks if isinstance(block, dict)]
+    for note in list(notes):
+        item = note.get("item")
+        if "kept" not in note or not isinstance(item, dict) or _lines(item) is None:
+            continue
+        kind = next(key for key in _WORDY if key in item)
+        for blocks in (blocks for slide in document.get("slides") or [] for blocks in lists(slide)):
+            index = next((n for n, block in enumerate(blocks) if block == item), None)
+            if index is None:
+                continue
+            for near in (index + 1, index - 1):
+                other = blocks[near] if 0 <= near < len(blocks) and isinstance(blocks[near], dict) else None
+                if other is None or _lines(other) is None or kind in other:
+                    continue
+                if _alike_lines(_lines(other), _lines(item)) < 0.5:
+                    continue
+                # Both sides' words: from what it was, as the kind it became.
+                was = next(
+                    (old for old in olds if kind in old and _alike_lines(_lines(old), _lines(item)) >= 0.5),
+                    None,
+                )
+                lines = merge3(_lines(was) if was else _lines(other), _lines(other), _lines(item))
+                made = dict(other)
+                if "bullets" in made:
+                    made["bullets"] = lines or [""]
+                else:
+                    made["text"] = "\n".join(lines)
+                blocks[near] = made
+                del blocks[index]
+                notes.remove(note)
+                break
+            break
+
+
+def _placeholder(block: Any) -> bool:
+    """An object with nothing of its person's in it yet, as the studio's editor reads one: an
+    empty text, list, quote, callout, code, numbers, table or equation, a new figure's lone
+    empty shape, or a sample (``placeholder: true``)."""
+
+    from flexo_talk.document import _lone_shape
+
+    if not isinstance(block, dict):
+        return False
+    if block.get("placeholder") or ("figure" in block and _lone_shape(block["figure"])):
+        return True
+    kinds = ("text", "bullets", "code", "quote", "callout", "stats", "table", "math")
+    kind = next((key for key in kinds if key in block), None)
+
+    def words(value: Any) -> list[str]:
+        if isinstance(value, dict):
+            return [word for item in value.values() for word in words(item)]
+        if isinstance(value, list):
+            return [word for item in value for word in words(item)]
+        return [] if value is None else [str(value)]
+
+    said = words([block[kind], block.get("title"), block.get("by")]) if kind is not None else []
+    return kind is not None and not any(word.strip() for word in said)
+
+
+def _without_placeholders(slide: Any) -> Any:
+    """A slide as it would be without its placeholders."""
+
+    if not isinstance(slide, dict):
+        return slide
+    kept = dict(slide)
+    for key in ("body", "left", "right"):
+        if isinstance(kept.get(key), list):
+            kept[key] = [block for block in kept[key] if not _placeholder(block)]
+    if isinstance(kept.get("columns"), list):
+        kept["columns"] = [
+            [block for block in column if not _placeholder(block)] if isinstance(column, list) else column
+            for column in kept["columns"]
+        ]
+    return kept
+
+
 def _what_changed(old: Any, new: Any) -> tuple[str, str]:
     """What a change did to a slide: its verb and what it did it to."""
 
     if not isinstance(old, dict) or not isinstance(new, dict):
         return "edited", ""
     keys = [key for key in dict.fromkeys([*old, *new]) if old.get(key) != new.get(key)]
-    # An object added or deleted is what the change did.
+    # An object added or deleted is what the change did; a placeholder typed in is added.
+    old, new = _without_placeholders(old), _without_placeholders(new)
     if "body" in keys and (done := _objects(old.get("body"), new.get("body")))[0] != "edited":
         return done
     names = {"title": "the title", "words": "the words", "subtitle": "the subtitle", "notes": "the notes",

@@ -304,6 +304,21 @@ def named_colour(value: object) -> bool:
     return isinstance(value, str) and bool(value) and not value.startswith("#") and paint_role(value) in _roles()
 
 
+def theme_colour(deck: Deck, name: str) -> str:
+    """A colour of a deck's theme by name, as it fills a slide: ``accent`` (``accent2``...)
+    the theme's own colour that tone takes -- not its stroke, which is that colour set to the
+    theme's outline lightness for lines and words on the page -- and ``ink`` or ``muted``
+    as the palette paints them."""
+
+    from flexo.themes import palette_order
+
+    if name.startswith("accent"):
+        order = palette_order(deck.theme, deck.palette_name)
+        if order:
+            return order[(int(name[6:] or 1) - 1) % len(order)]
+    return deck.palette.get(paint_role(name))
+
+
 _ROLES: set[str] = set()
 
 
@@ -341,6 +356,8 @@ class _Bullets:
     reveal: bool = False
     colour: str | None = None
     """The words' paint, as a text's ``colour``; the bullets and numbers keep the theme's."""
+    plain: bool = False
+    """Whether its items have no bullets or numbers, their levels kept (Keynote's None)."""
 
 
 @dataclass(slots=True)
@@ -361,6 +378,8 @@ class _Figure:
     """The width it is drawn at (points), as its place allows; ``None`` sizes it to its place."""
     said: tuple[str, ...] = ()
     """What is wrong with it that it is drawn despite: said when the slide is drawn."""
+    description: str = ""
+    """What it shows, for whoever cannot see it; else it is said from its shapes' words."""
 
 
 @dataclass(slots=True)
@@ -724,14 +743,18 @@ class Region:
         numbered: bool = False,
         reveal: bool = False,
         colour: str | None = None,
+        plain: bool = False,
     ) -> Region:
         """A bulleted list. A nested list of strings is the level below the item before it.
         ``numbered=True`` numbers every level, each in its tier (1., a., i.), as Keynote does.
         ``reveal=True`` shows the outer items one at a time: a click each in the
         PowerPoint, a page each in the PDF (the SVG and PNG show them all). ``colour``
-        paints its words, as a text's does."""
+        paints its words, as a text's does. ``plain=True`` draws no bullets or numbers,
+        each item at its level's indent (Keynote's None)."""
 
         size, numbered, reveal = _size(size), _flag(numbered, "numbered"), _flag(reveal, "reveal")
+        plain = _flag(plain, "plain")
+        numbered = numbered and not plain
         colour = _colour(colour)
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
 
@@ -748,9 +771,10 @@ class Region:
                     flattened.append((level, inline(_words(entry, "A bullet"))))
 
         add(items, 0)
-        self.blocks.append(_Bullets(flattened, size, numbered, reveal, colour))
+        self.blocks.append(_Bullets(flattened, size, numbered, reveal, colour, plain))
         self._record(
-            "bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None, colour=colour
+            "bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None, colour=colour,
+            plain=plain or None,
         )
         return self
 
@@ -982,7 +1006,8 @@ class Region:
         return figure
 
     def add(
-        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None,
+        description: str | None = None,
     ) -> Region:
         """An existing flexo figure, laid out again in the deck's theme for this place.
 
@@ -991,11 +1016,13 @@ class Region:
         be larger -- ``turn=False`` keeps it as written. It is drawn as large as its
         place lets its words be the size of the words round it; ``width`` (points)
         draws it that wide instead, smaller or larger, as far as its place allows.
+        ``description`` says what it shows, as a picture's does.
         """
 
         width = _width(width)
-        self.blocks.append(_Figure(figure, _flag(turn, "turn"), width))
-        self._record("figure", None, turn=None if turn else False, width=width)
+        description = " ".join(str(description).split()) if description is not None else ""
+        self.blocks.append(_Figure(figure, _flag(turn, "turn"), width, description=description))
+        self._record("figure", None, turn=None if turn else False, width=width, description=description or None)
         return self
 
     def image(self, source: str | Path, *, width: float | None = None, description: str | None = None) -> Region:
@@ -1108,8 +1135,9 @@ def _blank(cell: object) -> bool:
 
 
 def _numeric(cell: object) -> bool:
-    """A number, with what may go with one: a sign, ± a spread, a %, a multiple (k, M, x)
-    or a unit (38 ms, 1.2 GB, 400 req/s)."""
+    """A number, with what may go with one: a sign, ± a spread, a %, a multiple (k, M, x,
+    before it or after it: x7, 7x, as with the multiplication sign) or a unit (38 ms,
+    1.2 GB, 400 req/s)."""
 
     if isinstance(cell, int | float):
         return True
@@ -1119,7 +1147,7 @@ def _numeric(cell: object) -> bool:
 
 
 _NUMBER = (
-    r"[-+\u2212]?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?"
+    r"[-+\u2212]?([x\u00d7]\s?)?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?"
     r"\s*([kKMGTBx\u00d7]|[A-Za-z\u00b5\u03bc\u00b0\u03a9]{1,4}(/[A-Za-z\u00b5\u03bc]{1,3})?)?"
 )
 """A number as a table's cell gives one (see ``_numeric``)."""
@@ -1205,7 +1233,7 @@ class Slide:
         or the accent colour that fills a section slide in a look that fills them."""
 
         if named_colour(self.background):
-            return self.deck.palette.get(paint_role(self.background))
+            return theme_colour(self.deck, self.background)
         if self.background:
             return self.background
         if self.layout == "section" and self.deck.style.sections == "fill":
@@ -1252,8 +1280,11 @@ class Slide:
         numbered: bool = False,
         reveal: bool = False,
         colour: str | None = None,
+        plain: bool = False,
     ) -> Slide:
-        next(iter(self.regions.values())).bullets(*items, size=size, numbered=numbered, reveal=reveal, colour=colour)
+        next(iter(self.regions.values())).bullets(
+            *items, size=size, numbered=numbered, reveal=reveal, colour=colour, plain=plain
+        )
         return self
 
     def text(self, words: str, **options: object) -> Slide:
@@ -1266,9 +1297,10 @@ class Slide:
         return next(iter(self.regions.values())).figure(id, turn=turn, width=width, **options)
 
     def add(
-        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None,
+        description: str | None = None,
     ) -> Slide:
-        next(iter(self.regions.values())).add(figure, turn=turn, width=width)
+        next(iter(self.regions.values())).add(figure, turn=turn, width=width, description=description)
         return self
 
     def image(self, source: str | Path, *, width: float | None = None, description: str | None = None) -> Slide:
@@ -1729,6 +1761,8 @@ class ListLayout:
     numbered: bool = False
     reveal: bool = False
     """Whether the outer items appear one click (one PDF page) at a time."""
+    plain: bool = False
+    """Whether the items have no bullets or numbers: each starts at its level's indent."""
     number_room: float = 0.0
     sub_room: float = 0.0
     """In a numbered list, the room an item's number takes below the top level ("a.", "iv.")."""
@@ -1752,6 +1786,8 @@ class ListLayout:
 
         if self.numbered:
             return self.number_room if level == 0 else self.mark_at(level) + self.sub_room
+        if self.plain:
+            return self.indent * level
         return self.indent * level + self.size * 0.95
 
     def mark_at(self, level: int) -> float:
@@ -1760,6 +1796,8 @@ class ListLayout:
         if self.numbered:
             # Each level's number where the level above's words start, as Keynote's tiers are.
             return 0.0 if level == 0 else self.number_room + self.indent * (level - 1)
+        if self.plain:
+            return self.indent * level
         return self.indent * level + self.size * 0.12
 
 

@@ -267,7 +267,7 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
   const slide = deck.slides[state.index];
   root.className = `present ss-root ss-${role}${state.blank ? ` ss-${state.blank}` : ""}${root.classList.contains("ss-pointer") ? " ss-pointer" : ""}`;
   root.textContent = "";
-  const goto = state.typed ? el("div", "ss-goto", `Go to slide ${state.typed}`, el("small", "", "Return to go · Esc to cancel")) : null;
+  const goto = state.typed ? el("div", "ss-goto", `Go to Slide ${state.typed}`, el("small", "", "Return to go · Esc to cancel")) : null;
   if (role === "audience") {
     root.onclick = () => press("click");
     root.append(state.ended ? el("div", "ss-end", "End of slide show — click to exit") : frame(slide, state.step));
@@ -397,7 +397,8 @@ function dress() {
 .ss-side { display: grid; grid-template-rows: auto minmax(0, 0.8fr) auto minmax(0, 1.2fr); gap: 8px; min-height: 0; }
 /* Slides stand against their labels' left edge, not centred away from them. */
 .ss-presenter .ss-frame { place-items: start; }
-.ss-label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #8d8d8d; }
+/* Headings as the studio's are: grey and bold, in title case, never in capitals. */
+.ss-label { font-size: 12.5px; font-weight: 600; color: #8d8d8d; }
 .ss-press { cursor: pointer; }
 .ss-over { width: 100%; height: 100%; display: grid; place-items: center; background: #000; outline: 1px solid #2c2c2c; color: #8c8c8c; font-size: 16px; }
 .ss-notes { overflow: auto; font-size: clamp(18px, 1.55vw, 32px); line-height: 1.45; margin-top: 4px; white-space: pre-wrap; color: #f4f4f4; user-select: text; -webkit-user-select: text; }

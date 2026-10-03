@@ -153,6 +153,7 @@ background the slide's words and accents are set light (`dark=` overrides).
 
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below; `numbered=True` numbers every level in its tier (1., a., i.), natively in PowerPoint;
+`plain=True` draws no bullets or numbers, each item at its level's indent (Keynote's None);
 `reveal=True` shows the outer items one click at a time -- PowerPoint builds, and a
 PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),

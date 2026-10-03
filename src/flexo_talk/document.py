@@ -82,9 +82,9 @@ from flexo_talk.deck import (
 SCHEMA_VERSION = 1
 
 BLOCKS: dict[str, tuple[str, ...]] = {
-    "bullets": ("size", "numbered", "reveal", "colour"),
+    "bullets": ("size", "numbered", "reveal", "colour", "plain"),
     "text": ("size", "align", "muted", "colour"),
-    "figure": ("turn", "width"),
+    "figure": ("turn", "width", "description"),
     "image": ("width", "description"),
     "plot": ("aspect",),
     "table": ("header", "align", "size"),
@@ -571,7 +571,8 @@ def add_block(
                 options["colour"] = "muted"
             region.math(value, **{"align": "middle", **options})
         elif kind == "math":
-            if not _is_words(value) or not str(value).strip():
+            # Empty, it is a placeholder (as an empty text is): drawn faintly while editing.
+            if not _is_words(value):
                 raise DeckDocumentError(here, "math must be a LaTeX equation (for example, math: E = mc^2).")
             region.math(str(value), **options)
         elif kind in {"text", "code", "quote", "callout"}:
@@ -595,7 +596,10 @@ def add_block(
                 raise DeckDocumentError(here, "stats must be a list of {value, label} pairs.")
             region.stats(*(_stat(item, here) for item in value), **options)
         elif kind == "figure":
-            region.add(_figure(base, value, here, region), **options)
+            # A lone shape with no words shows its hint, faintly (see _lone_shape).
+            hint = _lone_shape(value)
+            shown = {**value, "nodes": [{**value["nodes"][0], "label": hint}]} if hint else value
+            region.add(_figure(base, shown, here, region), **options)
         elif kind == "plot":
             region.plot(_plot(base, value, here, region), **options)
         elif kind == "mechanism":
@@ -610,8 +614,21 @@ def add_block(
     except (ValueError, TypeError, OSError) as error:
         raise DeckDocumentError(here, str(error)) from error
     region.sources[-1] = dict(block)
-    if block.get("placeholder"):
+    if block.get("placeholder") or (kind == "figure" and _lone_shape(value)):
         region.placeholders.add(len(region.blocks) - 1)
+
+
+def _lone_shape(value: object) -> str | None:
+    """A figure written in the deck that is one shape with no words and nothing more (as the
+    studio starts one) is a placeholder, as an empty text is: the word it shows faintly while
+    it waits for its own ("Shape", or "Start" for a flow chart's first step); else None."""
+
+    if not isinstance(value, dict) or value.get("edges") or len(value.get("nodes") or []) != 1:
+        return None
+    node = value["nodes"][0]
+    if not isinstance(node, dict) or set(node) - {"id", "kind", "label"} or str(node.get("label") or "").strip():
+        return None
+    return {"terminal": "Start", None: "Shape", "block": "Shape", "decision": "Decision"}.get(node.get("kind"))
 
 
 def _steps(value: object, where: str) -> str | list[str | dict[str, object]]:
