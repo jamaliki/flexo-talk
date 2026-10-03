@@ -283,15 +283,21 @@ class DeckKind:
                 notes.append({"text": f"deleted slide {a1 + 1}" if a2 - a1 == 1 else f"deleted {a2 - a1} slides",
                               "where": {"page": at, "label": f"Slide {at}"}})
             else:
-                # Slides replaced by others: pair each new one with the old one it most resembles.
+                # Slides replaced by others: pair each new one with the old one it most resembles,
+                # or, as many in as out, with the one in its place if it is of a kind with it (its
+                # title or its layout): a list pasted into is that slide edited, not another.
                 unused = list(range(a1, a2))
                 for index in range(b1, b2):
                     text = json.dumps(new[index], sort_keys=True, default=str)
                     scored = [(_likeness(old[i], text), i) for i in unused]
                     best = max(scored, default=(0.0, -1))
+                    placed = a1 + index - b1
+                    if best[0] <= 0.5 and a2 - a1 == b2 - b1 and placed in unused and _kin(old[placed], new[index]):
+                        best = (1.0, placed)
                     if best[0] > 0.5:
                         unused.remove(best[1])
-                        notes.append(_slide_note("edited", new, index, _what_changed(old[best[1]], new[index])))
+                        verb, what = _what_changed(old[best[1]], new[index])
+                        notes.append(_slide_note(verb, new, index, what))
                     else:
                         notes.append(_slide_note("added", new, index))
                 if unused:
@@ -869,21 +875,73 @@ def _slide_note(verb: str, slides: list, index: int, what: str = "") -> dict[str
     slide = slides[index] if index < len(slides) and isinstance(slides[index], dict) else {}
     title = str(slide.get("words") or slide.get("title") or "").strip()
     named = f", “{title[:40]}”" if title and verb == "added" else ""
-    # "edited the title on slide 4", "added slide 5, “Methods”": what changed first, as said aloud.
-    text = f"{verb} {what} on slide {index + 1}" if what else f"{verb} slide {index + 1}{named}"
+    # "edited the title on slide 4", "added a table to slide 2", "added slide 5, “Methods”":
+    # what changed first, as said aloud.
+    where = {"added": "to", "deleted": "from"}.get(verb, "on")
+    text = f"{verb} {what} {where} slide {index + 1}" if what else f"{verb} slide {index + 1}{named}"
     return {"text": text,
             "where": {"page": index + 1, "label": f"Slide {index + 1}"}}
 
 
-def _what_changed(old: Any, new: Any) -> str:
+def _kin(old: Any, new: Any) -> bool:
+    """Whether two slides are one slide before and after a change: the same title, or the
+    same layout."""
+
     if not isinstance(old, dict) or not isinstance(new, dict):
-        return ""
+        return False
+    title = str(old.get("title") or old.get("words") or "").strip()
+    same_title = bool(title) and title == str(new.get("title") or new.get("words") or "").strip()
+    return same_title or old.get("layout") == new.get("layout")
+
+
+_OBJECTS = {"bullets": "list", "text": "text", "figure": "figure", "image": "picture", "table": "table",
+            "math": "equation", "code": "code", "quote": "quote", "callout": "callout", "stats": "numbers",
+            "gallery": "gallery", "plot": "plot", "mechanism": "mechanism"}
+"""Each object a slide holds, by name."""
+
+
+def _objects(old: Any, new: Any) -> tuple[str, str]:
+    """What changed among a slide's objects, as said aloud: ("edited", "the list"), ("added",
+    "a table"), ("edited", "the list and the figure")."""
+
+    def name(block: Any) -> str:
+        kind = next((key for key in block if key in _OBJECTS), "") if isinstance(block, dict) else ""
+        return _OBJECTS.get(kind, "object")
+
+    was = old if isinstance(old, list) else []
+    now = new if isinstance(new, list) else []
+    if len(now) > len(was):
+        kept = [json.dumps(block, sort_keys=True, default=str) for block in was]
+        added = [block for block in now if json.dumps(block, sort_keys=True, default=str) not in kept]
+        return ("added", _a(name(added[0]))) if added else ("edited", "its content")
+    if len(now) < len(was):
+        kept = [json.dumps(block, sort_keys=True, default=str) for block in now]
+        gone = [block for block in was if json.dumps(block, sort_keys=True, default=str) not in kept]
+        return ("deleted", _a(name(gone[0]))) if gone else ("edited", "its content")
+    changed = list(dict.fromkeys(f"the {name(b)}" for a, b in zip(was, now, strict=True) if a != b))
+    return "edited", " and ".join(changed[:2]) or "its content"
+
+
+def _a(noun: str) -> str:
+    return f"{'an' if noun[:1] in 'aeiou' else 'a'} {noun}"
+
+
+def _what_changed(old: Any, new: Any) -> tuple[str, str]:
+    """What a change did to a slide: its verb and what it did it to."""
+
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return "edited", ""
     keys = [key for key in dict.fromkeys([*old, *new]) if old.get(key) != new.get(key)]
+    # An object added or deleted is what the change did.
+    if "body" in keys and (done := _objects(old.get("body"), new.get("body")))[0] != "edited":
+        return done
     names = {"title": "the title", "words": "the words", "subtitle": "the subtitle", "notes": "the notes",
-             "layout": "the layout", "body": "its content", "left": "the left column", "right": "the right column",
-             "columns": "its columns", "background": "the background", "footnotes": "the footnotes"}
-    said = list(dict.fromkeys(names.get(key, key) for key in keys))
-    return " and ".join(said[:2])
+             "layout": "the layout", "left": "the left column", "right": "the right column",
+             "columns": "its columns", "background": "the background", "footnotes": "the footnotes",
+             "author": "the author", "date": "the date", "shade": "the background", "dark": "the background"}
+    said = list(dict.fromkeys(_objects(old.get(key), new.get(key))[1] if key == "body" else names.get(key, f"the {key}")
+                              for key in keys))
+    return "edited", " and ".join(said[:2])
 
 
 class SlideSamples:
@@ -915,22 +973,23 @@ class SlideSamples:
 SAMPLE_DECK: dict[str, Any] = {
     "deck": {"id": "sample", "footer": "A sample · 2026"},
     "slides": [
-        {"layout": "title", "title": "Folding proteins with diffusion", "subtitle": "What the model learns",
+        {"layout": "title", "title": "Making the service fast", "subtitle": "What we changed, and what it bought us",
          "author": "Ada Lovelace", "date": "2026"},
-        {"layout": "two-columns", "title": "From sequence to structure",
-         "left": [{"bullets": ["A language model reads the sequence", "A denoiser makes the coordinates",
-                               ["trained on solved structures"]]}],
-         "right": [{"figure": {"figure": {"id": "sample-model"}, "nodes": [
-             {"id": "s", "kind": "text", "label": "Sequence $s$"},
-             {"id": "lm", "label": "Language model", "properties": {"tone": "encoder"}},
-             {"id": "den", "label": "Denoiser", "properties": {"tone": "head"}},
-             {"id": "x", "kind": "text", "label": "Structure $x_0$"}],
-             "edges": [{"from": "s", "to": "lm"}, {"from": "lm", "to": "den"}, {"from": "den", "to": "x"}]}}]},
+        {"layout": "two-columns", "title": "From request to reply",
+         "left": [{"bullets": ["A cache answers most reads", "A queue takes the slow writes",
+                               ["drained by four workers"]]}],
+         "right": [{"figure": {"figure": {"id": "sample-path"}, "nodes": [
+             {"id": "r", "kind": "text", "label": "Request $r$"},
+             {"id": "api", "label": "API", "properties": {"tone": "1"}},
+             {"id": "cache", "kind": "database", "label": "Cache", "properties": {"tone": "2"}},
+             {"id": "reply", "kind": "text", "label": "Reply"}],
+             "edges": [{"from": "r", "to": "api"}, {"from": "api", "to": "cache"},
+                       {"from": "cache", "to": "reply"}]}}]},
         {"title": "The gap", "body": [
-            {"stats": [{"value": "200M", "label": "predicted"}, {"value": "0.1%", "label": "solved"}]},
-            {"callout": "A model that knows *how sure it is* tells us what to solve first.", "title": "The idea"}]},
-        {"title": "Results", "body": [{"table": [["Model", "Params", "Top-1 (%)"], ["Baseline", "25.6M", "76.1"],
-                                                 ["Ours", "24.0M", "**81.2**"]]}]},
+            {"stats": [{"value": "120 ms", "label": "before"}, {"value": "18 ms", "label": "after"}]},
+            {"callout": "A request that *waits on nothing* is one nobody notices.", "title": "The idea"}]},
+        {"title": "Results", "body": [{"table": [["Service", "p50 (ms)", "p99 (ms)"], ["Before", "120", "940"],
+                                                 ["After", "18", "**210**"]]}]},
         {"layout": "section", "title": "What next", "subtitle": "Three open questions"},
     ],
 }

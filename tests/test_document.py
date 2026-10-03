@@ -278,6 +278,14 @@ def test_the_studio_names_what_a_change_did_slide_by_slide() -> None:
         "changed the look", "edited the title on slide 1", "added slide 2, “New”", "deleted slide 3",
     ]
     assert notes[1]["where"] == {"page": 1, "label": "Slide 1"}
+    # A slide's objects by name, and a slide changed through and through still itself.
+    pasted = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}]}]}
+    grown = {"slides": [{"title": "Plan", "body": [{"bullets": ["Entirely", "different", "words", "pasted in"]}]}]}
+    assert [note["text"] for note in kind.describe(pasted, grown)] == ["edited the list on slide 1"]
+    added = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"table": [["a", "b"]]}], "date": "2026"}]}
+    assert [note["text"] for note in kind.describe(pasted, added)] == ["added a table to slide 1"]
+    dated = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}], "date": "2026"}]}
+    assert [note["text"] for note in kind.describe(pasted, dated)] == ["edited the date on slide 1"]
 
 
 def test_an_agent_gets_a_guide_and_a_quick_check() -> None:
@@ -955,6 +963,11 @@ def test_a_powerpoint_file_carries_the_talks_title_and_author_not_the_templates(
         "Making it fast", "Ada Lovelace", "Ada Lovelace"
     )
     assert "python-pptx" not in (properties.comments or "") and properties.created.year >= 2026
+    # The PDF is named for the talk too, not for its file.
+    from flexo_talk.export import build_deck
+
+    info = build_deck(deck, tmp_path / "out", ("pdf",)).pdf.read_bytes()
+    assert b"/Title (Making it fast)" in info and b"/Author (Ada Lovelace)" in info
 
 
 def test_a_pictures_description_is_read_out_and_is_powerpoints_alt_text(tmp_path: Path) -> None:
