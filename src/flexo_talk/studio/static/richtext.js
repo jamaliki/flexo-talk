@@ -103,6 +103,58 @@ function listed(line) {
   return { depth: Math.floor(indent / 2), words: line.trim().replace(/^(?:[-*+•◦▪‣·–]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s+/i, "") };
 }
 
+// Another app's formatted words (text/html) as items: each block -- a paragraph, a
+// list's item, a heading, a table's row -- its depth in lists and its words as markup,
+// keeping bold, italic, code and links; nothing else of their look.
+const BLOCKS_HTML = "address, article, aside, blockquote, center, dd, div, dl, dt, figcaption, figure, footer, h1, h2, h3, h4, h5, h6, header, hr, li, main, nav, ol, p, pre, section, table, tbody, tfoot, thead, tr, ul";
+function itemsOfHtml(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  // Word's own bullets and numbers are words in its HTML; the list's levels say them.
+  doc.querySelectorAll("script, style, meta, link, img, svg, title, template, [style*='mso-list:ignore' i], [style*='mso-list: ignore' i]").forEach((node) => node.remove());
+  doc.querySelectorAll("a[href]").forEach((link) => { link.dataset.href = link.getAttribute("href"); });
+  // Headings bold, the way a slide marks them.
+  doc.querySelectorAll("h1, h2, h3, h4, h5, h6, th").forEach((node) => { node.style.fontWeight = "700"; });
+  doc.querySelectorAll("td + td, td + th, th + td, th + th").forEach((cell) => cell.prepend(" "));
+  // Spaces and line ends in the source are one space, as a browser shows them, except
+  // in code set out as typed.
+  const texts = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  for (let text = texts.nextNode(); text; text = texts.nextNode()) if (!text.parentElement.closest("pre")) text.data = text.data.replace(/[ \t\r\n\f]+/g, " ");
+  // The words between one block's edge and the next are an item; an inline wrapper
+  // round blocks (Google Docs wraps all it copies in one) is passed through.
+  const items = [];
+  let run = null, depth = 0;
+  const flush = () => {
+    if (!run) return;
+    const markup = serialise(run).replace(/\u00a0/g, " ").replace(/\n$/, "");
+    for (const part of markup.split("\n")) items.push({ depth, markup: part.trim() });
+    run = null;
+  };
+  const walk = (node, lists) => {
+    for (const child of [...node.childNodes]) {
+      const element = child.nodeType === Node.ELEMENT_NODE;
+      if (element && (child.matches(BLOCKS_HTML) || child.querySelector(BLOCKS_HTML))) {
+        flush();
+        walk(child, lists + (child.matches("ul, ol") ? 1 : 0));
+        flush();
+        continue;
+      }
+      if (!run) {
+        if (!child.textContent.trim() && !(element && (child.nodeName === "BR" || child.querySelector("br")))) continue;
+        run = doc.createElement("span");
+        depth = Math.max(0, lists - 1);
+      }
+      run.append(child);
+    }
+  };
+  walk(doc.body, 0);
+  flush();
+  // Blank lines one at a time, and none at either end.
+  const kept = items.filter((item, n) => item.markup || (n && items[n - 1].markup));
+  while (kept.length && !kept[kept.length - 1].markup) kept.pop();
+  while (kept.length && !kept[0].markup) kept.shift();
+  return kept;
+}
+
 // -- markup to the page and back -------------------------------------------------------
 
 function wrapped(node, { bold, italic }) {
@@ -163,9 +215,11 @@ function runsOf(node, style, runs, names) {
     if (tag === "BR") { runs.push({ text: "\n", ...style }); continue; }
     if (child.classList.contains("rt-maths")) { runs.push({ raw: child.textContent }); continue; }
     const css = child.style || {};
+    // A weight or slant set in its style is its own, even on a <b> (Google Docs wraps
+    // all it copies in a <b> of normal weight).
     const next = {
-      bold: style.bold || tag === "B" || tag === "STRONG" || css.fontWeight === "bold" || Number(css.fontWeight) >= 600,
-      italic: style.italic || tag === "I" || tag === "EM" || css.fontStyle === "italic",
+      bold: css.fontWeight ? /^bold/.test(css.fontWeight) || Number(css.fontWeight) >= 600 : style.bold || tag === "B" || tag === "STRONG",
+      italic: css.fontStyle ? css.fontStyle !== "normal" : style.italic || tag === "I" || tag === "EM",
     };
     if (tag === "CODE") { runs.push({ raw: `\`${child.textContent.replace(/`/g, "")}\``, ...next, wrap: true }); continue; }
     const colour = child.dataset?.colour || (tag === "FONT" && child.getAttribute("color") ? names(child.getAttribute("color")) : null);
@@ -557,26 +611,50 @@ export function richText({ value = "", list = false, single = false, numbered = 
   // Whoever closes the field takes its bar with it.
   area.dispose = () => { bar.remove(); document.removeEventListener("selectionchange", showBar); };
 
-  // Pasted words come as words, in the look of where they go; lines pasted in a list are items.
+  // Pasted words come in the look of where they go, keeping what Keynote keeps of another
+  // app's: bold, italic, code and links, and a list's items and levels (⌥⇧⌘V, Paste and
+  // Match Style, keeps the words alone). Lines pasted in a list are items.
+  let matchStyle = false;
+  area.addEventListener("keydown", (event) => {
+    matchStyle = (event.metaKey || event.ctrlKey) && event.altKey && event.shiftKey && event.key.toLowerCase() === "v";
+  });
+  // Lines of markup in at the caret, in place of what is chosen.
+  const insertMarkup = (...lines) => {
+    const s = selection();
+    if (!s.rangeCount) return;
+    const range = s.getRangeAt(0);
+    range.deleteContents();
+    const nodes = lines.flatMap((markup, n) => [...(n ? [document.createElement("br")] : []), ...inlineNodes(markup, colours)]);
+    if (!nodes.length) return;
+    const fragment = document.createDocumentFragment();
+    fragment.append(...nodes);
+    const last = nodes[nodes.length - 1];
+    range.insertNode(fragment);
+    const caret = document.createRange();
+    caret.setStartAfter(last);
+    caret.collapse(true);
+    place(caret);
+  };
   area.addEventListener("paste", (event) => {
     const text = event.clipboardData?.getData("text/plain");
-    if (text === undefined) return;
+    const html = matchStyle ? "" : event.clipboardData?.getData("text/html") || "";
+    matchStyle = false;
+    if (text === undefined && !html) return;
     event.preventDefault();
     changed(true);
-    const parts = text.replace(/\r\n?/g, "\n").split("\n");
-    if (single) { document.execCommand("insertText", false, parts.join(" ")); changed(true); return; }
-    if (!list) {
-      parts.forEach((part, n) => { if (n) document.execCommand("insertLineBreak"); if (part) document.execCommand("insertText", false, part); });
-      changed(true);
-      return;
-    }
-    // Lines pasted are items: their own bullets and numbers ("- ", "• ", "3. ") left
-    // off, their indents kept as levels under the item pasted into, and the words after
-    // the caret moved to the end of the last one.
+    // What was pasted, as items: each its depth in a list and its words as markup.
+    const formatted = html ? itemsOfHtml(html).filter((item) => !list || item.markup) : null;
+    const plainParts = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+    const items = formatted?.length ? formatted
+      : plainParts.length > 1 && list ? plainParts.map(listed).map((item) => ({ depth: item.depth, markup: escaped(item.words) }))
+        : plainParts.map((part) => ({ depth: 0, markup: escaped(part) }));
+    if (single) { insertMarkup(items.map((item) => item.markup).join(" ")); changed(true); return; }
+    if (!list) { insertMarkup(...items.map((item) => item.markup)); changed(true); return; }
+    // In a list, items: their indents kept as levels under the item pasted into, and the
+    // words after the caret moved to the end of the last one. The first goes on with the
+    // item pasted into as it was, unless that is empty.
     let line = lineAt(selection().anchorNode);
-    // The first line goes on with the item pasted into as it was typed, unless that is empty.
-    const items = parts.length > 1 ? parts.map(listed) : [{ depth: 0, words: parts[0] }];
-    if (line?.textContent.trim()) items[0] = { depth: items[0].depth, words: parts[0] };
+    if (!formatted?.length && line?.textContent.trim() && plainParts.length > 1) items[0] = { depth: items[0].depth, markup: escaped(plainParts[0]) };
     const level = Number(line?.dataset.level) || 0;
     let rest = null;
     if (line && items.length > 1) {
@@ -587,13 +665,12 @@ export function richText({ value = "", list = false, single = false, numbered = 
       if (!s.isCollapsed) document.execCommand("delete");  // what was chosen goes, as a paste replaces it
       rest = after.extractContents();
     }
-    document.execCommand("insertText", false, items[0].words);
+    insertMarkup(items[0].markup);
     line = lineAt(selection().anchorNode);
     const first = items[0].depth;
     for (const item of items.slice(1)) {
       if (!line) break;
-      const next = lineNode(Math.max(0, Math.min(4, level + item.depth - first)), "");
-      next.replaceChildren(item.words ? document.createTextNode(item.words) : document.createElement("br"));
+      const next = lineNode(Math.max(0, Math.min(4, level + item.depth - first)), item.markup);
       line.after(next);
       line = next;
     }
