@@ -503,6 +503,7 @@ export function mount(studio, container) {
   // `done` names it in the note: "deleted", or "cut" for ⌘X.
   function deleteSlides(indices, done = "deleted") {
     if (indices.length === 1) { deleteSlide(indices[0], done); return; }
+    noteDeleted(indices);
     studio.change((d) => { for (const index of [...indices].sort((a, b) => b - a)) d.slides.splice(index, 1); });
     select(Math.min(indices[0], slides().length - 1));
     undoNote(`${indices.length} slides ${done}`, { icon: done === "cut" ? "cut" : "trash" });
@@ -527,7 +528,14 @@ export function mount(studio, container) {
   // Keynote's New Slide does.
   const newSlideLike = (index) => addSlide(layoutOf(slides()[index]) === "title" ? "content" : layoutOf(slides()[index]) || "content", index + 1);
 
+  // Slides deleted here lately, by layout and title (see followChange).
+  let deletedHere = [];
+  const noteDeleted = (indices) => {
+    deletedHere = [...deletedHere.filter((gone) => Date.now() - gone.at < 60000),
+      ...indices.map((index) => slides()[index]).filter(Boolean).map((slide) => ({ key: `${layoutOf(slide)}:${slide?.title ?? slide?.words ?? ""}`, at: Date.now() }))];
+  };
   function deleteSlide(index, done = "deleted") {
+    noteDeleted([index]);
     studio.change((d) => { d.slides.splice(index, 1); });
     select(Math.min(index, slides().length - 1));
     undoNote(`Slide ${done}`, { icon: done === "cut" ? "cut" : "trash" });
@@ -1981,9 +1989,20 @@ export function mount(studio, container) {
   function followChange(was, who) {
     const before = Array.isArray(was?.slides) ? was.slides : [], after = slides();
     if (before === after || !before.length) return;
+    // A slide deleted here a moment ago, back because someone was still editing it: said,
+    // so it does not seem to have come back of itself.
+    if (after.length > before.length && deletedHere.length) {
+      const titled = (slide) => `${layoutOf(slide)}:${slide?.title ?? slide?.words ?? ""}`;
+      const back = after.find((slide) => !before.some((other) => same(other, slide))
+        && deletedHere.some((gone) => Date.now() - gone.at < 60000 && gone.key === titled(slide)));
+      if (back) {
+        toast(`Slide ${after.indexOf(back) + 1} is back: ${nameOf(who)} was still editing it.`, { icon: "info", seconds: 6 });
+        deletedHere = deletedHere.filter((gone) => gone.key !== titled(back));
+      }
+    }
     const from = state.slide;
     const to = from < before.length ? follow(before, after, (slide) => `${layoutOf(slide)}:${slide?.title ?? ""}`)[from] : from;
-    const gone = () => { closeInline(); toast(`${who?.name || "Someone else"} deleted the text you were editing`, { icon: "info", seconds: 5 }); };
+    const gone = () => { closeInline(); toast(`${nameOf(who)} deleted the text you were editing`, { icon: "info", seconds: 5 }); };
     if (to < 0) {
       if (inline) gone();
       state.focus = null; state.field = null;
