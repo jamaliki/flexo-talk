@@ -201,7 +201,7 @@ def test_a_tall_figure_is_laid_out_for_a_wide_slide(tmp_path: Path) -> None:
         for index in range(6):
             previous = layers.block(f"b{index}", label=f"Layer {index}", input=previous)
     result = deck.build(tmp_path, formats=("svg",))
-    assert any("Figure rotated" in note and note.endswith("to fit the slide.") for note in result.notes)
+    assert any("rows and columns swapped" in note and note.endswith("to fit the slide.") for note in result.notes)
     assert not any("too small" in message for message in result.diagnostics)
 
 

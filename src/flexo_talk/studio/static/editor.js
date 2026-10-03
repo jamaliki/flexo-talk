@@ -102,6 +102,8 @@ const NEW_BLOCKS = {
     { id: "step", label: "Do the next step" },
     { id: "check", kind: "decision", label: "Done?" },
     { id: "end", kind: "terminal", label: "End" }],
+    // Written as a row, as a slide shows it: it is drawn as written, not turned to fit.
+    groups: [{ id: "root", role: "canvas", layout: { kind: "row" }, children: ["start", "step", "check", "end"] }],
     edges: [{ from: "start", to: "step" }, { from: "step", to: "check" }, { from: "check", to: "end", label: "yes" }, { from: "check", to: "step", label: "no" }] } }),
   image: () => ({ image: "" }),
   table: () => ({ table: [["Model", "Params", "Score"], ["Baseline", "25.6M", "76.1"], ["Ours", "24.0M", "**81.2**"]] }),
@@ -3197,7 +3199,7 @@ export function mount(studio, container) {
   function figureForm(block, at, edit) {
     const value = block.figure;
     const mode = typeof value === "string" ? (value.includes(".py:") ? "python" : "file") : "inline";
-    const turn = ui.toggle({ value: block.turn !== false, label: "Allow rotated layout to fit", onChange: (on) => editBlock(at, (b) => setOption(b, "turn", on ? null : false)) });
+    const turn = ui.toggle({ value: block.turn !== false, label: "Swap rows and columns to fit", onChange: (on) => editBlock(at, (b) => setOption(b, "turn", on ? null : false)) });
     const parts = [ui.field("Source", ui.segmented({ value: mode, options: [
       { value: "inline", label: "In Deck" }, { value: "file", label: "File" }, { value: "python", label: "Python" }],
     onChange: async (next) => {

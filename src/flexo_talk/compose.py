@@ -1895,8 +1895,11 @@ EDITING = contextvars.ContextVar("flexo_talk_editing", default=False)
 keeps the layout it last had (``flexo.fit_in_box``'s ``keep``), drawn in one compile
 rather than every way it could be, and the slide says it is not settled."""
 
-_LAYOUTS: dict[tuple[str, str], str] = {}
-"""The layout each figure (by slide and figure) was last drawn in."""
+_LAYOUTS: dict[tuple[str, str, str], str] = {}
+"""The layout each figure (by deck, slide and figure) was last drawn in."""
+
+STEADY = 1.3
+"""How much larger another layout must set a figure for it to leave the one it is shown in."""
 
 
 def _layout_said(layout: str) -> str:
@@ -1905,9 +1908,9 @@ def _layout_said(layout: str) -> str:
 
     done = []
     if layout.startswith("turned within"):
-        done.append("rotated within its groups")
+        done.append("its groups' rows and columns swapped")
     elif layout.startswith("turned"):
-        done.append("rotated")
+        done.append("its rows and columns swapped")
     if "tighter" in layout:
         done.append("set with tighter spacing")
     if "folded" in layout:
@@ -1915,7 +1918,7 @@ def _layout_said(layout: str) -> str:
     if not done:
         return "Figure rearranged to fit the slide."
     how = done[0] if len(done) == 1 else f"{', '.join(done[:-1])} and {done[-1]}"
-    return f"Figure {how} to fit the slide."
+    return f"Figure drawn with {how}, to fit the slide."
 
 
 def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
@@ -1942,7 +1945,7 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         largest, block.turn,
     )
     laid = _cached_fit(key)
-    where = (canvas.slide.id, spec.id)
+    where = (deck.id, canvas.slide.id, spec.id)
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
@@ -1957,6 +1960,21 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
             # The figure is laid out for its place and scaled to it: a grown width is moot.
             if diagnostic.code != "layout.width.grown"
         ]
+        previous = _LAYOUTS.get(where)
+        if (keep is None or fit.layout != keep) and previous and fit.layout != previous:
+            # A figure already shown one way stays that way unless another is clearly
+            # larger: it doesn't turn under its person for a little more room.
+            held = flexo.fit_in_box(
+                spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
+                turn=block.turn, keep=previous,
+            )
+            if held.layout == previous and fit.scale < held.scale * STEADY:
+                fit = held
+                codes = [
+                    diagnostic.code
+                    for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics
+                    if diagnostic.code != "layout.width.grown"
+                ]
         laid = {"svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes}
         if keep is not None and fit.layout == keep:
             canvas.settled = False
