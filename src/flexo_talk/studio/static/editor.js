@@ -3456,6 +3456,24 @@ export function mount(studio, container) {
         moveBlock(at, { region: regions[side].key, index: blocksAt(slideAt(), regions[side].key).length });
       }
     }
+    // Tab goes from one thing on the slide to the next (its title, then its objects), as in
+    // Keynote; only when the keys are the slide's, not a panel's.
+    else if (key === "Tab" && !event.altKey && (document.activeElement === document.body || stage.contains(document.activeElement)) && slideAt()) {
+      event.preventDefault();
+      const slide = slideAt();
+      const stops = [
+        ...["title", "words", "subtitle", "author"].filter((name) => slide[name] && catalog.slide_keys[layoutOf(slide)].includes(name)).map((name) => ({ field: name })),
+        ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => ({ region: region.key, index }))),
+      ];
+      if (!stops.length) return;
+      const now = stops.findIndex((stop) => (stop.field ? state.field?.field === stop.field : state.focus?.region === stop.region && state.focus?.index === stop.index));
+      const next = stops[(now + (event.shiftKey ? -1 : 1) + stops.length + (now < 0 && event.shiftKey ? 1 : 0)) % stops.length];
+      if (next.field) {
+        leaveFigure(false);
+        state.focus = null; state.field = { field: next.field, id: fieldId(next.field) };
+        placeChosen(); renderInspector(); reportFocus();
+      } else focusBlock(next.region, next.index);
+    }
     else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }
     else if (key === "End" && slides().length) { event.preventDefault(); select(slides().length - 1); }
     else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
