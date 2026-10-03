@@ -275,7 +275,7 @@ def test_the_studio_names_what_a_change_did_slide_by_slide() -> None:
         {"title": "A!", "body": [{"text": "long enough words to be recognised"}]}, {"title": "New"}, {"title": "B"}]}
     notes = kind.describe(before, after)
     assert [note["text"] for note in notes] == [
-        "changed the look", "edited slide 1: the title", "added slide 2 (New)", "removed slide 3",
+        "changed the look", "edited the title on slide 1", "added slide 2, “New”", "deleted slide 3",
     ]
     assert notes[1]["where"] == {"page": 1, "label": "Slide 1"}
 

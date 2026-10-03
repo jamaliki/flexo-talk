@@ -278,7 +278,7 @@ class DeckKind:
                     notes.append(_slide_note("added", new, index))
             elif tag == "delete":
                 at = min(a1 + 1, max(len(new), 1))
-                notes.append({"text": f"removed slide {a1 + 1}" if a2 - a1 == 1 else f"removed {a2 - a1} slides",
+                notes.append({"text": f"deleted slide {a1 + 1}" if a2 - a1 == 1 else f"deleted {a2 - a1} slides",
                               "where": {"page": at, "label": f"Slide {at}"}})
             else:
                 # Slides replaced by others: pair each new one with the old one it most resembles.
@@ -295,7 +295,7 @@ class DeckKind:
                 if unused:
                     at = min(b1 + 1, max(len(new), 1))
                     count = len(unused)
-                    notes.append({"text": f"removed slide {unused[0] + 1}" if count == 1 else f"removed {count} slides",
+                    notes.append({"text": f"deleted slide {unused[0] + 1}" if count == 1 else f"deleted {count} slides",
                                   "where": {"page": at, "label": f"Slide {at}"}})
         return notes
 
@@ -845,8 +845,10 @@ def _likeness(old: Any, text: str) -> float:
 def _slide_note(verb: str, slides: list, index: int, what: str = "") -> dict[str, Any]:
     slide = slides[index] if index < len(slides) and isinstance(slides[index], dict) else {}
     title = str(slide.get("words") or slide.get("title") or "").strip()
-    named = f" ({title[:40]})" if title and verb == "added" else ""
-    return {"text": f"{verb} slide {index + 1}{named}{f': {what}' if what else ''}",
+    named = f", “{title[:40]}”" if title and verb == "added" else ""
+    # "edited the title on slide 4", "added slide 5, “Methods”": what changed first, as said aloud.
+    text = f"{verb} {what} on slide {index + 1}" if what else f"{verb} slide {index + 1}{named}"
+    return {"text": text,
             "where": {"page": index + 1, "label": f"Slide {index + 1}"}}
 
 
