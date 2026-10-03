@@ -1709,7 +1709,7 @@ export function mount(studio, container) {
   // The server makes the edit where the figure is written; if the deck changed while
   // it did, the edit is made again on the deck as it is now.
   let figureCut = false;  // the figure's next delete is a cut (⌘X), and said so
-  async function runFigure(action, { merge, label: told = null }) {
+  async function runFigure(action, { merge, hold = false, label: told = null }) {
     if (!figure) return null;
     const at = { slide: figure.slide, region: figure.region, index: figure.index };
     // What changed is read from the figure before and after, but for a part moved: a swap
@@ -1723,9 +1723,9 @@ export function mount(studio, container) {
       if (!same(studio.doc, sent)) continue;
       if (result.file) {
         if (action.do !== "read") studio.requestDraw(0);
-        if (result.was !== undefined) recordFile(result, at, label, merge);
+        if (result.was !== undefined) recordFile(result, at, label, merge, hold);
       }
-      else if (!same(result.document, sent)) studio.change(() => result.document, { merge, quiet: true, label });
+      else if (!same(result.document, sent)) studio.change(() => result.document, { merge, hold, quiet: true, label });
       return result;
     }
     return null;
@@ -1734,7 +1734,7 @@ export function mount(studio, container) {
   // An edit to a figure kept in its own file is written there, not in the deck: the
   // deck's history keeps it all the same, undone by putting the file back as it was
   // (if no one has changed it since).
-  function recordFile(result, at, label, merge) {
+  function recordFile(result, at, label, merge, hold = false) {
     const file = result.file;
     const restore = (text, expect) => studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "figure-file", file, text, expect } });
     const [from, to] = result.change || [];
@@ -1749,7 +1749,7 @@ export function mount(studio, container) {
         this.label = say(this.from, this.to);
         return true;
       },
-    }, { merge });
+    }, { merge, hold });
   }
 
   function placeFigure() {
@@ -3641,7 +3641,19 @@ export function mount(studio, container) {
     const given = alignList(block.align, columns);
     const auto = autoAlign(rows, header);
     const write = () => edit((b) => { b.table = rows.map((row) => [...row]); }, "cells");
-    const restructure = (mutate) => { mutate(); editBlock(at, (b) => { b.table = rows.map((row) => [...row]); if (b.align) delete b.align; }); renderInspector(); };
+    // Rows or columns added (or pasted), the alignments set stay with their columns; a new
+    // column's is automatic.
+    const restructure = (mutate) => {
+      mutate();
+      const now = Math.max(1, ...rows.map((row) => row.length));
+      const fresh = autoAlign(rows, header);
+      const align = given ? Array.from({ length: now }, (_, c) => given[c] ?? fresh[c]) : null;
+      editBlock(at, (b) => {
+        b.table = rows.map((row) => [...row]);
+        if (align && align.some((value, c) => value !== fresh[c])) b.align = align; else delete b.align;
+      });
+      renderInspector();
+    };
     // Each column's cells set as the slide sets them: as its alignment says, else as its words do.
     const aligned = given || auto;
     const input = (r, c) => {
@@ -3671,11 +3683,15 @@ export function mount(studio, container) {
         options: [{ value: "", label: `Align Automatically (${auto[c] === "end" ? "Right" : "Left"})`, icon: ALIGN_ICONS[auto[c]] || "align-left" },
           { value: "start", label: "Align Left", icon: "align-left" }, { value: "middle", label: "Align Centre", icon: "align-centre" }, { value: "end", label: "Align Right", icon: "align-right" }],
         actions: tableItems(at, { row: 0, col: c }).filter((item) => / Column/.test(item.label)),
-        onChange: (value) => editBlock(at, (b) => {
-          const next = given ? [...given] : [...auto];
-          next[c] = value || auto[c];
-          if (next.every((v, i) => v === auto[i])) delete b.align; else b.align = next;
-        }) }))));
+        onChange: (value) => {
+          editBlock(at, (b) => {
+            const next = given ? [...given] : [...auto];
+            next[c] = value || auto[c];
+            if (next.every((v, i) => v === auto[i])) delete b.align; else b.align = next;
+          });
+          // The cells below it set as it now says.
+          renderInspector();
+        } }))));
     const table = h("table", {}, alignRow, rows.map((row, r) => h(`tr${header && r === 0 ? ".header" : ""}`, {},
       h("td.corner", {}, h("button.row-pick", { type: "button", title: `Row ${r + 1}`, "aria-haspopup": "menu",
         onclick: (event) => menu(event.currentTarget, tableItems(at, { row: r, col: 0 }).filter((item) => / Row/.test(item.label))) }, String(r + 1))),
