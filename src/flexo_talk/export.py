@@ -40,8 +40,19 @@ def file_stem(identifier: object) -> str:
 
 
 def build_deck(
-    deck: Deck, directory: Path, formats: tuple[str, ...], *, handout: bool = False, editable_maths: bool = True
+    deck: Deck,
+    directory: Path,
+    formats: tuple[str, ...],
+    *,
+    handout: bool = False,
+    editable_maths: bool = True,
+    images: Path | None = None,
 ) -> DeckBuild:
+    """Write the deck into ``directory``: its PowerPoint and PDF, named after the deck,
+    and an SVG and a PNG of each slide, beside them as talk-01.png, or in a folder of
+    their own (``images``) as slide-01.png. The PDF has a page per step of each list a
+    slide reveals, or, as a ``handout``, one page per slide, showing it whole."""
+
     unknown = set(formats) - set(FORMATS)
     if unknown:
         raise ValueError(f"Unknown {'format' if len(unknown) == 1 else 'formats'} {', '.join(sorted(unknown))}. "
@@ -54,15 +65,18 @@ def build_deck(
     pngs: list[Path] = []
     # Numbered as wide as the count needs, so the files sort in order: talk-100 after talk-099.
     digits = max(2, len(str(len(rendered))))
+    folder, prefix = (directory, name) if images is None else (images, "slide")
+    if images is not None and {"svg", "png"} & set(formats):
+        folder.mkdir(parents=True, exist_ok=True)
     for item in rendered:
-        stem = f"{name}-{item.slide.index:0{digits}d}"
+        stem = f"{prefix}-{item.slide.index:0{digits}d}"
         if "svg" in formats:
-            path = directory / f"{stem}.svg"
+            path = folder / f"{stem}.svg"
             path.write_text(item.svg, encoding="utf-8")
             svgs.append(path)
         if "png" in formats:
             # Drawn from outlines, so the preview shows exactly the glyphs measured.
-            path = directory / f"{stem}.png"
+            path = folder / f"{stem}.png"
             path.write_bytes(rasterise(portable_svg(item.svg), dpi=144))
             pngs.append(path)
     pdf = None

@@ -7,6 +7,7 @@
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
+import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText } from "/static/kinds/deck/richtext.js";
 
 const BLOCKS = {
@@ -3397,58 +3398,11 @@ export function mount(studio, container) {
     } catch (error) { toast(error.message, { kind: "error", icon: "error" }); }
   }
 
-  // -- presenting --
-  function present() {
-    if (!pages.length) return;
-    let index = state.slide;
-    let step = 1;
-    const started = Date.now();
-    const slideNode = h("div.present-slide");
-    const noteNode = h("div");
-    const count = h("div.count");
-    const clock = h("div.clock");
-    const stageNode = h("div.present-stage", {}, slideNode);
-    const hint = h("div.present-hint", {}, "→ next · ← previous · N notes · Esc to exit");
-    const node = h("div.present", {}, stageNode, h("div.present-bar", {}, noteNode, h("div", {}, clock, count)), hint);
-    const showNotes = () => node.classList.contains("with-notes");
-    const svgAt = (page, number) => {
-      if (!page?.svg || page.steps <= 1 || number >= page.steps) return page?.svg || "";
-      const parsed = new DOMParser().parseFromString(page.svg, "image/svg+xml");
-      parsed.querySelectorAll("[data-flexo-step]").forEach((el) => { if (Number(el.getAttribute("data-flexo-step")) > number) el.remove(); });
-      return new XMLSerializer().serializeToString(parsed.documentElement);
-    };
-    const show = () => {
-      const page = pages[index];
-      slideNode.innerHTML = svgAt(page, step).replace(/^<\?xml[^>]*>\s*/, "");
-      const svg = slideNode.querySelector("svg");
-      if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); }
-      noteNode.textContent = slides()[index]?.notes || "No speaker notes";
-      count.textContent = `${index + 1} / ${pages.length}${page?.steps > 1 ? ` · step ${step} of ${page.steps}` : ""}`;
-      node.style.setProperty("--notes-h", showNotes() ? `${node.querySelector(".present-bar").offsetHeight}px` : "0px");
-    };
-    const tick = () => { const s = Math.floor((Date.now() - started) / 1000); clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
-    const timer = setInterval(tick, 1000);
-    tick();
-    const next = () => { const page = pages[index]; if (page?.steps > step) step += 1; else if (index < pages.length - 1) { index += 1; step = 1; } show(); };
-    const back = () => { if (step > 1) step -= 1; else if (index > 0) { index -= 1; step = pages[index]?.steps || 1; } show(); };
-    const leave = () => { clearInterval(timer); document.removeEventListener("keydown", keys, true); node.remove(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); select(index); };
-    const keys = (event) => {
-      event.stopPropagation();
-      if (["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"].includes(event.key)) { event.preventDefault(); next(); }
-      else if (["ArrowLeft", "ArrowUp", "PageUp", "Backspace"].includes(event.key)) { event.preventDefault(); back(); }
-      else if (event.key === "Escape") leave();
-      else if (event.key.toLowerCase() === "n") { node.classList.toggle("with-notes"); show(); }
-      else if (event.key === "Home") { index = 0; step = 1; show(); }
-      else if (event.key === "End") { index = pages.length - 1; step = 1; show(); }
-    };
-    let idle;
-    stageNode.addEventListener("mousemove", () => { stageNode.classList.add("pointer"); clearTimeout(idle); idle = setTimeout(() => stageNode.classList.remove("pointer"), 1500); });
-    stageNode.addEventListener("click", (event) => (event.clientX < innerWidth / 3 ? back() : next()));
-    document.addEventListener("keydown", keys, true);
-    document.body.append(node);
-    node.requestFullscreen?.().catch(() => {});
-    setTimeout(() => { hint.style.opacity = "0"; }, 2500);
-    show();
+  // -- presenting (present.js) --
+  // From this slide, or from the first with ⌥ (⌥⌘↩, an ⌥-click on Present).
+  function present(fromStart = Boolean(window.event?.altKey)) {
+    if (!slides().length) { toast("This deck has no slides to present.", { icon: "play" }); return; }
+    presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index) });
   }
 
   // -- keys --
