@@ -13,6 +13,8 @@
 // from what the leader sends, and sends back the keys pressed in it. They talk over a
 // BroadcastChannel, or, in the Mac app, through the app.
 
+import { ownResources } from "/static/studio/drawings.js";
+
 const NEXT = new Set(["ArrowRight", "ArrowDown", "PageDown", " ", "Enter", "click"]);
 const BACK = new Set(["ArrowLeft", "ArrowUp", "PageUp", "Backspace"]);
 const PAGE = "/static/kinds/deck/presenter.html";
@@ -341,7 +343,7 @@ function frame(slide, step) {
   const size = svg.match(/viewBox\s*=\s*"\s*[-\d.e]+[\s,]+[-\d.e]+[\s,]+([\d.e]+)[\s,]+([\d.e]+)/);
   box.style.setProperty("--ratio", size && Number(size[2]) ? Number(size[1]) / Number(size[2]) : 16 / 9);
   box.innerHTML = svg;
-  const drawing = box.querySelector("svg");
+  const drawing = ownResources(box.querySelector("svg"));
   if (drawing) { drawing.removeAttribute("width"); drawing.removeAttribute("height"); }
   return el("div", "ss-frame", box);
 }
