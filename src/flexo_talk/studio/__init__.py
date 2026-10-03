@@ -461,7 +461,7 @@ class DeckKind:
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
         return Drawing(pages, _placed(messages, document), sorted(watched),
-                       {"palette": _palette(deck), "tones": _tones(deck), "order": _order(deck),
+                       {"palette": _palette(deck), "tones": _tones(deck), "order": _palette_order(deck),
                         "unsettled": unsettled})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
@@ -1147,7 +1147,7 @@ def _tones(deck) -> dict[str, Any]:
     return {"colours": colours, "used": {}}
 
 
-def _order(deck) -> list[str]:
+def _palette_order(deck) -> list[str]:
     """The colours the deck's tones come from, in the order they take them: what Customise…
     writes into a theme of its own, so the copy looks as the deck did."""
 

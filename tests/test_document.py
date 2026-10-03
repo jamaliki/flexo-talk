@@ -993,3 +993,12 @@ def test_a_pictures_description_is_read_out_and_is_powerpoints_alt_text(tmp_path
     slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
     described = {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
     assert described == {"slide1.body.0": "Latency fell by half", "slide1.body.1": "A red bar"}
+
+
+def test_the_studio_draws_a_deck_and_says_the_order_its_tones_take(tmp_path: Path) -> None:
+    from flexo.themes import palette_order
+
+    document = {"deck": {"id": "o", "palette": "Deep Sea Harvest"}, "slides": [{"title": "One"}, {"title": "Two"}]}
+    drawing = DeckKind().draw(document, tmp_path, {"focus": 1})
+    assert len(drawing.pages) == 2 and all(page.svg for page in drawing.pages)
+    assert drawing.info["order"] == palette_order("paper", "Deep Sea Harvest")
