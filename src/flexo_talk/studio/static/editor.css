@@ -141,8 +141,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 /* Words typed as the slide shows them (richtext.js): set as the slide sets them, with its
    bullets and levels; the measures come from the drawn words (positionInline). */
 .inline-editor.in-place .rich { position: relative; padding: 5px; outline: none; line-height: var(--rt-line, 1.22); caret-color: var(--accent); white-space: pre-wrap; overflow-wrap: break-word; cursor: text; min-height: 1.2em; }
+.rich { position: relative; }
 /* A placeholder in the words' own colour, faint: it reads on a dark band as on the page. */
-.rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; color: currentColor; opacity: 0.4; pointer-events: none; }
+.rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: currentColor; opacity: 0.4; pointer-events: none; }
 /* An empty list's placeholder sits where its first item's words start. */
 .inline-editor.in-place .rich.rt-list.empty::after { content: attr(data-placeholder); position: absolute; top: 5px; left: calc(5px + var(--rt-text, 1.4em)); color: currentColor; opacity: 0.4; pointer-events: none; }
 .rich code { font-family: var(--mono); font-size: 0.88em; }
@@ -158,7 +159,7 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich-field .rich { min-height: 22px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--raised); outline: none; line-height: 1.4; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; caret-color: var(--accent); position: relative; }
 .rich-field:not(.single) .rich { min-height: 52px; }
 .rich-field .rich:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.rich-field .rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; color: var(--ink-3); pointer-events: none; }
+.rich-field .rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: var(--ink-3); pointer-events: none; }
 .rich-field .rich.rt-list { padding-left: 4px; }
 .rich-field .rich .rt-line { --rt-text: 1.3em; --rt-mark-x: 0.55em; --rt-mark-y: 0.7em; --rt-gap: 2px; --rt-line: 1.4; --rt-r: 2.5px; --rt-r2: 2px; --rt-step: 1.2em; }
 /* The format bar looks as every text's does (.rt-bar, .markup-tools: studio.css). */

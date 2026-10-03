@@ -9,6 +9,7 @@ import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.j
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml } from "/static/kinds/deck/richtext.js";
+import { follows } from "/static/studio/merge.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -100,6 +101,8 @@ const NEW_BLOCKS = {
   text: () => ({ text: "" }),
   figure: () => ({ figure: { figure: { id: `figure-${Date.now().toString(36)}` }, nodes: [
     { id: "input", label: "Input" }, { id: "process", label: "Process" }, { id: "output", label: "Output" }],
+    // A row, as a slide shows it: drawn as written, with no note that it was turned to fit.
+    groups: [{ id: "root", role: "canvas", layout: { kind: "row" }, children: ["input", "process", "output"] }],
     edges: [{ from: "input", to: "process" }, { from: "process", to: "output" }] } }),
   flow: () => ({ figure: { figure: { id: `flow-${Date.now().toString(36)}` }, nodes: [
     { id: "start", kind: "terminal", label: "Start" },
@@ -731,10 +734,13 @@ export function mount(studio, container) {
   const stageMessages = h("div.slide-messages.messages", { hidden: true });
   const stageWrap = h("div.slide-wrap", {}, stageMeta, stageMessages);
 
+  let notesFor = null;
   function renderStage() {
     const list = slides();
     const slide = slideAt();
-    if (document.activeElement !== notesArea) {
+    // The notes shown are the slide's shown: kept as typed only while the same slide's.
+    if (document.activeElement !== notesArea || notesFor !== state.slide) {
+      notesFor = state.slide;
       notesArea.value = slide?.notes || "";
       requestAnimationFrame(() => { notesArea.style.height = "auto"; notesArea.style.height = `${Math.max(notesArea.scrollHeight + 2, 60)}px`; });
     }
@@ -1662,6 +1668,8 @@ export function mount(studio, container) {
     figure.parts.closeInline(false);
     figure = null;
     clear(figureMarks);
+    // Its line chosen is marked along its path, in the drawing: unmarked as it is left.
+    for (const twin of pageNode?.querySelectorAll(".hit-line.chosen") || []) twin.classList.remove("chosen");
     figureBar.hidden = true;
     root.classList.remove("wide");
     if (render) renderInspector();
@@ -1860,7 +1868,9 @@ export function mount(studio, container) {
         const next = order[(past + order.length) % order.length];
         if (next && next !== target.field) openInline({ kind: "field", field: next }, { selectAll: true });
       }
-      if (target.kind === "cell" && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) { event.preventDefault(); nextCell(target, event.key, event.shiftKey); }
+      // The key is the cell's: Return past the last row ends the typing, and does not go on
+      // to the table it leaves chosen (whose Return opens its first cell).
+      if (target.kind === "cell" && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) { event.preventDefault(); event.stopPropagation(); nextCell(target, event.key, event.shiftKey); }
     });
     // An equation's LaTeX looks nothing like it: it is typed under the equation, which
     // stays in view and is drawn again as it changes.
@@ -2003,34 +2013,12 @@ export function mount(studio, container) {
   // the same, in the same order, first; then an item changed in place is the changed
   // one between the same neighbours -- the one that looks like it (`like`), else the
   // one in its turn.
-  function follow(before, after, like) {
-    const a = before.map((item) => JSON.stringify(item)), b = after.map((item) => JSON.stringify(item));
-    const n = a.length, m = b.length;
-    const common = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
-    for (let i = n - 1; i >= 0; i -= 1) for (let j = m - 1; j >= 0; j -= 1) common[i][j] = a[i] === b[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
-    const map = new Array(n).fill(-1);
-    for (let i = 0, j = 0; i < n && j < m;) {
-      if (a[i] === b[j]) { map[i] = j; i += 1; j += 1; } else if (common[i + 1][j] >= common[i][j + 1]) i += 1; else j += 1;
-    }
-    let lastOld = -1, lastNew = -1;
-    for (let k = 0; k <= n; k += 1) {
-      if (k < n && map[k] < 0) continue;
-      const nextNew = k < n ? map[k] : m;
-      const olds = [], news = [];
-      for (let x = lastOld + 1; x < k; x += 1) olds.push(x);
-      for (let y = lastNew + 1; y < nextNew; y += 1) news.push(y);
-      if (olds.length === news.length) olds.forEach((x, t) => { map[x] = news[t]; });
-      else {
-        const free = new Set(news);
-        for (const x of olds) {
-          const match = news.find((y) => free.has(y) && like(before[x]) === like(after[y]));
-          if (match !== undefined) { map[x] = match; free.delete(match); }
-        }
-      }
-      lastOld = k; lastNew = nextNew;
-    }
-    return map;
+  // Where each of `before` is in `after`, by what it holds: kept, moved, or changed (and
+  // moved and changed at once, as a paragraph another person moved while it was typed in).
+  function follow(before, after) {
+    return follows(before, after);
   }
+
 
   // After an edit from elsewhere (another person, an agent, the file on disk) or an undo,
   // the slide shown, the object selected and the text being typed are found where they
@@ -2050,7 +2038,7 @@ export function mount(studio, container) {
       }
     }
     const from = state.slide;
-    const to = from < before.length ? follow(before, after, (slide) => `${layoutOf(slide)}:${slide?.title ?? ""}`)[from] : from;
+    const to = from < before.length ? follow(before, after)[from] : from;
     const gone = () => { closeInline(); toast(`${nameOf(who)} deleted the text you were editing`, { icon: "info", seconds: 5 }); };
     if (to < 0) {
       if (inline) gone();
@@ -2060,7 +2048,7 @@ export function mount(studio, container) {
     }
     state.slide = to;
     const place = (at) => {
-      const map = follow(blocksAt(before[from], at.region), blocksAt(after[to], at.region), (block) => kindOf(block));
+      const map = follow(blocksAt(before[from], at.region), blocksAt(after[to], at.region));
       return map[at.index] ?? -1;
     };
     // The selection and the editor's block may be one object: each is placed from where it was.
@@ -2128,6 +2116,7 @@ export function mount(studio, container) {
     const value = inline.read();
     if (value === undefined) { closeInline(); return; }
     if (value === inline.area.value) return;
+    if (inline.bullets && inline.area.rich && listMerged(value)) return;
     // Words changed under the caret (another person's, the file's, an undo): the caret
     // stays by the words it was by.
     const area = inline.area, rich = area.rich, focused = document.activeElement === area;
@@ -2141,6 +2130,75 @@ export function mount(studio, container) {
       if (rich) area.caretTo(start, end); else area.setSelectionRange(start, end);
     } else if (rich) area.caretToEnd();
     positionInline();
+  }
+  // A list being typed in takes a change from elsewhere item by item: its own items as they
+  // are typed (a space at an end, a new item still empty, which the document leaves out),
+  // the items changed elsewhere as they are now, items added elsewhere in their places,
+  // and the caret in its own item. Answers whether it took it so.
+  function listMerged(value) {
+    const area = inline.area;
+    const ours = area.value.split("\n");
+    const base = bulletsText(bulletsFrom(area.value)).split("\n").filter((line, i, all) => line || all.length > 1);
+    const theirs = value.split("\n");
+    // Its own items, as the document has them: each with the line it is in the editor.
+    const lineOf = ours.map((line, i) => (line.trim() ? i : -1)).filter((i) => i >= 0);
+    if (lineOf.length !== base.length) return false;
+    if (base.join("\n") === value) return true;  // the change was not to this list
+    // The items alike in both, in order; between them, items changed, paired in turn.
+    const table = Array.from({ length: base.length + 1 }, () => new Array(theirs.length + 1).fill(0));
+    for (let b = base.length - 1; b >= 0; b -= 1) {
+      for (let t = theirs.length - 1; t >= 0; t -= 1) {
+        table[b][t] = base[b] === theirs[t] ? table[b + 1][t + 1] + 1 : Math.max(table[b + 1][t], table[b][t + 1]);
+      }
+    }
+    const same = [];
+    for (let b = 0, t = 0; b < base.length && t < theirs.length;) {
+      if (base[b] === theirs[t]) { same.push([b, t]); b += 1; t += 1; } else if (table[b + 1][t] >= table[b][t + 1]) b += 1; else t += 1;
+    }
+    const kept = new Map(), changed = new Map();
+    let lastB = -1, lastT = -1;
+    for (const [b, t] of [...same, [base.length, theirs.length]]) {
+      for (let k = 0; k < Math.min(b - lastB - 1, t - lastT - 1); k += 1) changed.set(lastB + 1 + k, lastT + 1 + k);
+      if (b < base.length) kept.set(b, t);
+      lastB = b; lastT = t;
+    }
+    const taken = new Set([...kept.values(), ...changed.values()]);
+    const out = [], placed = new Map();  // ours line -> its line now
+    let next = 0;
+    const upTo = (t) => { for (; next < t; next += 1) if (!taken.has(next)) out.push(theirs[next]); };
+    ours.forEach((line, i) => {
+      const b = lineOf.indexOf(i);
+      if (b < 0) { placed.set(i, out.length); out.push(line); return; }
+      const t = kept.has(b) ? kept.get(b) : changed.get(b);
+      if (t === undefined) return;  // taken away elsewhere
+      upTo(t);
+      next = Math.max(next, t + 1);
+      placed.set(i, out.length);
+      out.push(kept.has(b) ? line : theirs[t]);
+    });
+    upTo(theirs.length);
+    const focused = document.activeElement === area;
+    const caret = focused ? area.caretAt() : null;
+    const wasLines = area.letters().split("\n");
+    area.value = out.join("\n");
+    const nowLines = area.letters().split("\n");
+    if (caret) {
+      // Each end of the caret to the same place in its own item.
+      const offsetOf = (line, column) => nowLines.slice(0, line).reduce((sum, words) => sum + words.length + 1, 0) + column;
+      const through = (at) => {
+        let line = 0, column = at;
+        while (line < wasLines.length - 1 && column > wasLines[line].length) { column -= wasLines[line].length + 1; line += 1; }
+        if (!placed.has(line)) {
+          const after = [...placed.entries()].find(([from]) => from > line);
+          return after ? offsetOf(after[1], 0) : area.letters().length;
+        }
+        const now = placed.get(line);
+        return offsetOf(now, Math.min(nowLines[now].length, caretThrough(wasLines[line], nowLines[now], column)));
+      };
+      area.caretTo(through(caret[0]), through(caret[1]));
+    }
+    positionInline();
+    return true;
   }
   // Where a caret at `at` goes when words change from `was` to `now`: before the change,
   // it stays; after it, it moves with the words; inside it, to the change's end.
@@ -2163,7 +2221,10 @@ export function mount(studio, container) {
     const style = getComputedStyle(text);
     const scale = text.getScreenCTM()?.a || 1;
     const first = text.getBoundingClientRect();
-    return { size: parseFloat(style.fontSize) * scale, family: style.fontFamily, weight: style.fontWeight,
+    // Words all in a face of their own (code, in the monospace) are typed in it.
+    const spans = [...text.querySelectorAll("tspan")].filter((span) => [...span.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.data.trim()));
+    const faces = new Set(spans.map((span) => getComputedStyle(span).fontFamily));
+    return { size: parseFloat(style.fontSize) * scale, family: faces.size === 1 ? [...faces][0] : style.fontFamily, weight: style.fontWeight,
       colour: style.fill && style.fill !== "none" ? style.fill : "", anchor: text.getAttribute("text-anchor") || style.textAnchor || "start", left: first.left };
   }
   function positionInline() {
@@ -3618,7 +3679,7 @@ export function mount(studio, container) {
         return false;
       } });
       if (create === "figure") actions.push({ label: "New Figure File…", aside: true, run: () => {
-        ask("New Figure File", "figures/figure.yaml").then(async (name) => {
+        ask("New Figure File", "figures/figure.yaml", "Create").then(async (name) => {
           if (!name) return;
           try { finish(await createFile(name, "figure")); }
           catch (error) { toast(error.message, { kind: "error", icon: "error" }); }
@@ -3629,6 +3690,9 @@ export function mount(studio, container) {
       const box = dialog({ title, body: [list, upload], actions, onClose: () => finish(null) });
       studio.files(types).then((files) => {
         const shown = files.filter((file) => file !== studio.file.split("/").pop());
+        // No picture to choose from in the folder: the Mac's file panel at once, as Keynote's
+        // Choose… is (the sheet stays, should it be cancelled).
+        if (!shown.length && types.includes("image") && !done) upload.click();
         clear(list, shown.length ? shown.map((file) => h("button.menu-item", { type: "button", onclick: () => finish(file) },
           types.includes("image") ? h("img.pic", { src: studio.raw(file), alt: "" }) : icon(types.includes("python") ? "code" : types.includes("structure") ? "structure" : "figure"),
           // Its name, and its folder only when it is in one.
@@ -3680,12 +3744,18 @@ export function mount(studio, container) {
     });
   }
 
-  function ask(title, placeholder) {
+  // A file's name asked for, as a Mac's save panel asks: its name chosen, not its folder or
+  // its extension, and the button saying what it does.
+  function ask(title, placeholder, action = "Save") {
     return new Promise((resolve) => {
-      const input = ui.input({ value: placeholder, mono: true });
+      const input = ui.input({ value: placeholder });
       input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); resolve(input.value.trim() || null); box.close(); } });
-      const box = dialog({ title, body: [input], actions: [{ label: "Cancel", run: () => resolve(null) }, { label: "OK", kind: "primary", run: () => resolve(input.value.trim() || null) }], onClose: () => resolve(null) });
-      setTimeout(() => { input.focus(); input.select(); }, 30);
+      const box = dialog({ title, body: [input], actions: [{ label: "Cancel", run: () => resolve(null) }, { label: action, kind: "primary", run: () => resolve(input.value.trim() || null) }], onClose: () => resolve(null) });
+      setTimeout(() => {
+        input.focus();
+        const from = placeholder.lastIndexOf("/") + 1, dot = placeholder.indexOf(".", from);
+        input.setSelectionRange(from, dot > from ? dot : placeholder.length);
+      }, 30);
     });
   }
 
@@ -3788,7 +3858,9 @@ export function mount(studio, container) {
 
   // -- keys --
   document.addEventListener("keydown", (event) => {
-    if (!studio.active) return;
+    // A key something has taken already (Return that ended a title's typing, or ran the
+    // palette's command) is done with: the slide does not take it again.
+    if (!studio.active || event.defaultPrevented) return;
     const typing = typingNow() || document.querySelector(".scrim, .present, .menu");
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key === "Enter") { event.preventDefault(); present(); return; }
@@ -4040,7 +4112,11 @@ export function mount(studio, container) {
     const changed = [...nodesB.keys()].filter((id) => !same(nodesA.get(id), nodesB.get(id)));
     if (changed.length === 1) {
       const id = changed[0], was = nodesA.get(id), now = nodesB.get(id);
-      if (!same(was.label, now.label)) return was.label && now.label ? `Rename ${named(was, id)} to ${named(now, id)}` : `Edit ${named(now, id)}`;
+      if (!same(was.label, now.label)) {
+        // The same words in another look (a colour, code) are the label's format changed.
+        if (was.label && named(was, id) === named(now, id)) return `Format ${named(now, id)}`;
+        return was.label && now.label ? `Rename ${named(was, id)} to ${named(now, id)}` : `Edit ${named(now, id)}`;
+      }
       if (!same(was.kind, now.kind)) return "Change Shape Type";
       const keys = differing(was.properties, now.properties);
       if (keys.length && keys.every((key) => ["yaw", "pitch", "roll"].includes(key))) return `Rotate ${call(id)}`;
