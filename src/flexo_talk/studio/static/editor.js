@@ -3637,9 +3637,22 @@ export function mount(studio, container) {
       if (kind === "figure" && typeof a.figure === "object" && typeof b.figure === "object") return figureChange(a.figure, b.figure);
       if (kind === "image") return "Change Picture";
       if (kind === "figure" && typeof b.figure === "string") return "Change Figure Source";
+      if (kind === "table") return tableChange(a.table, b.table);
+      if (kind === "bullets") {
+        const count = (items) => (Array.isArray(items) ? items.flat(Infinity).length : 1);
+        if (count(b.bullets) > count(a.bullets)) return "Add Item";
+        if (count(b.bullets) < count(a.bullets)) return "Delete Item";
+      }
       return `Edit ${name}`;
     }
     return `Change ${BLOCK_NAMES[keys[0]] || keyTitle(keys[0])}`;
+  }
+  // A table's change by what it did: a row or column more or fewer, else a cell typed in.
+  function tableChange(a, b) {
+    const rows = (table) => (Array.isArray(table) ? table : []), columns = (table) => Math.max(0, ...rows(table).map((row) => (Array.isArray(row) ? row.length : 1)));
+    if (rows(b).length !== rows(a).length) return rows(b).length > rows(a).length ? "Add Row" : "Delete Row";
+    if (columns(b) !== columns(a)) return columns(b) > columns(a) ? "Add Column" : "Delete Column";
+    return "Edit Cell";
   }
   // A field's label in the figure editor's catalogue (a mol-sketch setting's among a
   // structure's), title-style: "properties.colors" -> "Colours", "fill" -> "Fill".
