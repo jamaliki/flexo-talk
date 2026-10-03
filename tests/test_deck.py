@@ -931,16 +931,15 @@ def test_every_title_is_its_slide_s_title_placeholder(tmp_path: Path) -> None:
     result = deck.build(tmp_path, formats=("pptx",))
     slides = list(Presentation(str(result.pptx)).slides)  # type: ignore[arg-type]
     assert [slide.slide_layout.name for slide in slides] == [
-        "Title Slide", "Title Only", "Title Only", "Section Header", "Title and Content", "Blank", "Blank",
+        "Title Slide", "Title Only", "Title Only", "Section Header", "Title Only", "Blank", "Blank",
         "Title Only",
     ]
     assert _placeholders(slides[0]) == {PLACEHOLDER.CENTER_TITLE: "A bold talk", PLACEHOLDER.SUBTITLE: "Its subtitle"}
     assert _placeholders(slides[1]) == {PLACEHOLDER.TITLE: "Outline"}
     assert _placeholders(slides[2]) == {PLACEHOLDER.TITLE: "Why this matters", PLACEHOLDER.SUBTITLE: "With code"}
     assert _placeholders(slides[3]) == {PLACEHOLDER.TITLE: "Part one", PLACEHOLDER.BODY: "Its theme"}
-    # A statement's words are what the slide says, not what it is called.
-    assert _placeholders(slides[4]) == {PLACEHOLDER.OBJECT: "One thing, said large"}
-    assert slides[4].shapes.title is None
+    # A statement's words are its title, as on Keynote's Statement layout.
+    assert _placeholders(slides[4]) == {PLACEHOLDER.TITLE: "One thing, said large"}
     # No title, no title placeholder; and none of the layout's empty ones.
     assert _placeholders(slides[5]) == _placeholders(slides[6]) == {}
     # A title Flexo broke is one paragraph, broken where it was.
@@ -949,7 +948,7 @@ def test_every_title_is_its_slide_s_title_placeholder(tmp_path: Path) -> None:
     assert _placeholders(slides[7])[PLACEHOLDER.TITLE] == "".join(run.text for run in deck.slides[7].title_runs)
     # Read first, its link still a link, and its words written once: no drawn copy.
     xml = _slides(result.pptx)  # type: ignore[arg-type]
-    for slide in (slides[1], slides[2], slides[3], slides[7]):
+    for slide in (slides[1], slides[2], slides[3], slides[4], slides[7]):
         assert slide.shapes[0] == slide.shapes.title
     assert "<a:hlinkClick" in xml[2].split("</p:sp>")[0]
     assert xml[2].count(">Why <") == xml[0].count(">Its <") == xml[4].count(">One thing, said large<") == 1

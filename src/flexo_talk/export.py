@@ -88,7 +88,8 @@ def build_deck(
             for item in rendered
             for page in ([item.svg] if handout else [item.at_step(step) for step in range(1, item.steps + 1)])
         ]
-        pdf = write_pdf(pages, directory / f"{name}.pdf", title=str(deck.id or name))
+        title, author = _named(deck)
+        pdf = write_pdf(pages, directory / f"{name}.pdf", title=title or name, author=author)
     pptx = None
     if "pptx" in formats:
         pptx = directory / f"{name}.pptx"
@@ -192,14 +193,15 @@ def _describe(tree: etree._Element, slide: Slide) -> None:
 _HEADINGS = {
     "title": {"title": "ctrTitle", "subtitle": "subTitle"},
     "section": {"title": "title", "subtitle": "body"},
-    # A statement's words are what the slide says, not what it is called: its text.
-    "statement": {"title": "obj"},
+    # A statement's words are its title, as on Keynote's Statement layout: what an outline
+    # and a screen reader name the slide by.
+    "statement": {"title": "title"},
 }
 """The placeholder (``pptx.PLACEHOLDER_KINDS``) each heading a slide draws fills in
 PowerPoint, by the slide's layout and the heading's id after the slide's: on any other
 layout, a title and a subtitle."""
 
-_LAYOUTS = {"title": "Title Slide", "section": "Section Header", "statement": "Title and Content"}
+_LAYOUTS = {"title": "Title Slide", "section": "Section Header", "statement": "Title Only"}
 """The default template's layout whose placeholders a slide of each layout fills."""
 
 
@@ -260,6 +262,16 @@ def _overlap(one: tuple[float, float, float, float], other: tuple[float, float, 
     return drawn and one[0] < other[2] and other[0] < one[2] and one[1] < other[3] and other[1] < one[3]
 
 
+def _named(deck: Deck) -> tuple[str, str]:
+    """The talk's title and author, as its exports name them: its title slide's (else its
+    first titled slide's title), and no author but the title slide's."""
+
+    opening = next((slide for slide in deck.slides if slide.layout == "title"), None)
+    titled = opening or next((slide for slide in deck.slides if slide.title_runs), None)
+    title = "".join(run.text for run in titled.title_runs) if titled else ""
+    return title, str((opening.source.get("author") if opening else "") or "")
+
+
 def _properties(presentation: Presentation, deck: Deck) -> None:
     """The file's own properties, as PowerPoint shows them in its Properties: the talk's
     title and author, made now -- never python-pptx's template's (its author, its 2013
@@ -267,11 +279,9 @@ def _properties(presentation: Presentation, deck: Deck) -> None:
 
     import datetime
 
-    opening = next((slide for slide in deck.slides if slide.layout == "title"), None)
-    titled = opening or next((slide for slide in deck.slides if slide.title_runs), None)
     properties = presentation.core_properties
-    properties.title = "".join(run.text for run in titled.title_runs) if titled else str(deck.id)
-    properties.author = str((opening.source.get("author") if opening else "") or "")
+    properties.title, properties.author = _named(deck)
+    properties.title = properties.title or str(deck.id)
     properties.last_modified_by = properties.author
     properties.comments = ""
     properties.subject = ""
