@@ -123,6 +123,29 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .inline-editor.in-place.cell .markup-tools { display: none; }
 .inline-editor.in-place .markup-tools { position: absolute; bottom: calc(100% + 8px); left: -2px; opacity: 1; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); }
 
+/* Words typed as the slide shows them (richtext.js): set as the slide sets them, with its
+   bullets and levels; the measures come from the drawn words (positionInline). */
+.inline-editor.in-place .rich { position: relative; padding: 5px; outline: none; line-height: var(--rt-line, 1.22); caret-color: var(--accent); white-space: pre-wrap; overflow-wrap: break-word; cursor: text; min-height: 1.2em; }
+.rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; color: var(--ink-3); opacity: 0.7; pointer-events: none; }
+.rich code { font-family: var(--mono); font-size: 0.88em; }
+.rich .rt-maths { font-family: var(--mono); font-size: 0.82em; padding: 0 2px; border-radius: 3px; background: var(--accent-soft); }
+.rich a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.rich.rt-list { padding-left: 0; counter-reset: rt; }
+.rich .rt-line { --rt-at: 0; position: relative; padding-left: calc(var(--rt-text, 1.4em) + var(--rt-at) * var(--rt-step, 1.3em)); padding-bottom: var(--rt-gap, 0.35em); line-height: var(--rt-line, 1.22); }
+.rich .rt-line[data-level="1"] { --rt-at: 1; } .rich .rt-line[data-level="2"] { --rt-at: 2; } .rich .rt-line[data-level="3"] { --rt-at: 3; } .rich .rt-line[data-level="4"] { --rt-at: 4; }
+.rich .rt-line::before { content: ""; position: absolute; border-radius: 50%; background: var(--rt-mark, currentColor);
+  --r: var(--rt-r, 3px); left: calc(var(--rt-mark-x, 0.5em) + var(--rt-at) * var(--rt-step, 1.3em) - var(--r)); top: calc(var(--rt-mark-y, 0.6em) - var(--r)); width: calc(2 * var(--r)); height: calc(2 * var(--r)); }
+.rich .rt-line:not([data-level="0"])::before { --r: var(--rt-r2, 2.4px); background: var(--rt-mark2, var(--rt-mark, currentColor)); }
+.rich.rt-numbered .rt-line[data-level="0"] { counter-increment: rt; }
+.rt-bar { position: fixed; z-index: 60; display: flex; align-items: center; gap: 1px; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); animation: pop 0.1s ease-out; }
+.rt-bar[hidden] { display: none; }
+.rt-bar button { min-width: 26px; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); cursor: pointer; font-size: 12.5px; display: inline-grid; place-items: center; }
+.rt-bar button:hover { background: var(--sunken); }
+.rt-swatch { display: block; width: 13px; height: 13px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); }
+.rt-swatch.rt-plain { background: var(--ink); }
+.rt-link { width: 180px; height: 24px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); font: 12px var(--mono); }
+.rt-link[hidden] { display: none; }
+.rich.rt-numbered .rt-line[data-level="0"]::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: auto; right: calc(100% - var(--rt-text, 1.4em) + 0.3em); }
 /* -- notes -- */
 .notes { border-top: 1px solid var(--line); background: var(--panel); }
 .notes-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; cursor: pointer; color: var(--ink-2); font-size: 12px; text-align: left; }

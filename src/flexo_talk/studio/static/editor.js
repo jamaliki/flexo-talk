@@ -7,6 +7,7 @@
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
+import { richText } from "/static/kinds/deck/richtext.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -1545,6 +1546,12 @@ export function mount(studio, container) {
     if (!slide) return;
     // The slide shown and the block's place follow edits from elsewhere (followChange).
     const slideNow = () => slides()[state.slide];
+    // Words are typed as the slide shows them: bold as bold, a list as a list.
+    const rich = (value, options, onInput) => {
+      const field = richText({ value, palette: studio.info?.palette || {}, ...options });
+      field.addEventListener("input", () => onInput(field.value));
+      return field;
+    };
     let editor, idOf, at = null, bullets = false, read = () => undefined, mirror = null;
     if (target.kind === "field") {
       const key = target.field;
@@ -1552,8 +1559,8 @@ export function mount(studio, container) {
       read = () => slideNow()?.[key] ?? "";
       mirror = `slide.${key}`;
       state.field = { field: key, id: fieldId(key) };
-      editor = ui.markup({ value: slide[key] ?? "", rows: 1, placeholder: { title: "Title", subtitle: "Subtitle", words: "Text", author: "Author" }[key],
-        onInput: (text) => editSlide((s) => setOption(s, key, text), { quiet: true, merge: `${state.slide}-${key}` }) });
+      editor = rich(slide[key] ?? "", { single: key !== "words", placeholder: { title: "Title", subtitle: "Subtitle", words: "Text", author: "Author" }[key] },
+        (text) => editSlide((s) => setOption(s, key, text), { quiet: true, merge: `${state.slide}-${key}` }));
       idOf = () => fieldId(key);
     } else if (target.kind === "cell") {
       const block = blocksAt(slide, target.region)[target.index];
@@ -1561,9 +1568,9 @@ export function mount(studio, container) {
       if (!rows[target.row] || target.col >= rows[target.row].length) return;
       at = { region: target.region, index: target.index };
       read = () => { const now = blocksAt(slideNow() || {}, at.region)[at.index]; return now && kindOf(now) === "table" ? tableRows(now)[target.row]?.[target.col] : undefined; };
-      editor = ui.markup({ value: rows[target.row][target.col], rows: 1,
-        onInput: (text) => editBlock(at, (b) => { const cells = tableRows(b); cells[target.row][target.col] = text; b.table = cells; },
-          { merge: `${state.slide}-${at.region}-${at.index}-cell-${target.row}-${target.col}` }) });
+      editor = rich(rows[target.row][target.col], { single: true },
+        (text) => editBlock(at, (b) => { const cells = tableRows(b); cells[target.row][target.col] = text; b.table = cells; },
+          { merge: `${state.slide}-${at.region}-${at.index}-cell-${target.row}-${target.col}` }));
       idOf = () => `${blockId(at)}.${target.row}.${target.col}`;
       state.focus = at;
       renderInspector();
@@ -1581,10 +1588,10 @@ export function mount(studio, container) {
       };
       mirror = `block.${kind}`;
       bullets = kind === "bullets";
-      if (bullets) editor = ui.markup({ value: bulletsText(block.bullets), rows: 3, tabs: true, onInput: (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }) });
+      if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered) }, (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }));
       else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
       else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, onInput: (text) => editBlock(at, (b) => { b.math = text; }, { merge }) });
-      else editor = ui.markup({ value: block[kind], rows: 2, onInput: (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }) });
+      else editor = rich(block[kind] ?? "", {}, (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }));
       idOf = () => blockId(at);
       state.focus = at;
       renderInspector();
@@ -1595,7 +1602,7 @@ export function mount(studio, container) {
     const cell = target.kind === "cell";
     const node = h(`div.inline-editor.in-place${cell ? ".cell" : ""}`, { onmousedown: (event) => event.stopPropagation(),
       title: cell ? "Tab: next cell · Return: cell below · ⌘B: bold · ⌘I: italic · Esc: done"
-        : `${bullets ? "Tab: indent · " : ""}${target.kind === "field" ? "Return or Esc: done" : "Esc: done"}` }, editor);
+        : `${bullets ? "Tab: indent · Shift-Tab: outdent · " : ""}⌘B: bold · ⌘I: italic · ${target.kind === "field" ? "Return or Esc: done" : "Esc: done"}` }, editor);
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeInline(); }
       if (event.key === "Enter" && !event.shiftKey && target.kind === "field") { event.preventDefault(); closeInline(); }
@@ -1622,6 +1629,13 @@ export function mount(studio, container) {
     center.append(node);
     positionInline();
     area.focus();
+    if (area.rich) {
+      if (replaceWith !== null) { area.value = replaceWith; area.dispatchEvent(new Event("input")); area.caretToEnd(); }
+      else if (selectAll) area.selectAll();
+      else if (!(point && area.selectWordAt(point))) area.caretToEnd();
+      setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
+      return;
+    }
     const word = point && wordAt(id, point, area.value);
     if (replaceWith !== null) {
       area.value = replaceWith;
@@ -1820,9 +1834,12 @@ export function mount(studio, container) {
     if (value === undefined) { closeInline(); return; }
     if (value === inline.area.value) return;
     inline.area.value = value;
-    inline.area.setSelectionRange(value.length, value.length);
-    inline.area.style.height = "auto";
-    inline.area.style.height = `${inline.area.scrollHeight + 2}px`;
+    if (inline.area.rich) inline.area.caretToEnd();
+    else {
+      inline.area.setSelectionRange(value.length, value.length);
+      inline.area.style.height = "auto";
+      inline.area.style.height = `${inline.area.scrollHeight + 2}px`;
+    }
     positionInline();
   }
 
@@ -1871,24 +1888,100 @@ export function mount(studio, container) {
       return;
     }
     const centred = look?.anchor === "middle";
-    // As wide as the room the words have on the slide: to its margin, both sides for centred words.
+    // As wide as the room the words have on the slide: to its margin, both sides for centred
+    // words, and not past the column beside them.
     const margin = box ? Math.max(12, centred ? Math.min(box.left, slide.width - box.left - box.width) : box.left) : 40;
-    const width = box ? (centred ? slide.width - 2 * margin : Math.max(box.width, slide.width - box.left - margin)) : 420;
+    let width = box ? (centred ? slide.width - 2 * margin : Math.max(box.width, slide.width - box.left - margin)) : 420;
+    const beside = box && !centred ? columnBeside(box) : null;
+    if (beside !== null) width = Math.max(box.width, Math.min(width, beside - box.left - 8));
     const left = slide.left - outer.left + (box ? (centred ? margin : box.left) : 40);
-    const top = slide.top - outer.top + (box ? box.top : 60);
-    const indent = inline.bullets && look && box ? Math.max(0, look.left - slide.left - box.left - 5) : 0;
+    let top = slide.top - outer.top + (box ? box.top : 60);
+    const rich = inline.area.rich;
+    const indent = inline.bullets && look && box && !rich ? Math.max(0, look.left - slide.left - box.left - 5) : 0;
+    // The rich editor's lines lie on the drawn lines: the same line spacing, the first
+    // line's letters where the drawn ones are, and a list's bullets where they are drawn.
+    const metrics = rich && element ? textMetrics(element, size) : null;
+    // Words the slide wrapped wrap where it wrapped them: at their longest line, give or take a letter.
+    if (metrics?.wrapped && box && !centred) width = Math.min(width, box.width + size * 0.6);
+    if (metrics) {
+      top = metrics.top - outer.top - (metrics.line - metrics.height) / 2 - 5;
+      inline.area.style.setProperty("--rt-line", `${metrics.line}px`);
+      if (inline.bullets) for (const [name, value] of Object.entries(listLook(element, metrics, slide.left + box.left + 5))) inline.area.style.setProperty(name, value);
+    }
     Object.assign(inline.node.style, { left: `${left}px`, top: `${Math.max(8, top)}px`, width: `${width}px`, minHeight: box ? `${box.height}px` : "" });
     Object.assign(inline.area.style, { fontSize: `${size}px`, fontFamily: look?.family || "", fontWeight: look?.weight || "",
-      color: look?.colour || "", textAlign: centred ? "center" : "left", paddingLeft: `${5 + indent}px` });
+      color: look?.colour || "", textAlign: centred ? "center" : "left", paddingLeft: rich ? "" : `${5 + indent}px` });
+  }
+
+  // Where the next column's objects start, right of `box` (as boxOf gives boxes), if any.
+  function columnBeside(box) {
+    const slide = slideAt();
+    const lefts = regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => boxOf(`slide${state.slide + 1}.${region.svg}.${index}`)))
+      .filter((other) => other && other.left > box.left + box.width / 2).map((other) => other.left);
+    return lefts.length ? Math.min(...lefts) : null;
+  }
+
+  // How words are set on the slide (in page pixels): the top of the first line's letters,
+  // a line's height, and the distance from line to line -- from a text's own wrapped
+  // lines, or one and a fifth of its size.
+  function textMetrics(element, size) {
+    const texts = element.matches("text") ? [element] : [...element.querySelectorAll("text")];
+    if (!texts.length) return null;
+    const first = (texts[0].querySelector("tspan") || texts[0]).getBoundingClientRect();
+    let line = 0, wrapped = false;
+    for (const text of texts) {
+      const tops = [...new Set([...text.querySelectorAll("tspan")].map((span) => Math.round(span.getBoundingClientRect().top * 4) / 4))].sort((a, b) => a - b);
+      if (tops.length > 1) { line ||= tops[1] - tops[0]; wrapped = true; }
+    }
+    return { top: first.top, height: first.height, line: line || first.height * 1.05 || size * 1.22, wrapped, texts };
+  }
+
+  // A list as the slide draws it: where its words start and its bullets sit, how far a
+  // level indents, the space between items, and the bullets' size and colour -- as CSS
+  // properties for the rich editor (editor.css), from `origin` (its words' left edge).
+  function listLook(element, metrics, origin) {
+    const id = element.id;
+    const items = [];
+    for (let n = 0; n < 200; n += 1) {
+      const text = pageNode.querySelector(`[id="${CSS.escape(`${id}.${n}`)}"]`);
+      if (!text) break;
+      items.push({ text, box: text.getBoundingClientRect(), mark: pageNode.querySelector(`[id="${CSS.escape(`${id}.${n}.mark`)}"]`) });
+    }
+    if (!items.length) return {};
+    const centre = (mark) => { const b = mark.getBoundingClientRect(); return b.left + b.width / 2; };
+    const marked = items.filter((item) => item.mark);
+    const outerMost = marked.length ? Math.min(...marked.map((item) => centre(item.mark))) : null;
+    const top = marked.find((item) => Math.abs(centre(item.mark) - outerMost) < 1.5) || items[0];
+    const deeper = marked.find((item) => centre(item.mark) - outerMost > 3);
+    const look = {};
+    look["--rt-text"] = `${top.box.left - origin}px`;
+    if (top.mark) {
+      const mark = top.mark.getBoundingClientRect();
+      look["--rt-mark-x"] = `${centre(top.mark) - origin}px`;
+      look["--rt-r"] = `${mark.width / 2}px`;
+      look["--rt-mark-y"] = `${(metrics.line - metrics.height) / 2 + (mark.top + mark.height / 2 - top.box.top)}px`;
+      look["--rt-mark"] = top.mark.getAttribute("fill") || "currentColor";
+    }
+    if (deeper) {
+      look["--rt-step"] = `${centre(deeper.mark) - outerMost}px`;
+      look["--rt-r2"] = `${deeper.mark.getBoundingClientRect().width / 2}px`;
+      look["--rt-mark2"] = deeper.mark.getAttribute("fill") || "currentColor";
+    }
+    // From one item to the next, less its own lines: the space between items.
+    const lines = (item) => new Set([...item.text.querySelectorAll("tspan")].map((span) => Math.round(span.getBoundingClientRect().top))).size || 1;
+    const gaps = items.slice(1).map((item, n) => item.box.top - items[n].box.top - lines(items[n]) * metrics.line);
+    if (gaps.length) look["--rt-gap"] = `${Math.max(0, Math.min(...gaps))}px`;
+    return look;
   }
   stage.addEventListener("scroll", () => { if (inline) positionInline(); });
 
   function closeOnOutside(event) {
-    if (inline && !inline.node.contains(event.target)) closeInline();
+    if (inline && !inline.node.contains(event.target) && !event.target.closest?.(".rt-bar")) closeInline();
   }
 
   function closeInline() {
     if (!inline) return;
+    inline.area.dispose?.();
     inline.node.remove();
     pageNode?.querySelector(`[id="${CSS.escape(inline.id)}"]`)?.style.removeProperty("visibility");
     inline = null;
@@ -3259,7 +3352,7 @@ export function mount(studio, container) {
   // -- keys --
   document.addEventListener("keydown", (event) => {
     if (!studio.active) return;
-    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.querySelector(".scrim, .present, .menu");
+    const typing = typingNow() || document.querySelector(".scrim, .present, .menu");
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key === "Enter") { event.preventDefault(); present(); return; }
     if (typing) return;
