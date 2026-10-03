@@ -416,7 +416,11 @@ export function richText({ value = "", list = false, single = false, numbered = 
     ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => document.execCommand("foreColor", false, palette[name]))),
     palette.ink ? tool("<span class=\"rt-swatch rt-plain\"></span>", "Default colour", () => document.execCommand("foreColor", false, palette.ink)) : "",
     linkInput);
+  let seen = false;
   const showBar = () => {
+    // A field gone from the page (the panel drawn again) takes its bar and listener with it.
+    if (!area.isConnected) { if (seen) area.dispose(); return; }
+    seen = true;
     const s = selection();
     const inside = s.rangeCount && area.contains(s.anchorNode) && area.contains(s.focusNode);
     if (!inside || s.isCollapsed) { if (document.activeElement !== linkInput) bar.hidden = true; return; }

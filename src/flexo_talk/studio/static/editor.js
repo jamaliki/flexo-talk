@@ -2378,10 +2378,12 @@ export function mount(studio, container) {
     const allowed = new Set(catalog.slide_keys[layout]);
     // A blank slide draws no title: its title and subtitle are offered only once they are set.
     if (layout === "blank") for (const key of ["title", "subtitle"]) if (!slide[key]) allowed.delete(key);
-    const text = (key, label, { placeholder = "", markup = true, rows = 1 } = {}) => allowed.has(key)
-      ? ui.field(label, (markup ? ui.markup : ui.input)({ value: slide[key] ?? "", rows, placeholder, key: `slide.${key}`,
-        onInput: (value) => editSlide((s) => setOption(s, key, value), { quiet: true, merge: `${state.slide}-${key}` }) }))
-      : null;
+    const text = (key, label, { placeholder = "", markup = true, rows = 1 } = {}) => {
+      if (!allowed.has(key)) return null;
+      const onInput = (value) => editSlide((s) => setOption(s, key, value), { quiet: true, merge: `${state.slide}-${key}` });
+      return ui.field(label, markup ? richField({ value: slide[key] ?? "", single: rows === 1, placeholder, key: `slide.${key}`, onInput })
+        : ui.input({ value: slide[key] ?? "", placeholder, key: `slide.${key}`, onInput }));
+    };
     const parts = [
       h("div.section", {}, crumbs(slide, null),
         layout === "statement" ? text("words", "Text", { rows: 2, placeholder: "A short statement" }) : text("title", layout === "agenda" ? "Heading" : "Title", { placeholder: layout === "agenda" ? "Outline" : "Slide title" }),
@@ -2601,6 +2603,16 @@ export function mount(studio, container) {
     }
   }
 
+  // Words in the inspector as the slide shows them (richtext.js), in a field's box: Return
+  // in a one-line field is done, as in a Mac text field.
+  function richField({ value, key, placeholder = "", list = false, single = false, numbered = false, onInput }) {
+    const area = richText({ value, list, single, numbered, placeholder, palette: studio.info?.palette || {} });
+    area.dataset.key = key;
+    area.addEventListener("input", () => onInput(area.value));
+    if (single) area.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) area.blur(); });
+    return h(`div.rich-field${single ? ".single" : ""}`, {}, area);
+  }
+
   // -- the form for each kind of part --
   function blockForm(block, kind, at) {
     const merge = (name) => `${state.slide}-${at.region}-${at.index}-${name}`;
@@ -2616,25 +2628,25 @@ export function mount(studio, container) {
     };
     switch (kind) {
       case "bullets":
-        return [ui.markup({ value: bulletsText(block.bullets), rows: 3, tabs: true, key: key("bullets"), placeholder: "One item per line",
+        return [richField({ value: bulletsText(block.bullets), list: true, numbered: Boolean(block.numbered), key: key("bullets"),
           onInput: (text) => edit((b) => { b.bullets = bulletsFrom(text); }, "items") }),
-        h("div.hint-line", {}, "One item per line. Press ", h("kbd", {}, "Tab"), " to indent."),
+        h("div.hint-line", {}, "Return starts the next item; ", h("kbd", {}, "Tab"), " and ", h("kbd", {}, "⇧Tab"), " change its level."),
         h("div.row", {}, ui.toggle({ value: block.numbered, label: "Numbered", onChange: set("numbered", false) }),
           ui.toggle({ value: block.reveal, label: "Reveal items one at a time", onChange: set("reveal", false) })),
         size()];
       case "text":
-        return [ui.markup({ value: block.text, rows: 2, key: key("text"), onInput: (text) => edit((b) => { b.text = text; }, "text") }),
+        return [richField({ value: block.text ?? "", key: key("text"), onInput: (text) => edit((b) => { b.text = text; }, "text") }),
           ui.field("Align", ui.segmented({ value: block.align || "start", options: [
             { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
           onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "start")) })),
           ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
           size()];
       case "quote":
-        return [ui.markup({ value: block.quote, rows: 2, key: key("quote"), onInput: (text) => edit((b) => { b.quote = text; }, "quote") }),
+        return [richField({ value: block.quote ?? "", key: key("quote"), onInput: (text) => edit((b) => { b.quote = text; }, "quote") }),
           ui.field("Attribution", ui.input({ value: block.by, placeholder: "Name", key: key("by"), onInput: set("by") })), size()];
       case "callout":
         return [ui.field("Heading", ui.input({ value: block.title, placeholder: "Optional", key: key("title"), onInput: (text) => edit((b) => setOption(b, "title", text), "title") })),
-          ui.field("Text", ui.markup({ value: block.callout, rows: 2, key: key("callout"), onInput: (text) => edit((b) => { b.callout = text; }, "words") })),
+          ui.field("Text", richField({ value: block.callout ?? "", key: key("callout"), onInput: (text) => edit((b) => { b.callout = text; }, "words") })),
           ui.field("Colour", toneSwatches("colour", { none: false, fallback: "accent" })), size()];
       case "code":
         return [ui.textarea({ value: block.code, rows: 5, mono: true, key: key("code"), onInput: (text) => edit((b) => { b.code = text; }, "code") }),
