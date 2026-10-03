@@ -801,7 +801,11 @@ export function mount(studio, container) {
     const own = messages.filter((m) => m.page === `slide${state.slide + 1}`);
     const here = studio.others().filter((entry) => entry.where?.page === state.slide + 1);
     if (stageWrap.parentNode !== stage) clear(stage, stageWrap);
-    if (stageWrap.firstChild !== pageNode) stageWrap.replaceChildren(pageNode, stageMeta, stageMessages);
+    // The page alone is put in again: what else is beside it (a part's words being typed) stays.
+    if (stageWrap.firstChild !== pageNode) {
+      if (stageWrap.firstChild?.classList?.contains("slide-page")) stageWrap.firstChild.replaceWith(pageNode);
+      else stageWrap.prepend(pageNode);
+    }
     clear(stageMeta,
       h("span.slide-count", {}, `${state.slide + 1} / ${list.length}`),
       page?.steps > 1 ? h("span.chip", {}, icon("reveal"), `${page.steps} steps`) : null,
@@ -1667,6 +1671,8 @@ export function mount(studio, container) {
     figure.parts = figureParts({
       catalog: catalog.figure_editor,
       get overlay() { return pageNode; },
+      // The box a part's words are typed in stays beside the page as the slide is drawn again.
+      typing: stageWrap,
       element: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
       idOf: (id) => { const prefix = figurePrefix(); return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : null; },
       box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
