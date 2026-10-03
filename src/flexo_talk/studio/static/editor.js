@@ -4122,10 +4122,16 @@ export function mount(studio, container) {
     ] : []),
     // The object chosen, by name: what its right-click menu does.
     ...chosenCommands(),
-    // Words being typed: the Mac app's Format menu's Bold and Italic (⌘B and ⌘I are the field's own).
-    ...(inline?.area?.rich ? [["bold", "Bold", "b"], ["italic", "Italic", "i"]].map(([name, label, key]) => ({ icon: name, label, keys: `⌘${key.toUpperCase()}`,
+    // Words being typed: the Mac app's Format menu's Bold, Italic, Code and Inline Equation
+    // (⌘B, ⌘I, ⌘E and ⌥⌘E are the field's own).
+    ...(inline?.area?.rich ? [["bold", "Bold", "b"], ["italic", "Italic", "i"], ["code", "Code", "e"], ["math", "Inline Equation", "e", true]].map(([name, label, key, alt = false]) => ({
+      icon: name, label, keys: `${alt ? "⌥" : ""}⌘${key.toUpperCase()}`,
       // As if its keys were pressed in the field, which knows what bold means there (a bold title).
-      run: () => { inline?.area.focus(); inline?.area.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, bubbles: true, cancelable: true })); } })) : []),
+      run: () => {
+        const mac = /Mac|iP/.test(navigator.platform);
+        inline?.area.focus();
+        inline?.area.dispatchEvent(new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, metaKey: mac, ctrlKey: !mac, altKey: alt, bubbles: true, cancelable: true }));
+      } })) : []),
     ...(state.slide < slides().length - 1 ? [{ icon: "down", label: "Go to Next Slide", run: () => select(state.slide + 1) }] : []),
     ...(state.slide > 0 ? [{ icon: "up", label: "Go to Previous Slide", run: () => select(state.slide - 1) }] : []),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
