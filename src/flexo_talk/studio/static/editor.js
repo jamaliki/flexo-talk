@@ -416,9 +416,15 @@ export function mount(studio, container) {
     editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}` }) });
   const notesPreview = h("span.notes-preview");
   const notes = h(`div.notes${state.notes ? ".open" : ""}`, {},
-    h("button.notes-head", { type: "button", onclick: () => { state.notes = !state.notes; remember("notes", state.notes ? "1" : "0"); notes.classList.toggle("open", state.notes); if (state.notes) notesArea.focus(); } },
+    h("button.notes-head", { type: "button", onclick: () => showNotes(!state.notes) },
       icon("chevron", { class: "caret" }), h("span.notes-label", {}, "Notes"), notesPreview),
     h("div.notes-body", {}, notesArea));
+  function showNotes(on) {
+    state.notes = on;
+    remember("notes", on ? "1" : "0");
+    notes.classList.toggle("open", on);
+    if (on) notesArea.focus();
+  }
   const center = h("section.deck-center", {}, stage, notes);
   const inspectorHead = h("div.insp-head");
   const inspectorBody = h("div.panel-body.scroll-thin");
@@ -3866,9 +3872,11 @@ export function mount(studio, container) {
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${lookName(look)}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
+    { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
     { icon: "play", label: "Present", keys: "⌘↩", run: () => present() },
-    { icon: "export", label: "Export as PowerPoint…", run: () => studio.exportFiles(["pptx"]) },
-    { icon: "export", label: "Export as PDF…", run: () => studio.exportFiles(["pdf"]) },
+    { icon: "export", label: "Export as PowerPoint…", hint: "A .pptx file of editable shapes and text", run: () => studio.exportFiles(["pptx"]) },
+    { icon: "export", label: "Export as PDF…", hint: "One page per slide", run: () => studio.exportFiles(["pdf"]) },
+    { icon: "export", label: "Export as Images…", hint: "A PNG or SVG image of each slide", run: () => studio.exportFiles(["png"]) },
   ];
   studio.reveal = (where) => {
     if (where?.label === "Design") { state.tab = "design"; renderInspector(); return; }
