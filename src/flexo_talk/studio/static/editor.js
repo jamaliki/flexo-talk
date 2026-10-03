@@ -300,7 +300,7 @@ export function mount(studio, container) {
   const styleField = (name) => catalog.style?.find((field) => field.name === name);
   const styleName = (name) => styleField(name)?.label || keyTitle(name);
   const choiceName = (name, choice) => styleField(name)?.labels?.[choice] || ({ start: "Left", middle: "Centre", end: "Right" })[choice] || keyTitle(choice);
-  const state = { slide: 0, focus: null, field: null, tab: "slide", notes: remembered("notes", "0") === "1" };
+  const state = { slide: 0, picked: [], focus: null, field: null, tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
   let mathNotes = null;
@@ -406,8 +406,42 @@ export function mount(studio, container) {
   }
 
   function duplicateSlide(index) {
+    if (chosenSlides().length > 1 && chosenSlides().includes(index)) { duplicateSlides(chosenSlides()); return; }
     studio.change((d) => { d.slides.splice(index + 1, 0, structuredClone(d.slides[index])); });
     select(index + 1);
+  }
+
+  // Slides chosen together in the slide list (⇧-click a run, ⌘-click one more), in order;
+  // else the slide shown.
+  const chosenSlides = () => (state.picked.length > 1 ? [...state.picked].sort((a, b) => a - b) : [state.slide]);
+  function pickSlide(index, event) {
+    if (event.shiftKey && slides().length) {
+      const from = Math.min(state.slide, index), to = Math.max(state.slide, index);
+      const run = Array.from({ length: to - from + 1 }, (_, n) => from + n);
+      select(index);
+      state.picked = run;
+    } else if (event.metaKey || event.ctrlKey) {
+      const now = new Set(chosenSlides());
+      if (now.has(index) && now.size > 1) now.delete(index); else now.add(index);
+      const shown = now.has(index) ? index : Math.min(...now);
+      select(shown);
+      state.picked = [...now];
+    } else { select(index); return; }
+    railList.focus({ preventScroll: true });
+    renderRail();
+  }
+  function duplicateSlides(indices) {
+    const last = indices[indices.length - 1];
+    studio.change((d) => { d.slides.splice(last + 1, 0, ...indices.map((index) => structuredClone(d.slides[index]))); });
+    select(last + 1);
+    state.picked = indices.map((_, n) => last + 1 + n);
+    renderRail();
+  }
+  function deleteSlides(indices) {
+    if (indices.length === 1) { deleteSlide(indices[0]); return; }
+    studio.change((d) => { for (const index of [...indices].sort((a, b) => b - a)) d.slides.splice(index, 1); });
+    select(Math.min(indices[0], slides().length - 1));
+    undoNote(`${indices.length} slides deleted`);
   }
 
   // "Slide deleted · Undo": the link takes back that change and no other, and the note
@@ -437,19 +471,22 @@ export function mount(studio, container) {
 
   function slideMenu(anchor, index) {
     const count = slides().length;
-    // A thumbnail's menu is about its slide: the slide is chosen, as a right-click chooses in Keynote.
-    if (index !== state.slide || state.focus || state.field) select(index);
+    // A thumbnail's menu is about its slide -- or the slides chosen with it -- which a
+    // right-click chooses, as in Keynote.
+    const together = chosenSlides().length > 1 && chosenSlides().includes(index) ? chosenSlides() : null;
+    if (!together && (index !== state.slide || state.focus || state.field)) select(index);
     railList.focus({ preventScroll: true });
+    const many = together ? ` ${together.length} Slides` : "";
     menu(anchor, [
-      { icon: "plus", label: "New Slide…", run: () => newSlidePopover(anchor, index + 1) },
+      { icon: "plus", label: "New Slide…", run: () => newSlidePopover(anchor, (together ? Math.max(...together) : index) + 1) },
       "-",
       ...clipItems(),
-      { icon: "copy", label: "Duplicate", keys: "⌘D", run: () => duplicateSlide(index) },
+      { icon: "copy", label: `Duplicate${many}`, keys: "⌘D", run: () => (together ? duplicateSlides(together) : duplicateSlide(index)) },
       "-",
-      ...(index > 0 ? [{ icon: "up", label: "Move Up", run: () => moveSlide(index, index - 1) }] : []),
-      ...(index < count - 1 ? [{ icon: "down", label: "Move Down", run: () => moveSlide(index, index + 1) }] : []),
+      ...(!together && index > 0 ? [{ icon: "up", label: "Move Up", run: () => moveSlide(index, index - 1) }] : []),
+      ...(!together && index < count - 1 ? [{ icon: "down", label: "Move Down", run: () => moveSlide(index, index + 1) }] : []),
       "-",
-      { icon: "trash", label: "Delete", danger: true, run: () => deleteSlide(index) },
+      { icon: "trash", label: `Delete${many}`, danger: true, run: () => deleteSlides(together || [index]) },
     ]);
   }
 
@@ -457,6 +494,7 @@ export function mount(studio, container) {
     closeInline();
     leaveFigure(false);
     state.slide = Math.max(0, Math.min(index, slides().length - 1));
+    state.picked = [];
     state.focus = focus;
     state.field = null;
     renderRail();
@@ -493,7 +531,7 @@ export function mount(studio, container) {
       const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note");
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = others.filter((entry) => entry.where?.page === index + 1);
-      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), index === state.slide,
+      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
         worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
       keys.push(key);
       if (railKeys[index] === key && old[index]) return old[index];
@@ -514,9 +552,10 @@ export function mount(studio, container) {
 
   function thumbNode(slide, index, page, own, worst, here) {
     const clearDrops = () => railList.querySelectorAll(".drop-before,.drop-after").forEach((el) => el.classList.remove("drop-before", "drop-after"));
-    const node = h(`div.thumb${index === state.slide ? ".on" : ""}${page?.stale ? ".stale" : ""}`, {
+    const on = index === state.slide || (state.picked.length > 1 && state.picked.includes(index));
+    const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}`, {
       draggable: true, dataset: { index },
-      onclick: () => select(index),
+      onclick: (event) => pickSlide(index, event),
       oncontextmenu: (event) => { event.preventDefault(); slideMenu({ x: event.clientX, y: event.clientY }, index); },
       ondragstart: (event) => { dragFrom = index; node.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(index)); },
       ondragend: () => { dragFrom = null; node.classList.remove("dragging"); clearDrops(); },
@@ -554,7 +593,7 @@ export function mount(studio, container) {
 
   railList.addEventListener("keydown", (event) => {
     if (event.target !== railList || state.focus || state.field) return;
-    if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); if (slides().length) deleteSlide(state.slide); }
+    if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); if (slides().length) deleteSlides(chosenSlides()); }
   });
   // Keys go to what was chosen last: once something on the slide is chosen, not the slides.
   const offRail = () => { if (railList.contains(document.activeElement)) document.activeElement.blur(); };
@@ -2085,10 +2124,13 @@ export function mount(studio, container) {
     if (block) return { what: "block", block: structuredClone(block), label: BLOCKS[kindOf(block)].label.toLowerCase() };
     // The slide itself only when the slides have the keys (a thumbnail clicked last).
     if (!railList.contains(document.activeElement)) return null;
+    const chosen = chosenSlides();
+    if (chosen.length > 1) return { what: "slides", slides: chosen.map((index) => structuredClone(slides()[index])), indices: chosen, label: `${chosen.length} slides` };
     return { what: "slide", slide: structuredClone(slide), label: "slide" };
   }
   function plainOf(clip) {
     if (clip.what === "slide") return plain(slideTitle(clip.slide));
+    if (clip.what === "slides") return clip.slides.map((slide) => plain(slideTitle(slide))).join("\n");
     if (clip.what === "parts") return clip.parts.nodes.map((node) => plain(Array.isArray(node.label) ? node.label.map((run) => run?.text ?? "").join("") : node.label || node.id)).join("\n");
     const block = clip.block;
     return block.bullets ? bulletsText(block.bullets) : String(block.text ?? block.quote ?? block.callout ?? block.code ?? block.math ?? "");
@@ -2107,6 +2149,7 @@ export function mount(studio, container) {
   function cutAway(clip) {
     if (clip.what === "parts") figure.parts.remove();
     else if (clip.what === "block") deleteBlock(state.focus);
+    else if (clip.what === "slides") deleteSlides(clip.indices);
     else deleteSlide(state.slide);
   }
   document.addEventListener("copy", (event) => {
@@ -2162,7 +2205,13 @@ export function mount(studio, container) {
     insertBlock(lines.length > 1 ? "bullets" : "text", lines.length > 1 ? { bullets: lines.map((line) => line.replace(/^[-*•·]\s+/, "")) } : { text });
   });
   function pasteClip(clip) {
-    if (clip.what === "slide") {
+    if (clip.what === "slides") {
+      const at = Math.min(Math.max(...chosenSlides()) + 1, slides().length);
+      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => structuredClone(slide))); });
+      select(at);
+      state.picked = clip.slides.map((_, n) => at + n);
+      renderRail();
+    } else if (clip.what === "slide") {
       const at = Math.min(state.slide + 1, slides().length);
       studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, structuredClone(clip.slide)); });
       select(at);
@@ -3384,6 +3433,7 @@ export function mount(studio, container) {
       // ⌘D duplicates what is chosen: the object on the slide, else the slide.
       const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
       if (block) insertBlock(kindOf(block), structuredClone(block), { ...state.focus });
+      else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
       else if (slides().length) duplicateSlide(state.slide);
     }
     // ⌘A outside a text field selects nothing on the page's own words.
