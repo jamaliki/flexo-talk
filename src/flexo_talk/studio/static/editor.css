@@ -5,8 +5,12 @@
 
 /* -- the bar -- */
 .layout-button { gap: 7px; }
-.layout-button .glyph { width: 22px; height: 13px; }
-.layout-button > svg { width: 13px; height: 13px; color: var(--ink-3); }
+/* The layout's glyph in the bar is drawn like the bar's icons: lines in the button's ink, no box. */
+.layout-button div.glyph { width: 18px; height: 13px; background: none; border: 1.4px solid currentColor; border-radius: 2.5px; }
+.layout-button div.glyph i, .layout-button div.glyph i.a { background: currentColor; opacity: 0.75; min-height: 1.4px; }
+.layout-button div.glyph i.a { opacity: 1; }
+/* A button that opens a menu has its chevron after its word (More, the layout). */
+.layout-button > svg, .btn.pulldown > svg:last-child { width: 13px; height: 13px; color: var(--ink-3); }
 
 /* -- the rail -- */
 .rail { border-right: 1px solid var(--line); overflow: hidden; }
@@ -30,7 +34,7 @@
 .thumb .steps { position: absolute; left: 4px; bottom: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
 .thumb .here { position: absolute; left: 4px; top: 4px; display: flex; }
 .thumb .more { position: absolute; right: 2px; bottom: 2px; opacity: 0; background: var(--raised); }
-.thumb:hover .more { opacity: 1; }
+.thumb:hover .more, .thumb .more:focus-visible { opacity: 1; }
 .thumb.dragging { opacity: 0.35; }
 .thumb.stale .frame .picture { opacity: 0.55; }
 .thumb.drop-before::before, .thumb.drop-after::after { content: ""; position: absolute; left: 24px; right: 0; height: 3px; background: var(--accent); border-radius: 2px; }
@@ -38,10 +42,12 @@
 .thumb.drop-after::after { bottom: -7px; }
 /* Centred on the slide, right of the number column (20px and a 4px gap); no padding, or WebKit's
    puts the plus off centre. */
-.insert-after { position: absolute; left: calc(50% + 12px); bottom: -9px; transform: translateX(-50%); width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; cursor: pointer; opacity: 0; z-index: 2; transition: opacity 0.1s; box-shadow: var(--shadow-1); }
-.thumb:hover .insert-after { opacity: 1; }
+/* Hidden until the pointer is over its slide (fading in, never out: a rail drawn before its
+   styles arrive shows no + fading away). */
+.insert-after { position: absolute; left: calc(50% + 12px); bottom: -9px; transform: translateX(-50%); width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; cursor: pointer; opacity: 0; z-index: 2; box-shadow: var(--shadow-1); }
+.thumb:hover .insert-after, .insert-after:focus-visible { opacity: 1; transition: opacity 0.1s; }
 .insert-after svg { width: 11px; height: 11px; }
-.rail-add { margin: 4px 0 0 24px; display: flex; align-items: center; justify-content: center; gap: 6px; aspect-ratio: 16 / 9; border-radius: 5px; border: 1.5px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font-size: 12px; }
+.rail-add { margin: 4px 0 0 24px; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0 4px; aspect-ratio: 16 / 9; border-radius: 5px; border: 1.5px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font-size: 12px; white-space: nowrap; }
 .rail-add:hover { border-color: var(--accent); color: var(--accent); }
 .rail-add svg { width: 14px; height: 14px; }
 .frame.flash, .slide-page.flash { animation: flash 1.1s ease-out; }
@@ -56,7 +62,8 @@
 .slide-page.pending > svg { opacity: 0.6; transition: opacity 0.2s 0.3s; }
 .slide-page.error { outline: 2px solid var(--error); outline-offset: 3px; }
 .slide-page .placeholder { display: grid; place-items: center; height: 100%; }
-.hit { position: absolute; pointer-events: none; border-radius: 5px; transition: left 0.08s, top 0.08s, width 0.08s, height 0.08s; }
+/* A frame on the slide is where its part is, at once: it never glides, nor trails a resizing window. */
+.hit { position: absolute; pointer-events: none; border-radius: 5px; }
 .hit.hover { border: 1.5px dashed var(--accent-line); }
 .hit.selected { border: 2px solid var(--accent); background: rgba(61, 90, 254, 0.04); }
 .hit-label { position: absolute; top: -21px; left: -2px; background: var(--accent); color: var(--accent-ink); font: 600 10.5px/19px var(--font); padding: 0 7px; border-radius: 4px 4px 4px 0; white-space: nowrap; }
@@ -118,13 +125,6 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .inline-editor.in-place .markup { background: transparent; }
 .inline-editor.in-place .textarea { background: transparent; border: 0; box-shadow: none; padding: 5px; line-height: 1.22; letter-spacing: normal; resize: none; overflow: hidden; caret-color: var(--accent); }
 .inline-editor.in-place .textarea:focus { box-shadow: none; outline: none; }
-/* An equation's LaTeX is typed under it, on a panel of its own. */
-.inline-editor.in-place.under { background: var(--raised); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-2); padding: 4px; }
-.inline-editor.in-place.under textarea { font-size: 13px; background: transparent; }
-/* A cell is small and its neighbours close: its words are made strong or emphatic by key. */
-.inline-editor.in-place.cell .markup-tools { display: none; }
-.inline-editor.in-place .markup-tools { position: absolute; bottom: calc(100% + 8px); left: -2px; opacity: 1; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); }
-
 /* Words typed as the slide shows them (richtext.js): set as the slide sets them, with its
    bullets and levels; the measures come from the drawn words (positionInline). */
 .inline-editor.in-place .rich { position: relative; padding: 5px; outline: none; line-height: var(--rt-line, 1.22); caret-color: var(--accent); white-space: pre-wrap; overflow-wrap: break-word; cursor: text; min-height: 1.2em; }
@@ -154,6 +154,13 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rt-link { width: 180px; height: 24px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); font: 12px var(--mono); }
 .rt-link[hidden] { display: none; }
 .rich.rt-numbered .rt-line[data-level="0"]::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: auto; right: calc(100% - var(--rt-text, 1.4em) + 0.3em); }
+/* An equation's LaTeX is typed under it, on a panel of its own. */
+.inline-editor.in-place.under { background: var(--raised); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-2); padding: 4px; }
+.inline-editor.in-place.under textarea { font-size: 13px; background: transparent; }
+/* A cell is small and its neighbours close: its words are made strong or emphatic by key. */
+.inline-editor.in-place.cell .markup-tools { display: none; }
+.inline-editor.in-place .markup-tools { position: absolute; bottom: calc(100% + 8px); left: -2px; right: auto; opacity: 1; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); }
+
 /* -- notes -- */
 .notes { border-top: 1px solid var(--line); background: var(--panel); }
 .notes-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 12px; border: 0; background: transparent; cursor: pointer; color: var(--ink-2); font-size: 12px; text-align: left; }
@@ -164,40 +171,44 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .notes-preview { color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .notes-preview.empty { font-style: italic; }
 .notes.open .notes-preview { display: none; }
-.notes-body { padding: 0 12px 12px; display: none; }
-.notes.open .notes-body { display: block; }
+/* Opening the notes, the panel grows and the slide makes room for it together, briefly,
+   rather than the slide jumping up. Closed, the notes can't be reached by Tab. */
+.notes-body { display: grid; grid-template-rows: minmax(0, 0fr); padding: 0 12px; overflow: hidden; visibility: hidden;
+  transition: grid-template-rows 0.15s ease-out, padding 0.15s ease-out, visibility 0s linear 0.15s; }
+.notes.open .notes-body { grid-template-rows: minmax(0, 1fr); padding-top: 3px; padding-bottom: 12px; visibility: visible;
+  transition: grid-template-rows 0.15s ease-out, padding 0.15s ease-out; }
 .notes-body .textarea { max-height: 28vh; overflow: auto; }
 
 /* -- the inspector -- */
 .inspector { border-left: 1px solid var(--line); }
 .insp-head { display: flex; align-items: center; height: 44px; padding: 0 10px; border-bottom: 1px solid var(--line); flex: none; }
-.insp-tabs { display: flex; gap: 2px; padding: 2px; background: var(--sunken); border-radius: 8px; border: 1px solid var(--line); width: 100%; }
+.insp-tabs { display: flex; gap: 2px; padding: 2px; background: var(--seg-track); border-radius: 8px; width: 100%; }
 .insp-tab { flex: 1; height: 28px; border: 0; background: transparent; border-radius: 6px; color: var(--ink-3); cursor: pointer; font-weight: 580; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .insp-tab svg { width: 14px; height: 14px; }
 .insp-tab:hover { color: var(--ink); }
-.insp-tab.on { background: var(--raised); color: var(--ink); box-shadow: var(--shadow-1); }
-.crumbs { display: flex; align-items: center; gap: 4px; font-size: 12.5px; }
-.crumbs > svg { width: 12px; height: 12px; color: var(--ink-3); }
-.crumb { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 3px 6px; border-radius: 6px; color: var(--ink-2); cursor: pointer; font-weight: 560; }
-button.crumb:hover { background: var(--sunken); color: var(--ink); }
-.crumb.here { color: var(--ink); font-weight: 650; }
-.crumb svg { width: 14px; height: 14px; }
-.crumb .glyph { width: 20px; height: 12px; }
+.insp-tab.on { background: var(--seg-on); color: var(--ink); box-shadow: var(--seg-shadow); }
+.deck .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; font-size: 12.5px; }
+.deck .crumbs > svg { width: 12px; height: 12px; color: var(--ink-3); }
+.deck .crumb { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 3px 6px; border-radius: 6px; color: var(--ink-2); cursor: pointer; font-weight: 560; }
+.deck button.crumb:hover { background: var(--sunken); color: var(--ink); }
+.deck .crumb.here { color: var(--ink); font-weight: 650; }
+.deck .crumb svg { width: 14px; height: 14px; }
+.deck .crumb div.glyph { width: 20px; height: 12px; }
 .block-top { gap: 10px; }
 .block-actions { display: flex; align-items: center; gap: 2px; }
 .block-form { gap: 10px; }
 .block-error { color: var(--error); font-size: 12px; display: flex; gap: 6px; align-items: flex-start; background: var(--error-soft); padding: 7px 9px; border-radius: 6px; }
 .block-error svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
 
-.glyph { width: 30px; height: 17px; border-radius: 3px; background: var(--sunken); border: 1px solid var(--line-strong); position: relative; overflow: hidden; flex: none; }
-.glyph i { position: absolute; background: var(--ink-3); border-radius: 1px; opacity: 0.8; }
-.glyph i.a { background: var(--accent); opacity: 1; }
+div.glyph { width: 30px; height: 17px; border-radius: 3px; background: var(--sunken); border: 1px solid var(--line-strong); position: relative; overflow: hidden; flex: none; }
+div.glyph i { position: absolute; background: var(--ink-3); border-radius: 1px; opacity: 0.8; }
+div.glyph i.a { background: var(--accent); opacity: 1; }
 .layout-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.layout-card { display: grid; gap: 4px; justify-items: center; padding: 6px 4px 5px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.layout-card { display: grid; gap: 4px; align-content: start; justify-items: center; padding: 6px 3px 5px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; transition: border-color 0.12s, background 0.12s; }
 .layout-card:hover { border-color: var(--ink-3); }
 .layout-card.on { border-color: var(--accent); background: var(--accent-soft); }
 .layout-card .glyph { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 4px; }
-.layout-card .name { font-size: 11px; font-weight: 560; color: var(--ink-2); }
+.layout-card .name { font-size: 11px; font-weight: 560; color: var(--ink-2); white-space: nowrap; letter-spacing: -0.005em; }
 .layout-card .note { font-size: 11px; color: var(--ink-3); }
 .layout-grid.big { width: min(620px, 90vw); gap: 10px; }
 .layout-grid.big .layout-card { padding: 10px; gap: 6px; text-align: center; }
@@ -225,7 +236,7 @@ button.crumb:hover { background: var(--sunken); color: var(--ink); }
 .add-row:hover { border-color: var(--accent); color: var(--accent); }
 .add-row svg { width: 13px; height: 13px; }
 
-.list-rows { display: grid; gap: 6px; }
+.deck .list-rows { display: grid; gap: 6px; }
 .list-row { display: flex; gap: 6px; align-items: center; }
 .list-row > .input { flex: 1; }
 .list-row .pic, .menu-item .pic { width: 34px; height: 34px; border-radius: 5px; background: var(--sunken); border: 1px solid var(--line); object-fit: cover; flex: none; }
@@ -239,14 +250,15 @@ button.crumb:hover { background: var(--sunken); color: var(--ink); }
 .table-edit input:focus { background: var(--accent-soft); }
 .table-edit tr.header input { font-weight: 650; }
 .table-edit th { background: var(--sunken); }
-.table-edit th select { width: 100%; border: 0; background: transparent; font-size: 11px; color: var(--ink-3); padding: 3px 4px; cursor: pointer; }
+.table-edit th { min-width: 84px; }
+.table-edit th select { appearance: none; -webkit-appearance: none; width: 100%; height: 24px; border: 0; border-radius: 0; box-shadow: none; font-size: 11px; font-weight: 500; color: var(--ink-2); padding: 0 17px 0 6px; cursor: pointer; text-overflow: ellipsis;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5' fill='none' stroke='%238c867d' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 3px center / 13px; }
 .table-edit .corner { width: 24px; min-width: 24px; text-align: center; color: var(--ink-3); font-size: 10.5px; background: var(--sunken); }
 .table-edit .corner button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 3px; display: grid; place-items: center; width: 100%; }
 .table-edit .corner button:hover { color: var(--error); }
 .table-edit .corner button svg { width: 11px; height: 11px; }
 
 .preview-pic { width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); }
-.hint-line { font-size: 11.5px; color: var(--ink-3); }
 .math-notes { display: grid; gap: 6px; }
 .math-notes:empty { display: none; }
 .math-chips { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -255,9 +267,6 @@ button.crumb:hover { background: var(--sunken); color: var(--ink); }
 .math-chip:hover { background: var(--sunken); color: var(--ink); border-color: var(--line-strong, var(--line)); }
 .block-error.soft { color: var(--ink-2); background: color-mix(in srgb, var(--warn, #b45309) 10%, transparent); }
 .hint-line code, .hint-line kbd { font: 11px var(--mono); background: var(--sunken); border-radius: 3px; padding: 0 3px; }
-.slider { display: flex; align-items: center; gap: 10px; }
-.slider input[type=range] { flex: 1; accent-color: var(--accent); }
-.slider .value { width: 38px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: 12px; }
 
 .looks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .look { border: 1px solid var(--line-strong); border-radius: 9px; padding: 8px; display: grid; gap: 5px; cursor: pointer; background: var(--raised); text-align: left; transition: border-color 0.12s; }
@@ -270,19 +279,7 @@ button.crumb:hover { background: var(--sunken); color: var(--ink); }
 .theme-file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
 .theme-file svg { width: 15px; height: 15px; color: var(--accent); flex: none; }
 .theme-file span { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.palette-row { display: flex; gap: 3px; min-height: 14px; }
-.palette-row span { width: 14px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08); }
-.palette-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-height: 196px; overflow: auto; padding: 2px; }
-.palette-item { display: grid; gap: 5px; padding: 7px 8px; border: 1px solid var(--line-strong); border-radius: 7px; cursor: pointer; background: var(--raised); text-align: left; }
-.palette-item:hover { border-color: var(--ink-3); }
-.palette-item.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.palette-item .name { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-details.more > summary { cursor: pointer; font-weight: 600; font-size: 12px; color: var(--ink-2); list-style: none; display: flex; align-items: center; gap: 6px; }
-details.more > summary::-webkit-details-marker { display: none; }
-details.more > summary svg { width: 14px; height: 14px; transition: transform 0.15s; }
-details.more[open] > summary svg { transform: rotate(90deg); }
-details.more > .inner { display: grid; gap: 10px; margin-top: 12px; }
 .style-row { display: grid; grid-template-columns: 1fr 110px 24px; gap: 8px; align-items: center; }
 .style-row .name { font-size: 12px; display: grid; }
 .style-row .name .note { color: var(--ink-3); font-size: 11px; }

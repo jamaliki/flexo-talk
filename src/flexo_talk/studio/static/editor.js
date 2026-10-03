@@ -352,6 +352,9 @@ export function mount(studio, container) {
   // -- the bar --
   const insertButtons = MAIN_BLOCKS.map((kind) => ui.button(BLOCKS[kind].label, () => insertBlock(kind), { kind: "ghost", icon: BLOCKS[kind].icon, title: `Add ${BLOCKS[kind].label}: ${BLOCKS[kind].hint}` }));
   const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: BLOCKS[kind].label, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "chevron-down" });
+  // Its chevron after the word, as on the layout button: both open a menu.
+  moreButton.classList.add("pulldown");
+  moreButton.append(moreButton.querySelector("svg"));
   const layoutButton = h("button.btn.ghost.layout-button", { type: "button", title: "Slide layout", onclick: (event) => layoutPopover(event.currentTarget) });
   const newSlideButton = ui.button("Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide (N)" });
   newSlideButton.classList.add("keep-label");
@@ -2388,7 +2391,8 @@ export function mount(studio, container) {
       h("div.section", {}, crumbs(slide, null),
         layout === "statement" ? text("words", "Text", { rows: 2, placeholder: "A short statement" }) : text("title", layout === "agenda" ? "Heading" : "Title", { placeholder: layout === "agenda" ? "Outline" : "Slide title" }),
         text("subtitle", "Subtitle"),
-        layout === "title" ? h("div.grid2", {}, text("author", "Author", { markup: false }), text("date", "Date", { markup: false })) : null,
+        // Each a whole row wide: an author's name and affiliation read without being cut off.
+        layout === "title" ? [text("author", "Author", { markup: false }), text("date", "Date", { markup: false })] : null,
         text("by", "Attribution", { markup: false }),
         layout === "agenda" ? h("div.hint-line", {}, "Lists the titles of the deck's section slides automatically.") : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn't show its title.") : null),
@@ -3325,11 +3329,14 @@ export function mount(studio, container) {
     const themeIsFile = typeof deck.theme === "string" && /\.(ya?ml|json)$/i.test(deck.theme);
     const current = Array.isArray(deck.palette) ? "" : deck.palette || "default";
     const accents = () => Object.entries(studio.info?.palette || {}).filter(([k]) => k.startsWith("accent")).slice(0, 5).map(([, c]) => h("span", { style: { background: c } }));
-    const paletteList = h("div.palette-list.scroll-thin", {},
-      h(`button.palette-item${current === "default" ? ".on" : ""}`, { type: "button", onclick: () => { editDeck((d) => { delete d.palette; }); renderInspector(); } },
-        h("span.palette-row", {}, accents()), h("span.name", {}, "Default")),
-      Object.entries(catalog.palettes).map(([name, colours]) => h(`button.palette-item${current === name ? ".on" : ""}`, { type: "button", onclick: () => { editDeck((d) => { d.palette = name; }); renderInspector(); } },
-        h("span.palette-row", {}, colours.map((c) => h("span", { style: { background: c } }))), h("span.name", {}, name))));
+    // The palette as a pop-up button, like the theme above it: every palette is in its menu,
+    // not in a box scrolling inside the inspector.
+    const strip = (colours) => h("span.palette-strip", {}, colours ? colours.map((c) => h("span", { style: { background: c } })) : accents());
+    const choosePalette = (name) => { closeMenu(); editDeck((d) => { if (name === "default") delete d.palette; else d.palette = name; }); renderInspector(); };
+    const paletteList = h("button.palette-pick", { type: "button", title: "Choose the deck's palette", onclick: (event) => popover(event.currentTarget,
+      h("div.palette-choices", {}, [["default", null], ...Object.entries(catalog.palettes)].map(([name, colours]) => h(`button.palette-choice${current === name ? ".on" : ""}`,
+        { type: "button", onclick: () => choosePalette(name) }, strip(colours), h("span", {}, name === "default" ? "Default" : name)))), { className: "palette-menu" }) },
+    strip(catalog.palettes[current]), h("span", {}, current === "default" ? "Default" : current || "Custom"), icon("chevron"));
     const fonts = (name, label, note) => ui.field(label, ui.combo({ value: deck[name] || "", options: catalog.fonts, placeholder: note, key: `deck.${name}`, onChange: setDeck(name) }));
     const lookStyle = catalog.looks.find((item) => item.name === look)?.style || {};
     const changes = deck.style || {};
