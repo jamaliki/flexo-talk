@@ -1889,6 +1889,10 @@ class _Prepared:
 LEGIBLE = 7.0
 """Words on a slide smaller than this (points) are reported: they will not read."""
 
+SMALL = 11.0
+"""Words on a slide smaller than this (points) are noted: they read close to, not from the
+back of a room."""
+
 
 EDITING = contextvars.ContextVar("flexo_talk_editing", default=False)
 """Whether slides are drawn for an editor while they are changed: a figure on one then
@@ -2092,6 +2096,11 @@ def _check_legible(canvas: _Canvas, prepared: dict[int, _Prepared], scales: dict
             canvas.diagnostics.append(
                 f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.1f} pt, too small to read. "
                 "Try giving the figure its own slide, a wider layout, or fewer shapes."
+            )
+        elif drawn < SMALL:
+            canvas.notes.append(
+                f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.0f} pt, small for a talk. "
+                "More room or fewer shapes would make it larger."
             )
 
 
