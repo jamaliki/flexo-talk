@@ -746,6 +746,8 @@ export function mount(studio, container) {
   const stageWrap = h("div.slide-wrap", {}, stageMeta, stageMessages);
 
   let notesFor = null;
+  let wasOffline = false;
+  studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
   function renderStage() {
     const list = slides();
     const slide = slideAt();

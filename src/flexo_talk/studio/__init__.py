@@ -280,8 +280,9 @@ class DeckKind:
                     notes.append(_slide_note("added", new, index))
             elif tag == "delete":
                 at = min(a1 + 1, max(len(new), 1))
+                # Clicked, it goes where the slide was; it names no place, being gone.
                 notes.append({"text": f"deleted slide {a1 + 1}" if a2 - a1 == 1 else f"deleted {a2 - a1} slides",
-                              "where": {"page": at, "label": f"Slide {at}"}})
+                              "where": {"page": at}})
             else:
                 # Slides replaced by others: pair each new one with the old one it most resembles,
                 # or, as many in as out, with the one in its place if it is of a kind with it (its
@@ -304,7 +305,7 @@ class DeckKind:
                     at = min(b1 + 1, max(len(new), 1))
                     count = len(unused)
                     notes.append({"text": f"deleted slide {unused[0] + 1}" if count == 1 else f"deleted {count} slides",
-                                  "where": {"page": at, "label": f"Slide {at}"}})
+                                  "where": {"page": at}})
         return notes
 
     def catalog(self) -> dict[str, Any]:
