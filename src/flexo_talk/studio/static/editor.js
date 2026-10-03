@@ -457,6 +457,8 @@ export function mount(studio, container) {
   function moveSlide(from, to) {
     if (from === to || to < 0 || to >= slides().length) return;
     studio.change((d) => { const [slide] = d.slides.splice(from, 1); d.slides.splice(to, 0, slide); });
+    const entry = studio.past[studio.past.length - 1];
+    if (entry) studio.said(entry).moved = { from, to };
     select(to);
   }
 
@@ -1965,14 +1967,50 @@ export function mount(studio, container) {
 
   // After an undo or a redo, the object it changed is chosen, as Keynote does: the first
   // on the slide shown that is not as it was.
-  function chooseChanged(was) {
+  function chooseChanged(was, entry) {
     const before = was?.slides || [], after = slides();
     if (before.length !== after.length) { state.focus = null; return; }
+    // A move undone or redone: what moved is chosen, where it now is.
+    if (entry?.moved) {
+      const undone = studio.future[studio.future.length - 1]?.said === entry;
+      const { slide, from, to } = entry.moved;
+      if (slide === undefined) { select(undone ? from : to); state.focus = null; return; }
+      if (slide !== state.slide) select(slide);
+      const at = undone ? from : to;
+      if (blocksAt(slideAt(), at.region)[at.index]) { focusBlock(at.region, at.index); return; }
+    }
+    // A slide moved: the slide that moved is shown.
+    const movedSlide = movedIn(before, after);
+    if (movedSlide >= 0) { if (movedSlide !== state.slide) select(movedSlide); state.focus = null; return; }
     const old = partsOf(before[state.slide] || {}), now = partsOf(after[state.slide] || {});
-    const changed = now.find((item, k) => !old[k] || item.region !== old[k].region || !same(item.block, old[k].block));
-    const chosen = changed && state.focus?.region === changed.region && state.focus?.index === changed.index;
-    if (changed && !chosen) focusBlock(changed.region, changed.index);
-    else if (state.focus && !blocksAt(slideAt(), state.focus.region)[state.focus.index]) state.focus = null;
+    // An object moved: the one that moved; else the first changed.
+    const moved = old.length === now.length ? movedIn(old.map((item) => item.block), now.map((item) => item.block)) : -1;
+    const changed = moved >= 0 ? now[moved] : now.find((item, k) => !old[k] || item.region !== old[k].region || !same(item.block, old[k].block));
+    if (!changed) {
+      // Words of the slide's own (its title, its author): that field.
+      const field = SLIDE_WORDS.map(([key]) => key).find((key) => !same(before[state.slide]?.[key], after[state.slide]?.[key]));
+      if (field) { state.focus = null; state.field = { field, id: fieldId(field) }; placeChosen(); return; }
+      if (state.focus && !blocksAt(slideAt(), state.focus.region)[state.focus.index]) state.focus = null;
+      return;
+    }
+    // A figure's shapes come back (or change): those shapes are chosen in it.
+    const shapes = (block) => (block && typeof block.figure === "object" ? block.figure.nodes || [] : []);
+    const prior = old.find((item) => item.region === changed.region && item.index === changed.index)?.block;
+    const back = shapes(changed.block).filter((node) => !shapes(prior).some((other) => same(other, node))).map((node) => node.id).filter(Boolean);
+    const chosen = state.focus?.region === changed.region && state.focus?.index === changed.index;
+    if (back.length && kindOf(changed.block) === "figure") focusBlock(changed.region, changed.index, () => figure?.parts.select(back));
+    else if (!chosen) focusBlock(changed.region, changed.index);
+  }
+  // Where the one item that moved now is, when `after` is `before` with one item moved
+  // (else -1).
+  function movedIn(before, after) {
+    const differ = after.map((_, k) => k).filter((k) => !same(before[k], after[k]));
+    if (differ.length < 2) return -1;
+    const low = differ[0], high = differ[differ.length - 1];
+    const up = same(after[low], before[high]) && after.slice(low + 1, high + 1).every((item, k) => same(item, before[low + k]));
+    if (up) return low;
+    const down = same(after[high], before[low]) && after.slice(low, high).every((item, k) => same(item, before[low + 1 + k]));
+    return down ? high : -1;
   }
 
   // After an undo or an edit from elsewhere, the editor open on the slide shows the words
@@ -2446,6 +2484,9 @@ export function mount(studio, container) {
       target.splice(Math.min(index, target.length), 0, block);
       state.focus = { region: to.region, index: Math.min(index, target.length - 1) };
     }, { label });
+    // Which object moved, and where to: undone or redone, it is the one chosen.
+    const entry = studio.past[studio.past.length - 1];
+    if (entry && state.focus) studio.said(entry).moved = { slide: state.slide, from: { ...from }, to: { ...state.focus } };
     renderInspector();
     placeChosen();
   }
@@ -3931,7 +3972,7 @@ export function mount(studio, container) {
     }
     settling = false;
     if (state.slide >= slides().length) state.slide = Math.max(0, slides().length - 1);
-    if (source === "history" && !inline) chooseChanged(was);
+    if (source === "history" && !inline) chooseChanged(was, entry);
     pending = true;
     if (source === "remote" && before) flash(before, who);
     if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
