@@ -3510,6 +3510,16 @@ export function mount(studio, container) {
     presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index) });
   }
 
+  // ⌘D (and Edit › Duplicate) duplicates what is chosen: a figure's shapes, the object on
+  // the slide, else the slide.
+  function duplicateChosen() {
+    if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
+    const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
+    if (block) insertBlock(kindOf(block), structuredClone(block), { ...state.focus });
+    else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
+    else if (slides().length) duplicateSlide(state.slide);
+  }
+
   // -- keys --
   document.addEventListener("keydown", (event) => {
     if (!studio.active) return;
@@ -3520,14 +3530,7 @@ export function mount(studio, container) {
     if (figure && figureBlock() && figure.parts.key(event)) return;
     const key = event.key;
     if (mod && event.shiftKey && key.toLowerCase() === "n") { event.preventDefault(); newSlideLike(state.slide); }
-    else if (mod && key.toLowerCase() === "d") {
-      event.preventDefault();
-      // ⌘D duplicates what is chosen: the object on the slide, else the slide.
-      const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
-      if (block) insertBlock(kindOf(block), structuredClone(block), { ...state.focus });
-      else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
-      else if (slides().length) duplicateSlide(state.slide);
-    }
+    else if (mod && key.toLowerCase() === "d") { event.preventDefault(); duplicateChosen(); }
     // ⌘A outside a text field selects nothing on the page's own words.
     else if (mod && key.toLowerCase() === "a") event.preventDefault();
     else if (mod) return;
@@ -3602,6 +3605,16 @@ export function mount(studio, container) {
   studio.present = () => present();
   studio.commands = () => [
     ...slides().map((slide, index) => ({ icon: "slide", label: `Slide ${index + 1}: ${slideTitle(slide)}`, run: () => select(index) })),
+    // What the keys do (⇧⌘N, ⌘D, ⌫ in the slide list, the arrows), by name for the Mac
+    // app's Slide and Edit menus. ⌘D in a field is the field's.
+    { icon: "plus", label: "New Slide", keys: "⇧⌘N", run: () => newSlideLike(state.slide) },
+    ...(slides().length ? [
+      ...(typingNow() ? [] : [{ icon: "copy", label: "Duplicate", keys: "⌘D", run: () => duplicateChosen() }]),
+      { icon: "copy", label: "Duplicate Slide", run: () => duplicateSlide(state.slide) },
+      { icon: "trash", label: "Delete Slide", run: () => deleteSlides(chosenSlides()) },
+    ] : []),
+    ...(state.slide < slides().length - 1 ? [{ icon: "down", label: "Go to Next Slide", run: () => select(state.slide + 1) }] : []),
+    ...(state.slide > 0 ? [{ icon: "up", label: "Go to Previous Slide", run: () => select(state.slide - 1) }] : []),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
     // Only what can be done here: no layout the slide already has, nothing added where there is no room.
     ...(slides().length ? layouts.filter((layout) => layout.name !== layoutOf(slideAt())).map((layout) => ({ icon: "layout", label: `Layout: ${LAYOUT_NAMES[layout.name]}`, run: () => changeLayout(layout.name) })) : []),
