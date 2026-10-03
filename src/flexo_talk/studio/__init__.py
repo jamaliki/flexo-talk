@@ -593,6 +593,14 @@ class DeckKind:
         folder = into or base / "build"
         folder.mkdir(parents=True, exist_ok=True)
         name = f"{stem}-{spec.id}"
+        if into is not None:
+            # Handed to a person, it is named as they would name it: the deck and the slide.
+            slides = document.get("slides") or []
+            number = int(part.get("slide") or 0)
+            slide = slides[number] if 0 <= number < len(slides) and isinstance(slides[number], dict) else {}
+            words = str(slide.get("title") or slide.get("words") or "")
+            title = re.sub(r"[*`$\[\]{}]|\(https?://[^)]*\)", "", words).strip() or f"Slide {number + 1}"
+            name = re.sub(r'[/\\*?"<>|]', "-", f"{stem} \u2013 {title}".replace(":", ""))[:120]
         written: list[Path] = []
         if "yaml" in formats:
 
@@ -621,6 +629,10 @@ class DeckKind:
                 # handed over, only what was asked for is.
                 result.outputs.editable_svg.unlink()
                 made.remove(result.outputs.editable_svg)
+            if into is not None and len(made) == 1:
+                # One file, handed over: plainly named, not "….preview.png".
+                plain = made[0].with_name(f"{name}{made[0].suffix}")
+                made = [made[0].rename(plain)]
             written += made
         return written
 
