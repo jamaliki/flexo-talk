@@ -365,8 +365,10 @@ function dress() {
 .ss-slide svg { display: block; width: 100%; height: 100%; text-rendering: geometricPrecision; }
 .ss-slide [data-flexo-placeholder] { display: none; }
 .ss-end { position: absolute; inset: 0; display: grid; place-items: center; color: #8c8c8c; font-size: 17px; }
-.ss-hint { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: rgba(255,255,255,0.12);
-  color: #ddd; padding: 6px 12px; border-radius: 8px; font-size: 13px; pointer-events: none; white-space: nowrap; }
+/* A heads-up over the slide, as Keynote's: dark and solid enough to read on any slide. */
+.ss-hint { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); background: rgba(28,28,30,0.86);
+  color: #eee; padding: 7px 14px; border-radius: 9px; font-size: 13px; pointer-events: none; white-space: nowrap;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.35); backdrop-filter: blur(8px); }
 .present.ss-root.ss-presenter { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 14px; padding: 18px 22px 12px; background: #161616; }
 .ss-bar { display: flex; align-items: baseline; gap: 24px; }
 .ss-count { font-size: 19px; color: #e6e6e6; }

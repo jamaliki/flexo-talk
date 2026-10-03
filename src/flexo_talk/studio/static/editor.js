@@ -2524,7 +2524,8 @@ export function mount(studio, container) {
         layout === "statement" ? text("words", "Text", { rows: 2, placeholder: "A short statement" }) : text("title", layout === "agenda" ? "Heading" : "Title", { placeholder: layout === "agenda" ? "Outline" : "Slide title" }),
         text("subtitle", "Subtitle"),
         // Each a whole row wide: an author's name and affiliation read without being cut off.
-        layout === "title" ? [text("author", "Author", { markup: false }), text("date", "Date", { markup: false })] : null,
+        layout === "title" ? [text("author", "Author", { markup: false, placeholder: "Your name" }),
+          text("date", "Date", { markup: false, placeholder: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) })] : null,
         text("by", "Attribution", { markup: false }),
         layout === "agenda" ? h("div.hint-line", {}, "Lists the titles of the deck's section slides automatically.") : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn't show its title.") : null),
