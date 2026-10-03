@@ -3558,9 +3558,12 @@ export function mount(studio, container) {
     const name = await ask("Save Theme As", `${deck.id || "talk"}.theme.yaml`);
     if (!name) return;
     const stem = name.split("/").pop().replace(/\.(ya?ml|json)$/i, "").replace(/\.theme$/i, "");
+    // The deck's palette goes into the theme, where its colours can be changed: left on the
+    // deck it would stand over every colour changed there.
+    const colours = Array.isArray(deck.palette) ? deck.palette : catalog.palettes?.[deck.palette];
     try {
-      const made = await createFile(name, "theme", { theme: { name: stem, base, description: `The look of ${deck.id || "this deck"}.` } });
-      studio.change((d) => { d.deck ||= {}; d.deck.theme = made; });
+      const made = await createFile(name, "theme", { theme: { name: stem, base, description: `The look of ${deck.id || "this deck"}.`, ...(colours ? { palette: [...colours] } : {}) } });
+      studio.change((d) => { d.deck ||= {}; d.deck.theme = made; if (colours) delete d.deck.palette; });
       renderInspector();
       studio.workspace.open(studio.folder() + made);
       toast("Edit the theme here. The deck updates as you make changes.", { icon: "theme", seconds: 4 });
