@@ -356,7 +356,7 @@ export function mount(studio, container) {
   moreButton.classList.add("pulldown");
   moreButton.append(moreButton.querySelector("svg"));
   const layoutButton = h("button.btn.ghost.layout-button", { type: "button", title: "Slide layout", onclick: (event) => layoutPopover(event.currentTarget) });
-  const newSlideButton = ui.button("Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide (N)" });
+  const newSlideButton = ui.button("Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide" });
   newSlideButton.classList.add("keep-label");
   studio.tools.append(newSlideButton, layoutButton, h("span.sep"), ...insertButtons, moreButton);
   // Export lists what File › Export To does in the Mac app (`studio.exports`); each asks
@@ -3517,7 +3517,6 @@ export function mount(studio, container) {
         if (first) figure.parts.select([first]);
       }
     } else if ((key === "Delete" || key === "Backspace") && state.focus) { event.preventDefault(); deleteBlock(state.focus); }
-    else if (key.toLowerCase() === "n") { event.preventDefault(); newSlidePopover(newSlideButton); }
   });
 
   // -- the palette's commands, and following --
@@ -3705,6 +3704,17 @@ export function mount(studio, container) {
   }
 
   let lastDoc = doc();
+  // A deck just made opens ready to type its title over: no key typed into it is taken
+  // for a command.
+  if (studio.workspace?.justMade === studio.file) {
+    studio.workspace.justMade = null;
+    let started = false;
+    studio.on("drawn", () => {
+      if (started || !slides().length) return;
+      started = true;
+      setTimeout(() => openInline({ kind: "field", field: layoutOf(slides()[0]) === "statement" ? "words" : "title" }, { selectAll: true }), 60);
+    });
+  }
   // An undo waits for a figure's edits still on their way (shell.js).
   studio.settled = () => figure?.parts.idle?.() ?? Promise.resolve();
   studio.on("change", ({ quiet, source, who, before, entry }) => {
