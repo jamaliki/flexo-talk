@@ -1978,17 +1978,17 @@ def _layout_said(layout: str) -> str:
 
     done = []
     if layout.startswith("turned within"):
-        done.append("its groups' rows and columns swapped")
+        done.append("the figure's groups had their rows and columns swapped")
     elif layout.startswith("turned"):
-        done.append("its rows and columns swapped")
+        done.append("the figure's rows and columns were swapped")
     if "tighter" in layout:
-        done.append("set with tighter spacing")
+        done.append("its spacing was tightened" if done else "the figure's spacing was tightened")
     if "folded" in layout:
-        done.append("wrapped onto two lines")
+        done.append("it was wrapped onto two lines" if done else "the figure was wrapped onto two lines")
     if not done:
-        return "Figure rearranged to fit the slide."
+        return "The figure was rearranged to fit the slide."
     how = done[0] if len(done) == 1 else f"{', '.join(done[:-1])} and {done[-1]}"
-    return f"Figure drawn with {how}, to fit the slide."
+    return f"To fit the slide, {how}."
 
 
 def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:

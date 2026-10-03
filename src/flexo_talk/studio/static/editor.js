@@ -266,6 +266,23 @@ function placeOf(where) {
   return { slide: Number(match[1]), region, index: match[4] !== undefined ? Number(match[4]) : null };
 }
 
+// A copy of a slide or object: its figures with ids of their own, so the copy is laid out
+// and edited apart from what it was copied from.
+function copyOf(value) {
+  const copy = structuredClone(value);
+  const renew = (item) => {
+    if (Array.isArray(item)) { item.forEach(renew); return; }
+    if (!item || typeof item !== "object") return;
+    const inner = item.figure;
+    if (inner && typeof inner === "object" && inner.figure && typeof inner.figure === "object" && inner.figure.id) {
+      inner.figure.id = `${String(inner.figure.id).replace(/-copy(-\w+)?$/, "")}-copy-${Math.random().toString(36).slice(2, 6)}`;
+    }
+    Object.values(item).forEach(renew);
+  };
+  renew(copy);
+  return copy;
+}
+
 // -- small pictures ---------------------------------------------------------------------
 
 function glyph(layout) {
@@ -327,6 +344,9 @@ export function mount(studio, container) {
   // A deck style setting's name, and a choice's: as the catalogue names them, else from the key.
   const styleField = (name) => catalog.style?.find((field) => field.name === name);
   const styleName = (name) => styleField(name)?.label || keyTitle(name);
+  // A deck style setting as it is: the deck's own, else its look's, else the default.
+  const deckStyle = (name) => doc().deck?.style?.[name]
+    ?? catalog.looks.find((look) => look.name === (doc().deck?.look || "classic"))?.style?.[name] ?? styleField(name)?.default;
   const choiceName = (name, choice) => styleField(name)?.labels?.[choice] || ({ start: "Left", middle: "Centre", end: "Right" })[choice] || keyTitle(choice);
   // How to work the slide, said under it the first few times the editor is opened, then not.
   const opened = Number(remembered("opened", "0")) || 0;
@@ -441,7 +461,7 @@ export function mount(studio, container) {
 
   function duplicateSlide(index) {
     if (chosenSlides().length > 1 && chosenSlides().includes(index)) { duplicateSlides(chosenSlides()); return; }
-    studio.change((d) => { d.slides.splice(index + 1, 0, structuredClone(d.slides[index])); });
+    studio.change((d) => { d.slides.splice(index + 1, 0, copyOf(d.slides[index])); });
     select(index + 1);
   }
 
@@ -466,16 +486,17 @@ export function mount(studio, container) {
   }
   function duplicateSlides(indices) {
     const last = indices[indices.length - 1];
-    studio.change((d) => { d.slides.splice(last + 1, 0, ...indices.map((index) => structuredClone(d.slides[index]))); });
+    studio.change((d) => { d.slides.splice(last + 1, 0, ...indices.map((index) => copyOf(d.slides[index]))); });
     select(last + 1);
     state.picked = indices.map((_, n) => last + 1 + n);
     renderRail();
   }
-  function deleteSlides(indices) {
-    if (indices.length === 1) { deleteSlide(indices[0]); return; }
+  // `done` names it in the note: "deleted", or "cut" for ⌘X.
+  function deleteSlides(indices, done = "deleted") {
+    if (indices.length === 1) { deleteSlide(indices[0], done); return; }
     studio.change((d) => { for (const index of [...indices].sort((a, b) => b - a)) d.slides.splice(index, 1); });
     select(Math.min(indices[0], slides().length - 1));
-    undoNote(`${indices.length} slides deleted`);
+    undoNote(`${indices.length} slides ${done}`, { icon: done === "cut" ? "cut" : "trash" });
   }
 
   // "Slide deleted · Undo": the link takes back that change and no other, and the note
@@ -497,10 +518,10 @@ export function mount(studio, container) {
   // Keynote's New Slide does.
   const newSlideLike = (index) => addSlide(layoutOf(slides()[index]) === "title" ? "content" : layoutOf(slides()[index]) || "content", index + 1);
 
-  function deleteSlide(index) {
+  function deleteSlide(index, done = "deleted") {
     studio.change((d) => { d.slides.splice(index, 1); });
     select(Math.min(index, slides().length - 1));
-    undoNote("Slide deleted");
+    undoNote(`Slide ${done}`, { icon: done === "cut" ? "cut" : "trash" });
   }
 
   function slideMenu(anchor, index) {
@@ -517,8 +538,9 @@ export function mount(studio, container) {
       ...clipItems(),
       { icon: "copy", label: `Duplicate${many}`, keys: "⌘D", run: () => (together ? duplicateSlides(together) : duplicateSlide(index)) },
       "-",
-      ...(!together && index > 0 ? [{ icon: "up", label: "Move Up", run: () => moveSlide(index, index - 1) }] : []),
-      ...(!together && index < count - 1 ? [{ icon: "down", label: "Move Down", run: () => moveSlide(index, index + 1) }] : []),
+      // Greyed where it cannot go, as a Mac menu's items are, rather than left out.
+      ...(!together ? [{ icon: "up", label: "Move Up", disabled: index === 0, run: () => moveSlide(index, index - 1) },
+        { icon: "down", label: "Move Down", disabled: index >= count - 1, run: () => moveSlide(index, index + 1) }] : []),
       "-",
       { icon: "trash", label: `Delete${many}`, danger: true, run: () => deleteSlides(together || [index]) },
     ]);
@@ -615,19 +637,23 @@ export function mount(studio, container) {
       page?.steps > 1 ? h("div.steps", { title: "Items appear one at a time" }, `${page.steps} steps`) : null,
       here.length ? h("div.here", {}, here.slice(0, 2).map((entry) => avatar(entry.who, { size: 18 }))) : null,
       slideMoreButton(index)),
-    h("button.insert-after", { type: "button", title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
+    h("button.insert-after", { type: "button", tabindex: -1, title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
     return node;
   }
 
   function slideMoreButton(index) {
     const button = ui.button("", (event) => { event.stopPropagation(); slideMenu(event.currentTarget, index); }, { kind: "ghost", icon: "more", small: true, title: "Slide actions" });
     button.classList.add("more");
+    // The slide list is one stop for Tab, its slides chosen with the arrows: its buttons are for the pointer.
+    button.tabIndex = -1;
     return button;
   }
 
   railList.addEventListener("keydown", (event) => {
     if (event.target !== railList || state.focus || state.field) return;
     if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); if (slides().length) deleteSlides(chosenSlides()); }
+    // Return adds a slide after the one chosen, as in Keynote's slide navigator.
+    else if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); newSlideLike(state.slide); }
   });
   // Keys go to what was chosen last: once something on the slide is chosen, not the slides.
   const offRail = () => { if (railList.contains(document.activeElement)) document.activeElement.blur(); };
@@ -787,6 +813,10 @@ export function mount(studio, container) {
     // A figure's parts are shown one by one, as they will be chosen: by the first click.
     const inner = part && figurePartAt(event, part);
     if (inner) { place(hover, boxOf(inner.element.id), ""); return; }
+    // What is chosen has its own frame: no second one, nor a tag over the words above it.
+    const chosenNow = part && (part.kind === "block" ? state.focus && state.focus.region === part.region && state.focus.index === part.index
+      : state.field && state.field.field === fieldOf(part.field));
+    if (chosenNow) { hover.hidden = true; return; }
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
@@ -1339,9 +1369,9 @@ export function mount(studio, container) {
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
     if (items.length) items.push("-");
-    items.push(...clipItems(), { icon: "copy", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, structuredClone(block), at) });
-    if (at.index > 0) items.push({ icon: "up", label: "Move Up", run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) });
-    if (at.index < count - 1) items.push({ icon: "down", label: "Move Down", run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
+    items.push(...clipItems(), { icon: "copy", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, copyOf(block), at) });
+    items.push({ icon: "up", label: "Move Up", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
+      { icon: "down", label: "Move Down", disabled: at.index >= count - 1, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
     for (const other of regionsOf(slide)) {
       if (other.key !== at.region) items.push({ icon: "right", label: `Move to ${other.name}`, run: () => moveBlock(at, { region: other.key, index: blocksAt(slide, other.key).length }) });
     }
@@ -1381,10 +1411,8 @@ export function mount(studio, container) {
     const field = part?.kind === "field" ? part.field : null;
     return [
       field ? { icon: "pencil", label: `Edit ${layoutOf(slideAt()) === "statement" ? "Text" : { title: "Title", subtitle: "Subtitle", byline: "Byline" }[field] || "Text"}`, run: () => openInline({ kind: "field", field: field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : field }) } : null,
-      { icon: "text", label: "Add Text", disabled: !room, run: () => insertBlock("text") },
-      { icon: "flow", label: "Add Flow Chart", disabled: !room, run: () => insertBlock("flow") },
-      { icon: "structure", label: "Add Structure…", disabled: !room, run: () => insertBlock("structure") },
-      { icon: "image", label: "Add Picture…", disabled: !room, run: () => insertBlock("image") },
+      // What the toolbar adds, in its order.
+      ...MAIN_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `Add ${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, disabled: !room, run: () => insertBlock(kind) })),
       "-",
       { icon: "paste", label: "Paste", keys: "⌘V", disabled: !clipboard, run: () => clipboard && pasteClip(clipboard) },
       { icon: "plus", label: "New Slide", keys: "⇧⌘N", run: () => newSlideLike(index) },
@@ -1686,7 +1714,9 @@ export function mount(studio, container) {
       if (!rows[target.row] || target.col >= rows[target.row].length) return;
       at = { region: target.region, index: target.index };
       read = () => { const now = blocksAt(slideNow() || {}, at.region)[at.index]; return now && kindOf(now) === "table" ? tableRows(now)[target.row]?.[target.col] : undefined; };
-      editor = rich(rows[target.row][target.col], { single: true },
+      // The format bar stands over the table, not over the rows above the cell.
+      const table = () => pageNode?.querySelector(`[id="${CSS.escape(blockId(at))}"]`)?.getBoundingClientRect();
+      editor = rich(rows[target.row][target.col], { single: true, frame: table },
         (text) => editBlock(at, (b) => { const cells = tableRows(b); cells[target.row][target.col] = text; b.table = cells; },
           { merge: `${state.slide}-${at.region}-${at.index}-cell-${target.row}-${target.col}` }));
       idOf = () => `${blockId(at)}.${target.row}.${target.col}`;
@@ -2243,9 +2273,9 @@ export function mount(studio, container) {
   const copied = (clip) => toast(`${clip.label.charAt(0).toUpperCase()}${clip.label.slice(1)} copied`, { icon: "copy", seconds: 1.5 });
   function cutAway(clip) {
     if (clip.what === "parts") figure.parts.remove();
-    else if (clip.what === "block") deleteBlock(state.focus);
-    else if (clip.what === "slides") deleteSlides(clip.indices);
-    else deleteSlide(state.slide);
+    else if (clip.what === "block") deleteBlock(state.focus, "cut");
+    else if (clip.what === "slides") deleteSlides(clip.indices, "cut");
+    else deleteSlide(state.slide, "cut");
   }
   document.addEventListener("copy", (event) => {
     keyed = null;
@@ -2308,11 +2338,11 @@ export function mount(studio, container) {
       renderRail();
     } else if (clip.what === "slide") {
       const at = Math.min(state.slide + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, structuredClone(clip.slide)); });
+      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, copyOf(clip.slide)); });
       select(at);
     } else if (clip.what === "block") {
       if (!regionsOf(slideAt()).length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
-      insertBlock(kindOf(clip.block), structuredClone(clip.block));
+      insertBlock(kindOf(clip.block), copyOf(clip.block));
     } else if (clip.what === "parts") {
       if (figure && figureBlock() && editable(figureBlock())) figure.parts.paste(clip.parts);
       else insertBlock("figure", { figure: figureOfParts(clip.parts) });
@@ -2418,15 +2448,15 @@ export function mount(studio, container) {
     placeChosen();
   }
 
-  function deleteBlock(at) {
+  function deleteBlock(at, done = "deleted") {
     const block = blocksAt(slideAt(), at.region)[at.index];
     const label = block ? BLOCKS[kindOf(block)].label : "Object";
-    editSlide((s) => { blocksAt(s, at.region).splice(at.index, 1); });
+    editSlide((s) => { blocksAt(s, at.region).splice(at.index, 1); }, { label: done === "cut" ? `Cut ${label}` : null });
     state.focus = null;
     renderInspector();
     placeChosen();
     reportFocus();
-    undoNote(`${label} deleted`);
+    undoNote(`${label} ${done}`, { icon: done === "cut" ? "cut" : "trash" });
   }
 
   // -- the inspector --
@@ -2502,8 +2532,10 @@ export function mount(studio, container) {
     parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts, studio.info?.palette),
       layout === "two-columns" ? splitControl(slide) : null,
       layout === "columns" ? columnsControls(slide) : null,
-      allowed.has("align") ? ui.field(styleName("align"), ui.segmented({ value: slide.align ?? "", options: [
-        { value: "", label: "Default" }, ...["auto", "top", "middle"].map((value) => ({ value, label: choiceName("align", value) }))],
+      // Unset, the slide follows the deck's Design: said, so it is not taken for one of the others.
+      allowed.has("align") ? ui.field(styleName("align"), ui.select({ value: slide.align ?? "", options: [
+        { value: "", label: `As in Design (${choiceName("align", deckStyle("align") || "auto")})` },
+        ...["auto", "top", "middle"].map((value) => ({ value, label: choiceName("align", value) }))],
         onChange: (value) => editSlide((s) => setOption(s, "align", value), { quiet: true }) })) : null));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Footnotes"), footnotesControls(slide)));
@@ -2720,8 +2752,10 @@ export function mount(studio, container) {
     });
   }
   function richField({ value, key, placeholder = "", list = false, single = false, numbered = false, onInput }) {
-    const area = richText({ value, list, single, numbered, placeholder, palette: studio.info?.palette || {} });
+    const area = richText({ value, list, single, numbered, placeholder, palette: studio.info?.palette || {}, leaveOnTab: true });
     area.dataset.key = key;
+    // Esc leaves the field (a list's Tab sets its levels), and nothing else.
+    area.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.stopPropagation(); area.blur(); } });
     onRich(area, onInput);
     if (single) area.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) area.blur(); });
     return h(`div.rich-field${single ? ".single" : ""}`, {}, area);
@@ -2736,7 +2770,10 @@ export function mount(studio, container) {
     const size = () => ui.field("Font Size", ui.number({ value: block.size, placeholder: "Auto", min: 4, step: 1, key: key("size"), onChange: set("size") }), { hint: "In points" });
     const toneSwatches = (name, { none = true, extra = [], fallback } = {}) => {
       const palette = studio.info?.palette || {};
-      const colours = [...TONES.map((tone, i) => ({ value: tone, colour: palette[tone] || "#888", title: i === 0 ? "Accent" : `Accent ${i + 1}` })), ...extra];
+      // A palette of five fills more tones by going round again: each colour is offered once.
+      const seen = new Set();
+      const colours = [...TONES.map((tone, i) => ({ value: tone, colour: palette[tone] || "#888", title: i === 0 ? "Accent" : `Accent ${i + 1}` })), ...extra]
+        .filter((item) => item.value === block[name] || !seen.has(String(item.colour).toLowerCase()) && seen.add(String(item.colour).toLowerCase()));
       return ui.swatches({ value: block[name] ?? fallback ?? null, colours, none, custom: true,
         onChange: (value) => editBlock(at, (b) => setOption(b, name, value, fallback), { merge: merge(name) }) });
     };
@@ -3258,7 +3295,7 @@ export function mount(studio, container) {
     const preview = h("img.preview-pic", { src: block.image ? studio.raw(block.image) : "", alt: "", hidden: !block.image });
     return [preview,
       fileRow(block.image, ["image"], (path) => { editBlock(at, (b) => { b.image = path; }, {}); preview.src = studio.raw(path); preview.hidden = false; }, "picture.png"),
-      h("div.hint-line", {}, "SVG pictures stay as vectors: editable shapes and text in PowerPoint."),
+      /\.svg$/i.test(block.image || "") ? h("div.hint-line", {}, "An SVG picture stays as vectors: editable shapes and text in PowerPoint.") : null,
       widthField(block, at)];
   }
 
@@ -3539,7 +3576,7 @@ export function mount(studio, container) {
   function duplicateChosen() {
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
     const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
-    if (block) insertBlock(kindOf(block), structuredClone(block), { ...state.focus });
+    if (block) insertBlock(kindOf(block), copyOf(block), { ...state.focus });
     else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
     else if (slides().length) duplicateSlide(state.slide);
   }
@@ -3715,8 +3752,16 @@ export function mount(studio, container) {
     if (!same(a.footnotes, b.footnotes)) return "Edit Footnotes";
     const old = partsOf(a), next = partsOf(b);
     const found = (list, item) => list.some((other) => same(other.block, item.block));
-    if (next.length > old.length) { const added = next.find((item) => !found(old, item)) || next[next.length - 1]; return `Add ${blockLabel(added.block)}`; }
-    if (next.length < old.length) { const gone = old.find((item) => !found(next, item)) || old[old.length - 1]; return `Delete ${blockLabel(gone.block)}`; }
+    // The objects of one not in the other, counted: of two alike, the one more is the one added.
+    const beyond = (list, other) => {
+      const pool = [...other];
+      return list.filter((item) => { const at = pool.findIndex((one) => same(one.block, item.block)); if (at < 0) return true; pool.splice(at, 1); return false; });
+    };
+    if (next.length > old.length) {
+      const added = beyond(next, old)[0] || next[next.length - 1];
+      return `${found(old, added) ? "Duplicate" : "Add"} ${blockLabel(added.block)}`;
+    }
+    if (next.length < old.length) { const gone = beyond(old, next)[0] || old[old.length - 1]; return `Delete ${blockLabel(gone.block)}`; }
     const pairs = next.map((item, k) => [old[k], item]).filter(([was, now]) => !same(was.block, now.block) || was.region !== now.region);
     if (pairs.length && pairs.every(([, now]) => found(old, now))) return `Move ${blockLabel(pairs[0][1].block)}`;
     if (pairs.length === 1) return blockChange(pairs[0][0].block, pairs[0][1].block);

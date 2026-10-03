@@ -362,7 +362,7 @@ function dress() {
 .ss-frame { container-type: size; display: grid; place-items: center; min-width: 0; min-height: 0; width: 100%; height: 100%; }
 .ss-audience > .ss-frame { position: absolute; inset: 0; }
 .ss-slide { width: min(100cqw, calc(100cqh * var(--ratio))); aspect-ratio: var(--ratio); background: #fff; line-height: 0; overflow: hidden; }
-.ss-slide svg { display: block; width: 100%; height: 100%; }
+.ss-slide svg { display: block; width: 100%; height: 100%; text-rendering: geometricPrecision; }
 .ss-slide [data-flexo-placeholder] { display: none; }
 .ss-end { position: absolute; inset: 0; display: grid; place-items: center; color: #8c8c8c; font-size: 17px; }
 .ss-hint { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: rgba(255,255,255,0.12);

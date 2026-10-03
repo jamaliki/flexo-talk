@@ -1116,9 +1116,38 @@ def _json_value(value: object) -> object:
     raise TypeError(f"A deck document cannot contain a {type(value).__name__} value ({value!r:.40}).")
 
 
+_SLIDE_ORDER = (
+    "layout", "title", "subtitle", "author", "date", "words", "by", "dark", "align", "split", "widths",
+    "background", "shade", "body", "left", "right", "columns", "notes", "footnotes",
+)
+"""A slide's keys in the order a person reads them: what it is, its words, its look, its
+content, then its notes."""
+
+
+def _tidy(value: Any, *, slide: bool = False) -> Any:
+    """``value`` as it is written: a slide's keys in ``_SLIDE_ORDER`` (the rest after, as
+    they were), and an id first wherever there is one. Only the order changes."""
+
+    if isinstance(value, list):
+        return [_tidy(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    keys = list(value)
+    if slide:
+        keys = [key for key in _SLIDE_ORDER if key in value] + [key for key in keys if key not in _SLIDE_ORDER]
+    elif "id" in value:
+        keys = ["id", *(key for key in keys if key != "id")]
+    return {key: _tidy(value[key]) for key in keys}
+
+
 def dump_document(document: dict[str, Any], *, format: str = "yaml") -> str:
     """A deck document as YAML (or JSON) text."""
 
+    if isinstance(document, dict) and isinstance(document.get("slides"), list):
+        document = {
+            key: [_tidy(slide, slide=True) for slide in item] if key == "slides" else _tidy(item)
+            for key, item in document.items()
+        }
     if format == "json":
         return json.dumps(document, indent=2, ensure_ascii=False, default=_json_value) + "\n"
     return yaml.dump(document, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=100)

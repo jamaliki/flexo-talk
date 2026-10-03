@@ -37,6 +37,9 @@ from flexo_talk.document import (
     save_document,
 )
 
+LOOK_LABELS = {"keynote": "Centred"}
+"""A look's name as the studio shows it, where its id is not that name."""
+
 LOOK_NOTES = {
     "classic": "Short accent rule under titles, centred title slide",
     "band": "Titles on an accent band, filled section slides",
@@ -320,8 +323,11 @@ class DeckKind:
                           "note": STYLE_NOTES.get(item.name, "")})
         return {
             "themes": list(theme_names()),
-            "looks": [{"name": name, "label": name.title(), "note": LOOK_NOTES.get(name, ""), "style": {**LOOKS[name]}}
-                      for name in LOOKS],
+            "looks": [
+                {"name": name, "label": LOOK_LABELS.get(name, name.title()), "note": LOOK_NOTES.get(name, ""),
+                 "style": {**LOOKS[name]}}
+                for name in LOOKS
+            ],
             "palettes": {name: list(colours) for name, colours in design_palettes().items()},
             "fonts": sorted(available_families()),
             "style": style,

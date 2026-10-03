@@ -215,7 +215,7 @@ function serialise(node, style = { bold: false, italic: false }, names = (colour
 // next item, Return on an empty item moves it out a level); `single` a line of its own
 // (Return is left to whoever holds it); else words in lines. `palette` gives the
 // theme's colours by name, for [words]{accent}.
-export function richText({ value = "", list = false, single = false, numbered = false, palette = {}, placeholder = "", spelling = true } = {}) {
+export function richText({ value = "", list = false, single = false, numbered = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}`;
   area.contentEditable = "true";
@@ -402,7 +402,15 @@ export function richText({ value = "", list = false, single = false, numbered = 
       changed();
       return;
     }
-    if (event.key === "Tab" && !single) { event.preventDefault(); return; }
+    // Tab is no character here: in a panel's field it goes on to the next control.
+    if (event.key === "Tab" && !single) { if (!leaveOnTab) event.preventDefault(); return; }
+    // ⌘K links the words chosen, as in Keynote and Pages.
+    if (mod && !event.altKey && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!selection().isCollapsed) askLink();
+      return;
+    }
     if (event.key === "Backspace" && list) {
       const [line] = chosenLines();
       if (line && atStart(line) && Number(line.dataset.level) > 0) { event.preventDefault(); line.dataset.level = String(Number(line.dataset.level) - 1); changed(); }
@@ -481,12 +489,21 @@ export function richText({ value = "", list = false, single = false, numbered = 
     } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); linkInput.hidden = true; if (linkRange) place(linkRange); area.focus(); }
   });
   const boldTool = tool("<b>B</b>", "Bold (⌘B)", () => document.execCommand("bold"));
+  const italicTool = tool("<i>I</i>", "Italic (⌘I)", () => document.execCommand("italic"));
+  function askLink() {
+    const s = selection();
+    linkRange = s.rangeCount ? s.getRangeAt(0).cloneRange() : null;
+    linkInput.value = "";
+    showBar();
+    linkInput.hidden = false;
+    setTimeout(() => linkInput.focus(), 0);
+  }
   bar.append(
     boldTool,
-    tool("<i>I</i>", "Italic (⌘I)", () => document.execCommand("italic")),
+    italicTool,
     tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code", () => wrapChosen((text) => plainNode("code", "", text))),
-    tool("<span style=\"font-family: Georgia, serif; font-style: italic\">x²</span>", "Equation: the words chosen as LaTeX", () => wrapChosen((text) => plainNode("span", "rt-maths", `$${text}$`))),
-    tool(icon("link"), "Link", () => { const s = selection(); linkRange = s.rangeCount ? s.getRangeAt(0).cloneRange() : null; linkInput.value = ""; linkInput.hidden = false; setTimeout(() => linkInput.focus(), 0); }),
+    tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX", () => wrapChosen((text) => plainNode("span", "rt-maths", `$${text}$`))),
+    tool(icon("link"), "Link (⌘K)", () => askLink()),
     ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => document.execCommand("foreColor", false, palette[name]))),
     palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default colour", () => document.execCommand("foreColor", false, palette.ink)) : "",
     linkInput);
@@ -500,10 +517,15 @@ export function richText({ value = "", list = false, single = false, numbered = 
     if (!inside || s.isCollapsed) { if (document.activeElement !== linkInput) bar.hidden = true; return; }
     if (!bar.isConnected) document.body.append(bar);
     boldTool.hidden = boldAlready();
+    // Pressed where the words chosen are bold or italic, as a Mac format bar shows.
+    boldTool.classList.toggle("on", document.queryCommandState("bold"));
+    italicTool.classList.toggle("on", document.queryCommandState("italic"));
     bar.hidden = false;
+    // Over the thing being edited, never on it (`frame`: a table for its cell), else under it.
     const chosen = s.getRangeAt(0).getBoundingClientRect(), own = bar.getBoundingClientRect();
-    const above = chosen.top - own.height - 8;
-    const top = above > 8 ? above : chosen.bottom + 8;
+    const around = frame?.() || (area.closest(".inline-editor, .rich-field") || area).getBoundingClientRect();
+    const above = Math.min(chosen.top, around.top) - own.height - 8;
+    const top = above > 8 ? above : Math.max(chosen.bottom, around.bottom) + 8;
     const left = Math.min(Math.max(8, chosen.left + chosen.width / 2 - own.width / 2), innerWidth - own.width - 8);
     Object.assign(bar.style, { top: `${top}px`, left: `${left}px` });
   };
