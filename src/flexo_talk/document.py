@@ -539,7 +539,9 @@ def add_block(
         raise DeckDocumentError(where, f"A block must be a mapping named by its kind ({', '.join(BLOCKS)}).")
     kinds = [key for key in block if key in BLOCKS]
     if not kinds:
-        raise DeckDocumentError(where, f"This block has no kind. Name one of {', '.join(BLOCKS)}.")
+        named = next(iter(block), None)
+        said = f"Unknown kind of block \u201c{named}\u201d" if named is not None else "This block is empty"
+        raise DeckDocumentError(where, f"{said}. Name one of {', '.join(BLOCKS)}.")
     if len(kinds) > 1:
         raise DeckDocumentError(
             where, f"This block names more than one kind ({', '.join(kinds)}). Name only one of {', '.join(BLOCKS)}."

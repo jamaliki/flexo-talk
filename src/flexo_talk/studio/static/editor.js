@@ -26,9 +26,13 @@ const BLOCKS = {
   plot: { icon: "plot", label: "Plot", hint: "A matplotlib chart from a Python function" },
   math: { icon: "math", label: "Equation", hint: "A LaTeX equation on its own line" },
   mechanism: { icon: "mechanism", label: "Mechanism", hint: "A reaction mechanism from SMILES, with checked curly arrows" },
+  // What the file holds but Flexo does not know: shown for what it is, never offered.
+  unknown: { icon: "warning", label: "Object", hint: "Not a kind of object Flexo knows", hidden: true },
 };
 // Flow charts and structures are figures: they are offered by name, and made as figures.
 const MAIN_BLOCKS = ["text", "bullets", "figure", "flow", "structure", "image", "table"];
+// Those that ask for a file or function first.
+const CHOOSE = new Set(["structure", "image", "gallery", "plot"]);
 const MORE_BLOCKS = ["math", "mechanism", "stats", "quote", "callout", "code", "gallery", "plot"];
 
 // What an equation's snippet buttons put in: [label, title, LaTeX]; "|" is where the cursor goes.
@@ -162,7 +166,8 @@ function blocksAt(slide, key, create = false) {
   return slide[key] || [];
 }
 
-const kindOf = (block) => Object.keys(block || {}).find((key) => key in BLOCKS) || "text";
+const kindOf = (block) => Object.keys(block || {}).find((key) => key in BLOCKS && !BLOCKS[key].hidden)
+  || (block && typeof block === "object" ? "unknown" : "text");
 
 function setOption(target, key, value, fallback = undefined) {
   if (value === null || value === undefined || value === "" || value === fallback) delete target[key];
@@ -191,6 +196,7 @@ function summary(block) {
       const first = steps.map((step) => (typeof step === "string" ? step : step?.smiles)).find(Boolean) || "";
       return `${steps.length} step${steps.length === 1 ? "" : "s"} · ${first}`;
     }
+    case "unknown": return `Unknown: ${Object.keys(block).join(", ")}`;
     default: return plain(value);
   }
 }
@@ -364,7 +370,7 @@ export function mount(studio, container) {
 
   // -- the bar --
   const insertButtons = MAIN_BLOCKS.map((kind) => ui.button(BLOCKS[kind].label, () => insertBlock(kind), { kind: "ghost", icon: BLOCKS[kind].icon, title: `Add ${BLOCKS[kind].label}: ${BLOCKS[kind].hint}` }));
-  const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: BLOCKS[kind].label, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "chevron-down" });
+  const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "chevron-down" });
   // Its chevron after the word, as on the layout button: both open a menu.
   moreButton.classList.add("pulldown");
   moreButton.append(moreButton.querySelector("svg"));
@@ -1306,7 +1312,7 @@ export function mount(studio, container) {
       return;
     }
     focusBlock(part.region, part.index);
-    blockMenu(point, part);
+    blockMenu(point, part, block && kindOf(block) === "table" ? cellAt(part.id, event) : null);
   }
   // Greyed out, as a Mac menu's are, when there is nothing to cut, copy or paste.
   const clipItems = () => [
@@ -1314,15 +1320,16 @@ export function mount(studio, container) {
     { icon: "copy", label: "Copy", keys: "⌘C", disabled: !clipOf(), run: () => { const clip = clipOf(); if (clip) { clipboard = clip; navigator.clipboard?.writeText(plainOf(clip)).catch(() => {}); copied(clip); } } },
     { icon: "paste", label: "Paste", keys: "⌘V", disabled: !clipboard, run: () => clipboard && pasteClip(clipboard) },
   ];
-  function blockMenu(point, at) {
+  function blockMenu(point, at, cell = null) {
     const slide = slideAt(), block = blocksAt(slide, at.region)[at.index];
     if (!block) return;
     const kind = kindOf(block), count = blocksAt(slide, at.region).length;
     const items = [];
     if (INLINE.has(kind)) items.push({ icon: "pencil", label: kind === "math" ? "Edit Equation" : kind === "code" ? "Edit Code" : "Edit Text", run: () => openInline({ kind: "block", ...at }) });
+    if (cell) items.push({ icon: "pencil", label: "Edit Cell", run: () => openInline({ kind: "cell", ...at, ...cell }, { selectAll: true }) }, "-", ...tableItems(at, cell));
     if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", keys: "A", run: () => whenFigure(() => figure.parts.addPalette(point)) });
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
-    if (kind === "figure") items.push(...FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export as ${label}`, hint, run: () => exportFigure(at, formats) })));
+    if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
     if (items.length) items.push("-");
     items.push(...clipItems(), { icon: "copy", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, structuredClone(block), at) });
     if (at.index > 0) items.push({ icon: "up", label: "Move Up", run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) });
@@ -1333,6 +1340,33 @@ export function mount(studio, container) {
     items.push("-", { icon: "trash", label: "Delete", keys: "⌫", danger: true, run: () => deleteBlock(at) });
     menu(point, items);
   }
+  // A table's rows and columns, from the cell under the pointer, as in Keynote. Each
+  // column's alignment goes with it.
+  function tableItems(at, { row, col }) {
+    const rows = tableRows(blocksAt(slideAt(), at.region)[at.index]), columns = rows[0].length;
+    const reshape = (mutate) => {
+      editBlock(at, (b) => {
+        const grid = tableRows(b), align = alignList(b.align, columns);
+        mutate(grid, align);
+        b.table = grid;
+        if (align) b.align = align;
+      });
+      renderInspector();
+    };
+    const blank = () => Array(columns).fill("");
+    return [
+      { icon: "plus", label: "Add Row Above", run: () => reshape((grid) => grid.splice(row, 0, blank())) },
+      { icon: "plus", label: "Add Row Below", run: () => reshape((grid) => grid.splice(row + 1, 0, blank())) },
+      { icon: "plus", label: "Add Column Before", run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 0, "")); align?.splice(col, 0, align[col]); }) },
+      { icon: "plus", label: "Add Column After", run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col + 1, 0, "")); align?.splice(col + 1, 0, align[col]); }) },
+      { icon: "trash", label: "Delete Row", disabled: rows.length < 2, run: () => reshape((grid) => grid.splice(row, 1)) },
+      { icon: "trash", label: "Delete Column", disabled: columns < 2, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 1)); align?.splice(col, 1); }) },
+    ];
+  }
+  // A figure's exports, as the menu that Export Figure… opens.
+  const exportItems = (at) => [{ title: "Export Figure As" },
+    ...FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `${label}…`, hint, run: () => exportFigure(at, formats) }))];
+
   // The slide's own: its words, what may be added to it, and the slide.
   function slideItems(part) {
     const index = state.slide, room = regionsOf(slideAt()).length > 0;
@@ -1580,7 +1614,7 @@ export function mount(studio, container) {
       ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add Shape (A)", id: undefined }),
       ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one shape to another (C)" }),
       group,
-      ui.button("", (event) => menu(event.currentTarget, FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export as ${label}`, hint, run: () => exportFigure(figure, formats) }))),
+      ui.button("", (event) => menu(event.currentTarget, exportItems(figure)),
         { small: true, kind: "ghost", icon: "export", title: "Export figure (SVG, PDF, PNG, YAML)" }),
       figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)" })
         : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: "Delete Figure (⌫)" }),
@@ -2576,8 +2610,8 @@ export function mount(studio, container) {
       } },
     regionsOf(slide).length > 1 ? h("div.region-head", {}, region.name) : null,
     h("div.blocks", {}, blocks.map((block, index) => blockRow(block, region, index)),
-      h("button.add-row", { type: "button", onclick: (event) => menu(event.currentTarget, Object.entries(BLOCKS).map(([kind, info]) => ({
-        icon: info.icon, label: info.label, hint: info.hint, run: () => insertBlock(kind, null, { region: region.key, index: blocks.length - 1 }),
+      h("button.add-row", { type: "button", onclick: (event) => menu(event.currentTarget, Object.entries(BLOCKS).filter(([, info]) => !info.hidden).map(([kind, info]) => ({
+        icon: info.icon, label: `${info.label}${CHOOSE.has(kind) ? "…" : ""}`, hint: info.hint, run: () => insertBlock(kind, null, { region: region.key, index: blocks.length - 1 }),
       }))) }, icon("plus"), "Add Object")));
     return node;
   }
@@ -3534,8 +3568,9 @@ export function mount(studio, container) {
   studio.commands = () => [
     ...slides().map((slide, index) => ({ icon: "slide", label: `Slide ${index + 1}: ${slideTitle(slide)}`, run: () => select(index) })),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
-    ...(slides().length ? layouts.map((layout) => ({ icon: "layout", label: `Layout: ${LAYOUT_NAMES[layout.name]}`, run: () => changeLayout(layout.name) })) : []),
-    ...Object.entries(BLOCKS).map(([kind, info]) => ({ icon: info.icon, label: `Add ${info.label}`, hint: info.hint, run: () => insertBlock(kind) })),
+    // Only what can be done here: no layout the slide already has, nothing added where there is no room.
+    ...(slides().length ? layouts.filter((layout) => layout.name !== layoutOf(slideAt())).map((layout) => ({ icon: "layout", label: `Layout: ${LAYOUT_NAMES[layout.name]}`, run: () => changeLayout(layout.name) })) : []),
+    ...(regionsOf(slideAt()).length ? Object.entries(BLOCKS).filter(([, info]) => !info.hidden).map(([kind, info]) => ({ icon: info.icon, label: `Add ${info.label}${CHOOSE.has(kind) ? "…" : ""}`, hint: info.hint, run: () => insertBlock(kind) })) : []),
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${lookName(look)}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}`, hint, run: () => exportFigure(figure, formats) })) : []),
