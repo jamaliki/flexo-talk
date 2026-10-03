@@ -62,6 +62,7 @@ from flexo_talk.deck import (
     accent_field,
     inline,
     link_colour,
+    list_numbers,
     made,
     paint_role,
 )
@@ -1916,9 +1917,14 @@ def _list_layout(canvas: _Canvas, block: _Bullets, box: Box) -> ListLayout:
         style.indent, numbered=block.numbered, reveal=block.reveal, palette=canvas.palette,
     )
     if block.numbered:
-        count = sum(level == 0 for level, _ in block.items)
-        widest = max(canvas.measure((TextRun(f"{n}."),), size, None).width for n in range(1, max(count, 1) + 1))
-        layout.number_room = widest + size * 0.45
+        numbers = list(zip(list_numbers([level for level, _ in block.items]), block.items, strict=True))
+
+        def widest(labels: list[str]) -> float:
+            return max((canvas.measure((TextRun(label),), size, None).width for label in labels), default=0.0)
+
+        layout.number_room = widest([n for n, (level, _) in numbers if level == 0] or ["1."]) + size * 0.45
+        below = [n for n, (level, _) in numbers if level > 0]
+        layout.sub_room = widest(below) + size * 0.4 if below else 0.0
     return layout
 
 
@@ -1928,7 +1934,7 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="bullets")
     layout = _list_layout(canvas, block, box)
     top = box.y
-    number = 0
+    numbers = list_numbers([level for level, _ in block.items]) if block.numbered else []
     # A revealed list's steps follow those of the lists revealed before it on the slide,
     # as the PowerPoint's clicks do: the left list, then the right.
     step = canvas.steps - 1 if block.reveal else 0
@@ -1956,12 +1962,12 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
             """A distance in from the list's start edge: the left, or the right for RTL."""
 
             return box.x + box.width - distance if rtl else box.x + distance
-        if block.numbered and level == 0:
-            number += 1
-            label = (TextRun(f"{number}."),)
+        if block.numbered:
+            label = (TextRun(numbers[index]),)
             canvas.words(
                 f"{identifier}.{index}.mark", label,
-                Box(across(0.0), top + metrics.baseline - canvas.measure(label, size, None).baseline, 0.0, 0.0),
+                Box(across(layout.mark_at(level)), top + metrics.baseline - canvas.measure(label, size, None).baseline,
+                    0.0, 0.0),
                 size=size, role=role, parent=item, align="end" if rtl else "start",
             )
         else:

@@ -935,10 +935,12 @@ def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None
             mark_at = layout.mark_at(level)
             pieces = _runs_xml(runs, typography, stack, layout.size, palette, ink, native=native)
             spacing, before = rows[position]
-            if layout.numbered and level == 0:
-                # A native numbered list: the program numbers it, in the words' face.
+            if layout.numbered:
+                # A native numbered list: the program numbers it, in the words' face, each
+                # level in its own tier (1., a., i.), as the slide does.
                 face = escape(_family_name(_ListRun("1", layout.size, 400, False, stack.face(400, False), ink)))
-                mark = f'<a:buFont typeface="{face}"/><a:buAutoNum type="arabicPeriod"/>'
+                tier = ("arabicPeriod", "alphaLcPeriod", "romanLcPeriod")[level % 3]
+                mark = f'<a:buFont typeface="{face}"/><a:buAutoNum type="{tier}"/>'
             else:
                 mark = '<a:buFont typeface="Arial"/><a:buChar char="\u2022"/>'
             colour = accent if level == 0 else muted
@@ -950,7 +952,8 @@ def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None
                 f'<a:lnSpc><a:spcPts val="{round(spacing * 100)}"/></a:lnSpc>'
                 f'<a:spcBef><a:spcPts val="{round(before * 100)}"/></a:spcBef>'
                 f'<a:spcAft><a:spcPts val="0"/></a:spcAft>'
-                f'<a:buClr><a:srgbClr val="{colour}"/></a:buClr><a:buSzPct val="{100000 if level == 0 else 85000}"/>'
+                f'<a:buClr><a:srgbClr val="{colour}"/></a:buClr>'
+                f'<a:buSzPct val="{100000 if level == 0 or layout.numbered else 85000}"/>'
                 f"{mark}</a:pPr>{pieces}</a:p>"
             )
         return "".join(written)

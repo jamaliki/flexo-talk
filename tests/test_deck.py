@@ -254,9 +254,12 @@ def test_a_numbered_list_is_numbered_natively(tmp_path: Path) -> None:
         slide.bullets("First", ["a detail"], "Second", numbered=True)
     result = deck.build(tmp_path, formats=("pptx", "svg"))
     slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
-    assert slide.count('<a:buAutoNum type="arabicPeriod"/>') == 2 and slide.count("<a:buChar") == 1
+    # Every level numbered in its tier: the detail is "a.", not a bullet.
+    assert slide.count('<a:buAutoNum type="arabicPeriod"/>') == 2
+    assert slide.count('<a:buAutoNum type="alphaLcPeriod"/>') == 1
+    assert "<a:buChar" not in slide
     svg = result.svgs[0].read_text()
-    assert ">1.<" in svg and ">2.<" in svg
+    assert ">1.<" in svg and ">a.<" in svg and ">2.<" in svg
 
 
 def test_a_revealed_list_builds_click_by_click(tmp_path: Path) -> None:
@@ -1114,3 +1117,18 @@ def test_a_code_listing_is_one_text_box_in_powerpoint(tmp_path: Path) -> None:
     # A paragraph a line, the blank one kept, so each line is where it was drawn.
     lines = [paragraph.text for paragraph in listing[0].text_frame.paragraphs]
     assert lines == ["def greet(name):", "    # say hello", "", "    return name"]
+
+
+def test_a_numbered_list_numbers_every_level_in_its_tier(tmp_path: Path) -> None:
+    from flexo_talk.compose import render_slide
+    from flexo_talk.deck import list_numbers
+
+    assert list_numbers([0, 1, 1, 2, 2, 1, 0, 1]) == ["1.", "a.", "b.", "i.", "ii.", "c.", "2.", "a."]
+    deck = Deck("tiers")
+    with deck.slide("Steps") as slide:
+        slide.bullets("Plan", ["Ask", "Listen"], "Build", numbered=True)
+    svg = render_slide(deck, deck.slides[0]).svg
+    assert [">1.<" in svg, ">a.<" in svg, ">b.<" in svg, ">2.<" in svg] == [True] * 4
+    result = deck.build(tmp_path, formats=("pptx",))
+    xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert xml.count('type="arabicPeriod"') == 2 and xml.count('type="alphaLcPeriod"') == 2

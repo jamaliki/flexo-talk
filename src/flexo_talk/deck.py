@@ -686,7 +686,7 @@ class Region:
         reveal: bool = False,
     ) -> Region:
         """A bulleted list. A nested list of strings is the level below the item before it.
-        ``numbered=True`` numbers the outer level (1., 2., ...); levels below keep bullets.
+        ``numbered=True`` numbers every level, each in its tier (1., a., i.), as Keynote does.
         ``reveal=True`` shows the outer items one at a time: a click each in the
         PowerPoint, a page each in the PDF (the SVG and PNG show them all)."""
 
@@ -1673,6 +1673,8 @@ class ListLayout:
     reveal: bool = False
     """Whether the outer items appear one click (one PDF page) at a time."""
     number_room: float = 0.0
+    sub_room: float = 0.0
+    """In a numbered list, the room an item's number takes below the top level ("a.", "iv.")."""
     """How far an outer item's words start from its number's left edge, when numbered."""
     palette: Palette | None = None
     """The slide's paints (light words on a dark slide); the deck's when unset."""
@@ -1689,14 +1691,52 @@ class ListLayout:
     def offset(self, level: int) -> float:
         """Where an item's words start, from the list's left edge."""
 
-        if self.numbered and level == 0:
-            return self.number_room
+        if self.numbered:
+            return self.number_room if level == 0 else self.mark_at(level) + self.sub_room
         return self.indent * level + self.size * 0.95
 
     def mark_at(self, level: int) -> float:
         """Where an item's bullet or number starts, from the list's left edge."""
 
-        return 0.0 if self.numbered and level == 0 else self.indent * level + self.size * 0.12
+        if self.numbered:
+            # Each level's number where the level above's words start, as Keynote's tiers are.
+            return 0.0 if level == 0 else self.number_room + self.indent * (level - 1)
+        return self.indent * level + self.size * 0.12
+
+
+def list_number(count: int, level: int) -> str:
+    """An item's number at its level in a numbered list, as Keynote and PowerPoint tier
+    them: 1. at the top, a. under it, i. under that, and round again."""
+
+    if level % 3 == 1:
+        letters = ""
+        while count:
+            count, rest = divmod(count - 1, 26)
+            letters = chr(ord("a") + rest) + letters
+        return f"{letters}."
+    if level % 3 == 2:
+        numerals = [(10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+        roman = ""
+        for value, numeral in [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+                               (50, "l"), (40, "xl"), *numerals]:
+            while count >= value:
+                roman += numeral
+                count -= value
+        return f"{roman}."
+    return f"{count}."
+
+
+def list_numbers(levels: Sequence[int]) -> list[str]:
+    """The numbers of a numbered list's items, by their levels: each level counts on until
+    an item above it, then starts again."""
+
+    counts: list[int] = []
+    numbers = []
+    for level in levels:
+        counts = (counts + [0] * (level + 1))[: level + 1]
+        counts[level] += 1
+        numbers.append(list_number(counts[level], level))
+    return numbers
 
 
 @dataclass(slots=True)

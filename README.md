@@ -152,7 +152,7 @@ Any slide (title and section slides too) can take `background=`: a colour
 background the slide's words and accents are set light (`dark=` overrides).
 
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
-is the level below; `numbered=True` numbers the outer level, natively in PowerPoint;
+is the level below; `numbered=True` numbers every level in its tier (1., a., i.), natively in PowerPoint;
 `reveal=True` shows the outer items one click at a time -- PowerPoint builds, and a
 PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
