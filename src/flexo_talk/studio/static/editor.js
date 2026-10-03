@@ -3592,10 +3592,10 @@ export function mount(studio, container) {
     ...(regionsOf(slideAt()).length ? Object.entries(BLOCKS).filter(([, info]) => !info.hidden).map(([kind, info]) => ({ icon: info.icon, label: `Add ${info.label}${CHOOSE.has(kind) ? "…" : ""}`, hint: info.hint, run: () => insertBlock(kind) })) : []),
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${lookName(look)}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
-    ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}`, hint, run: () => exportFigure(figure, formats) })) : []),
+    ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
     { icon: "play", label: "Present", keys: "⌘↩", run: () => present() },
-    { icon: "export", label: "Export as PowerPoint", run: () => studio.exportFiles(["pptx"]) },
-    { icon: "export", label: "Export as PDF", run: () => studio.exportFiles(["pdf"]) },
+    { icon: "export", label: "Export as PowerPoint…", run: () => studio.exportFiles(["pptx"]) },
+    { icon: "export", label: "Export as PDF…", run: () => studio.exportFiles(["pdf"]) },
   ];
   studio.reveal = (where) => {
     if (where?.label === "Design") { state.tab = "design"; renderInspector(); return; }
