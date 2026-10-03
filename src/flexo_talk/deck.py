@@ -549,7 +549,18 @@ def accent_field(palette: Palette) -> str:
     return accent if is_dark(accent) else with_lightness(accent, 0.45)
 
 
-_INLINE = r"(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\*\*|\*)"
+_WORDS_IN = r"(?:[^\[\]\n]|\[[^\[\]\n]+\](?:\([^)\s]+\)|\{[^}\s]+\})|\[(?![^\[\]\n]+\](?:\([^)\s]+\)|\{[^}\s]+\})))+"
+"""A link's or a colour's words: no bracket in them but those of another link or colour
+(a link's words coloured, a colour's words linked), or one on its own that starts
+none."""
+
+_INLINE = rf"(\[{_WORDS_IN}\]\([^)\s]+\)|\[{_WORDS_IN}\]\{{[^}}\s]+\}}|`[^`]*`|\*\*|\*)"
+_LINK = re.compile(rf"\[({_WORDS_IN})\]\(([^)\s]+)\)")
+_COLOURED = re.compile(rf"\[({_WORDS_IN})\]\{{([^}}\s]+)\}}")
+_KEPT = re.compile(r"(\\`|`[^`]*`)|\\\\(?=[(\[])")
+"""Where a typed \\( or \\[ is written \\\\( or \\\\[ (outside code): a backslash
+before a bracket, which is no maths."""
+_MATHS = re.compile("\ue010(\\d+)\ue011")
 
 
 _DISPLAYED = re.compile(r"\s*(?:\$\$(?P<dollars>.+?)\$\$|\\\[(?P<brackets>.+?)\\\])\s*", re.DOTALL)
@@ -580,16 +591,30 @@ def inline(words: str) -> tuple[TextRun, ...]:
     """
 
     runs: list[TextRun] = []
-    # Split on maths (read as flexo reads it), then links, code, ** and *; each piece
-    # takes the styles open around it. \* is an asterisk, \` a backtick and \] a bracket
-    # (as typed: "[1](2)"), kept out of the split.
-    tokens: list[str] = []
+    # Split on links, colours, code, ** and *, maths (read as flexo reads it) standing
+    # aside meanwhile as a letter that is no mark, so maths in a link's or a colour's
+    # words stays in them; each piece takes the styles open around it. \* is an asterisk,
+    # \` a backtick, \] a bracket (as typed: "[1](2)") and \\( or \\[ a backslash and a
+    # bracket (as typed: "\(x\)"), kept out of the split.
+    masked = _KEPT.sub(lambda found: found.group(1) or "\ue003\ue003", words)
+    maths: list[str] = []
+    text = ""
     at = 0
-    for start, end in math_spans(words):
-        tokens += re.split(_INLINE, _held(words[at:start]))
-        tokens.append(words[start:end])
+    for start, end in math_spans(masked):
+        text += f"{masked[at:start]}\ue010{len(maths)}\ue011"
+        maths.append(words[start:end])
         at = end
-    tokens += re.split(_INLINE, _held(words[at:]))
+    text += masked[at:]
+
+    def back(part: str) -> str:
+        return _MATHS.sub(lambda found: maths[int(found.group(1))], part)
+
+    tokens: list[str] = []
+    for token in re.split(_INLINE, _held(text.replace("\ue003\ue003", "\ue003"))):
+        if _LINK.fullmatch(token) or _COLOURED.fullmatch(token):
+            tokens.append(back(token))
+        else:
+            tokens += [back(part) for part in re.split("(\ue010\\d+\ue011)", token)]
     tokens = [token for token in tokens if token]
     paired = _emphasis(tokens)
     bold = italic = False
@@ -600,8 +625,8 @@ def inline(words: str) -> tuple[TextRun, ...]:
         if token == "*" and index in paired:
             italic = not italic
             continue
-        link = re.fullmatch(r"\[([^\]\n]+)\]\(([^)\s]+)\)", token)
-        coloured = re.fullmatch(r"\[([^\]\n]+)\]\{([^}\s]+)\}", token)
+        link = _LINK.fullmatch(token)
+        coloured = None if link else _COLOURED.fullmatch(token)
         # A link's or a colour's words may carry emphasis of their own.
         if link:
             pieces = tuple(replace(run, link=link.group(2)) for run in inline(link.group(1)))
@@ -638,7 +663,7 @@ def _held(words: str) -> str:
 def _freed(text: str) -> str:
     for mark, held in _HELD.items():
         text = text.replace(held, mark[1])
-    return text
+    return text.replace("\ue003", "\\")
 
 
 def _emphasis(tokens: list[str]) -> set[int]:

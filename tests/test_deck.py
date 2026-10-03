@@ -712,6 +712,32 @@ def test_escaped_backticks_and_brackets_are_themselves() -> None:
     ]
 
 
+def test_bold_and_italic_that_meet_inside_a_word_are_read_as_the_studio_writes_them() -> None:
+    # "Second para" bold and "paragraph." italic: the studio closes the bold alone there,
+    # never a close and a reopen run together (which read as ****).
+    runs = inline("**Second *para**graph.*")
+    assert [(run.text, run.weight, run.italic) for run in runs] == [
+        ("Second ", 700, False), ("para", 700, True), ("graph.", 400, True)]
+    runs = inline("**bold *both*** *italic*")
+    assert [(run.text, run.weight, run.italic) for run in runs if run.text.strip()] == [
+        ("bold ", 700, False), ("both", 700, True), ("italic", 400, True)]
+
+
+def test_a_typed_backslash_before_a_bracket_is_no_maths() -> None:
+    runs = inline(r"Type \\(x\) or \\[y\\] for maths, and \(z\) is maths.")
+    assert "".join(run.text for run in runs if not run.maths).startswith(r"Type \(x\) or \[y\] for maths, and ")
+    assert [run.text for run in runs if run.maths] == ["z"]
+
+
+def test_a_link_and_a_colour_can_hold_each_other_and_maths() -> None:
+    for words in ("[[First]{accent}](https://example.com)", "[[First](https://example.com)]{accent}"):
+        runs = inline(words)
+        assert [(run.text, run.link, run.color) for run in runs] == [("First", "https://example.com", "accent")]
+    runs = inline("[the loss $L$]{accent2} and [see $x$](https://example.com)")
+    assert all(run.color == "accent2" for run in runs[:2]) and runs[1].maths
+    assert [run.link for run in runs if run.maths] == ["", "https://example.com"]
+
+
 def test_prices_are_prices_and_escaped_dollars_are_dollars() -> None:
     runs = inline(r"It costs $5 and $10, a sample is \$20, and $x^2$ is maths.")
     assert "".join(run.text for run in runs if not run.italic).startswith("It costs $5 and $10, a sample is $20")

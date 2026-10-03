@@ -88,14 +88,6 @@ const NEW_SLIDES = {
   blank: () => ({ layout: "blank", body: [] }),
 };
 
-// The words a new deck, slide or object starts with (and the studio's new deck, studio/__init__.py):
-// opened, they are chosen whole, to be typed over, rather than edited word by word.
-const STARTERS = new Set(["A talk worth giving", "What we found, and why it matters", "What we found", "Your name", "The question",
-  "What we asked", "Why it was hard", "and why it still is", "A new slide", "The first point", "The second point", "Two sides",
-  "On the left", "On the right.", "Three things", "**One**", "**Two**", "**Three**", "The model", "Part two",
-  "One sentence that [matters]{accent}.", "Anything at all.", "A point", "Another point", "A paragraph."]);
-const starter = (text) => String(text ?? "").split("\n").every((line) => !line.trim() || STARTERS.has(line.trim()));
-
 const NEW_BLOCKS = {
   bullets: () => ({ bullets: [""] }),
   text: () => ({ text: "" }),
@@ -799,6 +791,8 @@ export function mount(studio, container) {
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
       pageNode.addEventListener("click", onPick);
       pageNode.addEventListener("dblclick", onEdit);
+      // A link's words are chosen and edited as any words: a click never goes to its page.
+      pageNode.addEventListener("click", (event) => { if (event.target.closest?.("a")) event.preventDefault(); });
       pageNode.addEventListener("contextmenu", onContext);
       pageNode.addEventListener("pointerdown", onPress);
     }
@@ -1814,7 +1808,8 @@ export function mount(studio, container) {
     const slideNow = () => slides()[state.slide];
     // Words are typed as the slide shows them: bold as bold, a list as a list.
     const rich = (value, options, onInput) => {
-      const field = richText({ value, palette: studio.info?.palette || {}, ...options });
+      // Its format bar kept on the stage, never over the slides or the inspector beside it.
+      const field = richText({ value, palette: studio.info?.palette || {}, room: () => stage.getBoundingClientRect(), ...options });
       onRich(field, onInput);
       return field;
     };
@@ -1882,25 +1877,16 @@ export function mount(studio, container) {
     const cell = target.kind === "cell";
     const node = h(`div.inline-editor.in-place${cell ? ".cell" : ""}`, { onmousedown: (event) => event.stopPropagation(),
       title: cell ? "Tab: next cell · Return: cell below · ⌘B: bold · ⌘I: italic · Esc: done"
-        : `${bullets ? "Tab: indent · Shift-Tab: outdent · " : ""}⌘B: bold · ⌘I: italic · ${target.kind === "field" ? "Return or Esc: done" : "Esc: done"}` }, editor);
+        : `${bullets ? "Tab: indent · Shift-Tab: outdent" : "Tab: next object"} · ⌘B: bold · ⌘I: italic · ⌘K: link · ⌃Tab: format bar · ${target.kind === "field" ? "Return or Esc: done" : "Esc: done"}` }, editor);
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeInline(); }
       if (event.key === "Enter" && !event.shiftKey && target.kind === "field") { event.preventDefault(); closeInline(); }
-      // Tab goes on to the slide's next line of words (title, subtitle, byline), not to the inspector.
-      if (event.key === "Tab" && target.kind === "field") {
+      // Tab goes on to the slide's next line of words (title, subtitle, byline) or object, and
+      // ⇧Tab back, not to the inspector; a list's Tab sets its levels (and ⌃Tab goes to the
+      // format bar).
+      if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey && (target.kind === "field" || (target.kind === "block" && area.rich && !bullets))) {
         event.preventDefault();
-        // From words to words, then on to the slide's first object, as Tab goes on the slide.
-        const order = ["title", "words", "subtitle", "author", "date"].filter((key) => catalog.slide_keys[layoutOf(slideAt())].includes(key) && key !== "date");
-        const at = order.indexOf(target.field), past = at + (event.shiftKey ? -1 : 1);
-        const first = regionsOf(slideAt()).flatMap((region) => blocksAt(slideAt(), region.key).map((_, index) => ({ region: region.key, index })))[0];
-        if (past >= order.length && first) {
-          closeInline();
-          const block = blocksAt(slideAt(), first.region)[first.index];
-          if (WORDY.has(kindOf(block))) openInline({ kind: "block", ...first }, { selectAll: true }); else focusBlock(first.region, first.index);
-          return;
-        }
-        const next = order[(past + order.length) % order.length];
-        if (next && next !== target.field) openInline({ kind: "field", field: next }, { selectAll: true });
+        tabOn(target, event.shiftKey);
       }
       // The key is the cell's: Return past the last row ends the typing, and does not go on
       // to the table it leaves chosen (whose Return opens its first cell).
@@ -1923,7 +1909,9 @@ export function mount(studio, container) {
     area.focus();
     if (area.rich) {
       if (replaceWith !== null) { area.value = replaceWith; area.dispatchEvent(new Event("input")); area.caretToEnd(); }
-      else if (selectAll || (area.value.trim() && starter(area.value))) area.selectAll();
+      // Opened from the keys on purpose (Return on what is chosen, Tab onto it), all its words
+      // are chosen; a double-click chooses the word under it, as a Mac text view does.
+      else if (selectAll) area.selectAll();
       else if (!(point && area.selectWordAt(point))) area.caretToEnd();
       setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
       return;
@@ -1937,6 +1925,24 @@ export function mount(studio, container) {
     else if (word) area.setSelectionRange(word.start, word.end);
     else area.setSelectionRange(area.value.length, area.value.length);
     setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
+  }
+
+  // From the words being typed (`from`: a field or an object) on to the slide's next words
+  // or object (`back`: the one before), as Tab goes on the slide: title, subtitle and
+  // byline, then its objects, and round again. Words open all chosen, to be typed over.
+  function tabOn(from, back) {
+    const slide = slideAt();
+    const stops = [
+      ...["title", "words", "subtitle", "author"].filter((key) => catalog.slide_keys[layoutOf(slide)].includes(key)).map((field) => ({ field })),
+      ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => ({ region: region.key, index }))),
+    ];
+    const now = stops.findIndex((stop) => (stop.field ? stop.field === from.field : from.kind === "block" && stop.region === from.region && stop.index === from.index));
+    const next = stops[(now + (back ? -1 : 1) + stops.length) % stops.length];
+    if (!next || next === stops[now]) return;
+    if (next.field) { openInline({ kind: "field", field: next.field }, { selectAll: true }); return; }
+    closeInline();
+    if (WORDY.has(kindOf(blocksAt(slide, next.region)[next.index]))) openInline({ kind: "block", ...next }, { selectAll: true });
+    else focusBlock(next.region, next.index);
   }
 
   // A table's cells, typed in on the slide as in a spreadsheet: Tab goes to the next
@@ -2152,12 +2158,14 @@ export function mount(studio, container) {
 
   // After an undo or an edit from elsewhere, the editor open on the slide shows the words
   // as they now are -- typing on from what was undone would bring it back.
-  function refreshInline() {
+  // Undone or redone (`history`), the caret goes to the end of what changed -- after the
+  // words put back -- as in TextEdit.
+  function refreshInline(history = false) {
     if (!inline?.read) return;
     const value = inline.read();
     if (value === undefined) { closeInline(); return; }
     if (value === inline.area.value) return;
-    if (inline.bullets && inline.area.rich && listMerged(value)) return;
+    if (inline.bullets && inline.area.rich && listMerged(value, history)) return;
     // Words changed under the caret (another person's, the file's, an undo): the caret
     // stays by the words it was by.
     const area = inline.area, rich = area.rich, focused = document.activeElement === area;
@@ -2167,7 +2175,7 @@ export function mount(studio, container) {
     const now = rich ? area.letters() : value;
     if (!rich) { area.style.height = "auto"; area.style.height = `${area.scrollHeight + 2}px`; }
     if (focused && caret) {
-      const [start, end] = caret.map((at) => caretThrough(was, now, at));
+      const [start, end] = history ? [changeEnd(was, now), changeEnd(was, now)] : caret.map((at) => caretThrough(was, now, at));
       if (rich) area.caretTo(start, end); else area.setSelectionRange(start, end);
     } else if (rich) area.caretToEnd();
     positionInline();
@@ -2176,7 +2184,7 @@ export function mount(studio, container) {
   // are typed (a space at an end, a new item still empty, which the document leaves out),
   // the items changed elsewhere as they are now, items added elsewhere in their places,
   // and the caret in its own item. Answers whether it took it so.
-  function listMerged(value) {
+  function listMerged(value, history = false) {
     const area = inline.area;
     const ours = area.value.split("\n");
     const base = bulletsText(bulletsFrom(area.value)).split("\n").filter((line, i, all) => line || all.length > 1);
@@ -2223,7 +2231,8 @@ export function mount(studio, container) {
     const wasLines = area.letters().split("\n");
     area.value = out.join("\n");
     const nowLines = area.letters().split("\n");
-    if (caret) {
+    if (caret && history) area.caretTo(changeEnd(wasLines.join("\n"), nowLines.join("\n")));
+    else if (caret) {
       // Each end of the caret to the same place in its own item.
       const offsetOf = (line, column) => nowLines.slice(0, line).reduce((sum, words) => sum + words.length + 1, 0) + column;
       const through = (at) => {
@@ -2241,13 +2250,21 @@ export function mount(studio, container) {
     positionInline();
     return true;
   }
-  // Where a caret at `at` goes when words change from `was` to `now`: before the change,
-  // it stays; after it, it moves with the words; inside it, to the change's end.
-  function caretThrough(was, now, at) {
+  // Where words changed from `was` to `now`: how many letters are alike before the change,
+  // and how many after it.
+  function changeIn(was, now) {
     let start = 0;
     while (start < was.length && start < now.length && was[start] === now[start]) start++;
     let end = 0;
     while (end < was.length - start && end < now.length - start && was[was.length - 1 - end] === now[now.length - 1 - end]) end++;
+    return [start, end];
+  }
+  // The end of the change in `now`: past words put back, or where words were taken away.
+  const changeEnd = (was, now) => now.length - changeIn(was, now)[1];
+  // Where a caret at `at` goes when words change from `was` to `now`: before the change,
+  // it stays; after it, it moves with the words; inside it, to the change's end.
+  function caretThrough(was, now, at) {
+    const [start, end] = changeIn(was, now);
     if (at <= start) return at;
     if (at >= was.length - end) return at + now.length - was.length;
     return now.length - end;
@@ -2307,15 +2324,27 @@ export function mount(studio, container) {
     let width = box ? (centred ? slide.width - 2 * margin : Math.max(box.width, slide.width - box.left - margin)) : 420;
     const beside = box && !centred ? columnBeside(box) : null;
     if (beside !== null) width = Math.max(box.width, Math.min(width, beside - box.left - 8));
-    const left = slide.left - outer.left + (box ? (centred ? margin : box.left) : 40);
+    let left = slide.left - outer.left + (box ? (centred ? margin : box.left) : 40);
     let top = slide.top - outer.top + (box ? box.top : 60);
     const rich = inline.area.rich;
     const indent = inline.bullets && look && box && !rich ? Math.max(0, look.left - slide.left - box.left - 5) : 0;
     // The rich editor's lines lie on the drawn lines: the same line spacing, the first
     // line's letters where the drawn ones are, and a list's bullets where they are drawn.
     const metrics = rich && element ? textMetrics(element, size) : null;
-    // Words the slide wrapped wrap where it wrapped them: at their longest line, give or take a letter.
-    if (metrics?.wrapped && box && !centred) width = Math.min(width, box.width + size * 0.6);
+    // Words wrap where the slide will wrap them: as wide as the slide lets them run (its
+    // data-flexo-wrap), give or take a little for letters set a hair wider, centred words
+    // about their middle -- and so a title being typed takes the lines it will be drawn in.
+    const wrapping = (box && element?.getAttribute("data-flexo-wrap")) || "";
+    const wraps = (parseFloat(wrapping) || 0) * (element?.getScreenCTM?.()?.a || 0);
+    // Lines evened out on the slide are evened out here (CSS's balance is flexo's: the
+    // narrowest width that takes no more lines).
+    inline.area.style.textWrap = wrapping.includes("balance") ? "balance" : "";
+    if (wraps) {
+      width = wraps + 10 + size * 0.3;
+      left = slide.left - outer.left + (centred ? box.left + box.width / 2 - width / 2 : look?.anchor === "end" ? box.left + box.width - width + 10 : box.left);
+    }
+    // Else words the slide wrapped wrap where it wrapped them: at their longest line, give or take a letter.
+    else if (metrics?.wrapped && box && !centred) width = Math.min(width, box.width + size * 0.6);
     if (metrics) {
       top = metrics.top - outer.top - (metrics.line - metrics.height) / 2 - 5;
       inline.area.style.setProperty("--rt-line", `${metrics.line}px`);
@@ -2363,10 +2392,16 @@ export function mount(studio, container) {
     const first = (texts[0].querySelector("tspan") || texts[0]).getBoundingClientRect();
     let line = 0, wrapped = false;
     for (const text of texts) {
-      const tops = [...new Set([...text.querySelectorAll("tspan")].map((span) => Math.round(span.getBoundingClientRect().top * 4) / 4))].sort((a, b) => a - b);
+      const tops = lineTops(text, first.height || size);
       if (tops.length > 1) { line ||= tops[1] - tops[0]; wrapped = true; }
     }
     return { top: first.top, height: first.height, line: line || first.height * 1.05 || size * 1.22, wrapped, texts };
+  }
+  // The tops of a text's lines: its runs' tops, those within half a line of each other one
+  // line (code, in its own face, or a bold word sits a hair higher or lower on the same line).
+  function lineTops(text, height) {
+    const tops = [...text.querySelectorAll("tspan")].map((span) => span.getBoundingClientRect()).filter((box) => box.width).map((box) => box.top).sort((a, b) => a - b);
+    return tops.filter((top, k) => !k || top - tops[k - 1] > height / 2);
   }
 
   // A list as the slide draws it: where its words start and its bullets sit, how far a
@@ -2401,8 +2436,10 @@ export function mount(studio, container) {
       look["--rt-mark2"] = deeper.mark.getAttribute("fill") || "currentColor";
     }
     // From one item to the next, less its own lines: the space between items.
-    const lines = (item) => new Set([...item.text.querySelectorAll("tspan")].map((span) => Math.round(span.getBoundingClientRect().top))).size || 1;
-    const gaps = items.slice(1).map((item, n) => item.box.top - items[n].box.top - lines(items[n]) * metrics.line);
+    const lines = (item) => lineTops(item.text, metrics.height || 10).length || 1;
+    // Measured baseline to baseline (an item's box grows with a taller face in it, as code's).
+    const baseline = (item) => { const y = parseFloat(item.text.getAttribute("y")); const ctm = item.text.getScreenCTM(); return Number.isFinite(y) && ctm ? y * ctm.d + ctm.f : item.box.top; };
+    const gaps = items.slice(1).map((item, n) => baseline(item) - baseline(items[n]) - lines(items[n]) * metrics.line);
     if (gaps.length) look["--rt-gap"] = `${Math.max(0, Math.min(...gaps))}px`;
     return look;
   }
@@ -4033,7 +4070,8 @@ export function mount(studio, container) {
     else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
     else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
     else if (state.field && key === "Escape") { state.field = null; placeChosen(); }
-    else if (state.field && key === "Enter") { event.preventDefault(); openInline({ kind: "field", field: state.field.field }); }
+    // Return opens what is chosen with all its words chosen, as Keynote's does.
+    else if (state.field && key === "Enter") { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { selectAll: true }); }
     else if (state.field && (key === "Delete" || key === "Backspace")) { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { replaceWith: "" }); }
     else if (state.field && key.length === 1 && !event.altKey) {
       // Typing over a selected title replaces it, as in Keynote.
@@ -4050,7 +4088,7 @@ export function mount(studio, container) {
       event.preventDefault();
       const block = blocksAt(slideAt(), state.focus.region)[state.focus.index];
       // Return goes into what is chosen: its words, a table's first cell, a figure's first shape.
-      if (block && INLINE.has(kindOf(block))) openInline({ kind: "block", ...state.focus });
+      if (block && INLINE.has(kindOf(block))) openInline({ kind: "block", ...state.focus }, { selectAll: true });
       else if (block && kindOf(block) === "table") openInline({ kind: "cell", ...state.focus, row: 0, col: 0 }, { selectAll: true });
       else if (block && kindOf(block) === "figure" && figure && figureBlock() === block) {
         const first = figure.parts.model?.nodes?.[0]?.id;
@@ -4361,7 +4399,7 @@ export function mount(studio, container) {
     if (source === "remote" && before) flash(before, who);
     if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
     if (source === "history" || source === "remote") {
-      refreshInline();
+      refreshInline(source === "history");
       if (document.activeElement === notesArea) notesArea.value = slideAt()?.notes || "";
       if (source === "history") figure?.parts.closeInline(false);
     }

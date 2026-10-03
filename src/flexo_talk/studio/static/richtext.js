@@ -11,13 +11,20 @@ import { icon } from "/static/studio/studio.js";
 
 // -- markup to runs --------------------------------------------------------------------
 
-const INLINE = /(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\*\*|\*)/;
+// A link's or a colour's words (deck.py's _WORDS_IN): no bracket in them but those of
+// another link or colour (a link's words coloured, a colour's words linked) or one alone
+// that starts none.
+const WORDS_IN = String.raw`(?:[^\[\]\n]|\[[^\[\]\n]+\](?:\([^)\s]+\)|\{[^}\s]+\})|\[(?![^\[\]\n]+\](?:\([^)\s]+\)|\{[^}\s]+\})))+`;
+const LINK = new RegExp(String.raw`^\[(${WORDS_IN})\]\(([^)\s]+)\)$`);
+const COLOURED = new RegExp(String.raw`^\[(${WORDS_IN})\]\{([^}\s]+)\}$`);
+const INLINE = new RegExp(String.raw`(\[${WORDS_IN}\]\([^)\s]+\)|\[${WORDS_IN}\]\{[^}\s]+\}|` + "`[^`]*`" + String.raw`|\*\*|\*)`);
 const ASTERISK = "";
 // Escaped marks, and where each waits while markup is read (deck.py's _HELD): a mark typed
-// is written escaped, so it reads back as itself. An escaped $ is a dollar sign.
-const HELD = [["\\*", ASTERISK], ["\\`", "\ue001"], ["\\]", "\ue002"], ["\\$", "$"]];
+// is written escaped, so it reads back as itself. An escaped $ is a dollar sign, and \\(
+// and \\[ a backslash before a bracket (a typed \( is written so), not maths.
+const HELD = [["\\*", ASTERISK], ["\\`", "\ue001"], ["\\]", "\ue002"]];
 const held = (words) => HELD.reduce((text, [mark, wait]) => text.replaceAll(mark, wait), words);
-const freed = (text) => HELD.reduce((out, [mark, wait]) => (wait.length === 1 && wait !== "$" ? out.replaceAll(wait, mark[1]) : out), text);
+const freed = (text) => HELD.reduce((out, [mark, wait]) => out.replaceAll(wait, mark[1]), text).replaceAll("\\$", "$").replaceAll("\ue003", "\\");
 
 // Where maths is, delimiters and all, as flexo reads it (flexo.markup.math_spans): $...$
 // (not a price: no space inside its ends, no digit after it, unless plainly TeX),
@@ -63,16 +70,25 @@ function closingDollar(text, start) {
   return null;
 }
 
+// Markup as tokens (deck.py's inline): words, maths ({ maths }), links, colours, code, *
+// and **. Maths stands aside, as a letter that is no mark, while the rest is split, so
+// maths in a link's or a colour's words stays in them.
 function tokensOf(words) {
-  const tokens = [];
-  const split = (part) => tokens.push(...held(part).split(INLINE).filter(Boolean));
-  let at = 0;
-  for (const [start, end] of mathSpans(words)) {
-    split(words.slice(at, start));
-    tokens.push({ maths: words.slice(start, end) });
+  const masked = words.replace(/(\\`|`[^`]*`)|\\\\(?=[([])/g, (found, kept) => kept ?? "\ue003\ue003");
+  const maths = [];
+  let text = "", at = 0;
+  for (const [start, end] of mathSpans(masked)) {
+    text += `${masked.slice(at, start)}\ue010${maths.length}\ue011`;
+    maths.push(words.slice(start, end));
     at = end;
   }
-  split(words.slice(at));
+  text += masked.slice(at);
+  const back = (part) => part.replace(/\ue010(\d+)\ue011/g, (_, n) => maths[n]);
+  const tokens = [];
+  for (const token of held(text.replaceAll("\ue003\ue003", "\ue003")).split(INLINE).filter(Boolean)) {
+    if (LINK.test(token) || COLOURED.test(token)) { tokens.push(back(token)); continue; }
+    for (const part of token.split(/(\ue010\d+\ue011)/).filter(Boolean)) tokens.push(/^\ue010\d+\ue011$/.test(part) ? { maths: back(part) } : part);
+  }
   return tokens;
 }
 
@@ -181,8 +197,8 @@ function inlineNodes(words, colours, outer = { bold: false, italic: false }) {
       nodes.push(wrapped(maths, style));
       return;
     }
-    const link = /^\[([^\]\n]+)\]\(([^)\s]+)\)$/.exec(token);
-    const coloured = /^\[([^\]\n]+)\]\{([^}\s]+)\}$/.exec(token);
+    const link = LINK.exec(token);
+    const coloured = !link && COLOURED.exec(token);
     const code = /^`([^`]*)`$/.exec(token);
     if (link || coloured) {
       const node = document.createElement(link ? "a" : "span");
@@ -207,13 +223,14 @@ function inlineNodes(words, colours, outer = { bold: false, italic: false }) {
 
 // The runs a node holds: words with their emphasis, or markup kept as written (maths,
 // code, a link, a colour).
-function runsOf(node, style, runs, names) {
+function runsOf(node, style, runs, names, inside = false) {
   for (const child of node.childNodes) {
-    if (child.nodeType === Node.TEXT_NODE) { runs.push({ text: child.data.replace(/ /g, " "), ...style }); continue; }
+    if (child.nodeType === Node.TEXT_NODE) { runs.push({ text: child.data.replace(/ /g, " "), ...style, inside }); continue; }
     if (child.nodeType !== Node.ELEMENT_NODE) continue;
     const tag = child.nodeName;
     if (tag === "BR") { runs.push({ text: "\n", ...style }); continue; }
-    if (child.classList.contains("rt-maths")) { runs.push({ raw: child.textContent }); continue; }
+    // Maths keeps the emphasis it is in, as the slide reads it.
+    if (child.classList.contains("rt-maths")) { runs.push({ raw: child.textContent, ...style, wrap: true }); continue; }
     const css = child.style || {};
     // A weight or slant set in its style is its own, even on a <b> (Google Docs wraps
     // all it copies in a <b> of normal weight).
@@ -223,17 +240,27 @@ function runsOf(node, style, runs, names) {
     };
     if (tag === "CODE") { runs.push({ raw: `\`${child.textContent.replace(/`/g, "")}\``, ...next, wrap: true }); continue; }
     const colour = child.dataset?.colour || (tag === "FONT" && child.getAttribute("color") ? names(child.getAttribute("color")) : null);
-    if (tag === "A" && child.dataset.href) { runs.push({ raw: `[${serialise(child, next, names)}](${address(child.dataset.href)})` }); continue; }
-    // The ink is the words' own colour: no colour of their own.
-    if (colour && colour !== "ink") { runs.push({ raw: `[${serialise(child, next, names)}]{${colour}}` }); continue; }
+    // The ink is the words' own colour: no colour of their own. A link or a colour over a
+    // line's end is one on each line, as markup has no line in one.
+    if ((tag === "A" && child.dataset.href) || (colour && colour !== "ink")) {
+      for (const part of byLine(child)) {
+        if (part === "\n") runs.push({ text: "\n", ...next });
+        else if (part.textContent) runs.push({ raw: tag === "A" && child.dataset.href ? `[${serialise(part, next, names, true)}](${address(child.dataset.href)})` : `[${serialise(part, next, names, true)}]{${colour}}` });
+      }
+      continue;
+    }
     // A line the browser made a block of its own (a pasted or split paragraph) is a line.
     if ((tag === "DIV" || tag === "P") && runs.length && !String(runs[runs.length - 1].text ?? "").endsWith("\n")) runs.push({ text: "\n" });
-    runsOf(child, next, runs, names);
+    runsOf(child, next, runs, names, inside);
   }
   return runs;
 }
 
-const escaped = (text) => text.replace(/[*`$]/g, "\\$&").replace(/\](?=[({])/g, "\\]");
+// Words as markup that reads back as them: each mark escaped, a ] that would end a link's
+// words (in a link's or a colour's words, any), and a backslash that would make what
+// follows maths (\( or \[) or an escape (\]).
+const escaped = (text, inside = false) => text.replace(/\\(?=[([])/g, "\\\\").replace(/[*`$]/g, "\\$&")
+  .replace(inside ? /\\?\]/g : /\\?\](?=[({])|\\\]/g, (found) => (found.length > 1 ? "\\\\]" : "\\]"));
 // A link's address as markup reads it: no space, no bracket to end it early.
 const address = (href) => href.replace(/[\s()]/g, (mark) => `%${mark.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 
@@ -242,7 +269,10 @@ const address = (href) => href.replace(/[\s()]/g, (mark) => `%${mark.charCodeAt(
 function markupOf(runs) {
   // Marks open now, the innermost last ("**" bold, "*" italic): kept nested, so that
   // Markdown reads them as we do -- one that ends inside another closes what was opened
-  // after it and opens it again, never crossing it.
+  // after it and opens it again past the space between them. Between two letters there is
+  // no space to part them, and the marks run together (*, ** and * would read as ** and
+  // **): there a mark closes alone, never closed and opened again in one run of marks,
+  // and the readers (here and deck.py's _emphasis) pair each kind with its own.
   let out = "", pending = "";
   const stack = [];
   const closeAll = () => { let marks = ""; while (stack.length) marks += stack.pop(); return marks; };
@@ -258,14 +288,17 @@ function markupOf(runs) {
   };
   runs.forEach((run, index) => {
     if (run.raw !== undefined && !run.wrap) { out += closeAll() + pending + run.raw; pending = ""; return; }
-    const text = run.raw ?? escaped(run.text);
+    const text = run.raw ?? escaped(run.text, run.inside);
     const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
     if (!core) { pending += text; return; }
     const want = { "**": Boolean(run.bold), "*": Boolean(run.italic) };
     let marks = "";
     const reopen = [];
     const lowest = stack.findIndex((mark) => !want[mark]);
-    if (lowest >= 0) {
+    const between = !(pending + lead);
+    if (lowest >= 0 && between) {
+      for (const mark of stack.filter((open) => !want[open]).reverse()) { marks += mark; stack.splice(stack.lastIndexOf(mark), 1); }
+    } else if (lowest >= 0) {
       while (stack.length > lowest) {
         const mark = stack.pop();
         marks += mark;
@@ -283,8 +316,26 @@ function markupOf(runs) {
   return out + closeAll() + pending;
 }
 
-function serialise(node, style = { bold: false, italic: false }, names = (colour) => colour) {
-  return markupOf(runsOf(node, style, [], names));
+// An element as copies of it a line each, and the line ends ("\n") between them.
+function byLine(element) {
+  if (!element.querySelector("br")) return [element];
+  const parts = [];
+  const rest = element.cloneNode(true);
+  for (let end = rest.querySelector("br"); end; end = rest.querySelector("br")) {
+    const before = document.createRange();
+    before.setStart(rest, 0);
+    before.setEndBefore(end);
+    const line = element.cloneNode(false);
+    line.append(before.extractContents());
+    end.remove();
+    parts.push(line, "\n");
+  }
+  parts.push(rest);
+  return parts;
+}
+
+function serialise(node, style = { bold: false, italic: false }, names = (colour) => colour, inside = false) {
+  return markupOf(runsOf(node, style, [], names, inside));
 }
 
 // -- the field -------------------------------------------------------------------------
@@ -293,7 +344,7 @@ function serialise(node, style = { bold: false, italic: false }, names = (colour
 // next item, Return on an empty item moves it out a level); `single` a line of its own
 // (Return is left to whoever holds it); else words in lines. `palette` gives the
 // theme's colours by name, for [words]{accent}.
-export function richText({ value = "", list = false, single = false, numbered = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null } = {}) {
+export function richText({ value = "", list = false, single = false, numbered = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}`;
   area.contentEditable = "true";
@@ -353,6 +404,9 @@ export function richText({ value = "", list = false, single = false, numbered = 
   // the history: typing runs together, these do not (a native ⌘B says so by its inputType).
   const changed = (step = false) => area.dispatchEvent(new CustomEvent("input", { bubbles: true, detail: { step } }));
   area.addEventListener("input", () => area.classList.toggle("empty", !area.textContent.trim() && !area.querySelector(".rt-line + .rt-line")));
+  // Only the look the slide keeps is offered: bold and italic, not underline and the like
+  // (a menu's or the system's), which saving would drop.
+  area.addEventListener("beforeinput", (event) => { if (/^format/.test(event.inputType) && !["formatBold", "formatItalic"].includes(event.inputType)) event.preventDefault(); });
 
   // -- the caret --
   const selection = () => getSelection();
@@ -444,7 +498,9 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const s = selection();
     if (!s.rangeCount) return [];
     const range = s.getRangeAt(0);
-    const first = lineAt(range.startContainer), last = lineAt(range.endContainer);
+    // All the items chosen (Return or Tab onto the list) are chosen from the list itself.
+    const first = lineAt(range.startContainer) || (range.startContainer === area ? area.children[range.startOffset] : null);
+    const last = lineAt(range.endContainer) || (range.endContainer === area ? area.children[range.endOffset - 1] : null);
     const all = lines();
     if (!first) return [];
     return all.slice(all.indexOf(first), all.indexOf(last || first) + 1);
@@ -468,6 +524,18 @@ export function richText({ value = "", list = false, single = false, numbered = 
   const boldAlready = () => Number(getComputedStyle(area).fontWeight) >= 600;
   area.addEventListener("keydown", (event) => {
     const mod = event.metaKey || event.ctrlKey;
+    // ⌃Tab: to the format bar, to format from the keys.
+    if (event.key === "Tab" && event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); toBar(); return; }
+    // ⌘E makes the words chosen code, ⌥⌘E an equation (⌃E stays a Mac's end of the line).
+    const command = /Mac|iP/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
+    if (command && !event.shiftKey && (event.code === "KeyE" || event.key.toLowerCase() === "e")) {
+      event.preventDefault();
+      event.stopPropagation();
+      if ((event.altKey ? asMaths() : asCode()) !== false) changed(true);
+      return;
+    }
+    // No underline: the slide has none to keep.
+    if (mod && !event.altKey && (event.code === "KeyU" || event.key.toLowerCase() === "u")) { event.preventDefault(); return; }
     if (mod && !event.altKey && ["b", "i"].includes(event.key.toLowerCase())) {
       event.preventDefault();
       if (event.key.toLowerCase() === "b" && boldAlready()) return;
@@ -486,7 +554,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     if (mod && !event.altKey && event.key.toLowerCase() === "k") {
       event.preventDefault();
       event.stopPropagation();
-      if (!selection().isCollapsed) askLink();
+      askLink();
       return;
     }
     if (event.key === "Backspace" && list) {
@@ -522,94 +590,317 @@ export function richText({ value = "", list = false, single = false, numbered = 
   });
 
   // -- the format bar: over the words chosen, as a Mac text view's touch bar offers them --
+  // From the keys: ⌃Tab goes to it from the words (as ⌃Tab leaves a Mac text view for the
+  // next control), ← and → go along it, Space or Return presses a button, and Esc or Tab
+  // goes back to the words; ⌘E makes the words code and ⌥⌘E an equation (as Pages inserts one).
   const swatches = [["accent", "Accent"], ["accent2", "Accent 2"], ["muted", "Muted"]].filter(([name]) => palette[name]);
   const bar = document.createElement("div");
   bar.className = "rt-bar";
+  bar.setAttribute("role", "toolbar");
+  bar.setAttribute("aria-label", "Format");
   bar.hidden = true;
-  const tool = (label, title, run, style = {}) => {
+  // The words chosen while the bar has the keys, given back to the words to act on.
+  let kept = null;
+  const backToWords = () => {
+    area.focus();
+    if (kept && area.contains(kept.startContainer)) place(kept);
+  };
+  const keyed = () => bar.contains(document.activeElement);
+  const tool = (label, title, run, { words = false } = {}) => {
     const button = document.createElement("button");
     button.type = "button";
     button.title = title;
+    button.tabIndex = -1;
+    if (words) button.dataset.words = "";
     if (label instanceof Node) button.append(label); else button.innerHTML = label;
-    Object.assign(button.style, style);
     // The words stay chosen: the button never takes the caret.
-    button.addEventListener("mousedown", (event) => { event.preventDefault(); run(); changed(true); showBar(); });
+    button.addEventListener("mousedown", (event) => { event.preventDefault(); if (run() !== false) changed(true); showBar(); });
+    // Pressed from the keys (Space or Return on it): on the words, and the keys stay on it.
+    button.addEventListener("click", (event) => {
+      if (event.detail || !keyed()) return;
+      backToWords();
+      const done = run();
+      if (done !== false) changed(true);
+      if (done === "words") return;
+      const s = selection();
+      kept = s.rangeCount && area.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : kept;
+      showBar({ caret: true });
+      if (button.isConnected && !button.hidden && !button.disabled) button.focus();
+    });
     return button;
   };
-  const wrapChosen = (make) => {
+  const isLink = (node) => node.nodeName === "A";
+  const isColour = (node) => Boolean(node.dataset?.colour || (node.nodeName === "FONT" && node.getAttribute("color")) || node.style?.color);
+  // The range made all of one piece of the outermost element round it that `strip` takes
+  // (a colour, a link), by cutting that element at the range's ends, and then out of it.
+  const splitOut = (range, strip) => {
+    let outer = null;
+    for (let at = range.commonAncestorContainer; at && at !== area; at = at.parentNode) if (at.nodeType === Node.ELEMENT_NODE && strip(at)) outer = at;
+    if (!outer) return;
+    const piece = (start, end) => {
+      const part = document.createRange();
+      part.setStart(...start);
+      part.setEnd(...end);
+      const words = part.extractContents();
+      if (!words.textContent) return null;
+      const copy = outer.cloneNode(false);
+      copy.append(words);
+      return copy;
+    };
+    const head = piece([outer, 0], [range.startContainer, range.startOffset]);
+    const tail = piece([range.endContainer, range.endOffset], [outer, outer.childNodes.length]);
+    if (head) outer.before(head);
+    if (tail) outer.after(tail);
+    const kids = [...outer.childNodes];
+    outer.replaceWith(...kids);
+    if (kids.length) { range.setStartBefore(kids[0]); range.setEndAfter(kids[kids.length - 1]); }
+  };
+  // The words chosen (or `given`) taken out of what `strip` takes, round them and in them,
+  // and put in what `make` makes of them (nothing: as they are), keeping their look --
+  // bold, italic, a colour, a link -- as they had it. Chosen after, unless `choose` is false.
+  const wrapChosen = (make, { strip = null, given = null, choose = true } = {}) => {
     const s = selection();
-    if (!s.rangeCount || s.isCollapsed) return;
-    const range = s.getRangeAt(0);
-    const node = make(range.toString());
-    range.deleteContents();
-    range.insertNode(node);
+    const range = given || (s.rangeCount && !s.isCollapsed && area.contains(s.anchorNode) ? s.getRangeAt(0) : null);
+    if (!range || range.collapsed) return false;
+    // A line at a time (a list's items, a paragraph's lines), the last first, so each is
+    // where it was when its turn comes: markup has no link, colour or code over a line's end.
+    let start = null, end = null;
+    for (const piece of linesOf(range).reverse()) {
+      if (strip) splitOut(piece, strip);
+      const words = piece.extractContents();
+      if (strip) for (const node of [...words.querySelectorAll("*")].filter(strip)) node.replaceWith(...node.childNodes);
+      if (!words.textContent) { piece.insertNode(words); continue; }
+      const node = make ? make(words) : words;
+      const first = node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? node.firstChild : node, last = node.nodeType === Node.DOCUMENT_FRAGMENT_NODE ? node.lastChild : node;
+      piece.insertNode(node);
+      end ||= [last, make ? last.childNodes.length : null];
+      start = [first, 0];
+    }
+    if (!start) return false;
     const after = document.createRange();
-    after.selectNodeContents(node);
-    place(after);
+    if (make) after.setStart(...start); else after.setStartBefore(start[0]);
+    if (end[1] !== null) after.setEnd(...end); else after.setEndAfter(end[0]);
+    if (choose) place(after);
+    return after;
+  };
+  // A range a line each: cut at a list's items and at the line ends in words.
+  const linesOf = (range) => {
+    const items = [...area.querySelectorAll(".rt-line")].filter((line) => range.intersectsNode(line));
+    const spans = items.length > 1 ? items.map((line, k) => {
+      const piece = document.createRange();
+      piece.selectNodeContents(line);
+      if (k === 0) piece.setStart(range.startContainer, range.startOffset);
+      if (k === items.length - 1) piece.setEnd(range.endContainer, range.endOffset);
+      return piece;
+    }) : [range.cloneRange()];
+    return spans.flatMap((span) => {
+      const pieces = [];
+      let from = [span.startContainer, span.startOffset];
+      for (const end of [...area.querySelectorAll("br")]) {
+        const at = [end.parentNode, [...end.parentNode.childNodes].indexOf(end)];
+        if (span.comparePoint(...at) !== 0 || span.comparePoint(at[0], at[1] + 1) !== 0) continue;
+        const piece = document.createRange();
+        piece.setStart(...from);
+        piece.setEnd(...at);
+        pieces.push(piece);
+        from = [at[0], at[1] + 1];
+      }
+      const piece = document.createRange();
+      piece.setStart(...from);
+      piece.setEnd(span.endContainer, span.endOffset);
+      pieces.push(piece);
+      return pieces.filter((part) => part.toString().length);
+    });
+  };
+  // What holds words as one (code, an equation) has no look inside it: it takes the look
+  // all the words chosen had.
+  const inTheirLook = (words, node) => {
+    const texts = [];
+    const walker = document.createTreeWalker(words, NodeFilter.SHOW_TEXT);
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) if (text.data.trim()) texts.push(text);
+    // What every word chosen has (`find` says it of an element round one, or null).
+    const all = (find) => {
+      const found = texts.map((text) => { for (let at = text.parentNode; at && at !== words; at = at.parentNode) { const it = find(at); if (it !== null) return it; } return null; });
+      return found.length && found.every((it) => it !== null && it === found[0]) ? found[0] : null;
+    };
+    const weight = (at) => at.style?.fontWeight;
+    const bold = all((at) => (weight(at) ? /^bold/.test(weight(at)) || Number(weight(at)) >= 600 : at.nodeName === "B" || at.nodeName === "STRONG" ? true : null)) === true;
+    const italic = all((at) => (at.style?.fontStyle ? at.style.fontStyle !== "normal" : at.nodeName === "I" || at.nodeName === "EM" ? true : null)) === true;
+    const colour = all((at) => at.dataset?.colour || (at.nodeName === "FONT" && at.getAttribute("color") ? names(at.getAttribute("color")) : null));
+    const href = all((at) => (at.nodeName === "A" && at.dataset.href) || null);
+    let out = node;
+    if (italic) { const i = document.createElement("i"); i.append(out); out = i; }
+    if (bold) { const b = document.createElement("b"); b.append(out); out = b; }
+    if (colour && colour !== "ink") { const span = colourNode(colour); span.append(out); out = span; }
+    if (href) { const a = linkNode(href); a.append(out); out = a; }
+    return out;
   };
   const plainNode = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; node.textContent = text; return node; };
+  const colourNode = (name) => { const span = document.createElement("span"); span.dataset.colour = name; span.style.color = colours(name); return span; };
+  const linkNode = (href) => { const a = document.createElement("a"); a.dataset.href = href; a.title = href; return a; };
+  // Words in one of the theme's colours, or (none) in the words' own, as they are drawn.
+  const recolour = (name) => wrapChosen(name ? (words) => { const span = colourNode(name); span.append(words); return span; } : null, { strip: isColour });
+  const asCode = () => wrapChosen((words) => inTheirLook(words, plainNode("code", "", words.textContent)));
+  const asMaths = () => wrapChosen((words) => inTheirLook(words, plainNode("span", "rt-maths", `$${words.textContent}$`)));
+
+  // -- links: ⌘K, or the bar's link button, on words; on a link, its address to change or remove --
+  // An address as typed, as a link goes: "example.com/page" a web page's (https://), and
+  // "name@example.com" an email's (mailto:); one with its scheme, or a place, as it is.
+  const addressOf = (typed) => {
+    const text = typed.trim();
+    if (!text) return "";
+    if (text.startsWith("//")) return `https:${text}`;
+    if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(text) || /^[#/.?]/.test(text)) return text;
+    if (/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(text)) return `mailto:${text}`;
+    return `https://${text}`;
+  };
   const linkInput = document.createElement("input");
   linkInput.className = "rt-link";
-  linkInput.placeholder = "https://";
+  linkInput.placeholder = "example.com";
+  linkInput.setAttribute("aria-label", "Link address");
+  linkInput.spellcheck = false;
   linkInput.hidden = true;
-  let linkRange = null;
+  // The words to link, and the link they are in (to change or remove), if any.
+  let linkRange = null, editing = null;
+  const outerLink = (node) => { let found = null; for (let at = node; at && at !== area; at = at.parentNode) if (at.nodeName === "A") found = at; return found; };
+  // The address typed is applied (or, emptied, the link removed) or set aside; and the
+  // keys go back to the words, unless they have gone elsewhere (`back` false).
+  const finishLink = (apply, back = true) => {
+    if (linkInput.hidden) return;
+    linkInput.hidden = true;
+    unlinkTool.hidden = true;
+    const url = apply ? addressOf(linkInput.value) : "";
+    const link = editing?.isConnected ? editing : null, range = linkRange;
+    editing = null;
+    linkRange = null;
+    if (back) { area.focus(); if (range) place(range); }
+    if (apply && link) {
+      if (url) {
+        // One link, never one in another.
+        for (const inner of [...link.querySelectorAll("a")]) inner.replaceWith(...inner.childNodes);
+        Object.assign(link.dataset, { href: url });
+        link.title = url;
+      } else unlink(link, back);
+      changed(true);
+    } else if (apply && url && range && !range.collapsed) {
+      if (wrapChosen((words) => { const a = linkNode(url); a.append(words); return a; }, { strip: isLink, given: range, choose: back })) changed(true);
+    }
+    showBar();
+  };
+  const unlink = (link, choose = true) => {
+    const kids = [...link.childNodes];
+    link.replaceWith(...kids);
+    if (choose && kids.length) { const range = document.createRange(); range.setStartBefore(kids[0]); range.setEndAfter(kids[kids.length - 1]); place(range); }
+  };
   linkInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const url = linkInput.value.trim();
-      if (url && linkRange) {
-        place(linkRange);
-        wrapChosen((text) => { const a = plainNode("a", "", text); a.dataset.href = url; a.title = url; return a; });
-        changed(true);
-      }
-      linkInput.hidden = true;
-      area.focus();
-    } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); linkInput.hidden = true; if (linkRange) place(linkRange); area.focus(); }
+    // Its keys are its own: none reaches the words or the slide.
+    event.stopPropagation();
+    if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); finishLink(true); }
+    else if (event.key === "Escape") { event.preventDefault(); finishLink(false); }
   });
+  // Clicked away from, it applies what was typed, as a Mac link field does.
+  linkInput.addEventListener("blur", () => setTimeout(() => { if (!linkInput.hidden && area.isConnected && document.activeElement !== linkInput) finishLink(true, false); }, 0));
+  const unlinkTool = tool("Remove", "Remove Link", () => {
+    const link = editing?.isConnected ? editing : null;
+    linkInput.hidden = true;
+    unlinkTool.hidden = true;
+    editing = null;
+    area.focus();
+    if (linkRange) place(linkRange);
+    linkRange = null;
+    if (!link) return false;
+    unlink(link);
+    return "words";
+  });
+  unlinkTool.classList.add("rt-unlink");
+  unlinkTool.hidden = true;
   const boldTool = tool("<b>B</b>", "Bold (⌘B)", () => document.execCommand("bold"));
   const italicTool = tool("<i>I</i>", "Italic (⌘I)", () => document.execCommand("italic"));
   function askLink() {
     const s = selection();
-    linkRange = s.rangeCount ? s.getRangeAt(0).cloneRange() : null;
-    linkInput.value = "";
-    showBar();
+    if (!s.rangeCount || !area.contains(s.anchorNode)) return false;
+    const range = s.getRangeAt(0);
+    // Words in a link, or the caret: that link, its address shown to change or remove.
+    const start = outerLink(range.startContainer), end = outerLink(range.endContainer);
+    editing = start && start === end ? start : null;
+    if (!editing && range.collapsed) return false;
+    linkRange = range.cloneRange();
+    linkInput.value = editing?.dataset.href || "";
+    unlinkTool.hidden = !editing;
     linkInput.hidden = false;
-    setTimeout(() => linkInput.focus(), 0);
+    showBar({ caret: true });
+    setTimeout(() => { linkInput.focus(); linkInput.select(); }, 0);
+    return false;
   }
+  // The words' own colour, as they are drawn here (light on a dark slide), not the ink's.
+  const plainTool = palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default colour", () => recolour(null), { words: true }) : "";
   bar.append(
     boldTool,
     italicTool,
-    tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code", () => wrapChosen((text) => plainNode("code", "", text))),
-    tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX", () => wrapChosen((text) => plainNode("span", "rt-maths", `$${text}$`))),
+    tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code (⌘E)", asCode, { words: true }),
+    tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX (⌥⌘E)", asMaths, { words: true }),
     tool(icon("link"), "Link (⌘K)", () => askLink()),
-    ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => document.execCommand("foreColor", false, palette[name]))),
-    palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default colour", () => document.execCommand("foreColor", false, palette.ink)) : "",
-    linkInput);
+    ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => recolour(name), { words: true })),
+    plainTool,
+    linkInput,
+    unlinkTool);
+  // Along the bar from the keys, as along a Mac toolbar; Esc and Tab go back to the words.
+  bar.addEventListener("keydown", (event) => {
+    if (event.target === linkInput) return;
+    const buttons = [...bar.querySelectorAll("button")].filter((button) => !button.hidden && !button.disabled);
+    const at = buttons.indexOf(document.activeElement);
+    const go = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: buttons.length - 1 }[event.key];
+    if (go !== undefined) { event.preventDefault(); event.stopPropagation(); buttons[Math.max(0, Math.min(buttons.length - 1, go))]?.focus(); return; }
+    if (event.key === "Escape" || event.key === "Tab") { event.preventDefault(); event.stopPropagation(); backToWords(); }
+    // Space and Return press the button; nothing else of the slide's is done from here.
+    else if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+  });
+  // ⌃Tab from the words: the bar, at the words chosen (at the caret, what needs no words).
+  const toBar = () => {
+    const s = selection();
+    if (!s.rangeCount || !area.contains(s.anchorNode)) return;
+    kept = s.getRangeAt(0).cloneRange();
+    showBar({ caret: true });
+    [...bar.querySelectorAll("button")].find((button) => !button.hidden && !button.disabled)?.focus();
+  };
   let seen = false;
-  const showBar = () => {
+  const showBar = ({ caret = false } = {}) => {
     // A field gone from the page (the panel drawn again) takes its bar and listener with it.
     if (!area.isConnected) { if (seen) area.dispose(); return; }
     seen = true;
     const s = selection();
     const inside = s.rangeCount && area.contains(s.anchorNode) && area.contains(s.focusNode);
-    if (!inside || s.isCollapsed) { if (document.activeElement !== linkInput) bar.hidden = true; return; }
+    // It stays while it has the keys (its buttons) or a link's address is asked for.
+    if (!keyed() && linkInput.hidden && !caret && (!inside || s.isCollapsed)) { bar.hidden = true; return; }
+    if (!inside) return;
     if (!bar.isConnected) document.body.append(bar);
     boldTool.hidden = boldAlready();
     // Pressed where the words chosen are bold or italic, as a Mac format bar shows.
     boldTool.classList.toggle("on", document.queryCommandState("bold"));
     italicTool.classList.toggle("on", document.queryCommandState("italic"));
+    for (const button of bar.querySelectorAll("[data-words]")) button.disabled = s.isCollapsed;
+    if (plainTool) plainTool.firstElementChild.style.background = getComputedStyle(area).color || palette.ink;
     bar.hidden = false;
-    // Over the thing being edited, never on it (`frame`: a table for its cell), else under it.
-    const chosen = s.getRangeAt(0).getBoundingClientRect(), own = bar.getBoundingClientRect();
+    // Over the thing being edited, never on it (`frame`: a table for its cell), else under
+    // it; and in its `room` (the slide's stage), never over the panels beside it.
+    const range = s.getRangeAt(0);
+    const chosen = range.getClientRects().length ? range.getBoundingClientRect() : (area.closest(".inline-editor, .rich-field") || area).getBoundingClientRect();
+    const own = bar.getBoundingClientRect();
     const around = frame?.() || (area.closest(".inline-editor, .rich-field") || area).getBoundingClientRect();
+    const bounds = room?.() || { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
     const above = Math.min(chosen.top, around.top) - own.height - 8;
-    const top = above > 8 ? above : Math.max(chosen.bottom, around.bottom) + 8;
-    const left = Math.min(Math.max(8, chosen.left + chosen.width / 2 - own.width / 2), innerWidth - own.width - 8);
+    const top = above > bounds.top + 8 ? above : Math.max(chosen.bottom, around.bottom) + 8;
+    const left = Math.max(bounds.left + 8, Math.min(chosen.left + chosen.width / 2 - own.width / 2, bounds.right - own.width - 8));
     Object.assign(bar.style, { top: `${top}px`, left: `${left}px` });
   };
   document.addEventListener("selectionchange", showBar);
-  // Whoever closes the field takes its bar with it.
-  area.dispose = () => { bar.remove(); document.removeEventListener("selectionchange", showBar); };
+  // Whoever closes the field takes its bar with it, and the address being typed is applied.
+  // (A field the page has dropped writes nothing more.)
+  area.dispose = () => {
+    if (area.isConnected) finishLink(true, false); else linkInput.hidden = true;
+    bar.remove();
+    document.removeEventListener("selectionchange", showBar);
+  };
 
   // Pasted words come in the look of where they go, keeping what Keynote keeps of another
   // app's: bold, italic, code and links, and a list's items and levels (⌥⇧⌘V, Paste and

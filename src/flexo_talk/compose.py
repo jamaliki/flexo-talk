@@ -273,7 +273,7 @@ class _Canvas:
                 identifier, x, box.y + metrics.baseline, metrics.width, metrics.line_height,
                 [line.runs for line in metrics.lines], size, align, typography.family, weight, colour,
             ))
-        render_runs(
+        drawn = render_runs(
             parent if parent is not None else self.layer,
             identifier,
             metrics,
@@ -286,6 +286,10 @@ class _Canvas:
             anchor=None if align == "start" else align,
             weight=weight,
         )
+        # How wide the words may run before they wrap, and whether their lines are evened
+        # out: the studio's editor wraps them there too.
+        if wrap and drawn is not None:
+            drawn.set("data-flexo-wrap", f"{box.width:g}{' balance' if balance else ''}")
         return metrics.height
 
 
