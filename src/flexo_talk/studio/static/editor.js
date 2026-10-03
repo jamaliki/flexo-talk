@@ -782,6 +782,10 @@ export function mount(studio, container) {
       const svg = pageNode.querySelector("svg");
       if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
       if (svg) widenLines(svg);
+      // The page under the drawing is the slide's own colour: a dark slide shows no light
+      // edge where the drawing falls a fraction short of it.
+      const paper = svg?.querySelector('[id="canvas.background"]')?.getAttribute("fill");
+      if (paper && paper !== "none") pageNode.style.background = paper;
       // What the pointer was over has moved, or gone: shown again when it moves.
       hover.hidden = true;
       pageNode.append(hover, chosen, target);
@@ -2814,11 +2818,12 @@ export function mount(studio, container) {
     };
     const parts = [
       h("div.section", {}, crumbs(slide, null),
-        layout === "statement" ? text("words", "Text", { rows: 2, placeholder: "A short statement" }) : text("title", layout === "agenda" ? "Heading" : "Title", { placeholder: layout === "agenda" ? "Outline" : "Slide title" }),
+        layout === "statement" ? text("words", "Text", { rows: 2, placeholder: "A short statement" }) : text("title", layout === "agenda" ? "Heading" : "Title", { placeholder: layout === "agenda" ? "Outline" : "Title" }),
         text("subtitle", "Subtitle"),
         // Each a whole row wide: an author's name and affiliation read without being cut off.
         layout === "title" ? [text("author", "Author", { markup: false, placeholder: "Your name" }),
-          text("date", "Date", { markup: false, placeholder: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) })] : null,
+          // An example, not a default: an empty date draws nothing.
+          text("date", "Date", { markup: false, placeholder: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}` })] : null,
         text("by", "Attribution", { markup: false }),
         layout === "agenda" ? h("div.hint-line", {}, "Lists the titles of the deck's section slides automatically.") : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn't show its title.") : null),
@@ -4020,8 +4025,9 @@ export function mount(studio, container) {
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
     { icon: "play", label: "Present", keys: "⌘↩", run: () => present() },
-    { icon: "export", label: "Export as PowerPoint…", hint: "A .pptx file of editable shapes and text", run: () => studio.exportFiles(["pptx"]) },
+    // In the toolbar's Export menu's order.
     { icon: "export", label: "Export as PDF…", hint: "One page per slide", run: () => studio.exportFiles(["pdf"]) },
+    { icon: "export", label: "Export as PowerPoint…", hint: "A .pptx file of editable shapes and text", run: () => studio.exportFiles(["pptx"]) },
     { icon: "export", label: "Export as Images…", hint: "A PNG or SVG image of each slide", run: () => studio.exportFiles(["png"]) },
   ];
   function chosenCommands() {
