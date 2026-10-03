@@ -350,6 +350,7 @@ export function mount(studio, container) {
   const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: BLOCKS[kind].label, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "chevron-down" });
   const layoutButton = h("button.btn.ghost.layout-button", { type: "button", title: "Slide layout", onclick: (event) => layoutPopover(event.currentTarget) });
   const newSlideButton = ui.button("Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide (N)" });
+  newSlideButton.classList.add("keep-label");
   studio.tools.append(newSlideButton, layoutButton, h("span.sep"), ...insertButtons, moreButton);
   studio.actions.append(
     ui.button("Present", () => present(), { kind: "ghost", icon: "play", title: "Present (⌘↩)" }),
@@ -364,7 +365,7 @@ export function mount(studio, container) {
 
   const renderBar = () => {
     const slide = slideAt();
-    clear(layoutButton, glyph(layoutOf(slide)), h("span", {}, LAYOUT_NAMES[layoutOf(slide)] || "Layout"), icon("chevron-down"));
+    clear(layoutButton, glyph(layoutOf(slide)), h("span.bar-label", {}, LAYOUT_NAMES[layoutOf(slide)] || "Layout"), icon("chevron-down"));
     layoutButton.disabled = !slide;
     const room = regionsOf(slide).length > 0;
     for (const button of [...insertButtons, moreButton]) button.disabled = !room;
