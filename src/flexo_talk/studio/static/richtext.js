@@ -689,4 +689,4 @@ export function richText({ value = "", list = false, single = false, numbered = 
   return area;
 }
 
-export { serialise as markupFromNodes, inlineNodes as nodesFromMarkup, escaped as markupOfWords };
+export { serialise as markupFromNodes, inlineNodes as nodesFromMarkup, escaped as markupOfWords, itemsOfHtml };

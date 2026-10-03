@@ -8,7 +8,7 @@ import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus,
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
-import { richText, markupOfWords } from "/static/kinds/deck/richtext.js";
+import { richText, markupOfWords, itemsOfHtml } from "/static/kinds/deck/richtext.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -379,6 +379,34 @@ export function mount(studio, container) {
     const block = blocksAt(slide, place.region)[place.index];
     if (block) mutate(block, slide);
   }, { quiet: true, ...options });
+  // Words made a list, a list words, or its bullets numbers, as Keynote's Bullets & Lists:
+  // a line an item, the words kept, and what the other kind does not take left off.
+  const listStyle = (block) => (kindOf(block) !== "bullets" ? "none" : block.numbered ? "numbered" : "bulleted");
+  const restyle = (at, style) => {
+    const block = blocksAt(slideAt(), at.region)[at.index];
+    if (!block || listStyle(block) === style) return;
+    const renamed = (b, from, to, value, drop) => {
+      const entries = Object.entries(b).filter(([key]) => !drop.includes(key)).map(([key, was]) => (key === from ? [to, value] : [key, was]));
+      for (const key of Object.keys(b)) delete b[key];
+      Object.assign(b, Object.fromEntries(entries));
+    };
+    const label = style === "none" ? "Convert to Text" : listStyle(block) === "none" ? "Convert to List" : style === "numbered" ? "Number List" : "Bullet List";
+    editBlock(at, (b) => {
+      if (style === "none") {
+        renamed(b, "bullets", "text", bulletsText(b.bullets).split("\n").map((line) => line.trim()).filter(Boolean).join("\n"), ["numbered", "reveal"]);
+        return;
+      }
+      if (kindOf(b) === "text") {
+        const lines = String(b.text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+        renamed(b, "text", "bullets", lines.length ? lines : [""], ["align", "muted", "colour"]);
+      }
+      setOption(b, "numbered", style === "numbered", false);
+    }, { label });
+    renderInspector();
+  };
+  const listField = (at, block) => ui.field("List", ui.segmented({ value: listStyle(block), options: [
+    { value: "none", label: "None" }, { value: "bulleted", label: "Bulleted" }, { value: "numbered", label: "Numbered" }],
+  onChange: (style) => restyle(at, style) }));
 
   // -- the frame --
   const railList = h("div.rail-list.scroll-thin", { tabindex: 0 });
@@ -1395,6 +1423,8 @@ export function mount(studio, container) {
     const kind = kindOf(block), count = blocksAt(slide, at.region).length;
     const items = [];
     if (INLINE.has(kind)) items.push({ icon: "pencil", label: kind === "math" ? "Edit Equation" : kind === "code" ? "Edit Code" : "Edit Text", run: () => openInline({ kind: "block", ...at }) });
+    if (kind === "text") items.push({ icon: "list", label: "Convert to List", run: () => restyle(at, "bulleted") });
+    if (kind === "bullets") items.push({ icon: "text", label: "Convert to Text", run: () => restyle(at, "none") });
     if (cell) items.push({ icon: "pencil", label: "Edit Cell", run: () => openInline({ kind: "cell", ...at, ...cell }, { selectAll: true }) }, "-", ...tableItems(at, cell));
     if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", keys: "A", run: () => whenFigure(() => figure.parts.addPalette(point)) });
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
@@ -2442,9 +2472,17 @@ export function mount(studio, container) {
     const files = [...(data?.files || [])];
     if (files.length) { event.preventDefault(); await addFiles(files, state.focus ? { kind: "block", ...state.focus } : null); return; }
     const text = (data?.getData("text/plain") || "").replace(/\r/g, "").trim();
-    if (!text) return;
+    // Another app's formatted words keep their bold, italic, code, links and levels, as
+    // they do pasted in an editor.
+    const html = data?.getData("text/html");
+    const items = html ? itemsOfHtml(html).filter((item) => item.markup) : [];
+    if (!text && !items.length) return;
     if (!regionsOf(slideAt()).length) { toast("This layout has no room for text. Choose a different layout first.", { icon: "info" }); return; }
     event.preventDefault();
+    if (items.length) {
+      insertBlock(items.length > 1 ? "bullets" : "text", items.length > 1 ? { bullets: bulletsFrom(items.map((item) => "  ".repeat(item.depth) + item.markup).join("\n")) } : { text: items[0].markup });
+      return;
+    }
     // Words pasted are words: a * or $ in them is that mark, not markup.
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
     insertBlock(lines.length > 1 ? "bullets" : "text", lines.length > 1 ? { bullets: lines.map((line) => markupOfWords(line.replace(/^[-*•·]\s+/, ""))) } : { text: markupOfWords(text) });
@@ -2911,11 +2949,12 @@ export function mount(studio, container) {
         return [richField({ value: bulletsText(block.bullets), list: true, numbered: Boolean(block.numbered), key: key("bullets"),
           onInput: (text) => edit((b) => { b.bullets = bulletsFrom(text); }, "items") }),
         h("div.hint-line", {}, "Return starts the next item; ", h("kbd", {}, "Tab"), " and ", h("kbd", {}, "⇧Tab"), " change its level."),
-        h("div.row", {}, ui.toggle({ value: block.numbered, label: "Numbered", onChange: set("numbered", false) }),
-          ui.toggle({ value: block.reveal, label: "Reveal items one at a time", onChange: set("reveal", false) })),
+        listField(at, block),
+        ui.toggle({ value: block.reveal, label: "Reveal items one at a time", onChange: set("reveal", false) }),
         size()];
       case "text":
         return [richField({ value: block.text ?? "", key: key("text"), onInput: (text) => edit((b) => { b.text = text; }, "text") }),
+          listField(at, block),
           ui.field("Align", ui.segmented({ value: block.align || "start", options: [
             { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
           onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "start")) })),
