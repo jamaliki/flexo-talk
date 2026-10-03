@@ -150,7 +150,9 @@ function itemsOfHtml(html) {
       const element = child.nodeType === Node.ELEMENT_NODE;
       if (element && (child.matches(BLOCKS_HTML) || child.querySelector(BLOCKS_HTML))) {
         flush();
-        walk(child, lists + (child.matches("ul, ol") ? 1 : 0));
+        // Word's list items are paragraphs, each saying its level ("mso-list:l0 level2 lfo1").
+        const word = /mso-list:\s*l\d+\s+level(\d+)/i.exec(child.getAttribute("style") || "");
+        walk(child, word ? Number(word[1]) : lists + (child.matches("ul, ol") ? 1 : 0));
         flush();
         continue;
       }
