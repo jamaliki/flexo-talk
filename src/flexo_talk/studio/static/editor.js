@@ -764,14 +764,15 @@ export function mount(studio, container) {
     if (figure?.parts.dragging || carry?.started || inline || figure?.parts.inline) return;
     if (inFigure(event)) {
       const id = figure.parts.idAt(event);
+      // A shape's own words name it: its frame needs no tag over the words above it.
       const box = id && figure.parts.model ? boxOf(figurePrefix() + id) : null;
-      place(hover, box, id ? figure.parts.nameOf(id) : "");
+      place(hover, box, "");
       return;
     }
     const part = partAt(event);
     // A figure's parts are shown one by one, as they will be chosen: by the first click.
     const inner = part && figurePartAt(event, part);
-    if (inner) { place(hover, boxOf(inner.element.id), inner.name); return; }
+    if (inner) { place(hover, boxOf(inner.element.id), ""); return; }
     place(hover, part && boxOf(part.id), part ? labelOf(part) : "");
   }
 
@@ -788,7 +789,10 @@ export function mount(studio, container) {
       const alone = holder?.id === figure.parts.model.root && (holder.children || []).length < 2;
       if (figure.parts.connecting || (id && holder && !alone)) { figure.parts.pointerdown(event); return; }
     }
-    pressBlock(event, partAt(event));
+    const part = partAt(event);
+    // A shape of a figure not yet chosen is dragged as the shape, the figure chosen first.
+    if (part && figurePartAt(event, part)) { focusBlock(part.region, part.index, () => figure.parts.pointerdown(event)); return; }
+    pressBlock(event, part);
   }
 
   // -- the slide's parts, moved on it --
