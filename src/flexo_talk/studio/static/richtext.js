@@ -7,6 +7,8 @@
 // (for a list, one item a line, two spaces a level, as bulletsText writes it), and
 // which says "input" whenever it changes, as a textarea does.
 
+import { icon } from "/static/studio/studio.js";
+
 // -- markup to runs --------------------------------------------------------------------
 
 const INLINE = /(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\*\*|\*)/;
@@ -371,7 +373,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const button = document.createElement("button");
     button.type = "button";
     button.title = title;
-    button.innerHTML = label;
+    if (label instanceof Node) button.append(label); else button.innerHTML = label;
     Object.assign(button.style, style);
     // The words stay chosen: the button never takes the caret.
     button.addEventListener("mousedown", (event) => { event.preventDefault(); run(); changed(); showBar(); });
@@ -412,7 +414,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     tool("<i>I</i>", "Italic (⌘I)", () => document.execCommand("italic")),
     tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code", () => wrapChosen((text) => plainNode("code", "", text))),
     tool("<span style=\"font-family: Georgia, serif; font-style: italic\">x²</span>", "Equation: the words chosen as LaTeX", () => wrapChosen((text) => plainNode("span", "rt-maths", `$${text}$`))),
-    tool("Link", "Link", () => { const s = selection(); linkRange = s.rangeCount ? s.getRangeAt(0).cloneRange() : null; linkInput.value = ""; linkInput.hidden = false; setTimeout(() => linkInput.focus(), 0); }),
+    tool(icon("link"), "Link", () => { const s = selection(); linkRange = s.rangeCount ? s.getRangeAt(0).cloneRange() : null; linkInput.value = ""; linkInput.hidden = false; setTimeout(() => linkInput.focus(), 0); }),
     ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => document.execCommand("foreColor", false, palette[name]))),
     palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default colour", () => document.execCommand("foreColor", false, palette.ink)) : "",
     linkInput);
