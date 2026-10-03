@@ -406,6 +406,11 @@ export function mount(studio, container) {
       }
       setOption(b, "numbered", style === "numbered", false);
     }, { label });
+    // What the other kind cannot keep is said, with the way back.
+    const levels = kindOf(block) === "bullets" && bulletsText(block.bullets).split("\n").some((line) => /^\s/.test(line));
+    const looks = kindOf(block) === "text" && ["align", "colour", "muted"].some((key) => block[key] !== undefined);
+    if (style === "none" && levels) undoNote("Text has no levels: the list's items are now lines", { icon: "text" });
+    else if (style !== "none" && looks) undoNote("A list takes the slide's alignment and colour", { icon: "list" });
     renderInspector();
   };
   const listField = (at, block) => ui.field("List", ui.segmented({ value: listStyle(block), options: [
@@ -602,7 +607,7 @@ export function mount(studio, container) {
       ...(!together ? [{ icon: "up", label: "Move Up", disabled: index === 0, run: () => moveSlide(index, index - 1) },
         { icon: "down", label: "Move Down", disabled: index >= count - 1, run: () => moveSlide(index, index + 1) }] : []),
       "-",
-      { icon: "trash", label: `Delete${many}`, danger: true, run: () => deleteSlides(together || [index]) },
+      { icon: "trash", label: `Delete${many}`, keys: "⌫", danger: true, run: () => deleteSlides(together || [index]) },
     ]);
   }
 
@@ -1418,7 +1423,13 @@ export function mount(studio, container) {
       // Into the figure: the part under the pointer is chosen, with its own menu.
       const show = () => {
         const id = figure?.parts.model ? figure.parts.idAt(event) : null;
-        if (id && id !== figure.parts.model.root) { menu(point, [...figure.parts.menuOf(id, point), "-", ...clipItems()]); return; }
+        if (id && id !== figure.parts.model.root) {
+          // In the object menu's order: what is its own, then Cut, Copy, Paste and Duplicate, then Delete.
+          const own = figure.parts.menuOf(id, point), last = (label) => own.filter((item) => item?.label === label);
+          const first = own.filter((item) => !["Duplicate", "Delete"].includes(item?.label));
+          menu(point, [...first, "-", ...clipItems(), ...last("Duplicate"), "-", ...last("Delete")]);
+          return;
+        }
         figure?.parts.select([]);
         blockMenu(point, part);
       };
@@ -2583,13 +2594,25 @@ export function mount(studio, container) {
     if (!text && !items.length) return;
     if (!regionsOf(slideAt()).length) { toast("This layout has no room for text. Choose a different layout first.", { icon: "info" }); return; }
     event.preventDefault();
+    // A numbered list (an <ol>) stays numbered.
+    const numbered = /<ol[\s>]/i.test(html || "") && !/<ul[\s>]/i.test(html || "");
     if (items.length) {
-      insertBlock(items.length > 1 ? "bullets" : "text", items.length > 1 ? { bullets: bulletsFrom(items.map((item) => "  ".repeat(item.depth) + item.markup).join("\n")) } : { text: items[0].markup });
+      insertBlock(items.length > 1 ? "bullets" : "text", items.length > 1 ? { bullets: bulletsFrom(items.map((item) => "  ".repeat(item.depth) + item.markup).join("\n")), ...(numbered ? { numbered: true } : {}) } : { text: items[0].markup }, null, "Paste Text");
       return;
     }
-    // Words pasted are words: a * or $ in them is that mark, not markup.
-    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-    insertBlock(lines.length > 1 ? "bullets" : "text", lines.length > 1 ? { bullets: lines.map((line) => markupOfWords(line.replace(/^[-*•·]\s+/, ""))) } : { text: markupOfWords(text) });
+    // Words pasted are words: a * or $ in them is that mark, not markup. Lines are a list's
+    // items, their own bullets and numbers ("- ", "3. ", "a) ") left off and their indents
+    // kept as levels; numbered throughout, the list is numbered.
+    const marker = /^(?:[-*+•◦▪‣·–]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s+/i;
+    const lines = text.split("\n").filter((line) => line.trim());
+    if (lines.length < 2) { insertBlock("text", { text: markupOfWords(text) }, null, "Paste Text"); return; }
+    const outer = lines.filter((line) => !/^\s/.test(line));
+    const counted = outer.length > 1 && outer.every((line) => /^\(?\d{1,3}[.)]\s/.test(line));
+    const listed = lines.map((line) => {
+      const indent = /^[ \t]*/.exec(line)[0].replace(/\t/g, "  ").length;
+      return "  ".repeat(Math.floor(indent / 2)) + markupOfWords(line.trim().replace(marker, ""));
+    });
+    insertBlock("bullets", { bullets: bulletsFrom(listed.join("\n")), ...(counted ? { numbered: true } : {}) }, null, "Paste Text");
   });
   function pasteClip(clip) {
     if (clip.what === "slides") {
@@ -3984,6 +4007,8 @@ export function mount(studio, container) {
       { icon: "copy", label: "Duplicate Slide", run: () => duplicateSlide(state.slide) },
       { icon: "trash", label: "Delete Slide", run: () => deleteSlides(chosenSlides()) },
     ] : []),
+    // The object chosen, by name: what its right-click menu does.
+    ...chosenCommands(),
     ...(state.slide < slides().length - 1 ? [{ icon: "down", label: "Go to Next Slide", run: () => select(state.slide + 1) }] : []),
     ...(state.slide > 0 ? [{ icon: "up", label: "Go to Previous Slide", run: () => select(state.slide - 1) }] : []),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
@@ -3999,6 +4024,18 @@ export function mount(studio, container) {
     { icon: "export", label: "Export as PDF…", hint: "One page per slide", run: () => studio.exportFiles(["pdf"]) },
     { icon: "export", label: "Export as Images…", hint: "A PNG or SVG image of each slide", run: () => studio.exportFiles(["png"]) },
   ];
+  function chosenCommands() {
+    const at = state.focus, block = at && !typingNow() ? blocksAt(slideAt(), at.region)[at.index] : null;
+    if (!block) return [];
+    const kind = kindOf(block), name = blockLabel(block), count = blocksAt(slideAt(), at.region).length;
+    return [
+      ...(kind === "text" ? [{ icon: "list", label: "Convert to List", run: () => restyle(at, "bulleted") }] : []),
+      ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "none") }] : []),
+      ...(at.index > 0 ? [{ icon: "up", label: `Move ${name} Up`, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
+      ...(at.index < count - 1 ? [{ icon: "down", label: `Move ${name} Down`, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) }] : []),
+      { icon: "trash", label: `Delete ${name}`, keys: "⌫", run: () => deleteBlock(at) },
+    ];
+  }
   studio.reveal = (where) => {
     if (where?.label === "Design") { state.tab = "design"; renderInspector(); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);
