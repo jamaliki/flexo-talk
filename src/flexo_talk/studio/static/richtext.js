@@ -414,7 +414,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     tool("<span style=\"font-family: Georgia, serif; font-style: italic\">x²</span>", "Equation: the words chosen as LaTeX", () => wrapChosen((text) => plainNode("span", "rt-maths", `$${text}$`))),
     tool("Link", "Link", () => { const s = selection(); linkRange = s.rangeCount ? s.getRangeAt(0).cloneRange() : null; linkInput.value = ""; linkInput.hidden = false; setTimeout(() => linkInput.focus(), 0); }),
     ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => document.execCommand("foreColor", false, palette[name]))),
-    palette.ink ? tool("<span class=\"rt-swatch rt-plain\"></span>", "Default colour", () => document.execCommand("foreColor", false, palette.ink)) : "",
+    palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default colour", () => document.execCommand("foreColor", false, palette.ink)) : "",
     linkInput);
   let seen = false;
   const showBar = () => {
