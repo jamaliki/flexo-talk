@@ -1515,7 +1515,8 @@ export function mount(studio, container) {
       group,
       ui.button("", (event) => menu(event.currentTarget, FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export as ${label}`, hint, run: () => exportFigure(figure, formats) }))),
         { small: true, kind: "ghost", icon: "export", title: "Export figure (SVG, PDF, PNG, YAML)" }),
-      figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)" }) : null,
+      figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)" })
+        : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: "Delete Figure (⌫)" }),
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
     group.classList.add("group");
@@ -1534,8 +1535,16 @@ export function mount(studio, container) {
       return other && bar.left < other.left + other.width && bar.right > other.left && bar.top < other.top + other.height && bar.bottom > other.top;
     });
     const roomBelow = below + height < pageNode.clientHeight - 4;
-    const top = covers(span(above)) && roomBelow && !covers(span(below)) ? below : above;
-    Object.assign(figureBar.style, { left: `${left}px`, top: `${top}px` });
+    // Best of all off the slide, just above it, where it covers nothing and stays put
+    // whatever is chosen: over the figure's middle, within the slide's width.
+    const width = figureBar.offsetWidth || 300;
+    if (pageNode.getBoundingClientRect().top - stage.getBoundingClientRect().top >= height + 12) {
+      const middle = Math.max(0, Math.min(box.left + box.width / 2 - width / 2, pageNode.clientWidth - width));
+      Object.assign(figureBar.style, { left: `${middle}px`, top: `${-height - 8}px` });
+    } else {
+      const top = covers(span(above)) && roomBelow && !covers(span(below)) ? below : above;
+      Object.assign(figureBar.style, { left: `${left}px`, top: `${top}px` });
+    }
     stage.classList.toggle("connecting", Boolean(words));
   }
 
@@ -2257,7 +2266,6 @@ export function mount(studio, container) {
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
     if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
-    root.classList.toggle("wide", Boolean(figure && figureBlock() && figure.parts.wantsRoom()));
     keepFocus(inspectorBody, () => {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
