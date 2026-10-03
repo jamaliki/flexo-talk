@@ -3519,7 +3519,8 @@ export function mount(studio, container) {
     }
     if (now.length < was.length) {
       const gone = was.length - now.length;
-      return { ...on(Math.min(first, Math.max(now.length - 1, 0)), gone > 1 ? `Delete ${gone} Slides` : "Delete Slide"), place: `Slide ${first + 1}` };
+      // Where the slide was: undone, the slide comes back and is shown there.
+      return { ...on(first, gone > 1 ? `Delete ${gone} Slides` : "Delete Slide"), place: `Slide ${first + 1}` };
     }
     const changed = now.map((_, index) => index).filter((index) => !same(was[index], now[index]));
     if (!changed.length) return deckChange(before?.deck || {}, after?.deck || {});
