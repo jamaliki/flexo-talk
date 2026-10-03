@@ -300,6 +300,10 @@ export function mount(studio, container) {
   const styleField = (name) => catalog.style?.find((field) => field.name === name);
   const styleName = (name) => styleField(name)?.label || keyTitle(name);
   const choiceName = (name, choice) => styleField(name)?.labels?.[choice] || ({ start: "Left", middle: "Centre", end: "Right" })[choice] || keyTitle(choice);
+  // How to work the slide, said under it the first few times the editor is opened, then not.
+  const opened = Number(remembered("opened", "0")) || 0;
+  remember("opened", String(opened + 1));
+  const learning = opened < 5;
   const state = { slide: 0, picked: [], focus: null, field: null, tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
@@ -661,7 +665,7 @@ export function mount(studio, container) {
       page?.steps > 1 ? h("span.chip", {}, icon("reveal"), `${page.steps} steps`) : null,
       here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), entry.who.name, entry.doing ? h("span.muted", {}, ` · ${entry.doing}`) : null)),
       h("span.spacer", { style: { flex: 1 } }),
-      pending ? h("span.row.drawing", {}, h("span.spinner"), "Updating…") : h("span.stage-hint", {}, "Click to select · Drag to move · Double-click to edit text"));
+      pending ? h("span.row.drawing", {}, h("span.spinner"), "Updating…") : learning ? h("span.stage-hint", {}, "Click to select · Drag to move · Double-click to edit text") : null);
     clear(stageMessages, own.map(messageView));
     stageMessages.hidden = !own.length;
     fitStage();
