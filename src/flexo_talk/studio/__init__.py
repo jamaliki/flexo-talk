@@ -167,6 +167,26 @@ class DeckKind:
     def claims(self, document: object) -> bool:
         return is_deck_document(document)
 
+    def mended(self, document: object) -> object:
+        """A deck two edits were merged into: each figure written in it with no line left
+        naming a shape the other side deleted."""
+
+        from flexo.studio.figure_edit import mend
+
+        def walk(value: object) -> None:
+            if isinstance(value, dict):
+                figure = value.get("figure")
+                if isinstance(figure, dict) and isinstance(figure.get("nodes"), list):
+                    mend(figure)
+                for item in value.values():
+                    walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        walk(document)
+        return document
+
     def new(self, path: Path) -> dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,

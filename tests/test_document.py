@@ -1095,3 +1095,25 @@ def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tm
     described = {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
     assert described == {"slide1.body.0": "A figure: Customer, Orders API"}
     assert {"Customer", "Orders API", "Line from Customer to Orders API"} <= set(names)
+
+
+def test_a_merged_deck_keeps_no_line_to_a_shape_deleted() -> None:
+    from flexo.studio.merge import merge3
+
+    def deck(nodes: list[str], edges: list[tuple[str, str]]) -> dict:
+        figure = {
+            "figure": {"id": "f"},
+            "nodes": [{"id": node} for node in nodes],
+            "groups": [{"id": "root", "layout": {"kind": "row"}, "children": nodes}],
+        }
+        if edges:
+            figure["edges"] = [{"from": a, "to": b} for a, b in edges]
+        return {"deck": {"id": "d"}, "slides": [{"title": "T", "body": [{"figure": figure}]}]}
+
+    base = deck(["a", "b", "c"], [])
+    ours = deck(["a", "b", "c"], [("a", "b"), ("b", "c")])
+    theirs = deck(["a", "b"], [])
+    merged = DeckKind().mended(merge3(base, ours, theirs))
+    figure = merged["slides"][0]["body"][0]["figure"]
+    assert figure["edges"] == [{"from": "a", "to": "b"}]
+    assert figure["groups"][0]["children"] == ["a", "b"]
