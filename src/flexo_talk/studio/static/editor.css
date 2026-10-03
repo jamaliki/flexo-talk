@@ -63,6 +63,8 @@
 .hit.hover .hit-label { background: var(--raised); color: var(--accent); border: 1px solid var(--accent-line); line-height: 17px; }
 .hit.selected.holder { border: 1.5px dashed var(--accent-line); background: none; }
 .hit.selected.holder .hit-label { display: none; }
+/* What is chosen is framed, not named: a name tag over it covered the words above it (the inspector names it). */
+.hit.selected .hit-label { display: none; }
 .size-handle { display: none; position: absolute; width: 9px; height: 9px; box-sizing: border-box; background: var(--raised); border: 1.5px solid var(--accent); border-radius: 2px; pointer-events: auto; touch-action: none; }
 .size-handle::before { content: ""; position: absolute; inset: -6px; }
 .hit.selected.sizable .size-handle { display: block; }
