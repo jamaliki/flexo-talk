@@ -1976,6 +1976,13 @@ rather than every way it could be, and the slide says it is not settled."""
 _LAYOUTS: dict[tuple[str, str, str], str] = {}
 """The layout each figure (by deck, slide and figure) was last drawn in."""
 
+_SCALES: dict[tuple[str, str, str], float] = {}
+"""The scale each figure was last drawn at, beside its layout."""
+
+SHRUNK = 0.9
+"""How much smaller a figure kept in its layout while edited may be drawn before its best
+layout is found at once (see ``_prepare``)."""
+
 STEADY = 1.3
 """How much larger another layout must set a figure for it to leave the one it is shown in."""
 
@@ -2032,6 +2039,16 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
             spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
             turn=block.turn, keep=keep,
         )
+        shown = _SCALES.get(where)
+        if keep is not None and fit.layout == keep and shown and fit.scale < shown * SHRUNK:
+            # Kept, the figure would shrink a good deal (a shape added to a long row): its
+            # best layout is found now, in one drawing, rather than a moment later, when it
+            # would jump under its person's eyes.
+            keep = None
+            fit = flexo.fit_in_box(
+                spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
+                turn=block.turn,
+            )
         codes = [
             diagnostic.code
             for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics
@@ -2053,12 +2070,17 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
                     for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics
                     if diagnostic.code != "layout.width.grown"
                 ]
-        laid = {"svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes}
+        laid = {
+            "svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes,
+            "scale": fit.scale,
+        }
         if keep is not None and fit.layout == keep:
             canvas.settled = False
         else:
             _store_fit(key, laid)
     _LAYOUTS[where] = laid["layout"]
+    if laid.get("scale"):
+        _SCALES[where] = laid["scale"]
     for said in dict.fromkeys(_figure_check(code) for code in laid["codes"]):
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {said}")
     for text in block.said:
