@@ -3584,12 +3584,12 @@ export function mount(studio, container) {
       const upload = h("input", { type: "file", accept: types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json", hidden: true,
         onchange: async () => { const file = upload.files[0]; if (file) finish(await studio.upload(file)); } });
       const actions = [];
-      if (types.some((type) => ["image", "figure", "structure"].includes(type))) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });
-      if (types.includes("structure")) actions.push({ label: "PDB ID…", run: () => {
+      if (types.some((type) => ["image", "figure", "structure"].includes(type))) actions.push({ label: "Upload…", aside: true, run: () => { upload.click(); return false; } });
+      if (types.includes("structure")) actions.push({ label: "PDB ID…", aside: true, run: () => {
         askEntry().then((id) => { if (id) finish(id); });
         return false;
       } });
-      if (create === "figure") actions.push({ label: "New Figure File…", run: () => {
+      if (create === "figure") actions.push({ label: "New Figure File…", aside: true, run: () => {
         ask("New Figure File", "figures/figure.yaml").then(async (name) => {
           if (!name) return;
           try { finish(await createFile(name, "figure")); }
