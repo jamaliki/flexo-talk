@@ -760,7 +760,7 @@ def test_a_part_dragged_on_a_slide_swaps_goes_between_or_goes_home() -> None:
         [body, {"region": "body", "index": 0}, {"x": 100, "y": 250}],  # below them all
         [body, {"region": "body", "index": 1}, {"x": 900, "y": 900}],  # off the slide
         [[left, right_none], {"region": "left", "index": 1}, {"x": 300, "y": 200}],  # empty column
-        [[left, right_one], {"region": "left", "index": 0}, {"x": 300, "y": 250}],  # its one part
+        [[left, right_one], {"region": "left", "index": 0}, {"x": 300, "y": 250}],  # under its one part
     ]
     code = (
         f"import {{ blockDrop, blockPlan }} from {json.dumps(script.as_uri())};\n"
@@ -780,7 +780,7 @@ def test_a_part_dragged_on_a_slide_swaps_goes_between_or_goes_home() -> None:
         {"kind": "between", "region": "body", "index": 3},
         None,
         {"kind": "into", "region": "right", "index": 0},
-        {"kind": "swap", "region": "right", "index": 0},
+        {"kind": "between", "region": "right", "index": 1},
     ]
     place = lambda region, index: {"region": region, "index": index}  # noqa: E731
     # Swapped: the first and the last trade places, the middle stays.

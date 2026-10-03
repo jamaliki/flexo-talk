@@ -36,13 +36,12 @@ export function blockDrop(regions, from, point) {
       return between(region, block.index + (share >= 1 - EDGE ? 1 : 0));
     }
   }
-  // Elsewhere in a region: into it, if it is empty; a column holding one part swaps with
-  // it wherever it is let go; else between the parts either side of the pointer.
+  // Elsewhere in a region: into it, if it is empty; else between the parts either side of
+  // the pointer (a column holding one part too: only its middle swaps with it).
   for (const region of regions) {
     if (!within(region.room)) continue;
     const others = region.blocks.filter((block) => block.box && !isFrom(region, block));
     if (!others.length) return region.key === from.region ? { kind: "home" } : { kind: "into", region: region.key, index: 0 };
-    if (others.length === 1 && region.key !== from.region) return { kind: "swap", region: region.key, index: others[0].index };
     const above = region.blocks.filter((block) => block.box && (block.box.top + block.box.bottom) / 2 < point.y).length;
     return between(region, above);
   }
