@@ -4018,6 +4018,10 @@ export function mount(studio, container) {
     ] : []),
     // The object chosen, by name: what its right-click menu does.
     ...chosenCommands(),
+    // Words being typed: the Mac app's Format menu's Bold and Italic (⌘B and ⌘I are the field's own).
+    ...(inline?.area?.rich ? [["bold", "Bold", "b"], ["italic", "Italic", "i"]].map(([name, label, key]) => ({ icon: name, label, keys: `⌘${key.toUpperCase()}`,
+      // As if its keys were pressed in the field, which knows what bold means there (a bold title).
+      run: () => { inline?.area.focus(); inline?.area.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, bubbles: true, cancelable: true })); } })) : []),
     ...(state.slide < slides().length - 1 ? [{ icon: "down", label: "Go to Next Slide", run: () => select(state.slide + 1) }] : []),
     ...(state.slide > 0 ? [{ icon: "up", label: "Go to Previous Slide", run: () => select(state.slide - 1) }] : []),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
@@ -4041,8 +4045,9 @@ export function mount(studio, container) {
     return [
       ...(kind === "text" ? [{ icon: "list", label: "Convert to List", run: () => restyle(at, "bulleted") }] : []),
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "none") }] : []),
-      ...(at.index > 0 ? [{ icon: "up", label: `Move ${name} Up`, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
-      ...(at.index < count - 1 ? [{ icon: "down", label: `Move ${name} Down`, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) }] : []),
+      // As the Mac app's Arrange menu names them; the hint says what they move.
+      ...(at.index > 0 ? [{ icon: "up", label: "Move Up", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
+      ...(at.index < count - 1 ? [{ icon: "down", label: "Move Down", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) }] : []),
       { icon: "trash", label: `Delete ${name}`, keys: "⌫", run: () => deleteBlock(at) },
     ];
   }
