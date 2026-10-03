@@ -29,6 +29,7 @@ from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
 from flexo.lint import lint_compilation
 from flexo.render_common import render_runs
+from flexo.structures import structure_problem
 from flexo.style import Palette, TypographyStyle
 from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, xml_document
 from flexo.svg_resources import embed_fonts
@@ -1989,7 +1990,13 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {said}")
     for text in block.said:
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {text}")
-    if laid["layout"] != "as written":
+    # A structure that can't be drawn as written is a panel saying why: said under the slide too.
+    for node in spec.nodes:
+        problem = structure_problem(node, style) if node.kind == "structure" else None
+        if problem is not None:
+            canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {problem.message}")
+    # Spaced a little closer is no news; swapped or folded, the figure reads differently.
+    if "turned" in laid["layout"] or "folded" in laid["layout"]:
         canvas.notes.append(f"{canvas.slide.id} {spec.id}: {_layout_said(laid['layout'])}")
     left, top, width, height = laid["ink"]
     return _Prepared(laid["svg"], left, top, width, height, largest / base, base, spec.id)
