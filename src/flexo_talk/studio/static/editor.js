@@ -300,7 +300,7 @@ export function mount(studio, container) {
   const styleField = (name) => catalog.style?.find((field) => field.name === name);
   const styleName = (name) => styleField(name)?.label || keyTitle(name);
   const choiceName = (name, choice) => styleField(name)?.labels?.[choice] || ({ start: "Left", middle: "Centre", end: "Right" })[choice] || keyTitle(choice);
-  const state = { slide: 0, focus: null, tab: "slide", notes: remembered("notes", "0") === "1" };
+  const state = { slide: 0, focus: null, field: null, tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
   let mathNotes = null;
@@ -422,6 +422,7 @@ export function mount(studio, container) {
     leaveFigure(false);
     state.slide = Math.max(0, Math.min(index, slides().length - 1));
     state.focus = focus;
+    state.field = null;
     renderRail();
     renderStage();
     renderInspector();
@@ -1140,15 +1141,20 @@ export function mount(studio, container) {
     if (event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
-    if (!part) { state.focus = null; placeChosen(); renderInspector(); reportFocus(); return; }
+    if (!part) { state.focus = null; state.field = null; placeChosen(); renderInspector(); reportFocus(); return; }
+    state.field = null;
     // A click on a figure's part chooses that part, the figure not chosen first.
     if (part.kind === "block") focusBlock(part.region, part.index, () => figure.parts.click(event));
     else {
-      state.focus = null; state.tab = "slide"; placeChosen(); renderInspector(); reportFocus();
-      const field = part.field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : part.field;
-      inspectorBody.querySelector(`[data-key="slide.${field}"]`)?.focus();
+      // A title, subtitle or byline is selected as an object is: Return or a double-click
+      // edits it in place, and typing replaces it.
+      leaveFigure(false);
+      state.focus = null; state.tab = "slide";
+      state.field = { field: fieldOf(part.field), id: part.id };
+      placeChosen(); renderInspector(); reportFocus();
     }
   }
+  const fieldOf = (drawn) => (drawn === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : drawn);
 
   function onEdit(event) {
     if (event.target.closest(".fig-inline, .figure-bar")) return;
@@ -1156,10 +1162,11 @@ export function mount(studio, container) {
     if (inFigure(event)) { whenFigure(() => figure.parts.dblclick(event)); return; }
     const part = partAt(event);
     if (!part) return;
-    if (part.kind === "field") openInline({ kind: "field", field: part.field === "byline" ? "author" : layoutOf(slideAt()) === "statement" ? "words" : part.field });
+    const point = { x: event.clientX, y: event.clientY };
+    if (part.kind === "field") openInline({ kind: "field", field: fieldOf(part.field) }, { at: point });
     else {
       const block = blocksAt(slideAt(), part.region)[part.index];
-      if (block && INLINE.has(kindOf(block))) openInline({ kind: "block", region: part.region, index: part.index });
+      if (block && INLINE.has(kindOf(block))) openInline({ kind: "block", region: part.region, index: part.index }, { at: point });
       else if (block && kindOf(block) === "table") {
         const cell = cellAt(part.id, event);
         if (cell) openInline({ kind: "cell", region: part.region, index: part.index, ...cell });
@@ -1244,6 +1251,11 @@ export function mount(studio, container) {
   function placeChosen() {
     const focus = state.focus;
     if (sizing) return;  // its frame follows it as it is sized
+    if (!focus && state.field && pageNode && !inline && !moving && !landing) {
+      place(chosen, boxOf(state.field.id), { title: "Title", subtitle: "Subtitle", author: "Byline", words: "Text", date: "Date" }[state.field.field] || "Text");
+      chosen.classList.remove("sizable", "holder");
+      return;
+    }
     if (!focus || !pageNode || moving || landing || carry?.started || inline) { chosen.hidden = true; return; }
     const region = regionsOf(slideAt()).find((r) => r.key === focus.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${focus.index}`);
@@ -1261,6 +1273,7 @@ export function mount(studio, container) {
     closeInline();
     state.tab = "slide";
     state.focus = { region, index };
+    state.field = null;
     const block = blocksAt(slideAt(), region)[index];
     if (block && kindOf(block) === "figure") enterFigure(region, index);
     else leaveFigure(false);
@@ -1490,14 +1503,19 @@ export function mount(studio, container) {
   }
 
   // -- editing words in place --
-  function openInline(target, { selectAll = false } = {}) {
+  function openInline(target, { selectAll = false, at: point = null, replaceWith = null } = {}) {
     closeInline();
     const slide = slideAt();
     if (!slide) return;
-    let editor, id, bullets = false;
+    const slideIndex = state.slide;
+    const slideNow = () => slides()[slideIndex];
+    let editor, id, bullets = false, read = () => undefined, mirror = null;
     if (target.kind === "field") {
       const key = target.field;
       if (!catalog.slide_keys[layoutOf(slide)].includes(key)) return;
+      read = () => slideNow()?.[key] ?? "";
+      mirror = `slide.${key}`;
+      state.field = { field: key, id: `slide${state.slide + 1}.${key === "author" ? "byline" : key === "words" ? "title" : key}` };
       editor = ui.markup({ value: slide[key] ?? "", rows: 1, placeholder: { title: "Title", subtitle: "Subtitle", words: "Text", author: "Author" }[key],
         onInput: (text) => editSlide((s) => setOption(s, key, text), { quiet: true, merge: `${state.slide}-${key}` }) });
       id = `slide${state.slide + 1}.${key === "author" ? "byline" : key === "words" ? "title" : key}`;
@@ -1506,6 +1524,7 @@ export function mount(studio, container) {
       const rows = tableRows(block);
       if (!rows[target.row] || target.col >= rows[target.row].length) return;
       const at = { region: target.region, index: target.index };
+      read = () => { const now = blocksAt(slideNow() || {}, at.region)[at.index]; return now && kindOf(now) === "table" ? tableRows(now)[target.row]?.[target.col] : undefined; };
       editor = ui.markup({ value: rows[target.row][target.col], rows: 1,
         onInput: (text) => editBlock(at, (b) => { const cells = tableRows(b); cells[target.row][target.col] = text; b.table = cells; },
           { merge: `${state.slide}-${at.region}-${at.index}-cell-${target.row}-${target.col}` }) });
@@ -1520,6 +1539,12 @@ export function mount(studio, container) {
       const kind = kindOf(block);
       const at = { region: target.region, index: target.index };
       const merge = `${state.slide}-${at.region}-${at.index}-inline`;
+      read = () => {
+        const now = blocksAt(slideNow() || {}, at.region)[at.index];
+        if (!now || kindOf(now) !== kind) return undefined;
+        return kind === "bullets" ? bulletsText(now.bullets) : now[kind] ?? "";
+      };
+      mirror = `block.${kind}`;
       bullets = kind === "bullets";
       if (bullets) editor = ui.markup({ value: bulletsText(block.bullets), rows: 3, tabs: true, onInput: (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }) });
       else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
@@ -1540,17 +1565,36 @@ export function mount(studio, container) {
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeInline(); }
       if (event.key === "Enter" && !event.shiftKey && target.kind === "field") { event.preventDefault(); closeInline(); }
+      // Tab goes on to the slide's next line of words (title, subtitle, byline), not to the inspector.
+      if (event.key === "Tab" && target.kind === "field") {
+        event.preventDefault();
+        const order = ["title", "words", "subtitle", "author", "date"].filter((key) => catalog.slide_keys[layoutOf(slideAt())].includes(key) && key !== "date");
+        const next = order[(order.indexOf(target.field) + (event.shiftKey ? -1 : 1) + order.length) % order.length];
+        if (next && next !== target.field) openInline({ kind: "field", field: next }, { selectAll: true });
+      }
       if (target.kind === "cell" && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) { event.preventDefault(); nextCell(target, event.key, event.shiftKey); }
     });
     // An equation's LaTeX looks nothing like it: it is typed under the equation, which
     // stays in view and is drawn again as it changes.
     const under = target.kind === "block" && kindOf(blocksAt(slide, target.region)[target.index]) === "math";
     if (under) node.classList.add("under");
-    inline = { node, id, area, bullets, cell, under };
+    inline = { node, id, area, bullets, cell, under, read };
+    // The inspector shows what is typed, as it is typed.
+    if (mirror) area.addEventListener("input", () => {
+      const twin = inspectorBody.querySelector(`[data-key="${CSS.escape(mirror)}"]`);
+      if (twin && twin !== document.activeElement && twin.value !== area.value) twin.value = area.value;
+    });
     center.append(node);
     positionInline();
     area.focus();
-    if (selectAll) area.select(); else area.setSelectionRange(area.value.length, area.value.length);
+    const word = point && wordAt(id, point, area.value);
+    if (replaceWith !== null) {
+      area.value = replaceWith;
+      area.dispatchEvent(new Event("input"));
+      area.setSelectionRange(area.value.length, area.value.length);
+    } else if (selectAll) area.select();
+    else if (word) area.setSelectionRange(word.start, word.end);
+    else area.setSelectionRange(area.value.length, area.value.length);
     setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
   }
 
@@ -1618,6 +1662,54 @@ export function mount(studio, container) {
       editBlock(at, (b) => { const cells = tableRows(b); cells.push(Array(columns).fill("")); b.table = cells; });
     }
     openInline({ kind: "cell", ...at, row, col }, { selectAll: true });
+  }
+
+  // The word double-clicked on the slide, found in the words as written, so the editor
+  // opens with it selected (as a Mac text view does) rather than the caret at the end.
+  function wordAt(id, point, written) {
+    const element = pageNode?.querySelector(`[id="${CSS.escape(id)}"]`);
+    if (!element) return null;
+    const texts = element.matches("text") ? [element] : [...element.querySelectorAll("text")];
+    let before = "", hit = null;
+    for (const text of texts) {
+      const box = text.getBoundingClientRect();
+      const inside = point.x >= box.left && point.x <= box.right && point.y >= box.top && point.y <= box.bottom;
+      if (inside && !hit && text.getCharNumAtPosition && text.getScreenCTM()) {
+        const local = new DOMPoint(point.x, point.y).matrixTransform(text.getScreenCTM().inverse());
+        const index = text.getCharNumAtPosition(local);
+        const content = text.textContent || "";
+        if (index >= 0 && /[\p{L}\p{N}]/u.test(content[index] || "")) {
+          let start = index, end = index + 1;
+          while (start > 0 && /[\p{L}\p{N}'’-]/u.test(content[start - 1])) start -= 1;
+          while (end < content.length && /[\p{L}\p{N}'’-]/u.test(content[end])) end += 1;
+          hit = { word: content.slice(start, end), before: before + content.slice(0, start) };
+        }
+      }
+      before += `${text.textContent || ""} `;
+    }
+    if (!hit) return null;
+    // The same word, as often as it came before, in what is written.
+    const occurrence = hit.before.split(hit.word).length - 1;
+    let from = -1;
+    for (let n = 0; n <= occurrence; n += 1) {
+      from = written.indexOf(hit.word, from + 1);
+      if (from < 0) return null;
+    }
+    return { start: from, end: from + hit.word.length };
+  }
+
+  // After an undo or an edit from elsewhere, the editor open on the slide shows the words
+  // as they now are -- typing on from what was undone would bring it back.
+  function refreshInline() {
+    if (!inline?.read) return;
+    const value = inline.read();
+    if (value === undefined) { closeInline(); return; }
+    if (value === inline.area.value) return;
+    inline.area.value = value;
+    inline.area.setSelectionRange(value.length, value.length);
+    inline.area.style.height = "auto";
+    inline.area.style.height = `${inline.area.scrollHeight + 2}px`;
+    positionInline();
   }
 
   // Words are typed where they are on the slide, as they look there: the editor lies
@@ -3051,6 +3143,14 @@ export function mount(studio, container) {
     }
     else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
     else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
+    else if (state.field && key === "Escape") { state.field = null; placeChosen(); }
+    else if (state.field && key === "Enter") { event.preventDefault(); openInline({ kind: "field", field: state.field.field }); }
+    else if (state.field && (key === "Delete" || key === "Backspace")) { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { replaceWith: "" }); }
+    else if (state.field && key.length === 1 && !event.altKey) {
+      // Typing over a selected title replaces it, as in Keynote.
+      event.preventDefault();
+      openInline({ kind: "field", field: state.field.field }, { replaceWith: key });
+    }
     else if (key === "Escape" && state.focus) { state.focus = null; leaveFigure(false); renderInspector(); placeChosen(); reportFocus(); }
     else if (key === "Enter" && state.focus) {
       event.preventDefault();
@@ -3253,6 +3353,11 @@ export function mount(studio, container) {
     pending = true;
     if (source === "remote" && before) flash(before, who);
     if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
+    if (source === "history" || source === "remote") {
+      refreshInline();
+      if (document.activeElement === notesArea) notesArea.value = slideAt()?.notes || "";
+      if (source === "history") figure?.parts.closeInline(false);
+    }
     if (figure && source !== "edit") {
       if (figureBlock() && editable(figureBlock())) figure.parts.act({ do: "read" }, { select: false });
       else leaveFigure();
