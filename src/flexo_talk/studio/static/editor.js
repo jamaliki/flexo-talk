@@ -63,6 +63,8 @@ const LAYOUT_NAMES = {
 };
 const LAYOUT_ORDER = ["content", "two-columns", "columns", "figure", "title", "section", "statement", "agenda", "blank"];
 const WORDLESS = new Set(["title", "section", "statement", "agenda"]);
+// Objects that are words, which typing over (once chosen) replaces.
+const WORDY = new Set(["text", "bullets", "quote", "callout"]);
 const TONES = ["accent", "accent2", "accent3", "accent4", "accent5", "accent6"];
 const ARROW_INK = "#d466d6";
 
@@ -77,6 +79,14 @@ const NEW_SLIDES = {
   agenda: () => ({ layout: "agenda" }),
   blank: () => ({ layout: "blank", body: [{ text: "Anything at all." }] }),
 };
+
+// The words a new deck, slide or object starts with (and the studio's new deck, studio/__init__.py):
+// opened, they are chosen whole, to be typed over, rather than edited word by word.
+const STARTERS = new Set(["A talk worth giving", "What we found, and why it matters", "What we found", "Your name", "The question",
+  "What we asked", "Why it was hard", "and why it still is", "A new slide", "The first point", "The second point", "Two sides",
+  "On the left", "On the right.", "Three things", "**One**", "**Two**", "**Three**", "The model", "Part two",
+  "One sentence that [matters]{accent}.", "Anything at all.", "A point", "Another point", "A paragraph."]);
+const starter = (text) => String(text ?? "").split("\n").every((line) => !line.trim() || STARTERS.has(line.trim()));
 
 const NEW_BLOCKS = {
   bullets: () => ({ bullets: ["A point", "Another point"] }),
@@ -1690,7 +1700,7 @@ export function mount(studio, container) {
     area.focus();
     if (area.rich) {
       if (replaceWith !== null) { area.value = replaceWith; area.dispatchEvent(new Event("input")); area.caretToEnd(); }
-      else if (selectAll) area.selectAll();
+      else if (selectAll || (area.value.trim() && starter(area.value))) area.selectAll();
       else if (!(point && area.selectWordAt(point))) area.caretToEnd();
       setTimeout(() => document.addEventListener("mousedown", closeOnOutside, true), 0);
       return;
@@ -3504,6 +3514,11 @@ export function mount(studio, container) {
       // Typing over a selected title replaces it, as in Keynote.
       event.preventDefault();
       openInline({ kind: "field", field: state.field.field }, { replaceWith: key });
+    }
+    else if (state.focus && key.length === 1 && key !== " " && !event.altKey && WORDY.has(kindOf(blocksAt(slideAt(), state.focus.region)[state.focus.index]))) {
+      // And over a selected text or list: its words start again from the key.
+      event.preventDefault();
+      openInline({ kind: "block", ...state.focus }, { replaceWith: key });
     }
     else if (key === "Escape" && state.focus) { state.focus = null; leaveFigure(false); renderInspector(); placeChosen(); reportFocus(); }
     else if (key === "Enter" && state.focus) {
