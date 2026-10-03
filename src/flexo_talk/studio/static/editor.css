@@ -155,7 +155,12 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich .rt-line::before { content: ""; position: absolute; border-radius: 50%; background: var(--rt-mark, currentColor);
   --r: var(--rt-r, 3px); left: calc(var(--rt-mark-x, 0.5em) + var(--rt-at) * var(--rt-step, 1.3em) - var(--r)); top: calc(var(--rt-mark-y, 0.6em) - var(--r)); width: calc(2 * var(--r)); height: calc(2 * var(--r)); }
 .rich .rt-line:not([data-level="0"])::before { --r: var(--rt-r2, 2.4px); background: var(--rt-mark2, var(--rt-mark, currentColor)); }
-.rich.rt-numbered .rt-line[data-level="0"] { counter-increment: rt; }
+/* Numbered, each level in its tier, as the slide numbers it: 1., a., i. */
+.rich.rt-numbered .rt-line[data-level="0"] { counter-increment: rt; counter-reset: rt1; }
+.rich.rt-numbered .rt-line[data-level="1"] { counter-increment: rt1; counter-reset: rt2; }
+.rich.rt-numbered .rt-line[data-level="2"] { counter-increment: rt2; counter-reset: rt3; }
+.rich.rt-numbered .rt-line[data-level="3"] { counter-increment: rt3; counter-reset: rt4; }
+.rich.rt-numbered .rt-line[data-level="4"] { counter-increment: rt4; }
 .rich-field .rich { min-height: 22px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--raised); outline: none; line-height: 1.4; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; caret-color: var(--accent); position: relative; }
 .rich-field:not(.single) .rich { min-height: 52px; }
 .rich-field .rich:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -169,7 +174,11 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rt-swatch.rt-plain { background: var(--ink); }
 .rt-link { width: 180px; height: 24px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); font: 12px var(--mono); }
 .rt-link[hidden] { display: none; }
-.rich.rt-numbered .rt-line[data-level="0"]::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: auto; right: calc(100% - var(--rt-text, 1.4em) + 0.3em); }
+.rich.rt-numbered .rt-line::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: auto; right: calc(100% - var(--rt-text, 1.4em) - var(--rt-at) * var(--rt-step, 1.3em) + 0.3em); }
+.rich.rt-numbered .rt-line[data-level="1"]::before { content: counter(rt1, lower-alpha) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
+.rich.rt-numbered .rt-line[data-level="2"]::before { content: counter(rt2, lower-roman) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
+.rich.rt-numbered .rt-line[data-level="3"]::before { content: counter(rt3) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
+.rich.rt-numbered .rt-line[data-level="4"]::before { content: counter(rt4, lower-alpha) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
 /* An equation's LaTeX is typed under it, on a panel of its own. */
 .inline-editor.in-place.under { background: var(--raised); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-2); padding: 4px; }
 .inline-editor.in-place.under textarea { font-size: 13px; background: transparent; }
