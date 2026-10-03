@@ -161,13 +161,10 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich-field .rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; color: var(--ink-3); pointer-events: none; }
 .rich-field .rich.rt-list { padding-left: 4px; }
 .rich-field .rich .rt-line { --rt-text: 1.3em; --rt-mark-x: 0.55em; --rt-mark-y: 0.7em; --rt-gap: 2px; --rt-line: 1.4; --rt-r: 2.5px; --rt-r2: 2px; --rt-step: 1.2em; }
-.rt-bar { position: fixed; z-index: 60; display: flex; align-items: center; gap: 1px; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); animation: pop 0.1s ease-out; }
+/* The format bar looks as every text's does (.rt-bar, .markup-tools: studio.css). */
+.rt-bar { position: fixed; z-index: 60; animation: pop 0.1s ease-out; }
 .rt-bar[hidden] { display: none; }
-.rt-bar button { min-width: 26px; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); cursor: pointer; font-size: 12.5px; display: inline-grid; place-items: center; }
-.rt-bar button:hover { background: var(--sunken); }
 .rt-bar button.on { background: var(--accent-soft); color: var(--accent); }
-.rt-bar button svg { width: 14px; height: 14px; }
-.rt-swatch { display: block; width: 13px; height: 13px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); }
 .rt-swatch.rt-plain { background: var(--ink); }
 .rt-link { width: 180px; height: 24px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); font: 12px var(--mono); }
 .rt-link[hidden] { display: none; }
@@ -201,21 +198,32 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .inspector { border-left: 1px solid var(--line); }
 .insp-head { display: flex; align-items: center; height: 44px; padding: 0 10px; border-bottom: 1px solid var(--line); flex: none; }
 .insp-tabs { display: flex; gap: 2px; padding: 2px; background: var(--seg-track); border-radius: 8px; width: 100%; }
-.insp-tab { flex: 1; height: 28px; border: 0; background: transparent; border-radius: 6px; color: var(--ink-3); cursor: pointer; font-weight: 580; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.insp-tab { flex: 1; height: 28px; border: 0; background: transparent; border-radius: 6px; color: var(--ink-3); cursor: pointer; font: var(--text-title); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .insp-tab svg { width: 14px; height: 14px; }
 .insp-tab:hover { color: var(--ink); }
 .insp-tab.on { background: var(--seg-on); color: var(--ink); box-shadow: var(--seg-shadow); }
-.deck .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; font-size: 12.5px; }
+.deck .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; font: var(--text-small); }
 .deck .crumbs > svg { width: 12px; height: 12px; color: var(--ink-3); }
-.deck .crumb { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 3px 6px; border-radius: 6px; color: var(--ink-2); cursor: pointer; font-weight: 560; }
+.deck .crumb { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 3px 6px; border-radius: 6px; color: var(--ink-2); cursor: pointer; font: inherit; }
 .deck button.crumb:hover { background: var(--sunken); color: var(--ink); }
-.deck .crumb.here { color: var(--ink); font-weight: 650; }
+.deck .crumb.here { color: var(--ink); font-weight: 600; }
 .deck .crumb svg { width: 14px; height: 14px; }
 .deck .crumb div.glyph { width: 20px; height: 12px; }
-.block-top { gap: 10px; }
-.block-actions { display: flex; align-items: center; gap: 2px; }
+/* The chosen thing's name and its actions (move, duplicate, delete) on one line, as
+   Keynote heads an object's inspector; an Edit button, where it has one, goes under them. */
+.block-top { gap: 10px 2px; grid-template-columns: minmax(0, 1fr) repeat(4, auto); align-items: center; }
+.block-top > .crumbs { grid-row: 1; grid-column: 1; }
+.block-top > .block-actions { display: contents; }
+.block-top > .block-actions > .btn.icon { grid-row: 1; }
+.block-top > .block-actions > .btn:not(.icon) { grid-row: 2; grid-column: 1 / -1; justify-self: start; }
+.block-top > .block-actions > .spacer { display: none; }
+.block-top > :not(.crumbs):not(.block-actions) { grid-column: 1 / -1; }
+/* Beside the actions, the trail keeps to one line: the slide named without its layout's picture. */
+.block-top > .crumbs { gap: 2px; }
+.block-top .crumb { padding: 3px 4px; }
+.block-top .crumb > div.glyph { display: none; }
 .block-form { gap: 10px; }
-.block-error { color: var(--error); font-size: 12px; display: flex; gap: 6px; align-items: flex-start; background: var(--error-soft); padding: 7px 9px; border-radius: 6px; }
+.block-error { color: var(--error); font: var(--text-small); display: flex; gap: 6px; align-items: flex-start; background: var(--error-soft); padding: 7px 9px; border-radius: 6px; }
 .block-error svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
 
 div.glyph { width: 30px; height: 17px; border-radius: 3px; background: var(--sunken); border: 1px solid var(--line-strong); position: relative; overflow: hidden; flex: none; }
@@ -229,8 +237,8 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .layout-card .glyph i { background: var(--deck-muted, var(--ink-3)); opacity: 0.6; }
 /* Grey until the deck's colours are known: never the app's blue, then the deck's. */
 .layout-card .glyph i.a { background: var(--deck-accent, var(--ink-3)); opacity: 1; }
-.layout-card .name { font-size: 11px; font-weight: 560; color: var(--ink-2); white-space: nowrap; letter-spacing: -0.005em; }
-.layout-card .note { font-size: 11px; color: var(--ink-3); }
+.layout-card .name { font: var(--text-hint); color: var(--ink-2); white-space: nowrap; letter-spacing: -0.005em; }
+.layout-card .note { font: var(--text-hint); color: var(--ink-3); }
 .layout-grid.big { width: min(620px, 90vw); gap: 10px; }
 .layout-grid.big .layout-card { padding: 10px; gap: 6px; text-align: center; }
 .layout-grid.big .layout-card .name { font-size: 12.5px; color: var(--ink); }
@@ -238,7 +246,7 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 
 .region { display: grid; gap: 6px; }
 .region + .region { margin-top: 6px; }
-.region-head { font-size: 11px; font-weight: 620; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.region-head { font: var(--text-label); color: var(--ink-2); }
 .region.drop-target .blocks { outline: 2px dashed var(--accent-line); outline-offset: 2px; border-radius: 8px; }
 .blocks { display: grid; gap: 4px; }
 .block-row { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; min-width: 0; transition: border-color 0.12s; }
@@ -250,10 +258,10 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .block-row .kind { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; background: var(--sunken); color: var(--ink-2); flex: none; }
 .block-row .kind svg { width: 14px; height: 14px; }
 .block-row .summary { flex: 1; min-width: 0; display: grid; }
-.block-row .what { font-size: 10.5px; color: var(--ink-3); font-weight: 600; line-height: 1.2; text-transform: uppercase; letter-spacing: 0.03em; }
+.block-row .what { font: var(--text-hint); color: var(--ink-3); line-height: 1.2; }
 .block-row .words { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; }
 .block-row > svg { width: 13px; height: 13px; color: var(--ink-3); flex: none; }
-.add-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; border: 1px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font-size: 12px; }
+.add-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; border: 1px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font: var(--text-small); }
 .add-row:hover { border-color: var(--accent); color: var(--accent); }
 .add-row svg { width: 13px; height: 13px; }
 
@@ -263,18 +271,27 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .list-row .pic, .menu-item .pic { width: 34px; height: 34px; border-radius: 5px; background: var(--sunken); border: 1px solid var(--line); object-fit: cover; flex: none; }
 .list-row .pic.round { border-radius: 50%; }
 .figure-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); }
+.figure-card b { font-weight: 600; }
 
-.table-edit { overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-s); max-height: 320px; }
+/* The table's cells, with room for their words: they wrap, a row growing to hold them, and
+   read as the slide sets them -- strong, emphatic, code -- until typed in (ui.cell). */
+.table-edit { overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-s); max-height: 420px; }
 .table-edit table { border-collapse: collapse; width: 100%; }
-.table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 64px; }
-.table-edit input { width: 100%; border: 0; background: transparent; padding: 5px 7px; outline: none; font-size: 12.5px; }
-.table-edit input:focus { background: var(--accent-soft); }
-.table-edit tr.header input { font-weight: 650; }
+/* A column is at least as wide as its longest word (a cell's words set in .cell-view give it
+   its width); the rest of the room goes to the columns with the most to say. */
+.table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 56px; vertical-align: top; }
+.table-edit tr.header .cell-area, .table-edit tr.header .cell-view { font-weight: 600; }
+/* The row numbers and the row's delete buttons keep to their width: the room is the words'. */
+.table-edit tr > .corner:first-child, .table-edit tr > .corner:last-child { width: 24px; }
+.table-edit tr.header .cell-view b { font-weight: 700; }
 .table-edit th { background: var(--sunken); }
-.table-edit th { min-width: 84px; }
-.table-edit th select { appearance: none; -webkit-appearance: none; width: 100%; height: 24px; border: 0; border-radius: 0; box-shadow: none; font-size: 11px; font-weight: 500; color: var(--ink-2); padding: 0 17px 0 6px; cursor: pointer; text-overflow: ellipsis;
-  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5' fill='none' stroke='%238c867d' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 3px center / 13px; }
-.table-edit .corner { width: 24px; min-width: 24px; text-align: center; color: var(--ink-3); font-size: 10.5px; background: var(--sunken); }
+/* A column's alignment: a pop-up button as any other, made small to fit its head. */
+.table-edit th .select { height: 24px; gap: 2px; padding: 0 4px 0 7px; border: 0; border-radius: 0; background: transparent; box-shadow: none; font: var(--text-hint); }
+.table-edit th .select:not(.default) > span { color: var(--ink-2); }
+.table-edit th .select > svg { width: 12px; height: 12px; }
+/* Its words give way (…) rather than widen the column. */
+.table-edit th .select > span { width: 0; }
+.table-edit .corner { min-width: 24px; text-align: center; vertical-align: middle; color: var(--ink-3); font: var(--text-hint); background: var(--sunken); }
 .table-edit .corner button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 3px; display: grid; place-items: center; width: 100%; }
 .table-edit .corner button:hover { color: var(--error); }
 .table-edit .corner button svg { width: 11px; height: 11px; }
@@ -288,13 +305,15 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .math-chip:hover { background: var(--sunken); color: var(--ink); border-color: var(--line-strong, var(--line)); }
 .block-error.soft { color: var(--ink-2); background: color-mix(in srgb, var(--warn, #b45309) 10%, transparent); }
 .hint-line code, .hint-line kbd { font: 11px var(--mono); background: var(--sunken); border-radius: 3px; padding: 0 3px; }
+/* Keys in the system's face, their modifiers as large as their letters (as .kbd). */
+.hint-line kbd { font: var(--text-hint); }
 
 .looks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .look { border: 1px solid var(--line-strong); border-radius: 9px; padding: 8px; display: grid; gap: 5px; cursor: pointer; background: var(--raised); text-align: left; transition: border-color 0.12s; }
 .look:hover { border-color: var(--ink-3); }
 .look.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.look .name { font-weight: 620; font-size: 12.5px; text-transform: capitalize; }
-.look .note { font-size: 11px; color: var(--ink-3); line-height: 1.35; }
+.look .name { font: var(--text-label); text-transform: capitalize; }
+.look .note { font: var(--text-hint); color: var(--ink-3); }
 .look-art { aspect-ratio: 16 / 9; border-radius: 4px; background: var(--deck-canvas, #fbfaf8); border: 1px solid var(--line); position: relative; overflow: hidden; }
 .look-art i { position: absolute; border-radius: 1px; }
 .theme-file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
@@ -302,9 +321,9 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .theme-file span { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 
 .style-row { display: grid; grid-template-columns: 1fr 110px 24px; gap: 8px; align-items: center; }
-.style-row .name { font-size: 12px; display: grid; }
-.style-row .name .note { color: var(--ink-3); font-size: 11px; }
-.style-row .changed { color: var(--accent); font-weight: 600; }
+.style-row .name { font: var(--text-label); color: var(--ink-2); display: grid; }
+.style-row .name .note { color: var(--ink-3); font: var(--text-hint); }
+.style-row .changed { color: var(--accent); }
 
 /* -- presenting -- */
 .present { position: fixed; inset: 0; z-index: 100; background: #000; display: grid; grid-template-rows: 1fr auto; color: #eee; }
@@ -339,7 +358,7 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 /* A mechanism's steps, each on a card of its own. */
 .step-cards { display: flex; flex-direction: column; gap: 10px; }
 .step-card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line, #ddd); border-radius: 8px; }
-.step-head { display: flex; align-items: center; gap: 4px; font-weight: 600; font-size: 12px; }
+.step-head { display: flex; align-items: center; gap: 4px; font: var(--text-label); }
 .step-head .spacer { flex: 1; }
 
 /* Drawing a mechanism's arrows: the step's structure, large, every atom and bond a target. */

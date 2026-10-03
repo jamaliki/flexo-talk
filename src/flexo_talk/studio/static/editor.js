@@ -1643,6 +1643,7 @@ export function mount(studio, container) {
       settled: () => placeFigure(),
       chooseFile: async (options) => relativeTo(figureFolder(), await chooseFile(options)),
       tones: () => studio.info?.tones,
+      palette: () => studio.info?.palette,
       addAnchor: () => figureBar.querySelector(".add") || figureBar,
       groupAnchor: () => figureBar.querySelector(".group") || figureBar,
       crumbs: () => h("button.crumb", { type: "button", onclick: () => { state.focus = null; renderInspector(); placeChosen(); reportFocus(); } }, `Slide ${state.slide + 1}`),
@@ -3448,7 +3449,7 @@ export function mount(studio, container) {
     const write = () => edit((b) => { b.table = rows.map((row) => [...row]); }, "cells");
     const restructure = (mutate) => { mutate(); editBlock(at, (b) => { b.table = rows.map((row) => [...row]); if (b.align) delete b.align; }); renderInspector(); };
     const input = (r, c) => {
-      const cell = h("input", { value: rows[r][c], dataset: { key: `cell.${r}.${c}` },
+      const cell = ui.cell({ value: rows[r][c], dataset: { key: `cell.${r}.${c}` },
         oninput: () => { rows[r][c] = cell.value; write(); },
         onpaste: (event) => {
           const text = event.clipboardData.getData("text/plain");
@@ -3715,7 +3716,7 @@ export function mount(studio, container) {
       h("div.palette-choices", {}, [["default", null], ...Object.entries(catalog.palettes)].map(([name, colours]) => h(`button.palette-choice${current === name ? ".on" : ""}`,
         { type: "button", onclick: () => choosePalette(name) }, strip(colours), h("span", {}, name === "default" ? "Default" : name)))), { className: "palette-menu" }) },
     strip(catalog.palettes[current]), h("span", {}, current === "default" ? "Default" : current || "Custom"), icon("chevron"));
-    const fonts = (name, label, note) => ui.field(label, ui.combo({ value: deck[name] || "", options: catalog.fonts, placeholder: note, key: `deck.${name}`, onChange: setDeck(name) }));
+    const fonts = (name, label, note) => ui.field(label, ui.font({ value: deck[name] || "", options: catalog.fonts, placeholder: note, key: `deck.${name}`, onChange: setDeck(name) }));
     const lookStyle = catalog.looks.find((item) => item.name === look)?.style || {};
     const changes = deck.style || {};
     const styleRows = catalog.style.map((field) => {
