@@ -3889,10 +3889,34 @@ export function mount(studio, container) {
   }
   // An undo waits for a figure's edits still on their way (shell.js).
   studio.settled = () => figure?.parts.idle?.() ?? Promise.resolve();
+  // Drawings (and what they say) are kept by slide, not by place: when slides are added,
+  // removed or moved, each keeps its own until the next drawing comes, and a new slide
+  // shows as not drawn yet -- never another slide's drawing.
+  function followSlides(before, after) {
+    if (before === after || !pages.length) return;
+    let start = 0, end = 0;
+    while (start < before.length && start < after.length && same(before[start], after[start])) start += 1;
+    while (end < before.length - start && end < after.length - start
+      && same(before[before.length - 1 - end], after[after.length - 1 - end])) end += 1;
+    const was = before.length - start - end, now = after.length - start - end;
+    if (!was && !now) return;
+    const used = new Set();
+    const found = after.slice(start, start + now).map((slide) => {
+      const at = before.slice(start, start + was).findIndex((old, k) => !used.has(k) && same(old, slide));
+      if (at >= 0) used.add(at);
+      return at >= 0 ? start + at : -1;
+    });
+    if (was === now && found.some((at) => at < 0)) return;  // edited in place: as now
+    const from = (index) => (index < start ? index : index >= start + now ? index - now + was : found[index - start]);
+    const old = pages;
+    pages = after.map((_, index) => (from(index) >= 0 ? old[from(index)] : undefined));
+    messages = messages.filter((m) => { const n = Number(/^slide(\d+)$/.exec(m.page || "")?.[1]); return !n || from(n - 1) === n - 1; });
+  }
   studio.on("change", ({ quiet, source, who, before, entry }) => {
     clearTimeout(settleTimer);
     const was = lastDoc;
     lastDoc = doc();
+    followSlides(was?.slides || [], slides());
     if (source === "history" || source === "remote") followChange(was, who);
     // Undone or redone, the deck goes to the slide the change was made on.
     if (source === "history" && Number.isInteger(entry?.where) && entry.where !== state.slide && entry.where < slides().length) {
