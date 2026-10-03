@@ -1782,8 +1782,20 @@ export function mount(studio, container) {
       read = () => slideNow()?.[key] ?? "";
       mirror = `slide.${key}`;
       state.field = { field: key, id: fieldId(key) };
+      // A field the slide has none of (a title slide's subtitle) is put there empty as it
+      // is opened, so the slide draws it, as its placeholder, where its words will go; its
+      // words typed are the same step in the history. Left empty, it is taken back.
+      const merge = `${state.slide}-${key}`;
+      if (slide[key] === undefined) {
+        editSlide((s) => { s[key] = ""; }, { quiet: true, merge });
+        placed = { key, slide: state.slide, entry: studio.past[studio.past.length - 1], merge };
+      }
+      // Emptied, it stays, as its placeholder, until it is closed.
       editor = rich(slide[key] ?? "", { single: key !== "words", placeholder: { title: "Title", subtitle: "Subtitle", words: "Text", author: "Author" }[key] },
-        (text) => editSlide((s) => setOption(s, key, text), { quiet: true, merge: `${state.slide}-${key}` }));
+        (text) => {
+          if (placed?.key === key && studio.past[studio.past.length - 1] === placed.entry) studio.lastMerge = { key: merge, at: Date.now() };
+          editSlide((s) => { s[key] = text; }, { quiet: true, merge });
+        });
       idOf = () => fieldId(key);
     } else if (target.kind === "cell") {
       const block = blocksAt(slide, target.region)[target.index];
@@ -2307,6 +2319,15 @@ export function mount(studio, container) {
 
   function closeInline() {
     if (!inline) return;
+    if (placed) {
+      const { key, slide, entry } = placed;
+      placed = null;
+      // Put there to be typed into, and left empty: taken back, as if never put there.
+      if (slide === state.slide && slideAt()?.[key] === "") {
+        if (studio.past[studio.past.length - 1] === entry && same(studio.document, entry.after)) { studio.undo(); studio.future.pop(); }
+        else editSlide((s) => { delete s[key]; }, { quiet: true });
+      }
+    }
     inline.area.dispose?.();
     inline.node.remove();
     pageNode?.querySelector(`[id="${CSS.escape(inline.id)}"]`)?.style.removeProperty("visibility");
@@ -2586,6 +2607,8 @@ export function mount(studio, container) {
     if (INLINE.has(kind) && !given) setTimeout(() => openInline({ kind: "block", region, index }, { selectAll: true }), 300);
   }
   let fresh = null;
+  // The slide's field put there empty to be typed into (openInline), and its step in the history.
+  let placed = null;
   // A text or list with no words: a placeholder.
   function blank(block) {
     const kind = kindOf(block);
