@@ -1983,6 +1983,14 @@ export function mount(studio, container) {
     return look;
   }
   stage.addEventListener("scroll", () => { if (inline) positionInline(); });
+  // A click on the desk round the slide chooses nothing, as on Keynote's canvas.
+  stage.addEventListener("click", (event) => {
+    if (event.target !== stage && !event.target.classList?.contains("slide-wrap")) return;
+    if (!state.focus && !state.field) return;
+    state.focus = null; state.field = null;
+    leaveFigure(false);
+    placeChosen(); renderInspector(); reportFocus();
+  });
 
   function closeOnOutside(event) {
     if (inline && !inline.node.contains(event.target) && !event.target.closest?.(".rt-bar")) closeInline();
@@ -3390,6 +3398,8 @@ export function mount(studio, container) {
         moveBlock(at, { region: regions[side].key, index: blocksAt(slideAt(), regions[side].key).length });
       }
     }
+    else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }
+    else if (key === "End" && slides().length) { event.preventDefault(); select(slides().length - 1); }
     else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
     else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
     else if (state.field && key === "Escape") { state.field = null; placeChosen(); }
@@ -3404,7 +3414,13 @@ export function mount(studio, container) {
     else if (key === "Enter" && state.focus) {
       event.preventDefault();
       const block = blocksAt(slideAt(), state.focus.region)[state.focus.index];
+      // Return goes into what is chosen: its words, a table's first cell, a figure's first shape.
       if (block && INLINE.has(kindOf(block))) openInline({ kind: "block", ...state.focus });
+      else if (block && kindOf(block) === "table") openInline({ kind: "cell", ...state.focus, row: 0, col: 0 }, { selectAll: true });
+      else if (block && kindOf(block) === "figure" && figure && figureBlock() === block) {
+        const first = figure.parts.model?.nodes?.[0]?.id;
+        if (first) figure.parts.select([first]);
+      }
     } else if ((key === "Delete" || key === "Backspace") && state.focus) { event.preventDefault(); deleteBlock(state.focus); }
     else if (key.toLowerCase() === "n") { event.preventDefault(); newSlidePopover(newSlideButton); }
   });
