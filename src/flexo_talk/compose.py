@@ -1039,7 +1039,13 @@ def _region(
 
 
 PICTURE_LEAST = 120.0
-"""The least height a figure, plot, or picture keeps when words crowd its place."""
+"""The height a figure, plot, or picture keeps when words crowd its place."""
+
+PICTURE_SMALLEST = 70.0
+"""The least it gives up to, before the words around it shrink below ``WORDS_KEPT``."""
+
+WORDS_KEPT = 0.85
+"""How far a slide's words shrink, at most, to make room for a picture added to it."""
 
 
 def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
@@ -1052,7 +1058,7 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
     style = canvas.deck.style
     blocks = [_capped(canvas, block) for block in region.blocks]
     pictures = sum(isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing) for block in blocks)
-    room = box.height - style.block_gap * max(0, len(blocks) - 1) - PICTURE_LEAST * pictures
+    gaps = style.block_gap * max(0, len(blocks) - 1)
 
     def needed(scale: float) -> float:
         # Pictures (and galleries) take what is left: only words are fitted here.
@@ -1061,19 +1067,41 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
             for block in blocks if not isinstance(block, _Gallery)
         )
 
-    if needed(1.0) <= room:
+    def largest(least: float) -> float:
+        """The largest scale (down to the small size) at which the words leave each
+        picture ``least`` of height."""
+
+        room = box.height - gaps - least * pictures
+        low, high = style.small_size / style.body_size, 1.0
+        if needed(1.0) <= room:
+            return 1.0
+        if needed(low) > room:
+            return 0.0
+        for _ in range(10):
+            middle = (low + high) / 2.0
+            low, high = (middle, high) if needed(middle) <= room else (low, middle)
+        return low
+
+    scale = largest(PICTURE_LEAST)
+    if pictures and scale < WORDS_KEPT:
+        # A picture added to a full slide gives up room before the words around it do:
+        # they shrink to WORDS_KEPT at most while it can still be PICTURE_SMALLEST tall.
+        scale = max(scale, min(WORDS_KEPT, largest(PICTURE_SMALLEST)))
+    if scale >= 1.0:
         return blocks
-    low, high = style.small_size / style.body_size, 1.0
-    if needed(low) > room:
+    if scale <= 0.0:
         canvas.diagnostics.append(
             f"{canvas.slide.id}: Text does not fit, even at the smallest size. Try splitting the slide."
         )
-        return [_sized(block, low, style) for block in blocks]
-    for _ in range(10):
-        middle = (low + high) / 2.0
-        low, high = (middle, high) if needed(middle) <= room else (low, middle)
-    canvas.diagnostics.append(f"{canvas.slide.id}: Text size reduced to {round(low * 100)}% to fit the slide.")
-    return [_sized(block, low, style) for block in blocks]
+        return [_sized(block, style.small_size / style.body_size, style) for block in blocks]
+    advice = (
+        " For full-size text, give the picture a column of its own (Two Columns) or a slide of its own."
+        if pictures and canvas.slide.layout in {"content", "blank"} else ""
+    )
+    canvas.diagnostics.append(
+        f"{canvas.slide.id}: Text size reduced to {round(scale * 100)}% to fit the slide.{advice}"
+    )
+    return [_sized(block, scale, style) for block in blocks]
 
 
 MOST_ITEMS = 300

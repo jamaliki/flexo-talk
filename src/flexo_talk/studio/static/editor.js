@@ -395,6 +395,12 @@ export function mount(studio, container) {
   const inspectorHead = h("div.insp-head");
   const inspectorBody = h("div.panel-body.scroll-thin");
   const inspector = h("aside.panel.inspector", {}, inspectorHead, inspectorBody);
+  // Its buttons, swatches and cards clicked leave the keys with the slide, as Keynote's
+  // inspector does; its fields take them.
+  inspector.addEventListener("mousedown", (event) => {
+    // (Not where something is dragged from: a press held back is a drag never started.)
+    if (event.target.closest("button, [role=button], .swatch") && !event.target.closest("input, select, textarea, [contenteditable=true], summary, [draggable=true]")) event.preventDefault();
+  });
   const root = h("div.deck", {}, rail, center, inspector);
   clear(container, root);
 
@@ -657,7 +663,20 @@ export function mount(studio, container) {
     if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); if (slides().length) deleteSlides(chosenSlides()); }
     // Return adds a slide after the one chosen, as in Keynote's slide navigator.
     else if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); newSlideLike(state.slide); }
+    // ⇧↓ and ⇧↑ choose a run of slides from the one first chosen, as a Mac list does.
+    else if (event.shiftKey && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      event.stopPropagation();
+      const from = state.picked.length > 1 && runFrom !== null ? runFrom : state.slide;
+      const to = Math.max(0, Math.min(slides().length - 1, state.slide + (event.key === "ArrowDown" ? 1 : -1)));
+      select(to);
+      const low = Math.min(from, to), high = Math.max(from, to);
+      state.picked = Array.from({ length: high - low + 1 }, (_, n) => low + n);
+      runFrom = from;
+      renderRail();
+    }
   });
+  let runFrom = null;  // where a run of slides chosen with ⇧↓ began
   // Keys go to what was chosen last: once something on the slide is chosen, not the slides.
   const offRail = () => { if (railList.contains(document.activeElement)) document.activeElement.blur(); };
 
@@ -1760,8 +1779,17 @@ export function mount(studio, container) {
       // Tab goes on to the slide's next line of words (title, subtitle, byline), not to the inspector.
       if (event.key === "Tab" && target.kind === "field") {
         event.preventDefault();
+        // From words to words, then on to the slide's first object, as Tab goes on the slide.
         const order = ["title", "words", "subtitle", "author", "date"].filter((key) => catalog.slide_keys[layoutOf(slideAt())].includes(key) && key !== "date");
-        const next = order[(order.indexOf(target.field) + (event.shiftKey ? -1 : 1) + order.length) % order.length];
+        const at = order.indexOf(target.field), past = at + (event.shiftKey ? -1 : 1);
+        const first = regionsOf(slideAt()).flatMap((region) => blocksAt(slideAt(), region.key).map((_, index) => ({ region: region.key, index })))[0];
+        if (past >= order.length && first) {
+          closeInline();
+          const block = blocksAt(slideAt(), first.region)[first.index];
+          if (WORDY.has(kindOf(block))) openInline({ kind: "block", ...first }, { selectAll: true }); else focusBlock(first.region, first.index);
+          return;
+        }
+        const next = order[(past + order.length) % order.length];
         if (next && next !== target.field) openInline({ kind: "field", field: next }, { selectAll: true });
       }
       if (target.kind === "cell" && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) { event.preventDefault(); nextCell(target, event.key, event.shiftKey); }
@@ -2624,13 +2652,15 @@ export function mount(studio, container) {
       if (layout === "content") delete slide.layout; else slide.layout = layout;
       if (layout === "statement") { if (words) slide.words = words; delete slide.title; }
       else if (words) { slide.title = words; delete slide.words; }
-      // One body made two or more columns: words on the left and what is drawn on the
-      // right, as a slide with both is set out; else what is drawn shared across them.
+      // One body made two columns, its objects kept in their order: words on the left and
+      // what is drawn on the right where the words come first, as a slide with both is set
+      // out; else the first half on the left and the rest on the right.
       const drawn = (block) => VISUAL.has(kindOf(block));
-      if (layout === "two-columns" && blocks.length === 1 && all.some(drawn) && !all.every(drawn)) {
-        slide.left = all.filter((block) => !drawn(block));
-        slide.right = all.filter(drawn);
-      } else if (layout === "two-columns" && blocks.length === 1 && all.length > 1 && all.every(drawn)) {
+      const first = all.findIndex(drawn);
+      if (layout === "two-columns" && blocks.length === 1 && first > 0 && all.slice(first).every(drawn)) {
+        slide.left = all.slice(0, first);
+        slide.right = all.slice(first);
+      } else if (layout === "two-columns" && blocks.length === 1 && all.length > 1) {
         const half = Math.ceil(all.length / 2);
         slide.left = all.slice(0, half);
         slide.right = all.slice(half);
@@ -2744,7 +2774,10 @@ export function mount(studio, container) {
   function blockRow(block, region, index) {
     const kind = kindOf(block);
     const at = { region: region.key, index };
+    // A row Tab reaches, Return or Space choosing its object, as a Mac list's row.
     const node = h("div.block-row", { dataset: { region: region.key, index }, onclick: () => focusBlock(region.key, index), draggable: true,
+      tabindex: 0, role: "button", "aria-label": `${BLOCKS[kind].label}: ${summary(block)}`,
+      onkeydown: (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); focusBlock(region.key, index); } },
       ondragstart: (event) => { dragBlock = at; node.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", kind); },
       ondragend: () => { dragBlock = null; node.classList.remove("dragging"); },
       ondragover: (event) => {
@@ -3635,8 +3668,19 @@ export function mount(studio, container) {
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key === "Enter") { event.preventDefault(); present(); return; }
     if (typing) return;
-    if (figure && figureBlock() && figure.parts.key(event)) return;
     const key = event.key;
+    // ⌥⌘I goes to the inspector, as Keynote's shows it; Esc there comes back to the slide.
+    if (mod && event.altKey && key.toLowerCase() === "i") {
+      event.preventDefault();
+      [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")].find((node) => node.offsetParent)?.focus();
+      return;
+    }
+    // Keys in the inspector or the toolbar are theirs: a swatch focused is no slide's object to move.
+    if (!mod && document.activeElement && document.activeElement !== document.body && !stage.contains(document.activeElement) && !railList.contains(document.activeElement)) {
+      if (key === "Escape" && inspector.contains(document.activeElement)) { event.preventDefault(); document.activeElement.blur(); }
+      return;
+    }
+    if (figure && figureBlock() && figure.parts.key(event)) return;
     if (mod && event.shiftKey && key.toLowerCase() === "n") { event.preventDefault(); newSlideLike(state.slide); }
     else if (mod && key.toLowerCase() === "d") { event.preventDefault(); duplicateChosen(); }
     // ⌘A outside a text field selects nothing on the page's own words.
@@ -3661,7 +3705,8 @@ export function mount(studio, container) {
       event.preventDefault();
       const slide = slideAt();
       const stops = [
-        ...["title", "words", "subtitle", "author"].filter((name) => slide[name] && catalog.slide_keys[layoutOf(slide)].includes(name)).map((name) => ({ field: name })),
+        // Its words, placeholders too (an empty title is written, and holds its place).
+        ...["title", "words", "subtitle", "author"].filter((name) => (slide[name] || name in slide) && catalog.slide_keys[layoutOf(slide)].includes(name)).map((name) => ({ field: name })),
         ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => ({ region: region.key, index }))),
       ];
       if (!stops.length) return;
