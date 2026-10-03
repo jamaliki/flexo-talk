@@ -1093,3 +1093,24 @@ def test_what_a_figure_check_found_is_said_in_words_under_the_slide() -> None:
     assert _figure_check("routing.net.target.arrow") == "A line or arrowhead is cramped in this figure."
     assert _figure_check("routing.source.direction").startswith("A line doesn't meet its shape")
     assert "(svg.id.missing)" in _figure_check("svg.id.missing")
+
+
+def test_a_code_listing_is_one_text_box_in_powerpoint(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    deck = Deck("listing")
+    with deck.slide("Code") as slide:
+        slide.code("def greet(name):\n    # say hello\n\n    return name")
+    result = deck.build(tmp_path, formats=("pptx",))
+    def every(shapes):
+        for shape in shapes:
+            yield shape
+            if shape.shape_type == 6:  # a group
+                yield from every(shape.shapes)
+
+    slide = Presentation(str(result.pptx)).slides[0]  # type: ignore[arg-type]
+    listing = [shape for shape in every(slide.shapes) if shape.has_text_frame and "greet" in shape.text_frame.text]
+    assert len(listing) == 1
+    # A paragraph a line, the blank one kept, so each line is where it was drawn.
+    lines = [paragraph.text for paragraph in listing[0].text_frame.paragraphs]
+    assert lines == ["def greet(name):", "    # say hello", "", "    return name"]

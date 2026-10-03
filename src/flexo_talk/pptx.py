@@ -182,7 +182,33 @@ def _shown_name(group: Group) -> str:
     return group.id or "group"
 
 
+def _listing(group: Group) -> Group:
+    """A code listing's lines as one text, a paragraph a line (an empty one for a blank
+    line), each where Flexo set it: one text box in the slide program, edited as a whole,
+    not a box for each line."""
+
+    texts = [item for item in group.items if isinstance(item, Text)]
+    if len(texts) < 2 or not all(text.simple and not text.angle for text in texts):
+        return group
+    lines = sorted((line for text in texts for line in text.lines), key=lambda line: line.baseline)
+    steps = [after.baseline - line.baseline for line, after in pairwise(lines) if after.baseline - line.baseline > 0.01]
+    if not steps:
+        return group
+    pitch = min(steps)
+    filled = [lines[0]]
+    for line in lines[1:]:
+        while line.baseline - filled[-1].baseline > pitch * 1.5:
+            filled.append(type(line)(filled[-1].baseline + pitch, ()))
+        filled.append(line)
+    merged = replace(texts[0], id=f"{group.id}.listing", x=min(text.x for text in texts), lines=tuple(filled),
+                     line_height=pitch)
+    return Group(group.id, [item for item in group.items if not isinstance(item, Text)] + [merged], group.data,
+                 group.label)
+
+
 def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | None:
+    if group.data.get("data-flexo-talk") == "code":
+        group = _listing(group)
     children = [child for item in group.items if (child := _item(item, placement, ids)) is not None]
     if not children:
         return None
@@ -714,8 +740,10 @@ def _text_box(
 
     lines = text.lines
     spacing = text.line_height or text.size * 1.2
-    left = min(line.left for line in lines)
-    right = max(line.right for line in lines)
+    # An empty line (a listing's blank one) has no edges of its own.
+    written_lines = [line for line in lines if line.runs] or list(lines)
+    left = min(line.left for line in written_lines)
+    right = max(line.right for line in written_lines)
     slack = 2.0
     first = lines[0].baseline
     top = first - ascent(lines[0].runs[0].face if lines[0].runs else None) * spacing
