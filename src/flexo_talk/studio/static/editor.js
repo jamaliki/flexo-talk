@@ -540,8 +540,9 @@ export function mount(studio, container) {
   // `done` names it in the note: "deleted", or "cut" for ⌘X.
   function deleteSlides(indices, done = "deleted") {
     if (indices.length === 1) { deleteSlide(indices[0], done); return; }
-    noteDeleted(indices);
+    const noted = noteDeleted(indices);
     studio.change((d) => { for (const index of [...indices].sort((a, b) => b - a)) d.slides.splice(index, 1); });
+    noted.entry(studio.past[studio.past.length - 1]);
     select(Math.min(indices[0], slides().length - 1));
     undoNote(`${indices.length} slides ${done}`, { icon: done === "cut" ? "cut" : "trash" });
   }
@@ -565,15 +566,18 @@ export function mount(studio, container) {
   // Keynote's New Slide does.
   const newSlideLike = (index) => addSlide(layoutOf(slides()[index]) === "title" ? "content" : layoutOf(slides()[index]) || "content", index + 1);
 
-  // Slides deleted here lately, by layout and title (see followChange).
+  // Slides deleted here lately, by layout and title, and the step in the history that
+  // deleted them (see followChange).
   let deletedHere = [];
   const noteDeleted = (indices) => {
-    deletedHere = [...deletedHere.filter((gone) => Date.now() - gone.at < 60000),
-      ...indices.map((index) => slides()[index]).filter(Boolean).map((slide) => ({ key: `${layoutOf(slide)}:${slide?.title ?? slide?.words ?? ""}`, at: Date.now() }))];
+    const noted = indices.map((index) => slides()[index]).filter(Boolean).map((slide) => ({ slide: structuredClone(slide), at: Date.now(), entry: null }));
+    deletedHere = [...deletedHere.filter((gone) => Date.now() - gone.at < 60000), ...noted];
+    return { entry: (entry) => { for (const gone of noted) gone.entry = entry; } };
   };
   function deleteSlide(index, done = "deleted") {
-    noteDeleted([index]);
+    const noted = noteDeleted([index]);
     studio.change((d) => { d.slides.splice(index, 1); });
+    noted.entry(studio.past[studio.past.length - 1]);
     select(Math.min(index, slides().length - 1));
     undoNote(`Slide ${done}`, { icon: done === "cut" ? "cut" : "trash" });
   }
@@ -2029,12 +2033,18 @@ export function mount(studio, container) {
     // A slide deleted here a moment ago, back because someone was still editing it: said,
     // so it does not seem to have come back of itself.
     if (after.length > before.length && deletedHere.length) {
-      const titled = (slide) => `${layoutOf(slide)}:${slide?.title ?? slide?.words ?? ""}`;
-      const back = after.find((slide) => !before.some((other) => same(other, slide))
-        && deletedHere.some((gone) => Date.now() - gone.at < 60000 && gone.key === titled(slide)));
-      if (back) {
+      // Known by what it holds, as it was deleted -- changed since, by whoever kept typing in it.
+      const come = after.filter((slide) => !before.some((other) => same(other, slide)));
+      for (const gone of deletedHere.filter((item) => Date.now() - item.at < 60000)) {
+        const back = come[follows([gone.slide], come)[0]];
+        if (!back) continue;
         toast(`Slide ${after.indexOf(back) + 1} is back: ${nameOf(who)} was still editing it.`, { icon: "info", seconds: 6 });
-        deletedHere = deletedHere.filter((gone) => gone.key !== titled(back));
+        // Its deleting came to nothing, so it leaves the history: undone, it would bring
+        // back a second copy beside the one that came back.
+        const at = studio.past.indexOf(gone.entry);
+        if (at >= 0) { studio.past.splice(at, 1); studio.emit("status"); }
+        deletedHere = deletedHere.filter((item) => item !== gone);
+        come.splice(come.indexOf(back), 1);
       }
     }
     const from = state.slide;
