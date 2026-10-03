@@ -1024,3 +1024,22 @@ def test_a_new_quote_callout_code_or_numbers_is_a_placeholder_until_typed_in() -
     assert placed == [("slide1.body.0", "Quote"), ("slide1.body.1", "Text"), ("slide1.body.2", "Code"),
                       ("slide1.body.3", "Numbers")]
     assert "data-flexo-placeholder" not in exported and ">Quote<" not in exported and ">Kept<" in exported
+
+
+def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    from flexo_talk.export import write_pptx
+
+    document = yaml.safe_load(
+        "deck: {id: named}\nslides:\n  - title: Flow\n    body:\n      - figure:\n"
+        "          figure: {id: f}\n"
+        "          nodes: [{id: a, label: Customer, kind: person}, {id: b, label: Orders API}]\n"
+        "          edges: [{from: a, to: b}]\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+    slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
+    names = [element.get("name") for element in slide._element.iter() if element.tag.endswith("}cNvPr")]
+    described = {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
+    assert described == {"slide1.body.0": "A figure: Customer, Orders API"}
+    assert {"Customer", "Orders API", "Line"} <= set(names)

@@ -14,7 +14,7 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
-from flexo_talk.deck import Deck, DeckBuild, RenderedSlide, Slide, _Image
+from flexo_talk.deck import Deck, DeckBuild, RenderedSlide, Slide, _Figure, _Image
 from flexo_talk.pptx import (
     Placement,
     add_drawing,
@@ -176,15 +176,31 @@ def write_pptx(
 _PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
+def _figure_said(block: _Figure) -> str:
+    """A figure's alt text: what it is, by the words on its shapes, in order ("A figure:
+    Customer, Orders API, Database")."""
+
+    spec = block.figure
+    nodes = getattr(spec, "nodes", None) or getattr(getattr(spec, "spec", None), "nodes", None) or []
+    words = []
+    for node in nodes:
+        label = getattr(node, "label", "")
+        text = label if isinstance(label, str) else "".join(getattr(run, "text", "") for run in label or ())
+        if " ".join(text.split()):
+            words.append(" ".join(text.split()))
+    return f"A figure: {', '.join(words)}" if words else ""
+
+
 def _describe(tree: etree._Element, slide: Slide) -> None:
     """Each picture's description as its alt text, on the shape drawn for it."""
 
     described = {
-        f"{slide.id}.{region.name}.{index}": block.description
+        f"{slide.id}.{region.name}.{index}": block.description if isinstance(block, _Image) else _figure_said(block)
         for region in slide.regions.values()
         for index, block in enumerate(region.blocks)
-        if isinstance(block, _Image) and block.description
+        if (isinstance(block, _Image) and block.description) or isinstance(block, _Figure)
     }
+    described = {key: text for key, text in described.items() if text}
     for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
         if text := described.get(properties.get("name", "")):
             properties.set("descr", text)

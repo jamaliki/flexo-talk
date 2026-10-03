@@ -157,6 +157,31 @@ def add_drawing(
         tree.append(leaf)
 
 
+def _shown_name(group: Group) -> str:
+    """What PowerPoint's Selection Pane calls a group: a figure's shape by its words
+    ("Orders API"), a line as a line; anything else by its id, which other writers here
+    find it by."""
+
+    entity = group.data.get("data-flexo-entity")
+    if entity == "component":
+        words: list[str] = []
+
+        def gather(item: object) -> None:
+            if isinstance(item, Text):
+                words.append("".join(run.text for line in item.lines for run in line.runs))
+            elif isinstance(item, Group):
+                for child in item.items:
+                    gather(child)
+
+        gather(group)
+        said = " ".join(" ".join(words).split())
+        if said:
+            return said if len(said) <= 60 else f"{said[:59]}…"
+    if entity in {"connector", "net"}:
+        return "Line"
+    return group.id or "group"
+
+
 def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | None:
     children = [child for item in group.items if (child := _item(item, placement, ids)) is not None]
     if not children:
@@ -169,7 +194,7 @@ def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | No
     right = max(box[0] + box[2] for box in boxes)
     bottom = max(box[1] + box[3] for box in boxes)
     element = etree.fromstring(
-        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(group.id or 'group', {'"': '&quot;'})}\"/>"
+        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(_shown_name(group), {'"': '&quot;'})}\"/>"
         f"<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>"
         f'<a:off x="{left}" y="{top}"/><a:ext cx="{right - left}" cy="{bottom - top}"/>'
         f'<a:chOff x="{left}" y="{top}"/><a:chExt cx="{right - left}" cy="{bottom - top}"/>'
