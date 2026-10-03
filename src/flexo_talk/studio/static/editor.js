@@ -1952,14 +1952,30 @@ export function mount(studio, container) {
     const value = inline.read();
     if (value === undefined) { closeInline(); return; }
     if (value === inline.area.value) return;
-    inline.area.value = value;
-    if (inline.area.rich) inline.area.caretToEnd();
-    else {
-      inline.area.setSelectionRange(value.length, value.length);
-      inline.area.style.height = "auto";
-      inline.area.style.height = `${inline.area.scrollHeight + 2}px`;
-    }
+    // Words changed under the caret (another person's, the file's, an undo): the caret
+    // stays by the words it was by.
+    const area = inline.area, rich = area.rich, focused = document.activeElement === area;
+    const caret = rich ? area.caretAt() : [area.selectionStart, area.selectionEnd];
+    const was = rich ? area.letters() : area.value;
+    area.value = value;
+    const now = rich ? area.letters() : value;
+    if (!rich) { area.style.height = "auto"; area.style.height = `${area.scrollHeight + 2}px`; }
+    if (focused && caret) {
+      const [start, end] = caret.map((at) => caretThrough(was, now, at));
+      if (rich) area.caretTo(start, end); else area.setSelectionRange(start, end);
+    } else if (rich) area.caretToEnd();
     positionInline();
+  }
+  // Where a caret at `at` goes when words change from `was` to `now`: before the change,
+  // it stays; after it, it moves with the words; inside it, to the change's end.
+  function caretThrough(was, now, at) {
+    let start = 0;
+    while (start < was.length && start < now.length && was[start] === now[start]) start++;
+    let end = 0;
+    while (end < was.length - start && end < now.length - start && was[was.length - 1 - end] === now[now.length - 1 - end]) end++;
+    if (at <= start) return at;
+    if (at >= was.length - end) return at + now.length - was.length;
+    return now.length - end;
   }
 
   // Words are typed where they are on the slide, as they look there: the editor lies

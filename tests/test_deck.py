@@ -700,6 +700,15 @@ def test_maths_that_cannot_be_read_is_reported_on_its_slide(tmp_path: Path) -> N
     assert "Traceback" not in said and "Error" not in said
 
 
+def test_escaped_backticks_and_brackets_are_themselves() -> None:
+    runs = inline(r"Use \`ls\` and [box\](x) and [red\]{accent}, but `code`.")
+    assert [(run.text, run.code, run.link, run.color) for run in runs] == [
+        ("Use `ls` and [box](x) and [red]{accent}, but ", False, "", ""),
+        ("code", True, "", ""),
+        (".", False, "", ""),
+    ]
+
+
 def test_prices_are_prices_and_escaped_dollars_are_dollars() -> None:
     runs = inline(r"It costs $5 and $10, a sample is \$20, and $x^2$ is maths.")
     assert "".join(run.text for run in runs if not run.italic).startswith("It costs $5 and $10, a sample is $20")

@@ -13,6 +13,11 @@ import { icon } from "/static/studio/studio.js";
 
 const INLINE = /(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\*\*|\*)/;
 const ASTERISK = "";
+// Escaped marks, and where each waits while markup is read (deck.py's _HELD): a mark typed
+// is written escaped, so it reads back as itself. An escaped $ is a dollar sign.
+const HELD = [["\\*", ASTERISK], ["\\`", "\ue001"], ["\\]", "\ue002"], ["\\$", "$"]];
+const held = (words) => HELD.reduce((text, [mark, wait]) => text.replaceAll(mark, wait), words);
+const freed = (text) => HELD.reduce((out, [mark, wait]) => (wait.length === 1 && wait !== "$" ? out.replaceAll(wait, mark[1]) : out), text);
 
 // Where maths is, delimiters and all, as flexo reads it (flexo.markup.math_spans): $...$
 // (not a price: no space inside its ends, no digit after it, unless plainly TeX),
@@ -60,7 +65,7 @@ function closingDollar(text, start) {
 
 function tokensOf(words) {
   const tokens = [];
-  const split = (part) => tokens.push(...part.replace(/\\\*/g, ASTERISK).split(INLINE).filter(Boolean));
+  const split = (part) => tokens.push(...held(part).split(INLINE).filter(Boolean));
   let at = 0;
   for (const [start, end] of mathSpans(words)) {
     split(words.slice(at, start));
@@ -128,11 +133,11 @@ function inlineNodes(words, colours, outer = { bold: false, italic: false }) {
       nodes.push(node);
     } else if (code) {
       const node = document.createElement("code");
-      node.textContent = code[1];
+      node.textContent = freed(code[1]);
       nodes.push(wrapped(node, style));
     } else {
       // Lines in the words are lines on the page.
-      token.replaceAll(ASTERISK, "*").split("\n").forEach((line, n) => {
+      freed(token).split("\n").forEach((line, n) => {
         if (n) nodes.push(document.createElement("br"));
         if (line) nodes.push(wrapped(document.createTextNode(line), style));
       });
@@ -157,7 +162,7 @@ function runsOf(node, style, runs, names) {
     };
     if (tag === "CODE") { runs.push({ raw: `\`${child.textContent.replace(/`/g, "")}\``, ...next, wrap: true }); continue; }
     const colour = child.dataset?.colour || (tag === "FONT" && child.getAttribute("color") ? names(child.getAttribute("color")) : null);
-    if (tag === "A" && child.dataset.href) { runs.push({ raw: `[${serialise(child, next, names)}](${child.dataset.href})` }); continue; }
+    if (tag === "A" && child.dataset.href) { runs.push({ raw: `[${serialise(child, next, names)}](${address(child.dataset.href)})` }); continue; }
     // The ink is the words' own colour: no colour of their own.
     if (colour && colour !== "ink") { runs.push({ raw: `[${serialise(child, next, names)}]{${colour}}` }); continue; }
     // A line the browser made a block of its own (a pasted or split paragraph) is a line.
@@ -167,7 +172,9 @@ function runsOf(node, style, runs, names) {
   return runs;
 }
 
-const escaped = (text) => text.replace(/\*/g, "\\*");
+const escaped = (text) => text.replace(/[*`$]/g, "\\$&").replace(/\](?=[({])/g, "\\]");
+// A link's address as markup reads it: no space, no bracket to end it early.
+const address = (href) => href.replace(/[\s()]/g, (mark) => `%${mark.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 
 // Runs as markup: emphasis opened and closed only where it changes, each mark against
 // a word (spaces kept outside it), so ** and * pair as written.
@@ -274,6 +281,65 @@ export function richText({ value = "", list = false, single = false, numbered = 
   const place = (range) => { const s = selection(); s.removeAllRanges(); s.addRange(range); };
   area.selectAll = () => { const range = document.createRange(); range.selectNodeContents(area); place(range); };
   area.caretToEnd = () => { const range = document.createRange(); range.selectNodeContents(area); range.collapse(false); place(range); };
+  // The words as letters, and where the caret is as a count of the letters before it (a
+  // new line counts one): so the caret stays where it was when the words change under it.
+  const lettersIn = (root) => {
+    let text = "", lines = 0;
+    const go = (node) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === Node.TEXT_NODE) text += child.data;
+        else if (child.nodeType !== Node.ELEMENT_NODE) continue;
+        else if (child.classList.contains("rt-line")) { if (lines++) text += "\n"; go(child); }
+        else if (child.nodeName === "BR") { if (!list) text += "\n"; }
+        else go(child);
+      }
+    };
+    go(root);
+    return text;
+  };
+  area.letters = () => lettersIn(area);
+  area.caretAt = () => {
+    const s = selection();
+    if (!s.rangeCount || !area.contains(s.anchorNode) || !area.contains(s.focusNode)) return null;
+    const range = s.getRangeAt(0);
+    const upTo = (container, offset) => { const r = document.createRange(); r.setStart(area, 0); r.setEnd(container, offset); return lettersIn(r.cloneContents()).length; };
+    return [upTo(range.startContainer, range.startOffset), upTo(range.endContainer, range.endOffset)];
+  };
+  const pointAt = (count) => {
+    let left = count, lines = 0, previous = null, found = null;
+    const go = (node) => {
+      for (const [index, child] of [...node.childNodes].entries()) {
+        if (found) return;
+        if (child.nodeType === Node.TEXT_NODE) {
+          if (left <= child.data.length) { found = [child, left]; return; }
+          left -= child.data.length;
+        } else if (child.nodeType !== Node.ELEMENT_NODE) continue;
+        else if (child.classList.contains("rt-line")) {
+          if (lines++) {
+            if (left === 0) { found = [previous, previous.textContent ? previous.childNodes.length : 0]; return; }
+            left -= 1;
+          }
+          previous = child;
+          go(child);
+          if (!found && left === 0) found = [child, child.textContent ? child.childNodes.length : 0];
+        } else if (child.nodeName === "BR") {
+          if (list) continue;
+          if (left === 0) { found = [node, index]; return; }
+          left -= 1;
+        } else go(child);
+      }
+    };
+    go(area);
+    return found;
+  };
+  area.caretTo = (start, end = start) => {
+    const from = pointAt(start), to = pointAt(end);
+    if (!from || !to) { area.caretToEnd(); return; }
+    const range = document.createRange();
+    range.setStart(...from);
+    range.setEnd(...to);
+    place(range);
+  };
   // The word under a point (a double-click on the slide), as a Mac text view selects it.
   area.selectWordAt = (point) => {
     const range = document.caretRangeFromPoint?.(point.x, point.y);

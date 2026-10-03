@@ -579,14 +579,15 @@ def inline(words: str) -> tuple[TextRun, ...]:
 
     runs: list[TextRun] = []
     # Split on maths (read as flexo reads it), then links, code, ** and *; each piece
-    # takes the styles open around it. \* is an asterisk, kept out of the split.
+    # takes the styles open around it. \* is an asterisk, \` a backtick and \] a bracket
+    # (as typed: "[1](2)"), kept out of the split.
     tokens: list[str] = []
     at = 0
     for start, end in math_spans(words):
-        tokens += re.split(_INLINE, words[at:start].replace("\\*", _ASTERISK))
+        tokens += re.split(_INLINE, _held(words[at:start]))
         tokens.append(words[start:end])
         at = end
-    tokens += re.split(_INLINE, words[at:].replace("\\*", _ASTERISK))
+    tokens += re.split(_INLINE, _held(words[at:]))
     tokens = [token for token in tokens if token]
     paired = _emphasis(tokens)
     bold = italic = False
@@ -610,7 +611,7 @@ def inline(words: str) -> tuple[TextRun, ...]:
             runs.append(
                 replace(
                     run,
-                    text=run.text.replace(_ASTERISK, "*"),
+                    text=_freed(run.text),
                     # Strong words' maths stays regular, as LaTeX's \textbf leaves it.
                     weight=700 if bold and not run.maths else run.weight,
                     italic=run.italic or italic,
@@ -621,6 +622,21 @@ def inline(words: str) -> tuple[TextRun, ...]:
 
 _ASTERISK = "\ue000"
 """Where an escaped asterisk (\\*) waits while emphasis is read."""
+
+_HELD = {"\\*": _ASTERISK, "\\`": "\ue001", "\\]": "\ue002"}
+"""Escaped marks, and where each waits while the markup is read."""
+
+
+def _held(words: str) -> str:
+    for mark, held in _HELD.items():
+        words = words.replace(mark, held)
+    return words
+
+
+def _freed(text: str) -> str:
+    for mark, held in _HELD.items():
+        text = text.replace(held, mark[1])
+    return text
 
 
 def _emphasis(tokens: list[str]) -> set[int]:
