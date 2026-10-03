@@ -81,11 +81,11 @@ def test_words_over_several_lines_are_written_as_blocks() -> None:
 @pytest.mark.parametrize(
     ("slide", "where", "words"),
     [
-        ({"layout": "sideways"}, "slides[0].layout", "unknown layout"),
-        ({"title": "T", "colour": "red"}, "slides[0]", "unknown key colour"),
+        ({"layout": "sideways"}, "slides[0].layout", "Unknown layout"),
+        ({"title": "T", "colour": "red"}, "slides[0]", "Unknown key colour"),
         ({"body": [{"table": "not rows"}]}, "slides[0].body[0] (table)", "list of rows"),
-        ({"body": [{"text": "a", "bullets": ["b"]}]}, "slides[0].body[0]", "names text, bullets"),
-        ({"body": [{"image": "nowhere.png"}]}, "slides[0].body[0] (image)", "no file nowhere.png"),
+        ({"body": [{"text": "a", "bullets": ["b"]}]}, "slides[0].body[0]", "more than one kind (text, bullets)"),
+        ({"body": [{"image": "nowhere.png"}]}, "slides[0].body[0] (image)", "Cannot find nowhere.png"),
         ({"layout": "columns", "columns": [[], []], "widths": [1]}, "slides[0].widths", "one share"),
         ({"body": [{"callout": "c", "colour": "red"}]}, "slides[0].body[0] (callout)", "accent"),
     ],
@@ -211,7 +211,7 @@ def test_an_agent_gets_a_guide_and_a_quick_check() -> None:
     guide = kind.guide()
     assert "two-columns" in guide and "bullets" in guide and "Look at each slide" in guide
     assert kind.check({"deck": {}, "slides": [{"body": [{"table": 1}]}]}, ROOT) == [
-        "slides[0].body[0] (table): a table is a list of rows, each a list of cells"
+        "slides[0].body[0] (table): A table must be a list of rows, each a list of cells."
     ]
     document = {"schema_version": 1, **_small()}
     assert kind.parse(kind.dump(document)) == document
@@ -358,6 +358,39 @@ def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
     assert text.startswith("# A flexo figure") and "id: backbone" in text and "to: backbone" in text
 
 
+def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: Path) -> None:
+    from flexo.studio.figure_edit import EditError
+    from flexo.studio.figure_kind import NEW_FIGURE
+
+    path = tmp_path / "model.yaml"
+    path.write_text(NEW_FIGURE, encoding="utf-8")
+    kind = DeckKind()
+    document = _deck_with_figures()
+    at = {"slide": 1, "region": "body", "index": 0}
+    read = kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+    assert "was" not in read  # nothing changed, nothing to undo
+    rename = {"do": "rename", "id": "encoder", "to": "backbone"}
+    result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
+    assert result["was"] == NEW_FIGURE and result["now"] == path.read_text()
+    was, now = result["change"]
+    assert "encoder" in [node["id"] for node in was["nodes"]] and "backbone" in [node["id"] for node in now["nodes"]]
+
+    def restore(text: str, expect: str) -> None:
+        kind.act(document, {"do": "figure-file", "file": "model.yaml", "text": text, "expect": expect}, tmp_path)
+
+    restore(result["was"], result["now"])  # undone
+    assert path.read_text() == NEW_FIGURE
+    restore(result["now"], result["was"])  # done again
+    assert path.read_text() == result["now"]
+    # Changed since by hand: left as it is.
+    path.write_text(result["now"] + "\n# mine\n", encoding="utf-8")
+    with pytest.raises(EditError, match="changed since"):
+        restore(result["was"], result["now"])
+    assert path.read_text().endswith("# mine\n")
+    with pytest.raises(EditError, match="Can't find the figure file"):
+        kind.act(document, {"do": "figure-file", "file": "../elsewhere.yaml", "text": "", "expect": ""}, tmp_path)
+
+
 def test_a_figure_made_in_python_or_gone_is_not_edited_on_its_slide(tmp_path: Path) -> None:
     from flexo.studio.figure_edit import EditError
 
@@ -369,13 +402,57 @@ def test_a_figure_made_in_python_or_gone_is_not_edited_on_its_slide(tmp_path: Pa
 
     with pytest.raises(EditError, match="Python file"):
         read(2, "body", 0)
-    with pytest.raises(EditError, match="gone"):
+    with pytest.raises(EditError, match="no longer exists"):
         read(0, "right", 5)
 
 
 def test_the_studio_offers_the_figure_editor_for_figures_on_slides() -> None:
     parts = DeckKind().catalog()["figure_editor"]["parts"]
     assert {"block", "protein", "plasmid", "attention"} <= set(parts)
+
+
+def test_a_figure_on_a_slide_is_exported_by_itself_in_the_decks_look(tmp_path: Path) -> None:
+    (tmp_path / "logo.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>'
+    )
+    figure = {"figure": {"id": "pic"}, "nodes": [
+        {"id": "logo", "kind": "image", "properties": {"source": "logo.svg"}}, {"id": "m", "label": "Model"}]}
+    document = {"schema_version": 1, "deck": {"id": "t", "theme": "dark"},
+                "slides": [{"title": "Logo", "body": [{"text": "Words"}, {"figure": figure}]}]}
+    at = {"slide": 0, "region": "body", "index": 1}
+    written = DeckKind().export_part(document, tmp_path, "talk", at, ["yaml", "editable"])
+    assert sorted(path.name for path in written) == ["talk-pic.editable.svg", "talk-pic.yaml"]
+    exported = yaml.safe_load((tmp_path / "build" / "talk-pic.yaml").read_text())
+    # In the deck's theme, and naming its picture from where it is written.
+    assert exported["figure"]["style"] == "dark"
+    assert exported["nodes"][0]["properties"]["source"] == "../logo.svg"
+    from flexo.serialization import load_figure
+
+    assert load_figure(tmp_path / "build" / "talk-pic.yaml").id == "pic"
+    from flexo.studio.figure_edit import EditError
+
+    with pytest.raises(EditError, match="isn't a figure"):
+        DeckKind().export_part(document, tmp_path, "talk", {**at, "index": 0}, ["yaml"])
+
+
+def test_a_figure_file_is_written_into_the_deck_its_files_named_from_there(tmp_path: Path) -> None:
+    (tmp_path / "figures").mkdir()
+    (tmp_path / "logo.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>'
+    )
+    text = "# its own\nfigure: {id: pic}\nnodes:\n- {id: logo, kind: image, properties: {source: ../logo.svg}}\n"
+    (tmp_path / "figures" / "pic.yaml").write_text(text)
+    document = {"schema_version": 1, "deck": {"id": "t"},
+                "slides": [{"title": "Logo", "body": [{"figure": "figures/pic.yaml"}]}]}
+    # Drawn from its file, its picture is found beside the file.
+    deck = deck_from_document(document, tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
+    result = DeckKind().act(document, {"do": "inline", "at": {"slide": 0, "region": "body", "index": 0}}, tmp_path)
+    inline = result["document"]["slides"][0]["body"][0]["figure"]
+    assert inline["nodes"][0]["properties"]["source"] == "logo.svg"
+    assert (tmp_path / "figures" / "pic.yaml").read_text() == text  # the file is left as it was
+    deck = deck_from_document(result["document"], tmp_path)
+    assert render_slide(deck, deck.slides[0]).svg
 
 
 def test_a_picture_in_a_figure_written_in_the_deck_is_found_beside_the_deck(tmp_path: Path) -> None:
@@ -565,11 +642,11 @@ def test_in_the_studio_a_decks_python_runs_apart_and_cannot_hang_or_take_down_th
     pages = {page.id: page for page in drawing.pages}
     assert f"pid {os.getpid()}" not in pages["slide1"].svg and "pid " in pages["slide1"].svg
     assert "Made apart" in pages["slide2"].svg
-    assert said["slide3"] == "plots.py:forever took longer than 3 s, and was stopped"
-    assert said["slide4"] == "plots.py:crash quit the Python it ran in (exit code 3)"
-    assert said["slide5"] == "plots.py:leave: it called sys.exit(2) (line 22)"
+    assert said["slide3"] == "plots.py:forever took longer than 3 seconds and was stopped."
+    assert said["slide4"] == "plots.py:crash quit unexpectedly (exit code 3)."
+    assert said["slide5"] == "plots.py:leave: sys.exit(2) was called (line 22)"
     assert said["slide6"] == "plots.py:nothing: nothing did not return a matplotlib figure"
-    assert said["slide8"] == "plots.py:fault crashed the Python it ran in (signal 11)"
+    assert said["slide8"] == "plots.py:fault crashed (signal 11)."
     assert said["slide9"] == "plots.py:typo: name 'figur' is not defined (line 29)"
     assert "slide1" not in said and "slide7" not in said and "pid " in pages["slide7"].svg
     assert seconds < 30
@@ -622,7 +699,7 @@ def test_the_studio_draws_a_mechanisms_arrows_from_two_clicks(tmp_path: Path) ->
     assert placed["sheet"]["molecules"][0]["placed"] is True
     (rendered,) = deck_from_document(placed["document"], tmp_path).render()
     assert "mechanism" in rendered.svg
-    with pytest.raises(DeckDocumentError, match="place maps an atom"):
+    with pytest.raises(DeckDocumentError, match="place must map an atom"):
         bad = {"deck": {"id": "c"}, "slides": [{"body": [{"mechanism": [
             {"smiles": "[OH-:1].[CH3:2][Br:3]", "place": "1 sideways"}]}]}]}
         deck_from_document(bad, tmp_path)
@@ -733,3 +810,27 @@ def test_each_region_of_a_slide_says_where_its_room_is_empty_or_not(tmp_path: Pa
     assert set(rooms) == {"left", "right"}  # the empty column too: a part can be dropped in it
     (lx, ly, lw, lh), (rx, ry, rw, rh) = (map(float, rooms[key].split()) for key in ("left", "right"))
     assert lw > 0 and lh > 0 and (rw, rh, ry) == (lw, lh, ly) and rx > lx + lw
+
+
+def test_a_structure_on_a_slide_says_the_mol_sketch_settings_it_is_drawn_with(tmp_path: Path) -> None:
+    pytest.importorskip("molsketch")
+    import shutil
+
+    data = Path(__file__).resolve().parents[2] / "flexo" / "tests" / "unit" / "data" / "1a7g.cif"
+    if not data.is_file():
+        pytest.skip("no structure file beside flexo")
+    shutil.copy(data, tmp_path / "1a7g.cif")
+    figure = {
+        "figure": {"id": "mol"},
+        "nodes": [{"id": "m", "kind": "structure",
+                   "properties": {"source": "1a7g.cif", "style": {"line": {"width": 2.5}}}}],
+    }
+    document = {"schema_version": 1, "deck": {"id": "talk", "theme": "sketch"},
+                "slides": [{"title": "A molecule", "body": [{"figure": figure}]}]}
+    at = {"slide": 0, "region": "body", "index": 0}
+    asked = {"do": "figure", "at": at, "edit": {"do": "structure-settings", "id": "m"}}
+    result = DeckKind().act(document, asked, tmp_path)
+    assert result["document"] == document
+    # In the deck's look: a sketched theme draws in watercolour, the molecule's own pen over it.
+    assert result["settings"]["look"] == "watercolour"
+    assert result["settings"]["style"]["line.width"] == 2.5

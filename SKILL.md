@@ -224,11 +224,11 @@ again at the size of its place.
 
 | Message | Do |
 | --- | --- |
-| `slideN: words set at 80% to fit` | Too many words: cut them or split the slide |
-| `slideN: the words do not fit even at the small size` | Split the slide |
-| `slideN fig: its words are 5.2pt, too small to read` | Give the figure its own slide (`layout="figure"`), a wider column, or fewer parts |
-| `slideN fig: routing.connector.crossing` (and other flexo codes) | flexo's lint on the figure: simplify it; see flexo's docs |
-| `slideN: the agenda lists section slides, and the deck has none` | Add `deck.section(...)` slides or drop the agenda |
+| `slideN: Text size reduced to 80% to fit the slide.` | Too many words: cut them or split the slide |
+| `slideN: Text does not fit, even at the smallest size. …` | Split the slide |
+| `slideN fig: Text in this figure is 5.2 pt, too small to read. …` | Give the figure its own slide (`layout="figure"`), a wider column, or fewer shapes |
+| `slideN fig: Lines cross in this figure.` (and other figure checks) | flexo's checks on the figure: simplify it; see flexo's docs |
+| `slideN: The agenda is empty because the deck has no section slides.` | Add `deck.section(...)` slides or drop the agenda |
 
 ## Habits that make decks good
 

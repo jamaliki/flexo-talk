@@ -54,6 +54,12 @@ class Stopped(Exception):
     """The worker did not answer: it took too long, or its process ended."""
 
 
+def duration(value: float) -> str:
+    """A time limit as a message says it: ``3 seconds``, ``1 second``."""
+
+    return f"{value:g} second{'' if value == 1 else 's'}"
+
+
 class Worker:
     def __init__(self, folder: Path) -> None:
         self.folder = folder
@@ -73,7 +79,7 @@ class Worker:
                 answer = _receive(process.stdout.fileno(), time.monotonic() + wait)
             except TimeoutError:
                 self.stop()
-                raise Stopped(f"took longer than {seconds:g} s, and was stopped") from None
+                raise Stopped(f"took longer than {duration(seconds)} and was stopped.") from None
             except (EOFError, BrokenPipeError, OSError):
                 try:
                     code = process.wait(timeout=5)
@@ -81,8 +87,8 @@ class Worker:
                     code = -9
                 self.stop()
                 if code < 0:
-                    raise Stopped(f"crashed the Python it ran in (signal {-code})") from None
-                raise Stopped(f"quit the Python it ran in (exit code {code})") from None
+                    raise Stopped(f"crashed (signal {-code}).") from None
+                raise Stopped(f"quit unexpectedly (exit code {code}).") from None
             self.fresh = False
             return answer
 
@@ -226,8 +232,8 @@ class DeckView:
 
     def __getattr__(self, name: str) -> Any:
         raise AttributeError(
-            f"a plot is given the deck's theme, palette_name, font, palette, plot_style() and "
-            f"plotting(); deck.{name} is not among them"
+            f"A plot can use the deck's theme, palette_name, font, palette, plot_style() and plotting(), "
+            f"but not deck.{name}."
         )
 
 
@@ -318,7 +324,7 @@ def _said(error: BaseException) -> str:
     if isinstance(error, _Said):
         return str(error)
     if isinstance(error, SystemExit):
-        return f"it called sys.exit({'' if error.code is None else repr(error.code)})"
+        return f"sys.exit({'' if error.code is None else repr(error.code)}) was called"
     try:
         from flexo.studio.plain import explain
 

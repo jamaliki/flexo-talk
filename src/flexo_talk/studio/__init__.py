@@ -37,48 +37,99 @@ from flexo_talk.document import (
 )
 
 LOOK_NOTES = {
-    "classic": "A short accent rule under each title; centred opening",
-    "band": "Titles on a band of the accent; sections filled with it",
-    "editorial": "A hairline under each title; sections numbered large",
+    "classic": "Short accent rule under titles, centred title slide",
+    "band": "Titles on an accent band, filled section slides",
+    "editorial": "Hairline under titles, large section numbers",
     "keynote": "Centred titles and content, no rules",
-    "margin": "Titles in the accent; a bar down each slide's edge",
+    "margin": "Accent-coloured titles, accent bar along the left edge",
 }
+
+LAYOUT_LABELS = {
+    "content": "Content",
+    "two-columns": "Two Columns",
+    "columns": "Columns",
+    "figure": "Figure",
+    "title": "Title",
+    "section": "Section",
+    "statement": "Statement",
+    "agenda": "Agenda",
+    "blank": "Blank",
+}
+"""What the studio calls each layout."""
 
 LAYOUT_NOTES = {
-    "content": "A title over words, lists, pictures, figures",
-    "two-columns": "A title over two columns side by side",
-    "columns": "A title over any number of columns",
-    "figure": "A title over one figure, as large as the slide allows",
-    "title": "The opening: title, subtitle, who and when",
-    "section": "A divider between parts of the talk",
-    "statement": "One sentence, large, in the middle",
-    "agenda": "The talk's sections, numbered",
-    "blank": "The whole slide as one body",
+    "content": "Title with text, lists, pictures or figures",
+    "two-columns": "Title with two columns side by side",
+    "columns": "Title with any number of columns",
+    "figure": "Title with one figure, as large as the slide allows",
+    "title": "Title, subtitle, author and date",
+    "section": "Divider between sections of the talk",
+    "statement": "One large sentence in the centre",
+    "agenda": "Numbered list of the talk's sections",
+    "blank": "No title; the content fills the slide",
 }
 
-STYLE_NOTES = {
-    "title_size": "Slide titles (pt)",
-    "subtitle_size": "Subtitles (pt)",
-    "body_size": "Words and lists (pt)",
-    "small_size": "Footnotes, captions, the smallest words may shrink to (pt)",
-    "figure_size": "Words in figures (pt)",
-    "margin": "Space around the slide's edge (pt)",
-    "line_height": "Line height, as a multiple of the size",
-    "paragraph_gap": "Space between bullets, as a fraction of the size",
-    "indent": "How far each list level steps in (pt)",
-    "column_gap": "Space between columns (pt)",
-    "block_gap": "Space between blocks (pt)",
-    "title_gap": "Space between the title and the body (pt)",
-    "header": "What marks a slide's title",
-    "opening": "How the title slide is set",
-    "sections": "How section slides are set",
-    "edge": "An accent bar down the left edge",
-    "align": "Where content sits in the body",
-    "numbers": "Slide numbers",
-    "title_weight": "The weight of titles (100 to 900)",
-    "title_align": "Titles flush left or centred",
-    "title_role": "The colour titles are painted in",
+STYLE_LABELS = {
+    "margin": "Margin",
+    "title_size": "Title Size",
+    "subtitle_size": "Subtitle Size",
+    "body_size": "Body Size",
+    "small_size": "Small Text Size",
+    "figure_size": "Figure Text Size",
+    "line_height": "Line Height",
+    "paragraph_gap": "Paragraph Spacing",
+    "indent": "Indent",
+    "column_gap": "Column Spacing",
+    "block_gap": "Object Spacing",
+    "title_gap": "Title Spacing",
+    "header": "Title Decoration",
+    "opening": "Title Slide",
+    "sections": "Section Slides",
+    "edge": "Edge Bar",
+    "align": "Content Position",
+    "numbers": "Slide Numbers",
+    "title_weight": "Title Weight",
+    "title_align": "Title Alignment",
+    "title_role": "Title Colour",
 }
+"""What the studio calls each of the deck's style settings."""
+
+STYLE_NOTES = {
+    "title_size": "Slide titles, in points",
+    "subtitle_size": "Subtitles, in points",
+    "body_size": "Body text and lists, in points",
+    "small_size": "Footnotes, captions and the minimum text size, in points",
+    "figure_size": "Text in figures, in points",
+    "margin": "Space around the slide edges, in points",
+    "line_height": "As a multiple of the font size",
+    "paragraph_gap": "Space between bullets, as a fraction of the font size",
+    "indent": "Indent for each list level, in points",
+    "column_gap": "Space between columns, in points",
+    "block_gap": "Space between objects, in points",
+    "title_gap": "Space between the title and the body, in points",
+    "header": "How slide titles are marked",
+    "opening": "How the title slide is laid out",
+    "sections": "How section slides are laid out",
+    "edge": "An accent bar along the left edge",
+    "align": "Where content sits on the slide",
+    "numbers": "Show slide numbers",
+    "title_weight": "Font weight of titles, 100 to 900",
+    "title_align": "Titles aligned left or centred",
+    "title_role": "The colour of titles",
+}
+
+CHOICE_LABELS = {
+    "auto": "Automatic",
+    "centred": "Centred",
+    "middle": "Middle",
+    "start": "Left",
+    "ink": "Ink",
+    "tone-1-stroke": "Accent",
+    "tone-2-stroke": "Accent 2",
+    "muted-ink": "Muted",
+}
+"""What the studio shows for a style setting's choices, where it is not the value
+capitalised (``title_align: middle`` is Centre)."""
 
 CACHE_SIZE = 600
 CACHE_BYTES = 200_000_000
@@ -216,15 +267,20 @@ class DeckKind:
             kind = "choice" if choices else "bool" if isinstance(value, bool) else "number"
             if item.name == "title_role":
                 kind, choices = "choice", ["ink", "tone-1-stroke", "tone-2-stroke", "muted-ink"]
-            style.append({"name": item.name, "kind": kind, "default": value, "choices": choices,
+            labels = {**CHOICE_LABELS, **({"middle": "Centre"} if item.name == "title_align" else {})}
+            style.append({"name": item.name, "label": STYLE_LABELS.get(item.name, item.name.replace("_", " ").title()),
+                          "kind": kind, "default": value, "choices": choices,
+                          "labels": {choice: labels.get(choice, choice.capitalize()) for choice in choices},
                           "note": STYLE_NOTES.get(item.name, "")})
         return {
             "themes": list(theme_names()),
-            "looks": [{"name": name, "note": LOOK_NOTES.get(name, ""), "style": {**LOOKS[name]}} for name in LOOKS],
+            "looks": [{"name": name, "label": name.title(), "note": LOOK_NOTES.get(name, ""), "style": {**LOOKS[name]}}
+                      for name in LOOKS],
             "palettes": {name: list(colours) for name, colours in design_palettes().items()},
             "fonts": sorted(available_families()),
             "style": style,
-            "layouts": [{"name": name, "note": LAYOUT_NOTES[name]} for name in LAYOUTS],
+            "layouts": [{"name": name, "label": LAYOUT_LABELS.get(name, name.title()), "note": LAYOUT_NOTES[name]}
+                        for name in LAYOUTS],
             "slide_keys": {layout: [*COMMON_KEYS, *keys] for layout, keys in SLIDE_KEYS.items()},
             "blocks": {kind: list(options) for kind, options in BLOCKS.items()},
             # What the figure editor offers, for figures edited on their slides.
@@ -346,7 +402,14 @@ class DeckKind:
         """An edit to a figure on a slide, made where the figure is written: in the deck
         (a figure written inline) or in its own file. ``action`` is ``{"do": "figure",
         "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}`` -- or
-        ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``)."""
+        ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``), or
+        ``{"do": "inline", "at"}``, a figure file's figure written into the deck
+        (``_inline``), or ``{"do": "figure-file", "file", "text", "expect"}``, a figure
+        file put back as an edit made on its slide found it or left it (``_restore``).
+
+        An edit to a figure file answers with the file's text before and after it
+        (``was``, ``now``) and both read as data (``change``): the studio keeps them in
+        the deck's history, to undo the edit and say what it did."""
 
         import copy
 
@@ -354,10 +417,21 @@ class DeckKind:
 
         if action.get("do") == "mechanism":
             return _mechanism(document, action, base)
+        if action.get("do") == "inline":
+            return _inline(document, action, base)
+        if action.get("do") == "figure-file":
+            return _restore(document, action, base)
         if action.get("do") != "figure":
-            raise EditError(f'unknown deck edit "{action.get("do")}"')
+            raise EditError(f"Unknown deck edit “{action.get('do')}”.")
         at = action.get("at") or {}
         edit = action.get("edit") or {}
+        if edit.get("do") == "structure-view":
+            return {"document": document, "view": _structure_view(document, at, str(edit.get("id")), base)}
+        if edit.get("do") == "structure-settings":
+            from flexo.studio.figure_kind import settings_of
+
+            spec = _slide_figure(document, at, base)
+            return {"document": document, "settings": settings_of(spec, str(edit.get("id")))}
         changed = copy.deepcopy(document)
         block = _block_at(changed, at)
         value = block.get("figure") if isinstance(block, dict) else None
@@ -366,21 +440,93 @@ class DeckKind:
             block["figure"] = made["data"]
             return {"document": changed, "select": made["select"], "model": made["model"]}
         if isinstance(value, str) and value and ".py:" not in value:
-            path = (base / value).resolve()
-            if not path.is_file() or not path.is_relative_to(base.resolve()):
-                raise EditError(f"no figure file {value} beside the deck")
-            result = apply(path.read_text(encoding="utf-8"), edit, suffix=path.suffix, base=path.parent)
-            if edit.get("do") != "read":
+            path = _figure_file(base, value)
+            was = path.read_text(encoding="utf-8")
+            result = apply(was, edit, suffix=path.suffix, base=path.parent)
+            answer = {"document": document, "select": result["select"],
+                      "model": model(result["text"], suffix=path.suffix), "file": value}
+            if edit.get("do") != "read" and result["text"] != was:
                 path.write_text(result["text"], encoding="utf-8")
-            return {"document": document, "select": result["select"],
-                    "model": model(result["text"], suffix=path.suffix), "file": value}
-        raise EditError("a figure made in Python is changed in its Python file")
+                answer |= {"was": was, "now": result["text"],
+                           "change": [_figure_data(was, path.suffix), _figure_data(result["text"], path.suffix)]}
+            return answer
+        raise EditError("This figure is made in Python. Edit it in its Python file.")
 
     def export(self, document: dict[str, Any], base: Path, stem: str, formats: list[str]) -> list[Path]:
         deck = deck_from_document(document, base)
         result = deck.build(base / "build", formats=tuple(formats))
         written = [result.pptx, result.pdf, *result.svgs, *result.pngs]
         return [path for path in written if path]
+
+    def export_part(
+        self, document: dict[str, Any], base: Path, stem: str, part: dict[str, Any], formats: list[str]
+    ) -> list[Path]:
+        """A figure on a slide written out as a figure of its own, in the deck's look: its
+        document (``yaml``, a flexo figure file) and what flexo builds of it (``editable``
+        and ``portable`` SVG, ``pdf``, ``png``). It is laid out as written, not as fitted
+        to the slide. Files go in ``build/`` beside the deck, the files the figure names
+        (a theme, structures, pictures) named from there."""
+
+        import os
+        from dataclasses import replace
+
+        import yaml
+        from flexo.export import build
+        from flexo.serialization import figure_to_document, parse_figure
+        from flexo.studio.figure_edit import EditError
+
+        from flexo_talk.deck import made
+        from flexo_talk.document import _figure, make_deck
+
+        block = _block_at(document, part)
+        if not isinstance(block, dict) or "figure" not in block:
+            raise EditError("The selected object isn't a figure.")
+        deck = make_deck(document.get("deck") or {}, base)
+        where = f"slides[{part.get('slide')}].{part.get('region')}[{part.get('index')}]"
+        figure = made(_figure(base, block["figure"], where, None))
+        spec = getattr(figure, "spec", figure)
+        spec = replace(
+            spec, style=deck.theme, palette=deck.palette_name,
+            font=deck.figure_font or deck.font or spec.font,
+        )
+        # The files its parts draw, wherever it names them from (a figure file names them
+        # from its own folder), found once and for all.
+        value = block["figure"]
+        origin = (base / value).parent if isinstance(value, str) and ".py:" not in value else base
+        data = figure_to_document(spec)
+        for node in data.get("nodes") or []:
+            properties = node.get("properties") or {}
+            source = properties.get("source")
+            if isinstance(source, str) and source and not Path(source).is_absolute() and (origin / source).is_file():
+                properties["source"] = str((origin / source).resolve())
+        spec = parse_figure(data)
+        folder = base / "build"
+        folder.mkdir(parents=True, exist_ok=True)
+        name = f"{stem}-{spec.id}"
+        written: list[Path] = []
+        if "yaml" in formats:
+
+            def beside(value: object) -> object:
+                # A file inside the folder is named from where the figure file is.
+                if isinstance(value, str) and Path(value).is_absolute() and Path(value).is_relative_to(base.resolve()):
+                    return os.path.relpath(value, folder)
+                return value
+
+            for key in ("style", "theme", "palette"):
+                if key in data["figure"]:
+                    data["figure"][key] = beside(data["figure"][key])
+            for node in data.get("nodes") or []:
+                properties = node.get("properties") or {}
+                if "source" in properties:
+                    properties["source"] = beside(properties["source"])
+            target = folder / f"{name}.yaml"
+            target.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+            written.append(target)
+        built = [item for item in formats if item != "yaml"]
+        if built:
+            result = build(spec, folder, stem=name, formats=tuple(built))
+            written += list(result.outputs.existing())
+        return written
 
     def text(self, document: dict[str, Any]) -> str:
         return dump_document(document)
@@ -403,7 +549,7 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> 
     changed = copy.deepcopy(document)
     block = _block_at(changed, action.get("at") or {})
     if not isinstance(block, dict) or "mechanism" not in block:
-        raise EditError("that part is not a mechanism any more: someone changed it meanwhile")
+        raise EditError("This object is no longer a mechanism. Someone else may have changed it.")
     options = {key: block.get(key) for key in OPTIONS}
     step = int(action.get("step") or 0)
     holding = action.get("holding")
@@ -439,6 +585,114 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> 
     return {"document": changed, "sheet": drawn, **said}
 
 
+def _figure_file(base: Path, value: str) -> Path:
+    """The figure file ``value`` names, in the deck's folder."""
+
+    from flexo.studio.figure_edit import EditError
+
+    path = (base / value).resolve()
+    figure = path.suffix.lower() in {".yaml", ".yml", ".json"}
+    if not figure or not path.is_file() or not path.is_relative_to(base.resolve()):
+        raise EditError(f"Can't find the figure file “{value}” in the deck's folder.")
+    return path
+
+
+def _restore(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+    """A figure file written as ``text`` -- as an edit made on its slide found it (undone)
+    or left it (done again) -- only while it is still ``expect``: a change made to the
+    file since, by hand or by someone else, is not lost."""
+
+    from flexo.studio.figure_edit import EditError
+
+    value = str(action.get("file") or "")
+    path = _figure_file(base, value)
+    if path.read_text(encoding="utf-8") != action.get("expect"):
+        raise EditError(f"“{value}” has changed since this edit, so it was left unchanged.")
+    path.write_text(str(action.get("text") or ""), encoding="utf-8")
+    return {"document": document, "file": value}
+
+
+def _figure_data(text: str, suffix: str) -> Any:
+    """A figure file's text as data (None if it does not read)."""
+
+    import json
+
+    import yaml
+
+    try:
+        return json.loads(text) if suffix.lower() == ".json" else yaml.safe_load(text)
+    except (ValueError, yaml.YAMLError):
+        return None
+
+
+def _structure_view(document: dict[str, Any], at: dict[str, Any], identifier: str, base: Path) -> Any:
+    """A structure's trace and turn on a slide, in the deck's look, as the slide draws it."""
+
+    from flexo.studio.figure_kind import view_of
+
+    return view_of(_slide_figure(document, at, base), identifier)
+
+
+def _slide_figure(document: dict[str, Any], at: dict[str, Any], base: Path) -> Any:
+    """The figure at ``at`` on a slide, in the deck's look, as the slide draws it."""
+
+    from dataclasses import replace
+
+    from flexo.studio.figure_edit import EditError
+
+    from flexo_talk.deck import made
+    from flexo_talk.document import _figure, make_deck
+
+    block = _block_at(document, at)
+    if not isinstance(block, dict) or "figure" not in block:
+        raise EditError("This object is no longer a figure. Someone else may have changed it.")
+    deck = make_deck(document.get("deck") or {}, base)
+    figure = made(_figure(base, block["figure"], "figure", None))
+    spec = getattr(figure, "spec", figure)
+    return replace(spec, style=deck.theme, palette=deck.palette_name, font=deck.figure_font or deck.font or spec.font)
+
+
+def _inline(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+    """The figure a slide takes from a figure file, written into the deck as it is, so it
+    is kept with the slide: the files it names (structures, pictures, a theme) named from
+    the deck's folder. The file is left as it was."""
+
+    import os
+
+    import yaml
+    from flexo.studio.figure_edit import EditError
+
+    changed = copy.deepcopy(document)
+    block = _block_at(changed, action.get("at") or {})
+    value = block.get("figure") if isinstance(block, dict) else None
+    if isinstance(value, dict):
+        return {"document": document}
+    if not isinstance(value, str) or not value or ".py:" in value:
+        raise EditError("Only a figure stored in a file can be moved into the deck.")
+    path = (base / value).resolve()
+    if not path.is_file() or not path.is_relative_to(base.resolve()):
+        raise EditError(f"Can't find the figure file “{value}” in the deck's folder.")
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))  # JSON reads as YAML too
+    if not isinstance(data, dict):
+        raise EditError(f"“{value}” isn't a figure.")
+
+    def rebased(name: object) -> object:
+        if not isinstance(name, str) or not name or Path(name).is_absolute():
+            return name
+        found = (path.parent / name).resolve()
+        return os.path.relpath(found, base.resolve()) if found.is_file() else name
+
+    for key in ("theme", "style", "palette"):
+        if isinstance(data.get("figure"), dict) and key in data["figure"]:
+            data["figure"][key] = rebased(data["figure"][key])
+    for node in data.get("nodes") or []:
+        properties = node.get("properties") if isinstance(node, dict) else None
+        if isinstance(properties, dict) and "source" in properties:
+            properties["source"] = rebased(properties["source"])
+    block["figure"] = data
+    return {"document": changed}
+
+
 def _written(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Steps as the document keeps them: a step's arrows left out when it has none."""
 
@@ -464,7 +718,7 @@ def _block_at(document: dict[str, Any], at: dict[str, Any]) -> Any:
         blocks = slide["columns"][int(region.split(".", 1)[1])] if column else slide[region]
         return blocks[int(at["index"])]
     except (KeyError, IndexError, TypeError, ValueError) as error:
-        raise EditError("that part of the slide is gone: someone changed it meanwhile") from error
+        raise EditError("This object no longer exists. Someone else may have changed the slide.") from error
 
 
 def _order(count: int, focus: int) -> list[int]:

@@ -34,9 +34,11 @@ def test_a_deck_id_cannot_write_outside_the_output_folder(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize(
     ("changes", "said"),
-    [({"width": 1e7}, r"width is 1e\+07"), ({"body_size": "big"}, "body_size is 'big'"),
-     ({"margin": float("inf")}, "margin is inf"), ({"header": "fancy"}, "one of rule, band"),
-     ({"numbers": "no"}, "true or false"), ({"margin": 300}, "leaves no room")],
+    [({"width": 1e7}, r"width must be between 72 and 4032, not 1e\+07\."),
+     ({"body_size": "big"}, "body_size must be a number from 1 to 400, not 'big'"),
+     ({"margin": float("inf")}, "margin must be a number from 0 to 2016, not inf"),
+     ({"header": "fancy"}, "one of rule, band"), ({"numbers": "no"}, "true or false, not 'no'"),
+     ({"margin": 300}, "leaves no room")],
 )
 def test_a_deck_style_says_what_is_wrong_with_it(changes: dict, said: str) -> None:
     with pytest.raises(ValueError, match=said):
@@ -47,10 +49,10 @@ def test_a_deck_style_says_what_is_wrong_with_it(changes: dict, said: str) -> No
     ("make", "said"),
     [(lambda s: s.gallery([]), "at least one picture"),
      (lambda s: s.text("x", align="sideways"), "one of start, middle, end"),
-     (lambda s: s.text("x", size="big"), "size is 'big'"),
+     (lambda s: s.text("x", size="big"), r"size must be a number, such as 20 \(points\), not 'big'"),
      (lambda s: s.stats("93%"), r"a \(value, label\) pair"),
-     (lambda s: s.bullets("a", numbered="no"), "numbered is 'no'"),
-     (lambda s: s.image("x.png", width="wide"), "width is 'wide'"),
+     (lambda s: s.bullets("a", numbered="no"), "numbered must be true or false, not 'no'"),
+     (lambda s: s.image("x.png", width="wide"), r"width must be a number, such as 300 \(points\), not 'wide'"),
      (lambda s: s.text("x", colour="#zzzzzz"), "hex digits"),
      (lambda s: s.table(["ab", "cd"]), "a list of rows")],
 )
@@ -66,9 +68,11 @@ def test_friendly_settings_are_taken() -> None:
 
 
 def test_a_slides_settings_are_checked() -> None:
-    for options, said in (({"split": "half"}, "split is 'half'"), ({"shade": 5}, "shade is 5"),
-                          ({"layout": "columns", "widths": [0, 0]}, "width is 0"),
-                          ({"background": "#zz"}, "hex digits"), ({"dark": "no"}, "dark is 'no'")):
+    for options, said in (({"split": "half"}, "split must be a number, such as 0.5 .*, not 'half'"),
+                          ({"shade": 5}, "shade must be between 0 and 1, not 5"),
+                          ({"layout": "columns", "widths": [0, 0]}, "column width must be between 0.01 and 100, not 0"),
+                          ({"background": "#zz"}, "hex digits"),
+                          ({"dark": "no"}, "dark must be true or false, not 'no'")):
         with pytest.raises(ValueError, match=said):
             Deck("v").slide("S", **options)
 
@@ -97,20 +101,20 @@ def test_words_too_long_for_any_slide_are_cut_and_said_quickly(tmp_path: Path) -
     start = time.monotonic()
     result = deck.build(tmp_path, formats=("svg",))
     assert time.monotonic() - start < 30
-    assert any("200,000 characters cut to 20,000" in line for line in result.diagnostics)
+    assert any("Text shortened from 200,000 to 20,000 characters" in line for line in result.diagnostics)
 
 
 @pytest.mark.parametrize(
     ("name", "text", "said"),
-    [("dup.yaml", "deck: {id: a}\ndeck: {id: b}\nslides: []\n", "'deck' is written twice"),
+    [("dup.yaml", "deck: {id: a}\ndeck: {id: b}\nslides: []\n", "duplicate key 'deck'"),
      ("tab.yaml", "deck:\n\tid: a\nslides: []\n", "a tab"),
      ("bad.json", '{"deck": {"id": "a"},, }', "line 1, column"),
      ("python.yaml", "deck: !!python/object/apply:os.system ['true']\nslides: []\n", "constructor"),
-     ("half.json", '{"deck": {"id": "\\ud800"}, "slides": []}', "broken character"),
+     ("half.json", '{"deck": {"id": "\\ud800"}, "slides": []}', "invalid character"),
      ("bomb.yaml", "a: &a [x,x,x,x,x,x,x,x,x,x]\nb: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a,*a]\n"
       "c: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b,*b]\nd: &d [*c,*c,*c,*c,*c,*c,*c,*c,*c,*c]\n"
       "e: &e [*d,*d,*d,*d,*d,*d,*d,*d,*d,*d]\nf: &f [*e,*e,*e,*e,*e,*e,*e,*e,*e,*e]\n"
-      "g: [*f,*f,*f,*f,*f,*f,*f,*f,*f,*f]\n", "more parts")],
+      "g: [*f,*f,*f,*f,*f,*f,*f,*f,*f,*f]\n", "more than 2,000,000 items")],
 )
 def test_a_document_file_that_cannot_be_read_says_why(tmp_path: Path, name: str, text: str, said: str) -> None:
     path = tmp_path / name
@@ -138,8 +142,12 @@ def test_a_document_says_where_a_setting_is_wrong(tmp_path: Path) -> None:
             deck_from_document(document, tmp_path).render()
         return str(caught.value)
 
-    assert said({"deck": {"style": {"width": "wide"}}, "slides": []}).startswith("deck.style.width: width is 'wide'")
-    assert said({"slides": [{"shade": "dark"}]}).startswith("slides[0].shade: shade is 'dark'")
+    assert said({"deck": {"style": {"width": "wide"}}, "slides": []}) == (
+        "deck.style.width: width must be a number from 72 to 4032, not 'wide'."
+    )
+    assert said({"slides": [{"shade": "dark"}]}) == (
+        "slides[0].shade: shade must be a number, such as 0.4 (how much a picture is darkened), not 'dark'."
+    )
     assert said({"slides": [{"footnotes": {"a": 1}}]}).startswith("slides[0].footnotes:")
     assert said({"slides": [{"body": [{"text": "x", "align": "sideways"}]}]}).startswith("slides[0].body[0] (text)")
     built = deck_from_document({"deck": {"footer": None, "id": None}, "slides": [{"title": "x"}]}, tmp_path)
@@ -149,28 +157,43 @@ def test_a_document_says_where_a_setting_is_wrong(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("document", "said"),
     [
-        ({"deck": {"palette": 123}}, "deck.palette: palette is 123"),
+        ({"deck": {"palette": 123}}, "deck.palette: palette must be a palette name or a list of #rrggbb colours, "
+         "not 123."),
         ({"deck": {"palette": "nosuch"}}, 'deck.palette: Unknown palette "nosuch"'),
-        ({"deck": {"font": 123}}, "deck.font: font is 123"),
-        ({"deck": {"look": ["band"]}}, "deck.look: look is ['band']"),
-        ({"deck": {"sketch": "very"}}, "deck.sketch: sketch is 'very'"),
-        ({"deck": {"conventions": "straight"}}, "deck.conventions: conventions is 'straight'"),
+        ({"deck": {"font": 123}}, "deck.font: font must be a font family name, such as IBM Plex Sans, not 123."),
+        ({"deck": {"look": ["band"]}}, "deck.look: look must be one of classic, band, editorial, keynote, margin, "
+         "not ['band']."),
+        ({"deck": {"sketch": "very"}}, "deck.sketch: sketch must be true (for a hand-drawn look) or a mapping of "
+         "roughness, passes, fill, paper and seed, not 'very'."),
+        ({"deck": {"conventions": "straight"}}, "deck.conventions: conventions must be a mapping of flexo "
+         "conventions, such as {lines: straight}, not 'straight'."),
         ({"deck": {"conventions": {"nosuch": 1}}}, "deck.conventions: unknown convention nosuch"),
-        ({"deck": {"background": 5}}, "deck.background: background is 5"),
-        ({"deck": {"background": "#zzzzzz"}}, "deck.background: background is '#zzzzzz'"),
-        ({"deck": {"footer": ["a"]}}, "deck.footer: footer is ['a']"),
-        ({"deck": {"style": {"title_role": "accent"}}}, "deck.style.title_role: title_role is 'accent'"),
-        ({"slides": [{"title": True}]}, "slides[0].title: title is words, not yes/no (true)"),
-        ({"slides": [{"layout": "two-columns", "split": "half"}]}, "slides[0].split: split is 'half'"),
-        ({"slides": [{"background": 5}]}, "slides[0].background: background is 5"),
-        ({"slides": [{"footnotes": [True]}]}, "slides[0].footnotes: footnotes are words"),
-        ({"slides": [{"body": [{"text": "a", "colour": "red"}]}]}, "(text): colour is 'red'"),
-        ({"slides": [{"body": [{"text": True}]}]}, "(text): text is words"),
-        ({"slides": [{"body": [{"table": [[{"a": 1}, [1, 2]]]}]}]}, "(table): a table's cell is {'a': 1}"),
-        ({"slides": [{"body": [{"table": [["a"]], "align": "zzz"}]}]}, "(table): align is 'zzz'"),
-        ({"slides": [{"body": [{"stats": [{"value": 1, "label": ["a"]}]}]}]}, "(stats): a stat's label is ['a']"),
-        ({"slides": [{"body": [{"stats": [[1, {"a": 1}]]}]}]}, "(stats): a stat's label is {'a': 1}"),
-        ({"slides": [{"body": [{"callout": "c", "colour": "accent12"}]}]}, "(callout): a callout's colour"),
+        ({"deck": {"background": 5}}, "deck.background: background must be true (the theme's page colour), "
+         "false, a #rrggbb colour or a picture file, not 5."),
+        ({"deck": {"background": "#zzzzzz"}}, "deck.background: background must be a colour written as #rgb or "
+         "#rrggbb in hex digits, not '#zzzzzz'."),
+        ({"deck": {"footer": ["a"]}}, "deck.footer: footer must be text, not ['a']."),
+        ({"deck": {"style": {"title_role": "accent"}}}, "deck.style.title_role: title_role must be a palette role "
+         "(such as ink, muted-ink or tone-1-stroke), not 'accent'."),
+        ({"slides": [{"title": True}]}, "slides[0].title: title must be text, not yes/no (true)."),
+        ({"slides": [{"layout": "two-columns", "split": "half"}]}, "slides[0].split: split must be a number, "
+         "such as 0.5 (the left column's share of the width), not 'half'."),
+        ({"slides": [{"background": 5}]}, "slides[0].background: background must be a #rrggbb colour or a "
+         "picture file, not 5."),
+        ({"slides": [{"footnotes": [True]}]}, "slides[0].footnotes: footnotes must be text or a list of text."),
+        ({"slides": [{"body": [{"text": "a", "colour": "red"}]}]}, "(text): colour must be accent (accent2, …), "
+         "muted, ink or a #rrggbb colour, not 'red'."),
+        ({"slides": [{"body": [{"text": True}]}]}, "(text): A text block must contain text, not yes/no (true)."),
+        ({"slides": [{"body": [{"table": [[{"a": 1}, [1, 2]]]}]}]}, "(table): A table cell must be text, "
+         "not {'a': 1}."),
+        ({"slides": [{"body": [{"table": [["a"]], "align": "zzz"}]}]}, "(table): align must be a letter for each "
+         "column (l, c or r) or a list of start, middle and end, not 'zzz'."),
+        ({"slides": [{"body": [{"stats": [{"value": 1, "label": ["a"]}]}]}]}, "(stats): A stat's label must be "
+         "text, not ['a']."),
+        ({"slides": [{"body": [{"stats": [[1, {"a": 1}]]}]}]}, "(stats): A stat's label must be text, "
+         "not {'a': 1}."),
+        ({"slides": [{"body": [{"callout": "c", "colour": "accent12"}]}]}, "(callout): A callout's colour must be "
+         "an accent (accent, accent2, …), not 'accent12'."),
     ],
 )
 def test_a_wrong_value_in_a_document_is_said_at_its_key_not_drawn(tmp_path: Path, document: dict, said: str) -> None:
@@ -184,7 +207,7 @@ def test_a_caption_is_words_not_what_python_writes_for_a_list(tmp_path: Path) ->
 
     Image.new("RGB", (8, 8)).save(tmp_path / "p.png")
     gallery = {"gallery": [{"picture": "p.png", "caption": ["a"]}]}
-    with pytest.raises(DeckDocumentError, match=r"\(gallery\): a caption is \['a'\]"):
+    with pytest.raises(DeckDocumentError, match=r"\(gallery\): A caption must be text, not \['a'\]"):
         deck_from_document({"deck": {}, "slides": [{"body": [gallery]}]}, tmp_path)
 
 
@@ -280,7 +303,7 @@ def test_light_words_over_a_shaded_picture_and_a_word_when_they_will_not_read(tm
     assert slide.diagnostics == [] and "#f7f5f0" in slide.svg  # light words, and they read
     faint = Deck("p")
     faint.title("Over a photograph", background=str(bright), shade=0.2)
-    assert any("a shade of" in line for line in faint.render()[0].diagnostics)
+    assert any("Darken the picture by" in line for line in faint.render()[0].diagnostics)
 
 
 def test_a_wide_table_wraps_its_cells_to_stay_on_the_slide(tmp_path: Path) -> None:
@@ -296,7 +319,7 @@ def test_a_wide_table_wraps_its_cells_to_stay_on_the_slide(tmp_path: Path) -> No
     assert table.heights[1] > table.heights[0] * 1.5  # the long cell wrapped
     assert first.diagnostics == []
     assert sum(second.tables[0].widths) <= deck.style.width - 2 * deck.style.margin + 0.5
-    assert any("too wide for its place" in line for line in second.diagnostics)
+    assert any("is too wide to fit, even at the smallest size" in line for line in second.diagnostics)
 
 
 def test_a_long_code_line_is_set_smaller_then_wrapped_and_said() -> None:
@@ -307,7 +330,7 @@ def test_a_long_code_line_is_set_smaller_then_wrapped_and_said() -> None:
     slide = deck.slide("Code")
     slide.code(f"def f():\n    {long}\n    return result")
     (rendered,) = deck.render()
-    assert any("too long for the slide, wrapped" in line for line in rendered.diagnostics)
+    assert any("of code wrapped to fit the slide" in line for line in rendered.diagnostics)
     canvas = _Canvas(deck, slide)
     _, lines = _code_lines(canvas, slide.body.blocks[0], 400.0)
     assert len(lines) > 3 and all(line.startswith("        ") for line, _ in lines[2:-1])
@@ -329,7 +352,7 @@ def test_a_gallery_fits_the_height_of_its_place(tmp_path: Path) -> None:
     placed = re.findall(r'<image[^>]* y="([\d.]+)"[^>]* height="([\d.]+)"', slide.svg)
     bottoms = [float(y) + float(h) for y, h in placed]
     assert bottoms and max(bottoms) <= deck.style.height - deck.style.margin + 1
-    assert not any("words do not fit" in line for line in slide.diagnostics)
+    assert not any("Text does not fit" in line for line in slide.diagnostics)
 
 
 def test_a_phone_photograph_stands_upright_and_cmyk_reads(tmp_path: Path) -> None:
@@ -511,9 +534,9 @@ def test_two_revealed_lists_reveal_one_after_the_other_as_in_powerpoint() -> Non
 def test_small_things_are_left_out_or_said() -> None:
     import re
 
-    with pytest.raises(ValueError, match='unknown theme "night"'):
+    with pytest.raises(ValueError, match="Unknown theme \u201cnight\u201d"):
         Deck("t", theme="night")
-    with pytest.raises(ValueError, match="theme is 123"):
+    with pytest.raises(ValueError, match=r"theme must name a theme .* not 123"):
         Deck("t", theme=123)
     deck = Deck("s")
     slide = deck.slide("   ")
@@ -545,7 +568,7 @@ def test_a_list_far_longer_than_any_slide_is_cut_and_said_quickly() -> None:
     start = time.monotonic()
     (slide,) = deck.render()
     assert time.monotonic() - start < 30
-    assert any("a list of 5,000 items cut" in line for line in slide.diagnostics)
+    assert any("List shortened from 5,000 to 300 items" in line for line in slide.diagnostics)
 
 
 def test_convert_names_files_beside_the_document_and_makes_its_folder(tmp_path: Path) -> None:
@@ -624,7 +647,9 @@ def test_a_plot_that_never_returns_is_stopped_on_the_command_line(
     start = time.monotonic()
     assert main(["build", str(tmp_path / "deck.yaml"), "-o", str(tmp_path / "out"), "--formats", "svg"]) == 1
     assert time.monotonic() - start < 30
-    assert "slides[0].body[0] (plot): plots.py:loops took longer than 1 s, and was stopped" in capsys.readouterr().err
+    assert "slides[0].body[0] (plot): plots.py:loops took longer than 1 second and was stopped." in (
+        capsys.readouterr().err
+    )
     (tmp_path / "plots.py").write_text("def loops():\n    return None\n")
     assert main(["build", str(tmp_path / "deck.yaml"), "-o", str(tmp_path / "out"), "--formats", "svg"]) == 1
     assert "plots.py:loops did not return a matplotlib figure" in capsys.readouterr().err
@@ -785,8 +810,8 @@ def test_a_plot_of_very_many_marks_draws_them_as_one_picture_in_the_slides_paint
     result = deck.build(tmp_path, formats=("png", "pdf", "pptx", "svg"))
     assert time.monotonic() - start < 15  # 100,000 shapes took half a minute
     assert [line for line in result.diagnostics if "rasterized=True" in line] == [
-        "slide1: the plot's 100,000 marks are drawn as a picture, not as shapes -- "
-        "plot them with rasterized=True to choose so yourself"
+        "slide1: The 100,000 marks in the plot are drawn as an image, not as shapes. "
+        "To choose this yourself, plot them with rasterized=True."
     ]
     svg = result.svgs[0].read_text()
     assert len(svg) < 2_000_000 and svg.count("<path") < 200
@@ -858,10 +883,10 @@ def test_a_plots_words_longer_than_it_are_fitted_to_it_and_said() -> None:
     said: list[tuple[str, str]] = []
     svg = plot_svg(figure, 300.0, 200.0, "Figtree", "w", said=said)
     assert [line for _, line in said] == [
-        "the plot's words “a score with a very long axis label that keeps going and go…” are too long "
-        "for it, wrapped onto more lines -- shorten them",
-        "the plot's words “https://example.org/a/very/long/path/to/the/data/that/was/p…” are too long "
-        "for it, set smaller and cut short -- shorten them",
+        "Text “a score with a very long axis label that keeps going and go…” in the plot is too long, "
+        "so it was wrapped. Try shortening it.",
+        "Text “https://example.org/a/very/long/path/to/the/data/that/was/p…” in the plot is too long, "
+        "so it was reduced in size and truncated. Try shortening it.",
     ]
     # Drawn on a page a hundred points larger all round, nothing is outside the plot's own box.
     wider = re.sub(r'width="[^"]+" height="[^"]+" viewBox="[^"]+"',

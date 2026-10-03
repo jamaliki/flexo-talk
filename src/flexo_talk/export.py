@@ -44,7 +44,8 @@ def build_deck(
 ) -> DeckBuild:
     unknown = set(formats) - set(FORMATS)
     if unknown:
-        raise ValueError(f"unknown format(s) {', '.join(sorted(unknown))}; use {', '.join(FORMATS)}")
+        raise ValueError(f"Unknown {'format' if len(unknown) == 1 else 'formats'} {', '.join(sorted(unknown))}. "
+                         f"Available formats: {', '.join(FORMATS)}.")
     directory.mkdir(parents=True, exist_ok=True)
     rendered = deck.render()
     name = file_stem(deck.id)

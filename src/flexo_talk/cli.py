@@ -25,7 +25,7 @@ def load_deck(target: str, theme: str | None = None) -> Deck:
     if not source.exists():
         raise SystemExit(f"{path}: no such file")
     if source.is_dir():
-        raise SystemExit(f"{path} is a folder: name a deck.py or a deck document in it")
+        raise SystemExit(f"{path} is a folder. Name a deck.py file or a deck document inside it.")
     if source.suffix.lower() in {".yaml", ".yml", ".json"}:
         from flexo_talk.document import DeckDocumentError, read_deck
 
@@ -35,7 +35,7 @@ def load_deck(target: str, theme: str | None = None) -> Deck:
             raise SystemExit(f"{path}: {error}") from error
     spec = importlib.util.spec_from_file_location(source.stem, source)
     if spec is None or spec.loader is None:
-        raise SystemExit(f"cannot read {path}")
+        raise SystemExit(f"Cannot read {path}.")
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(source.parent))
     spec.loader.exec_module(module)
@@ -44,7 +44,7 @@ def load_deck(target: str, theme: str | None = None) -> Deck:
         return found
     if callable(found):
         return found(theme) if theme else found()
-    raise SystemExit(f"{path} has no function {name or 'talk'!r} and no deck")
+    raise SystemExit(f"{path} has no function {name or 'talk'!r} and no deck.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         if os.environ.get("FLEXO_TRACEBACK"):
             raise
         print(f"flexo-talk: {_said(error, arguments.deck)}", file=sys.stderr)
-        print("(FLEXO_TRACEBACK=1 shows the whole traceback)", file=sys.stderr)
+        print("(Set FLEXO_TRACEBACK=1 to show the full traceback.)", file=sys.stderr)
         return 1
     print(result.summary())
     return 0
@@ -140,7 +140,7 @@ def _convert(arguments: argparse.Namespace) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(svg, encoding="utf-8")
         saved.append(path)
-        print(f"{where}: a matplotlib plot, saved as {path.name} and placed as an image")
+        print(f"{where}: Saved the matplotlib plot as {path.name} and added it as an image.")
         return {"image": str(path)}  # named beside the document, as every file is, below
 
     document = deck_document(deck, plots=plot)
