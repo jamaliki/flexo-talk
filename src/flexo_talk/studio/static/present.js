@@ -270,7 +270,18 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
     root.onclick = () => press("click");
     root.append(state.ended ? el("div", "ss-end", "End of slide show — click to exit") : frame(slide, state.step));
     if (!paired && goto) root.append(goto);
-    if (hint) root.append(el("div", "ss-hint", hint));
+    if (hint) {
+      // In the band below the slide if there is room for it there, else well over the
+      // slide -- never across its edge.
+      const said = el("div", "ss-hint", hint);
+      root.append(said);
+      requestAnimationFrame(() => {
+        const edge = root.querySelector(".ss-slide")?.getBoundingClientRect();
+        if (!edge) return;
+        const band = root.getBoundingClientRect().bottom - edge.bottom, tall = said.offsetHeight;
+        said.style.bottom = `${band >= tall + 8 ? (band - tall) / 2 : band + 24}px`;
+      });
+    }
     return;
   }
   root.onclick = null;
@@ -297,8 +308,8 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
         el("div", "ss-label", "Notes"),
         el("div", notes ? "ss-notes" : "ss-notes none", notes || "No notes"))),
     // The keys, each with what it does, as a Mac's presenter display lists them.
-    // ("→|Space": either key; "4 ↩": one after the other.)
-    el("div", "ss-keys", ...[["→|Space", "Next"], ["←", "Previous"], ["4 ↩", "Go to Slide 4"], ["B", "Black Screen"],
+    // ("→|Space": either key; "0–9 ↩": a slide's number, then Return.)
+    el("div", "ss-keys", ...[["→|Space", "Next"], ["←", "Previous"], ["0–9 ↩", "Go to a Slide"], ["B", "Black Screen"],
       ["W", "White Screen"], ["X", paired ? "Swap Displays" : "Show the Slides"], ["Esc", "End"]].map(([keys, what]) =>
       el("span", "ss-key", ...keys.split("|").flatMap((either, n) => [n ? el("i", "", "or") : null, ...either.split(" ").map((key) => el("kbd", "", key))]), el("span", "", what)))),
     blankWords ? el("div", "ss-status", blankWords) : null,
@@ -389,7 +400,8 @@ function dress() {
 .ss-over { width: 100%; height: 100%; display: grid; place-items: center; background: #000; outline: 1px solid #2c2c2c; color: #8c8c8c; font-size: 16px; }
 .ss-notes { overflow: auto; font-size: clamp(18px, 1.55vw, 32px); line-height: 1.45; margin-top: 4px; white-space: pre-wrap; color: #f4f4f4; user-select: text; -webkit-user-select: text; }
 .ss-notes.none { color: #777; }
-.ss-keys { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13px; color: #9a9a9a; }
+/* In even columns, so a narrow screen wraps them into a table, not one key left alone. */
+.ss-keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 22px; font-size: 13px; color: #9a9a9a; }
 .ss-key { display: inline-flex; align-items: center; gap: 4px; }
 .ss-key kbd { font: 12px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #ddd; padding: 3px 6px; border-radius: 5px; background: #2a2a2a; border: 1px solid #3a3a3a; }
 .ss-key span { margin-left: 3px; }
