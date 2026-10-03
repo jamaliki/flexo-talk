@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cache
+from itertools import pairwise
 from xml.sax.saxutils import escape
 
 from flexo.drawing import Drawing, Group, Image, Paint, Segment, Shape, Text
@@ -485,8 +486,9 @@ def linking(slide):
         _LINKS.reset(token)
 
 
-def _run_xml(run, *, size: float | None = None, baseline: int | None = None) -> str:
-    """One run: its face, size, style, colour, any raise, and any link."""
+def _run_xml(run, *, size: float | None = None, baseline: int | None = None, spacing: float = 0.0) -> str:
+    """One run: its face, size, style, colour, any raise, and any link; ``spacing`` (points)
+    is added after each of its characters."""
 
     size = size if size is not None else run.size
     face = escape(_family_name(run), {'"': "&quot;"})
@@ -496,6 +498,8 @@ def _run_xml(run, *, size: float | None = None, baseline: int | None = None) -> 
     bold = ' b="1"' if _bold(run) else ""
     italic = ' i="1"' if run.italic else ""
     raise_ = f' baseline="{baseline}"' if baseline else ""
+    if spacing:
+        raise_ += f' spc="{max(-400000, min(400000, round(spacing * 100)))}"'
     link = ""
     relate = _LINKS.get()
     if getattr(run, "link", "") and relate is not None:
@@ -675,7 +679,14 @@ def _flat_text(text: Text, placement: Placement, ids: _Ids) -> etree._Element | 
     return _text_box(text, placement, ids, name=text.id)
 
 
-def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) -> etree._Element | None:
+def _text_box(
+    text: Text, placement: Placement, ids: _Ids, *, name: str | None, breaks: bool = False, steps: bool = False
+) -> etree._Element | None:
+    """Words as one text box, each line where Flexo set it: a paragraph a line, or with
+    ``breaks`` one paragraph broken where Flexo broke it (a title is one paragraph). With
+    ``steps``, a run set further on than the one before it ends (past a mark or a script
+    drawn apart from the words) is spaced out to where it was set."""
+
     lines = text.lines
     spacing = text.line_height or text.size * 1.2
     left = min(line.left for line in lines)
@@ -685,27 +696,32 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
     top = first - ascent(lines[0].runs[0].face if lines[0].runs else None) * spacing
     height = spacing * len(lines)
     align = {"start": "l", "middle": "ctr", "end": "r"}[text.anchor]
-    paragraphs = []
+    written = []
     for line in lines:
-        runs = []
         # A right-to-left line is written as it is read; the slide program orders it.
         rtl = bool(line.logical) and _rtl_text("".join(run.text for run in line.logical))
-        for run in line.logical or line.runs:
-            if run.shift:
-                # A raised or lowered run is drawn smaller than its size: write
-                # it larger so it is drawn at its own, raised as a percentage.
-                written = run.size / SCRIPT_SCALE
-                runs.append(
-                    _run_xml(run, size=written, baseline=round(run.shift / written * 100000))
-                )
-            else:
-                runs.append(_run_xml(run))
-        paragraphs.append(
+        order = line.logical or line.runs
+        gaps = [0.0] * len(order)
+        if steps and not line.logical:
+            for index, (run, after) in enumerate(pairwise(order)):
+                gap = after.x - (run.x + run.width)
+                gaps[index] = gap * placement.scale if gap > 0.01 else 0.0
+        written.append((rtl, "".join(_written_run(run, gap) for run, gap in zip(order, gaps, strict=True))))
+
+    def paragraph(rtl: bool, runs: str) -> str:
+        return (
             f'<a:p><a:pPr algn="{align}"{' rtl="1"' if rtl else ""}>'
             f'<a:lnSpc><a:spcPts val="{round(spacing * placement.scale * 100)}"/></a:lnSpc>'
             f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
-            f"{''.join(runs)}</a:p>"
+            f"{runs}</a:p>"
         )
+
+    if breaks and len({rtl for rtl, _ in written}) == 1:
+        # Exactly spaced, a broken line sits where the next paragraph's would.
+        br = f'<a:br><a:rPr lang="en-GB" sz="{round(text.size * 100)}" dirty="0"/></a:br>'
+        paragraphs = [paragraph(written[0][0], br.join(runs for _, runs in written))]
+    else:
+        paragraphs = [paragraph(rtl, runs) for rtl, runs in written]
     # Room to spare on the side the words are not set against, so they start (or end)
     # where Flexo set them.
     spare = {"start": 0.0, "middle": slack, "end": 2 * slack}[text.anchor]
@@ -723,6 +739,28 @@ def _text_box(text: Text, placement: Placement, ids: _Ids, *, name: str | None) 
         f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
         f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{body}</p:txBody></p:sp>"
     )
+
+
+def _written_run(run, spacing: float = 0.0) -> str:
+    """A run of a text box, raised or lowered as set, and ``spacing`` (points) more after
+    its last character than its own advance."""
+
+    options = {}
+    if run.shift:
+        # A raised or lowered run is drawn smaller than its size: write
+        # it larger so it is drawn at its own, raised as a percentage.
+        written = run.size / SCRIPT_SCALE
+        options = {"size": written, "baseline": round(run.shift / written * 100000)}
+    if not spacing:
+        return _run_xml(run, **options)
+    import unicodedata
+
+    # Spacing is added after every character of a run: only the last (with its marks) takes it.
+    cut = len(run.text) - 1
+    while cut > 0 and unicodedata.combining(run.text[cut]):
+        cut -= 1
+    head = _run_xml(replace(run, text=run.text[:cut]), **options) if cut > 0 else ""
+    return head + _run_xml(replace(run, text=run.text[cut:]), spacing=spacing, **options)
 
 
 def _ink_of(run, palette, ink: str) -> str:
@@ -777,9 +815,12 @@ def _room_for(run, typography, face, size: float, weight: int) -> str:
     gid = font.get_nominal_glyph(ord(" ")) or 0
     space = font.get_glyph_h_advance(gid) / font.scale[0] * size
     spacing = max(-400000, min(400000, round((width - space) * 100)))
-    name = escape(_family_name(_ListRun(" ", size, weight, False, face, "#000000")), {'"': "&quot;"})
+    room = _ListRun(" ", size, weight, False, face, "#000000")
+    name = escape(_family_name(room), {'"': "&quot;"})
+    # In the weight its width was measured at: a bold space is narrower than a regular one.
+    bold = ' b="1"' if _bold(room) else ""
     return (
-        f'<a:r><a:rPr lang="en-GB" sz="{round(size * 100)}" spc="{spacing}" dirty="0">'
+        f'<a:r><a:rPr lang="en-GB" sz="{round(size * 100)}"{bold} spc="{spacing}" dirty="0">'
         f'<a:latin typeface="{name}"/><a:ea typeface="{name}"/><a:cs typeface="{name}"/>'
         f"</a:rPr><a:t> </a:t></a:r>"
     )
@@ -997,8 +1038,6 @@ def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, p
     PowerPoint's own -- its equations editable in its equation editor -- with the drawing
     of it as the fallback for other slide programs. How many were written."""
 
-    from flexo.text import font_stack
-
     from flexo_talk.omml import expressible, omml
 
     equations: dict[str, Group] = {}
@@ -1042,36 +1081,7 @@ def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, p
                 f'<a:endParaRPr lang="en-GB" sz="{round(size * 100)}" dirty="0"/></a:p></p:txBody></p:sp>'
             )
         elif name in passages:
-            words = passages[name]
-            typography = deck.typography(words.size)
-            if words.family:
-                typography = typography.with_family(words.family)
-            bold = (words.weight or 400) >= 600
-            stack = font_stack(typography)
-            ink = words.fill
-            lines = "".join(
-                f'<a:p><a:pPr algn="{ {"start": "l", "middle": "ctr", "end": "r"}.get(words.align, "l") }">'
-                f'<a:lnSpc><a:spcPts val="{round(words.line_height * 100)}"/></a:lnSpc>'
-                f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
-                f"{_runs_xml(line, typography, stack, words.size, palette, ink, native=True, bold=bold)}"
-                f'<a:endParaRPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:p>'
-                for line in words.lines
-            )
-            left = {"start": words.x, "middle": words.x - words.width / 2.0, "end": words.x - words.width}.get(
-                words.align, words.x)
-            top = words.baseline - baseline_down(stack.face(400, False), words.line_height,
-                                                 words.size * typography.line_height)
-            height = words.line_height * len(words.lines)
-            choice = etree.fromstring(
-                f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(name)}\"/>"
-                f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
-                f'<p:spPr><a:xfrm><a:off x="{round(left * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
-                f'<a:ext cx="{round((words.width + 0.5) * EMU_PER_POINT)}" '
-                f'cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
-                f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
-                f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
-                f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{lines}</p:txBody></p:sp>"
-            )
+            choice = _passage(passages[name], deck, palette, ids, native=True)
         else:
             continue
         # The wrapper goes in first, and the drawing moves into it within the slide: a
@@ -1081,6 +1091,57 @@ def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, p
         wrapper[-1].append(drawn)
         count += 1
     return count
+
+
+def _passage(words, deck, palette, ids: _Ids, *, native: bool, breaks: bool = False) -> etree._Element:
+    """Words with maths in them (a ``WordsLayout``) as one text box where they were set:
+    the maths PowerPoint's own equations (``native``), or room for the drawn formulas.
+    With ``breaks``, one paragraph broken where Flexo broke it."""
+
+    from flexo.text import font_stack
+
+    typography = deck.typography(words.size)
+    if words.family:
+        typography = typography.with_family(words.family)
+    bold = (words.weight or 400) >= 600
+    stack = font_stack(typography)
+    plain = words.size * typography.line_height
+    # A line opened for a tall formula is set lower by some slide programs than by others: a
+    # single line leaving room for a drawn formula keeps its words' own spacing.
+    spacing = plain if not native and len(words.lines) == 1 else words.line_height
+    lines = [
+        _runs_xml(line, typography, stack, words.size, palette, words.fill, native=native, bold=bold)
+        # Room for a formula ending a line is a space there, which a centred or right-aligned
+        # line leaves out: a zero-width word after it keeps it in.
+        + (_run_xml(_ListRun("\u200b", words.size, 400, False, stack.face(400, False), words.fill))
+           if not native and line and line[-1].math else "")
+        for line in words.lines
+    ]
+    start = (
+        f'<a:p><a:pPr algn="{ {"start": "l", "middle": "ctr", "end": "r"}.get(words.align, "l") }">'
+        f'<a:lnSpc><a:spcPts val="{round(spacing * 100)}"/></a:lnSpc>'
+        f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
+    )
+    end = f'<a:endParaRPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:p>'
+    if breaks:
+        br = f'<a:br><a:rPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:br>'
+        paragraphs = start + br.join(lines) + end
+    else:
+        paragraphs = "".join(start + line + end for line in lines)
+    left = {"start": words.x, "middle": words.x - words.width / 2.0, "end": words.x - words.width}.get(
+        words.align, words.x)
+    top = words.baseline - baseline_down(stack.face(400, False), spacing, plain)
+    height = spacing * len(words.lines)
+    return etree.fromstring(
+        f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(words.id, {'"': '&quot;'})}\"/>"
+        f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
+        f'<p:spPr><a:xfrm><a:off x="{round(left * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
+        f'<a:ext cx="{round((words.width + 0.5) * EMU_PER_POINT)}" '
+        f'cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+        f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
+        f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody></p:sp>"
+    )
 
 
 def _first_fill(group: Group) -> str | None:
@@ -1128,6 +1189,157 @@ def add_reveals(slide_element: etree._Element, reveals: list[tuple[int, list[tup
     )
     # <p:timing> follows <p:clrMapOvr> (and <p:transition>) in a slide.
     slide_element.append(timing)
+
+
+# -- placeholders ----------------------------------------------------------------------
+
+
+PLACEHOLDER_KINDS = {
+    "title": '<p:ph type="title"/>',
+    "ctrTitle": '<p:ph type="ctrTitle"/>',
+    "subTitle": '<p:ph type="subTitle" idx="1"/>',
+    "body": '<p:ph type="body" idx="1"/>',
+    "obj": '<p:ph idx="1"/>',
+}
+"""The placeholders a slide's headings fill, as the default template's layouts have them:
+a title (a title slide's centred one), a subtitle, and the text of a section or content
+layout."""
+
+
+def placeholder(shape: etree._Element, kind: str) -> etree._Element:
+    """A text box (``_text_box``'s, ``_passage``'s) made the slide's placeholder of ``kind``
+    (``PLACEHOLDER_KINDS``) -- what PowerPoint's outline, navigation and accessibility checker,
+    and a screen reader, take a slide's title from -- looking just as it did.
+
+    A placeholder takes what its own words do not say from its layout and master: a
+    section title's capitals and bold, a subtitle's bullet and indent. The box says
+    everything a text box takes for granted, so none of it shows."""
+
+    nv = shape.find(f"{{{_P}}}nvSpPr")
+    locks = nv.find(f"{{{_P}}}cNvSpPr")
+    locks.attrib.pop("txBox", None)
+    etree.SubElement(locks, f"{{{_A}}}spLocks").set("noGrp", "1")
+    nv.find(f"{{{_P}}}nvPr").insert(0, etree.fromstring(PLACEHOLDER_KINDS[kind].replace("<p:ph ", f"<p:ph {_NS} ")))
+    body = shape.find(f"{{{_P}}}txBody")
+    plain = etree.fromstring(
+        f'<a:lstStyle {_NS}><a:lvl1pPr marL="0" indent="0"><a:buNone/>'
+        f'<a:defRPr b="0" i="0" cap="none" spc="0" baseline="0"/>'
+        f"</a:lvl1pPr></a:lstStyle>"
+    )
+    body.replace(body.find(f"{{{_A}}}lstStyle"), plain)
+    later = {f"{{{_A}}}{tag}" for tag in ("tabLst", "defRPr", "extLst")}
+    for properties in body.iter(f"{{{_A}}}pPr"):
+        properties.set("marL", "0")
+        properties.set("indent", "0")
+        mark = etree.Element(f"{{{_A}}}buNone")
+        follower = next((child for child in properties if child.tag in later), None)
+        if follower is None:
+            properties.append(mark)
+        else:
+            follower.addprevious(mark)
+    for properties in body.iterfind(f".//{{{_A}}}r/{{{_A}}}rPr"):
+        # Said on each run as well, for slide programs that read no list style.
+        for name, value in (("b", "0"), ("i", "0"), ("cap", "none")):
+            if properties.get(name) is None:
+                properties.set(name, value)
+    return shape
+
+
+def add_heading(
+    tree: etree._Element,
+    heading: Text | Group,
+    kind: str,
+    *,
+    words=None,
+    formulas: list | None = None,
+    deck=None,
+    palette=None,
+    editable: bool = False,
+    span: tuple[float, float] | None = None,
+) -> None:
+    """A slide's heading -- its title, its subtitle -- appended to its shape tree as the
+    slide's placeholder of ``kind`` (``PLACEHOLDER_KINDS``), where Flexo drew it and as it drew it.
+
+    A ``Text`` is written as its text box was; a run that steps back over the words (an
+    accent's mark, the second of a stacked pair of scripts) is drawn on its own, as it was.
+    Words with maths in them (a ``Group``, with its ``words``, a ``WordsLayout``) are words
+    leaving room for the drawn ``formulas``, and with ``editable`` (when Office Math can
+    show them) PowerPoint's own equations in the words, with the former as the fallback
+    for other slide programs (see ``alternate``).
+
+    Some slide programs wrap a placeholder's words at its box, however it says not to:
+    the box reaches across ``span`` (the slide's left and right margins, in points) on
+    the side its words are not set against, so words a little wider there stay on one line."""
+
+    existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
+    ids = _Ids(max(existing, default=1))
+
+    def made(shape: etree._Element) -> etree._Element:
+        return _widened(placeholder(shape, kind), span) if span else placeholder(shape, kind)
+
+    if isinstance(heading, Text):
+        flowing, apart = _apart(heading)
+        tree.append(made(_text_box(flowing, Placement(), ids, name=heading.id, breaks=True, steps=bool(apart))))
+        if apart and (marks := _flat_text(apart, Placement(), ids)) is not None:
+            tree.append(marks)
+        return
+    drawn = [made(_passage(words, deck, palette, ids, native=False, breaks=True))]
+    if formulas and (shapes := _group(Group(None, list(formulas)), Placement(), ids)) is not None:
+        drawn.append(shapes)
+    if not (editable and _expressible(run for line in words.lines for run in line)):
+        tree.extend(drawn)
+        return
+    wrapper = alternate(made(_passage(words, deck, palette, ids, native=True, breaks=True)), None)
+    wrapper[-1].extend(drawn)
+    tree.append(wrapper)
+
+
+def _apart(text: Text) -> tuple[Text, Text | None]:
+    """``text`` as words that run on, and the runs that step back over them (an accent's
+    mark, the wider of a stacked pair of scripts), to be drawn apart, each where it was
+    set -- one text box cannot step back."""
+
+    if text.simple:
+        return text, None
+    lines, apart = [], []
+    for line in text.lines:
+        if line.logical:
+            # Read right to left, ordered by the slide program: kept whole.
+            lines.append(line)
+            continue
+        kept: list = []
+        for run in line.runs:
+            if kept and run.x < kept[-1].x + kept[-1].width - 0.01:
+                apart.append(type(line)(line.baseline, (run,)))
+            else:
+                kept.append(run)
+        lines.append(type(line)(line.baseline, tuple(kept)))
+    flowing = replace(text, lines=tuple(lines), simple=True)
+    if not apart:
+        return flowing, None
+    return flowing, replace(text, id=f"{text.id}.marks", lines=tuple(apart), simple=False)
+
+
+def _widened(shape: etree._Element, span: tuple[float, float]) -> etree._Element:
+    """``shape``'s box reaching to ``span`` (points) on the side its words are not set against."""
+
+    off = shape.find(f"{{{_P}}}spPr/{{{_A}}}xfrm/{{{_A}}}off")
+    ext = shape.find(f"{{{_P}}}spPr/{{{_A}}}xfrm/{{{_A}}}ext")
+    left = int(off.get("x"))
+    right = left + int(ext.get("cx"))
+    low, high = (round(edge * EMU_PER_POINT) for edge in span)
+    align = shape.find(f".//{{{_A}}}p/{{{_A}}}pPr").get("algn", "l")
+    if align == "l":
+        right = max(right, high)
+    elif align == "r":
+        left = min(left, low)
+    else:
+        middle = (left + right) // 2
+        half = max(middle - left, min(middle - low, high - middle))
+        left, right = middle - half, middle + half
+    off.set("x", str(left))
+    ext.set("cx", str(right - left))
+    return shape
 
 
 # -- tables ----------------------------------------------------------------------------

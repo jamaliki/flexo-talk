@@ -5,7 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from flexo.drawing import Group, read_drawing
+from flexo.drawing import Drawing, Group, Text, ink_bounds, read_drawing
 from flexo.export import rasterise
 from flexo.pdf import write_pdf
 from flexo.portable import portable_svg
@@ -18,6 +18,7 @@ from flexo_talk.deck import Deck, DeckBuild, RenderedSlide
 from flexo_talk.pptx import (
     Placement,
     add_drawing,
+    add_heading,
     add_list,
     add_reveals,
     add_table,
@@ -110,9 +111,19 @@ def write_pptx(
     presentation.slide_width = Pt(deck.style.width)
     presentation.slide_height = Pt(deck.style.height)
     _properties(presentation, deck)
-    blank = presentation.slide_layouts[6]
+    layouts = {layout.name: layout for layout in presentation.slide_layouts}
     for item in rendered:
-        slide = presentation.slides.add_slide(blank)
+        drawing = read_drawing(item.svg)
+        formulas = _drop_lists(drawing.root)
+        _dissolve_regions(drawing.root)
+        under, headings = _take_headings(drawing.root, item)
+        # The layout the slide's headings come from: a content slide's titled, or blank.
+        kinds = {kind for _, kind in headings}
+        chosen = _LAYOUTS.get(item.slide.layout, "Title Only" if "title" in kinds else "Blank") if kinds else "Blank"
+        slide = presentation.slides.add_slide(layouts[chosen])
+        for empty in list(slide.placeholders):
+            # The layout's own, empty: the slide's are its headings, and nothing else shows.
+            empty._element.getparent().remove(empty._element)
         with linking(slide):
             page = deck.background
             own = item.slide.backdrop
@@ -123,21 +134,25 @@ def write_pptx(
                 colour = str(page) if str(page).startswith("#") else deck.palette.get("canvas")
                 slide.background.fill.solid()
                 slide.background.fill.fore_color.rgb = RGBColor.from_string(colour.lstrip("#").upper())
-            drawing = read_drawing(item.svg)
-            formulas = _drop_lists(drawing.root)
-            _dissolve_regions(drawing.root)
-            add_drawing(
-                slide.shapes._spTree, drawing, Placement(), name=item.slide.id, background=False,
-                groups=groups, pictures=slide_pictures(slide),
-                backdrop=deck.palette.get("canvas"),
-            )
+            tree = slide.shapes._spTree
+            drawn = {"background": False, "groups": groups, "pictures": slide_pictures(slide),
+                     "backdrop": deck.palette.get("canvas")}
+            for shape in under:
+                add_drawing(tree, Drawing(drawing.width, drawing.height, Group(None, [shape])), Placement(), **drawn)
+            worded = {words.id: words for words in item.worded}
+            span = (deck.style.margin, deck.style.width - deck.style.margin)
+            for heading, kind in headings:
+                add_heading(
+                    tree, heading, kind, words=worded.get(heading.id), formulas=_formulas(heading)
+                    if isinstance(heading, Group) else None, deck=deck, palette=deck.palette, editable=editable_maths,
+                    span=span,
+                )
+            add_drawing(tree, drawing, Placement(), name=item.slide.id, **drawn)
             if editable_maths:
-                editable_maths_of(slide.shapes._spTree, drawing, item.worded, deck, deck.palette)
+                editable_maths_of(tree, drawing, item.worded, deck, deck.palette)
             reveals = []
             for layout in item.lists:
-                shape_id = add_list(
-                    slide.shapes._spTree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths
-                )
+                shape_id = add_list(tree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths)
                 outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
                 if layout.reveal and outer:
                     # Each outer item appears with the items under it; any before the first
@@ -146,9 +161,7 @@ def write_pptx(
                     ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
                     reveals.append((shape_id, ranges))
             for layout in item.tables:
-                add_table(
-                    slide.shapes._spTree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths
-                )
+                add_table(tree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths)
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
             add_reveals(slide._element, reveals)
@@ -156,6 +169,77 @@ def write_pptx(
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())
     return target
+
+
+_HEADINGS = {
+    "title": {"title": "ctrTitle", "subtitle": "subTitle"},
+    "section": {"title": "title", "subtitle": "body"},
+    # A statement's words are what the slide says, not what it is called: its text.
+    "statement": {"title": "obj"},
+}
+"""The placeholder (``pptx.PLACEHOLDER_KINDS``) each heading a slide draws fills in
+PowerPoint, by the slide's layout and the heading's id after the slide's: on any other
+layout, a title and a subtitle."""
+
+_LAYOUTS = {"title": "Title Slide", "section": "Section Header", "statement": "Title and Content"}
+"""The default template's layout whose placeholders a slide of each layout fills."""
+
+
+def _take_headings(root: Group, item: RenderedSlide) -> tuple[list, list[tuple[Text | Group, str]]]:
+    """The slide's headings (``_HEADINGS``), each with its placeholder, taken out of its
+    drawing to be written as placeholders (``add_heading``) -- first on the slide, as a
+    slide's title is first read -- and what is drawn under them taken out with them, to
+    go before them: a band, a backdrop. Nothing changes its place in front of or behind
+    anything it overlaps."""
+
+    slide = item.slide
+    kinds = _HEADINGS.get(slide.layout, {"title": "title", "subtitle": "subTitle"})
+    worded = {words.id for words in item.worded}
+    prefix = f"{slide.id}."
+
+    def kind_of(child: object) -> str | None:
+        name = getattr(child, "id", None) or ""
+        kind = kinds.get(name.removeprefix(prefix)) if name.startswith(prefix) else None
+        if isinstance(child, Text) and not child.angle and any(
+            run.text.strip() for line in child.lines for run in line.runs
+        ):
+            return kind
+        # Words with maths in them, set as words and formulas.
+        return kind if isinstance(child, Group) and name in worded else None
+
+    def holder(group: Group) -> Group | None:
+        if any(kind_of(child) for child in group.items):
+            return group
+        return next((found for child in group.items if isinstance(child, Group) and (found := holder(child))), None)
+
+    parent = holder(root)
+    if parent is None:
+        return [], []
+    headings = [(child, kind) for child in parent.items if (kind := kind_of(child))]
+    first = next(index for index, child in enumerate(parent.items) if child is headings[0][0])
+    # What is drawn before the headings and overlaps them, or overlaps what does, goes under them.
+    boxes = [_bounds(heading, 1.0) for heading, _ in headings]
+    under: list[int] = []
+    for index in reversed(range(first)):
+        box = _bounds(parent.items[index])
+        if any(_overlap(box, other) for other in boxes):
+            under.insert(0, index)
+            boxes.append(box)
+    taken = {id(heading) for heading, _ in headings} | {id(parent.items[index]) for index in under}
+    lifted = [parent.items[index] for index in under]
+    parent.items = [child for child in parent.items if id(child) not in taken]
+    return lifted, headings
+
+
+def _bounds(item: object, margin: float = 0.0) -> tuple[float, float, float, float]:
+    left, top, right, bottom = ink_bounds(Drawing(0.0, 0.0, Group(None, [item])))  # type: ignore[list-item]
+    return left - margin, top - margin, right + margin, bottom + margin
+
+
+def _overlap(one: tuple[float, float, float, float], other: tuple[float, float, float, float]) -> bool:
+    # What draws nothing (bounds of no size) lies over nothing.
+    drawn = all(box[2] > box[0] and box[3] > box[1] for box in (one, other))
+    return drawn and one[0] < other[2] and other[0] < one[2] and one[1] < other[3] and other[1] < one[3]
 
 
 def _properties(presentation: Presentation, deck: Deck) -> None:

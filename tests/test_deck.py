@@ -905,6 +905,124 @@ def test_the_powerpoint_has_editable_equations_and_the_drawing_for_other_program
     assert all("<a14:m" not in xml and "AlternateContent" not in xml for xml in _slides(drawn.pptx))
 
 
+def _placeholders(slide) -> dict:
+    """A slide's placeholders by kind, each with its words (a broken line read as a space)."""
+
+    return {
+        shape.placeholder_format.type: " ".join(shape.text_frame.text.replace("\v", " ").split())
+        for shape in slide.placeholders
+    }
+
+
+def test_every_title_is_its_slide_s_title_placeholder(tmp_path: Path) -> None:
+    from pptx import Presentation
+    from pptx.enum.shapes import PP_PLACEHOLDER as PLACEHOLDER
+
+    deck = Deck("titled", footer="A footer")
+    deck.title("A **bold** talk", subtitle="Its *subtitle*", author="Ada", date="2026")
+    deck.agenda()
+    with deck.slide("Why [this](https://example.com) matters", subtitle="With `code`") as slide:
+        slide.bullets("One", "Two")
+    deck.section("Part one", subtitle="Its theme")
+    deck.statement("One thing, said large", by="Someone")
+    deck.slide("", layout="blank").text("Nothing on top.")
+    deck.slide("").text("No title.")
+    deck.slide("A title long enough that it has to break onto a second line of the slide to fit").text("Words.")
+    result = deck.build(tmp_path, formats=("pptx",))
+    slides = list(Presentation(str(result.pptx)).slides)  # type: ignore[arg-type]
+    assert [slide.slide_layout.name for slide in slides] == [
+        "Title Slide", "Title Only", "Title Only", "Section Header", "Title and Content", "Blank", "Blank",
+        "Title Only",
+    ]
+    assert _placeholders(slides[0]) == {PLACEHOLDER.CENTER_TITLE: "A bold talk", PLACEHOLDER.SUBTITLE: "Its subtitle"}
+    assert _placeholders(slides[1]) == {PLACEHOLDER.TITLE: "Outline"}
+    assert _placeholders(slides[2]) == {PLACEHOLDER.TITLE: "Why this matters", PLACEHOLDER.SUBTITLE: "With code"}
+    assert _placeholders(slides[3]) == {PLACEHOLDER.TITLE: "Part one", PLACEHOLDER.BODY: "Its theme"}
+    # A statement's words are what the slide says, not what it is called.
+    assert _placeholders(slides[4]) == {PLACEHOLDER.OBJECT: "One thing, said large"}
+    assert slides[4].shapes.title is None
+    # No title, no title placeholder; and none of the layout's empty ones.
+    assert _placeholders(slides[5]) == _placeholders(slides[6]) == {}
+    # A title Flexo broke is one paragraph, broken where it was.
+    title = slides[7].shapes.title
+    assert len(title.text_frame.paragraphs) == 1 and title.text_frame.text.count("\v") == 1
+    assert _placeholders(slides[7])[PLACEHOLDER.TITLE] == "".join(run.text for run in deck.slides[7].title_runs)
+    # Read first, its link still a link, and its words written once: no drawn copy.
+    xml = _slides(result.pptx)  # type: ignore[arg-type]
+    for slide in (slides[1], slides[2], slides[3], slides[7]):
+        assert slide.shapes[0] == slide.shapes.title
+    assert "<a:hlinkClick" in xml[2].split("</p:sp>")[0]
+    assert xml[2].count(">Why <") == xml[0].count(">Its <") == xml[4].count(">One thing, said large<") == 1
+
+
+def test_a_title_placeholder_is_where_the_title_was_drawn_and_says_how_it_looks(tmp_path: Path) -> None:
+    from flexo.drawing import Text, read_drawing
+
+    from flexo_talk.pptx import ascent
+
+    # Centred titles, and a section title, whose layout would set it bold and in capitals.
+    deck = Deck("look", look="keynote")
+    deck.slide("A centred title").text("Words.")
+    deck.section("A quiet section")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    for svg, xml in zip(result.svgs, _slides(result.pptx), strict=True):  # type: ignore[arg-type]
+        drawn = next(item for item in read_drawing(svg.read_text()).walk()
+                      if isinstance(item, Text) and (item.id or "").endswith(".title"))
+        shape = re.search(r'<p:sp>(?:(?!</p:sp>).)*<p:ph type="title"/>.*?</p:sp>', xml, re.S).group(0)
+        left, top = (int(value) / 12700 for value in re.search(r'<a:off x="(-?\d+)" y="(-?\d+)"/>', shape).groups())
+        width = int(re.search(r'<a:ext cx="(\d+)"', shape).group(1)) / 12700
+        spacing = int(re.search(r'<a:lnSpc><a:spcPts val="(\d+)"/>', shape).group(1)) / 100
+        (line,) = drawn.lines
+        # Its first baseline where Flexo set it, and centred where it was centred.
+        assert top + ascent(line.runs[0].face) * spacing == pytest.approx(line.baseline, abs=0.02)
+        assert left + width / 2 == pytest.approx((line.left + line.right) / 2, abs=0.05)
+        assert 'algn="ctr"' in shape and f'sz="{round(drawn.size * 100)}"' in shape and ' b="1"' in shape
+        # What it would take from its layout and master is said: no capitals, bullet,
+        # indent, autofit or inset.
+        assert 'cap="none"' in shape and "<a:buNone/>" in shape and 'marL="0" indent="0"' in shape
+        assert "<a:noAutofit/>" in shape and 'lIns="0" tIns="0"' in shape and 'wrap="none"' in shape
+
+
+def test_a_title_is_first_on_its_slide_and_over_what_it_was_drawn_on(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    for look, first in (("classic", ["slide1.title", "slide1"]), ("band", ["slide1.band", "slide1.title", "slide1"])):
+        deck = Deck(look, look=look)
+        deck.slide("On the slide").bullets("A point")
+        slide = Presentation(str(deck.build(tmp_path / look, formats=("pptx",)).pptx)).slides[0]
+        # The band it is set on stays under it; nothing else comes before it.
+        assert [shape.name for shape in slide.shapes][: len(first)] == first
+
+
+def test_a_title_with_maths_is_a_placeholder_with_its_equation_or_room_for_it(tmp_path: Path) -> None:
+    deck = Deck("maths")
+    deck.slide(r"Halves $\frac{1}{2}$ and more").text("Words.")
+    xml = _slides(deck.build(tmp_path / "editable", formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
+    (block,) = re.findall(r"<mc:AlternateContent.*?</mc:AlternateContent>", xml, re.S)
+    choice, fallback = block.split("<mc:Fallback>")
+    # PowerPoint's own equation in the title; for other programs, the title's words
+    # leaving room for the formula, drawn over them.
+    assert '<p:ph type="title"/>' in choice and "<a14:m" in choice
+    assert '<p:ph type="title"/>' in fallback and "<a:custGeom>" in fallback and re.search(r'spc="\d+"', fallback)
+    assert xml.index("<mc:AlternateContent") < xml.index('name="slide1"')
+    drawn = _slides(deck.build(tmp_path / "drawn", formats=("pptx",), editable_maths=False).pptx)[0]  # type: ignore[arg-type]
+    assert "AlternateContent" not in drawn and drawn.count('<p:ph type="title"/>') == 1 and "<a:custGeom>" in drawn
+
+
+def test_a_title_s_marks_that_step_back_are_drawn_beside_its_placeholder(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    deck = Deck("marks")
+    deck.slide(r"The vector $\vec{v}$ and $x_i^2$ here").text("Words.")
+    result = deck.build(tmp_path, formats=("pptx",))
+    slide = Presentation(str(result.pptx)).slides[0]  # type: ignore[arg-type]
+    # One placeholder for the words; the arrow and the stacked script, each where it was set.
+    assert slide.shapes.title.text_frame.text.startswith("The vector v and x")
+    assert [shape.name for shape in slide.shapes][:2] == ["slide1.title", "slide1.title.marks"]
+    # Nothing steps back by negative spacing, which slide programs set differently.
+    assert not re.search(r'spc="-', _slides(result.pptx)[0])  # type: ignore[arg-type]
+
+
 def test_no_formula_however_broken_makes_office_math_powerpoint_cannot_read() -> None:
     import random
 
