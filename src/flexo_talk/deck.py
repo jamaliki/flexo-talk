@@ -357,6 +357,8 @@ class _Figure:
 class _Image:
     source: str
     width: float | None = None
+    description: str = ""
+    """What the picture shows, in words, for whoever cannot see it: its alt text."""
 
 
 @dataclass(slots=True)
@@ -952,13 +954,16 @@ class Region:
         self._record("figure", None, turn=None if turn else False, width=width)
         return self
 
-    def image(self, source: str | Path, *, width: float | None = None) -> Region:
+    def image(self, source: str | Path, *, width: float | None = None, description: str | None = None) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
-        as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture."""
+        as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture.
+        ``description`` says what it shows, for whoever cannot see it (a screen reader,
+        PowerPoint's alt text)."""
 
         width = _width(width)
-        self.blocks.append(_Image(str(source), width))
-        self._record("image", str(source), width=width)
+        description = " ".join(str(description).split()) if description is not None else ""
+        self.blocks.append(_Image(str(source), width, description))
+        self._record("image", str(source), width=width, description=description or None)
         return self
 
     def stand_in(self, what: str, name: str) -> Region:
@@ -1218,8 +1223,8 @@ class Slide:
         next(iter(self.regions.values())).add(figure, turn=turn, width=width)
         return self
 
-    def image(self, source: str | Path, *, width: float | None = None) -> Slide:
-        next(iter(self.regions.values())).image(source, width=width)
+    def image(self, source: str | Path, *, width: float | None = None, description: str | None = None) -> Slide:
+        next(iter(self.regions.values())).image(source, width=width, description=description)
         return self
 
     def gallery(self, items, **options: object) -> Slide:

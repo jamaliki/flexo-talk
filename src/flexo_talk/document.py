@@ -84,7 +84,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal"),
     "text": ("size", "align", "muted", "colour"),
     "figure": ("turn", "width"),
-    "image": ("width",),
+    "image": ("width", "description"),
     "plot": ("aspect",),
     "table": ("header", "align", "size"),
     "gallery": ("columns", "height", "crop", "size", "align"),

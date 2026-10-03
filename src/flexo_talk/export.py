@@ -14,7 +14,7 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
-from flexo_talk.deck import Deck, DeckBuild, RenderedSlide
+from flexo_talk.deck import Deck, DeckBuild, RenderedSlide, Slide, _Image
 from flexo_talk.pptx import (
     Placement,
     add_drawing,
@@ -148,6 +148,7 @@ def write_pptx(
                     span=span,
                 )
             add_drawing(tree, drawing, Placement(), name=item.slide.id, **drawn)
+            _describe(tree, item.slide)
             if editable_maths:
                 editable_maths_of(tree, drawing, item.worded, deck, deck.palette)
             reveals = []
@@ -169,6 +170,23 @@ def write_pptx(
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())
     return target
+
+
+_PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
+
+
+def _describe(tree: etree._Element, slide: Slide) -> None:
+    """Each picture's description as its alt text, on the shape drawn for it."""
+
+    described = {
+        f"{slide.id}.{region.name}.{index}": block.description
+        for region in slide.regions.values()
+        for index, block in enumerate(region.blocks)
+        if isinstance(block, _Image) and block.description
+    }
+    for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
+        if text := described.get(properties.get("name", "")):
+            properties.set("descr", text)
 
 
 _HEADINGS = {

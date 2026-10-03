@@ -136,7 +136,7 @@ a picture; words turn light), `dark=` (force light words), and `align=` (see
 | `with region.figure(**Figure options) as figure:` | A new flexo figure in the deck's theme |
 | `add(flexo_figure, turn=True)` | An existing flexo figure, redrawn in the deck's theme |
 | `plot(matplotlib_figure)` | A plot laid out again at its place's size: vectors and live text |
-| `image(path)` | An SVG as vectors when flexo can draw it exactly, else a picture; PNG/JPEG pictures |
+| `image(path, description=)` | An SVG as vectors when flexo can draw it exactly, else a picture; PNG/JPEG pictures. `description`: what it shows, read out by screen readers and PowerPoint's alt text |
 | `table(rows, header=True, align="lrr")` | A booktabs-ruled native table; numbers flush right by default |
 | `code(source)` | A monospace listing on a tinted panel |
 | `gallery(items, columns=, height=, crop="circle"\|"square", align=)` | Logos, or people as `(file, "**Name**\nRole")` |

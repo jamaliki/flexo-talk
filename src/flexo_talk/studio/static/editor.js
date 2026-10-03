@@ -3470,7 +3470,11 @@ export function mount(studio, container) {
     return [preview,
       fileRow(block.image, ["image"], (path) => { editBlock(at, (b) => { b.image = path; }, {}); preview.src = studio.raw(path); preview.hidden = false; }, "picture.png"),
       /\.svg$/i.test(block.image || "") ? h("div.hint-line", {}, "An SVG picture stays as vectors: editable shapes and text in PowerPoint.") : null,
-      widthField(block, at)];
+      widthField(block, at),
+      // As Keynote's Description: read out for whoever cannot see the picture.
+      ui.field("Description", ui.input({ value: block.description || "", placeholder: "What the picture shows", key: "block.description",
+        onInput: (text) => editBlock(at, (b) => setOption(b, "description", text), { merge: `${state.slide}-${at.region}-${at.index}-description` }) }),
+      { hint: "Read aloud by screen readers, and PowerPoint's alt text" })];
   }
 
   // A figure's or picture's width: as its place sets it, or as its corners were dragged to.
@@ -3961,7 +3965,7 @@ export function mount(studio, container) {
     if (keys.length && keys.every((key) => ["background", "shade", "dark"].includes(key)) && keys.some((key) => key !== "dark")) return "Change Background";
     return keys.length === 1 ? `Change ${SLIDE_NAMES[keys[0]] || keyTitle(keys[0])}` : "Edit Slide";
   }
-  const BLOCK_NAMES = { align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering",
+  const BLOCK_NAMES = { description: "Description", align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering",
     reveal: "Build", header: "Header Row", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour" };
   function blockChange(a, b) {
     const kind = kindOf(b), name = blockLabel(b), keys = differing(a, b);

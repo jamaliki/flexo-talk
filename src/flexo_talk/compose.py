@@ -3090,6 +3090,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         view = [float(v) for v in re.split(r"[ ,]+", ET.fromstring(art.markup).get("viewBox", "").strip()) if v]
         units = (natural_w / view[2]) if len(view) == 4 and view[2] else 1.0
         _place_svg(canvas, identifier, art.markup, box.x + (box.width - width) / 2.0, box.y, scale * units, width)
+        _described(canvas.layer[-1], block.description)
         return height
     if art.format == "svg":
         import base64
@@ -3097,8 +3098,17 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
     else:
         href = picture_href(art)
-    element(
+    picture = element(
         canvas.layer, "image", id=identifier, x=box.x + (box.width - width) / 2.0, y=box.y,
         width=width, height=height, href=href, data__flexo__width=number(width),
     )
+    _described(picture, block.description)
     return height
+
+
+def _described(picture: ET.Element, description: str) -> None:
+    """A picture's description, as a screen reader reads it (and PowerPoint's alt text)."""
+
+    if description:
+        picture.set("role", "img")
+        picture.set("aria-label", description)

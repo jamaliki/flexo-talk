@@ -955,3 +955,28 @@ def test_a_powerpoint_file_carries_the_talks_title_and_author_not_the_templates(
         "Making it fast", "Ada Lovelace", "Ada Lovelace"
     )
     assert "python-pptx" not in (properties.comments or "") and properties.created.year >= 2026
+
+
+def test_a_pictures_description_is_read_out_and_is_powerpoints_alt_text(tmp_path: Path) -> None:
+    from PIL import Image
+    from pptx import Presentation
+
+    from flexo_talk.export import write_pptx
+
+    Image.new("RGB", (64, 36), "#2b4c9b").save(tmp_path / "chart.png")
+    (tmp_path / "plot.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" viewBox="0 0 80 40">'
+        '<rect x="0" y="0" width="80" height="40" fill="#c0392b"/></svg>'
+    )
+    document = yaml.safe_load(
+        "deck: {id: alt}\nslides:\n"
+        "  - title: Results\n    body:\n"
+        "      - {image: chart.png, description: \"  Latency   fell by half  \"}\n"
+        "      - {image: plot.svg, description: A red bar}\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+    svg = render_slide(deck, deck.slides[0]).svg
+    assert 'aria-label="Latency fell by half"' in svg and 'aria-label="A red bar"' in svg
+    slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
+    described = {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
+    assert described == {"slide1.body.0": "Latency fell by half", "slide1.body.1": "A red bar"}
