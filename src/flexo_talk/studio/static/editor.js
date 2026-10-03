@@ -114,10 +114,11 @@ const NEW_BLOCKS = {
     edges: [{ from: "start", to: "step" }, { from: "step", to: "check" }, { from: "check", to: "end", label: "yes" }, { from: "check", to: "step", label: "no" }] } }),
   image: () => ({ image: "" }),
   table: () => ({ table: [["Item", "Value", "Change"], ["First", "1.0", "+5%"], ["Second", "2.0", "−3%"]] }),
-  stats: () => ({ stats: [{ value: "93%", label: "accuracy" }, { value: "4×", label: "faster" }] }),
-  quote: () => ({ quote: "Words worth repeating.", by: "Someone wise" }),
-  callout: () => ({ callout: "The one thing to remember.", title: "Key point" }),
-  code: () => ({ code: "def greet(name):\n    # say hello\n    return f\"Hello, {name}\"" }),
+  // Placeholders, as a new text's: drawn faintly here, never presented or exported.
+  stats: () => ({ stats: [{ value: "", label: "" }, { value: "", label: "" }] }),
+  quote: () => ({ quote: "" }),
+  callout: () => ({ callout: "" }),
+  code: () => ({ code: "" }),
   gallery: () => ({ gallery: [] }),
   plot: () => ({ plot: "" }),
   math: () => ({ math: "a^2 + b^2 = c^2" }),
@@ -1843,9 +1844,9 @@ export function mount(studio, container) {
       mirror = `block.${kind}`;
       bullets = kind === "bullets";
       if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered), placeholder: "Text" }, (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }));
-      else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, indent: true, onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
+      else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, indent: true, placeholder: "Code", onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
       else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, onInput: (text) => editBlock(at, (b) => { b.math = text; }, { merge }) });
-      else editor = rich(block[kind] ?? "", { placeholder: kind === "text" ? "Text" : "" }, (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }));
+      else editor = rich(block[kind] ?? "", { placeholder: { text: "Text", quote: "Quote", callout: "Text" }[kind] || "" }, (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }));
       idOf = () => blockId(at);
       state.focus = at;
       renderInspector();
@@ -2690,7 +2691,10 @@ export function mount(studio, container) {
   // A text or list with no words: a placeholder.
   function blank(block) {
     const kind = kindOf(block);
-    if (kind === "text") return !String(block.text ?? "").trim();
+    if (kind === "text" || kind === "code") return !String(block[kind] ?? "").trim();
+    if (kind === "quote") return !String(block.quote ?? "").trim() && !String(block.by ?? "").trim();
+    if (kind === "callout") return !String(block.callout ?? "").trim() && !String(block.title ?? "").trim();
+    if (kind === "stats") return (block.stats || []).every((item) => !String(item?.value ?? "").trim() && !String(item?.label ?? "").trim());
     if (kind === "bullets") return !JSON.stringify(block.bullets ?? "").replace(/[\[\]",\s]/g, "");
     return false;
   }

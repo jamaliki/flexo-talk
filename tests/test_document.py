@@ -1002,3 +1002,25 @@ def test_the_studio_draws_a_deck_and_says_the_order_its_tones_take(tmp_path: Pat
     drawing = DeckKind().draw(document, tmp_path, {"focus": 1})
     assert len(drawing.pages) == 2 and all(page.svg for page in drawing.pages)
     assert drawing.info["order"] == palette_order("paper", "Deep Sea Harvest")
+
+
+def test_a_new_quote_callout_code_or_numbers_is_a_placeholder_until_typed_in() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    document = yaml.safe_load(
+        'deck: {id: holds}\nslides:\n  - title: Empty objects\n    body:\n'
+        '      - {quote: ""}\n      - {callout: ""}\n      - {code: ""}\n'
+        '      - {stats: [{value: "", label: ""}, {value: "", label: ""}]}\n'
+        '      - {callout: "", title: Kept}\n'
+    )
+    deck = deck_from_document(document, Path("."))
+    exported = render_slide(deck, deck.slides[0]).svg
+    token = PLACEHOLDERS.set(True)
+    try:
+        studio = render_slide(deck, deck.slides[0]).svg
+    finally:
+        PLACEHOLDERS.reset(token)
+    placed = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', studio)
+    assert placed == [("slide1.body.0", "Quote"), ("slide1.body.1", "Text"), ("slide1.body.2", "Code"),
+                      ("slide1.body.3", "Numbers")]
+    assert "data-flexo-placeholder" not in exported and ">Quote<" not in exported and ">Kept<" in exported

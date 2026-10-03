@@ -312,6 +312,17 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                 stand_in(block, "runs", (TextRun("Text"),), f"{slide.id}.{name}.{index}", "Text")
             elif isinstance(block, _Bullets) and not any(_worded(runs) for _, runs in block.items):
                 stand_in(block, "items", [(0, (TextRun("Text"),))], f"{slide.id}.{name}.{index}", "Text")
+            # A quote, callout, code or numbers with nothing in them yet: placeholders too.
+            elif isinstance(block, _Quote) and not _worded(block.runs) and not _worded(block.by):
+                stand_in(block, "runs", (TextRun("Quote"),), f"{slide.id}.{name}.{index}", "Quote")
+            elif isinstance(block, _Callout) and not _worded(block.runs) and not _worded(block.title):
+                stand_in(block, "runs", (TextRun("Text"),), f"{slide.id}.{name}.{index}", "Text")
+            elif isinstance(block, _Code) and not any(line.strip() for line in block.lines):
+                stand_in(block, "lines", ["Code"], f"{slide.id}.{name}.{index}", "Code")
+            elif isinstance(block, _Stats) and not any(_worded(value) or _worded(label) 
+                                                       for value, label in block.items):
+                stand_in(block, "items", [((TextRun("00"),), (TextRun("Label"),))] * len(block.items),
+                         f"{slide.id}.{name}.{index}", "Numbers")
     try:
         return _render_slide(deck, slide, empty)
     finally:
