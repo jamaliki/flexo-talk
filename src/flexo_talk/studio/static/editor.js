@@ -1376,6 +1376,8 @@ export function mount(studio, container) {
     if (event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
+    // What is chosen shows as chosen at once: the name tag of what the pointer was over goes.
+    hover.hidden = true;
     if (!part) { state.focus = null; state.field = null; placeChosen(); renderInspector(); reportFocus(); return; }
     state.field = null;
     // A click on a figure's part chooses that part, the figure not chosen first.
@@ -1978,7 +1980,8 @@ export function mount(studio, container) {
     const [, tableId, row, col] = /^(.*)\.(\d+)\.(\d+)$/.exec(id) || [];
     for (const [r, c] of [[+row - 1, +col], [+row + 1, +col], [+row, +col - 1], [+row, +col + 1], [+row - 1, +col - 1]]) {
       const look = r > 0 && wordsLook(pageNode.querySelector(`[id="${CSS.escape(`${tableId}.${r}.${c}`)}"]`));
-      if (look) return look;
+      // Another column's cell lends its face, not its alignment (a new column beside numbers).
+      if (look) return c === +col ? look : { ...look, anchor: "start" };
     }
     return null;
   }
@@ -4032,7 +4035,7 @@ export function mount(studio, container) {
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
-    { icon: "play", label: "Present", keys: "⌘↩", run: () => present() },
+    { icon: "play", label: "Present", keys: "⌘↩", hint: "Full screen; X for the presenter view, with notes", run: () => present() },
     // In the toolbar's Export menu's order.
     { icon: "export", label: "Export as PDF…", hint: "One page per slide", run: () => studio.exportFiles(["pdf"]) },
     { icon: "export", label: "Export as PowerPoint…", hint: "A .pptx file of editable shapes and text", run: () => studio.exportFiles(["pptx"]) },
@@ -4149,6 +4152,9 @@ export function mount(studio, container) {
         if (count(b.bullets) > count(a.bullets)) return "Add Item";
         if (count(b.bullets) < count(a.bullets)) return "Delete Item";
       }
+      // The same words in another look (bold, a colour, a link): their format changed.
+      const words = (block) => readable(JSON.stringify(block[kind] ?? ""));
+      if (["text", "bullets", "quote", "callout"].includes(kind) && words(a) === words(b)) return `Format ${name}`;
       return `Edit ${name}`;
     }
     return `Change ${BLOCK_NAMES[keys[0]] || keyTitle(keys[0])}`;
