@@ -461,7 +461,8 @@ class DeckKind:
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
         return Drawing(pages, _placed(messages, document), sorted(watched),
-                       {"palette": _palette(deck), "tones": _tones(deck), "unsettled": unsettled})
+                       {"palette": _palette(deck), "tones": _tones(deck), "order": _order(deck),
+                        "unsettled": unsettled})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck
@@ -1144,6 +1145,18 @@ def _tones(deck) -> dict[str, Any]:
         except (KeyError, ValueError):
             break
     return {"colours": colours, "used": {}}
+
+
+def _order(deck) -> list[str]:
+    """The colours the deck's tones come from, in the order they take them: what Customise…
+    writes into a theme of its own, so the copy looks as the deck did."""
+
+    from flexo.themes import palette_order
+
+    try:
+        return palette_order(deck.theme, deck.palette_name)
+    except Exception:
+        return []
 
 
 def _palette(deck) -> dict[str, str]:

@@ -3828,8 +3828,9 @@ export function mount(studio, container) {
     if (!name) return;
     const stem = name.split("/").pop().replace(/\.(ya?ml|json)$/i, "").replace(/\.theme$/i, "");
     // The deck's palette goes into the theme, where its colours can be changed: left on the
-    // deck it would stand over every colour changed there.
-    const colours = Array.isArray(deck.palette) ? deck.palette : catalog.palettes?.[deck.palette];
+    // deck it would stand over every colour changed there. Its colours are written in the
+    // order the deck's tones took them, so every colour stays where it was.
+    const colours = deck.palette ? (studio.info?.order?.length ? studio.info.order : Array.isArray(deck.palette) ? deck.palette : catalog.palettes?.[deck.palette]) : null;
     try {
       const made = await createFile(name, "theme", { theme: { name: stem, base, description: `The look of ${deck.id || "this deck"}.`, ...(colours ? { palette: [...colours] } : {}) } });
       studio.change((d) => { d.deck ||= {}; d.deck.theme = made; if (colours) delete d.deck.palette; });
