@@ -32,7 +32,9 @@
 .thumb .badge.error { background: var(--error); }
 .thumb .badge svg { width: 10px; height: 10px; }
 .thumb .steps { position: absolute; left: 4px; bottom: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
-.thumb .here { position: absolute; left: 4px; top: 4px; display: flex; }
+/* Who else is on a slide: in its lower corner, clear of its title. */
+.thumb .here { position: absolute; right: 4px; bottom: 4px; display: flex; }
+.thumb:hover .here { visibility: hidden; }
 .thumb .more { position: absolute; right: 2px; bottom: 2px; opacity: 0; background: var(--raised); }
 .thumb:hover .more, .thumb .more:focus-visible { opacity: 1; }
 .thumb.dragging { opacity: 0.35; }
