@@ -213,7 +213,9 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .layout-card { display: grid; gap: 4px; align-content: start; justify-items: center; padding: 6px 3px 5px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; transition: border-color 0.12s, background 0.12s; }
 .layout-card:hover { border-color: var(--ink-3); }
 .layout-card.on { border-color: var(--accent); background: var(--accent-soft); }
-.layout-card .glyph { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 4px; }
+.layout-card .glyph { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 4px; background: var(--deck-canvas, var(--sunken)); }
+.layout-card .glyph i { background: var(--deck-muted, var(--ink-3)); opacity: 0.6; }
+.layout-card .glyph i.a { background: var(--deck-accent, var(--accent)); opacity: 1; }
 .layout-card .name { font-size: 11px; font-weight: 560; color: var(--ink-2); white-space: nowrap; letter-spacing: -0.005em; }
 .layout-card .note { font-size: 11px; color: var(--ink-3); }
 .layout-grid.big { width: min(620px, 90vw); gap: 10px; }
@@ -280,7 +282,7 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .look.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .look .name { font-weight: 620; font-size: 12.5px; text-transform: capitalize; }
 .look .note { font-size: 11px; color: var(--ink-3); line-height: 1.35; }
-.look-art { aspect-ratio: 16 / 9; border-radius: 4px; background: #fbfaf8; border: 1px solid var(--line); position: relative; overflow: hidden; }
+.look-art { aspect-ratio: 16 / 9; border-radius: 4px; background: var(--deck-canvas, #fbfaf8); border: 1px solid var(--line); position: relative; overflow: hidden; }
 .look-art i { position: absolute; border-radius: 1px; }
 .theme-file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
 .theme-file svg { width: 15px; height: 15px; color: var(--accent); flex: none; }

@@ -284,24 +284,33 @@ function glyph(layout) {
   return h("div.glyph", {}, parts);
 }
 
+// In the deck's own colours, when it is tinted (tinted below).
 function lookArt(name) {
-  const bar = (x, y, w, hgt, colour) => h("i", { style: { left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${hgt}%`, background: colour } });
-  const ink = "#3b3834", soft = "#c9c4bc", accent = "#3d5afe";
-  const body = (x = 10, centred = false) => [0, 1, 2].map((i) => bar(centred ? 22 + i * 3 : x, 48 + i * 13, centred ? 56 - i * 6 : 64 - i * 10, 6, soft));
+  const bar = (x, y, w, hgt, colour, opacity = 1) => h("i", { style: { left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${hgt}%`, background: colour, opacity } });
+  const ink = "var(--deck-ink, #3b3834)", accent = "var(--deck-accent, #3d5afe)";
+  const soft = "var(--deck-muted, #8f8a83)";
+  const body = (x = 10, centred = false) => [0, 1, 2].map((i) => bar(centred ? 22 + i * 3 : x, 48 + i * 13, centred ? 56 - i * 6 : 64 - i * 10, 6, soft, 0.45));
   const art = {
     classic: [bar(10, 14, 48, 10, ink), bar(10, 30, 12, 3, accent), ...body()],
     band: [bar(0, 0, 100, 34, accent), bar(10, 12, 48, 10, "#fff"), ...body()],
-    editorial: [bar(10, 14, 52, 10, ink), bar(10, 30, 80, 1.5, soft), ...body()],
+    editorial: [bar(10, 14, 52, 10, ink), bar(10, 30, 80, 1.5, soft, 0.45), ...body()],
     keynote: [bar(26, 16, 48, 11, ink), ...body(0, true)],
     margin: [bar(0, 0, 3, 100, accent), bar(10, 14, 48, 10, accent), ...body()],
   }[name] || [];
   return h("div.look-art", {}, art);
 }
 
-function layoutGrid(current, onPick, layouts) {
-  return h("div.layout-grid", {}, layouts.map((layout) => h(`button.layout-card${layout.name === current ? ".on" : ""}`, {
+// The deck's colours on the small pictures of its slides, so that a layout or look is
+// seen as it will be.
+function tinted(node, palette = {}) {
+  for (const name of ["canvas", "ink", "muted", "accent"]) if (palette[name]) node.style.setProperty(`--deck-${name}`, palette[name]);
+  return node;
+}
+
+function layoutGrid(current, onPick, layouts, palette) {
+  return tinted(h("div.layout-grid", {}, layouts.map((layout) => h(`button.layout-card${layout.name === current ? ".on" : ""}`, {
     type: "button", title: layout.note, onclick: () => onPick(layout.name),
-  }, glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name]))));
+  }, glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name])))), palette);
 }
 
 // -- the editor -------------------------------------------------------------------------
@@ -409,11 +418,11 @@ export function mount(studio, container) {
   function layoutPopover(anchor) {
     const slide = slideAt();
     if (!slide) return;
-    popover(anchor, [h("div.menu-title", {}, "Layout"), layoutGrid(layoutOf(slide), (name) => { closeMenu(); changeLayout(name); }, layouts)], { className: "layout-menu" });
+    popover(anchor, [h("div.menu-title", {}, "Layout"), layoutGrid(layoutOf(slide), (name) => { closeMenu(); changeLayout(name); }, layouts, studio.info?.palette)], { className: "layout-menu" });
   }
 
   function newSlidePopover(anchor, at = state.slide + 1) {
-    popover(anchor, [h("div.menu-title", {}, "New Slide"), layoutGrid(null, (name) => { closeMenu(); addSlide(name, at); }, layouts)], { className: "layout-menu" });
+    popover(anchor, [h("div.menu-title", {}, "New Slide"), layoutGrid(null, (name) => { closeMenu(); addSlide(name, at); }, layouts, studio.info?.palette)], { className: "layout-menu" });
   }
 
   // -- slides --
@@ -644,8 +653,8 @@ export function mount(studio, container) {
     notes.hidden = !list.length;
     if (!list.length) {
       clear(stage, h("div.stage-empty", {}, h("h2", {}, "No slides"), h("div", {}, "Choose a layout for the first slide:"),
-        h("div.layout-grid.big", {}, layouts.map((layout) => h("button.layout-card", { type: "button", onclick: () => addSlide(layout.name, 0) },
-          glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name]), h("span.note", {}, layout.note))))));
+        tinted(h("div.layout-grid.big", {}, layouts.map((layout) => h("button.layout-card", { type: "button", onclick: () => addSlide(layout.name, 0) },
+          glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name]), h("span.note", {}, layout.note)))), studio.info?.palette)));
       return;
     }
     const page = pages[state.slide];
@@ -2450,7 +2459,7 @@ export function mount(studio, container) {
     ];
     const regions = regionsOf(slide);
     if (regions.length) parts.push(h("div.section", {}, h("div.section-title", {}, "Objects"), regions.map((region) => regionView(slide, region))));
-    parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts),
+    parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts, studio.info?.palette),
       layout === "two-columns" ? splitControl(slide) : null,
       layout === "columns" ? columnsControls(slide) : null,
       allowed.has("align") ? ui.field(styleName("align"), ui.segmented({ value: slide.align ?? "", options: [
@@ -3404,9 +3413,9 @@ export function mount(studio, container) {
     const editDeck = (mutate, options = {}) => studio.change((d) => { d.deck ||= {}; mutate(d.deck); }, options);
     const setDeck = (name, fallback) => (value) => editDeck((d) => setOption(d, name, value, fallback), { quiet: true, merge: `deck-${name}` });
     const look = deck.look || "classic";
-    const looks = h("div.looks", {}, catalog.looks.map((item) => h(`button.look${item.name === look ? ".on" : ""}`, { type: "button",
+    const looks = tinted(h("div.looks", {}, catalog.looks.map((item) => h(`button.look${item.name === look ? ".on" : ""}`, { type: "button",
       onclick: () => { editDeck((d) => setOption(d, "look", item.name, "classic")); renderInspector(); } },
-    lookArt(item.name), h("span.name", {}, lookName(item)), h("span.note", {}, item.note))));
+    lookArt(item.name), h("span.name", {}, lookName(item)), h("span.note", {}, item.note)))), studio.info?.palette);
     const themeIsFile = typeof deck.theme === "string" && /\.(ya?ml|json)$/i.test(deck.theme);
     const current = Array.isArray(deck.palette) ? "" : deck.palette || "default";
     const accents = () => Object.entries(studio.info?.palette || {}).filter(([k]) => k.startsWith("accent")).slice(0, 5).map(([, c]) => h("span", { style: { background: c } }));
