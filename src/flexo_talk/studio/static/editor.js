@@ -1668,7 +1668,7 @@ export function mount(studio, container) {
     // Words are typed as the slide shows them: bold as bold, a list as a list.
     const rich = (value, options, onInput) => {
       const field = richText({ value, palette: studio.info?.palette || {}, ...options });
-      field.addEventListener("input", () => onInput(field.value));
+      onRich(field, onInput);
       return field;
     };
     let editor, idOf, at = null, bullets = false, read = () => undefined, mirror = null;
@@ -2669,10 +2669,20 @@ export function mount(studio, container) {
 
   // Words in the inspector as the slide shows them (richtext.js), in a field's box: Return
   // in a one-line field is done, as in a Mac text field.
+  // Rich words' changes, for the history: typing runs together into one step; a change
+  // of look or a paste is a step of its own, as in Keynote.
+  function onRich(area, onInput) {
+    area.addEventListener("input", (event) => {
+      const step = Boolean(event.detail?.step) || /^format/.test(event.inputType || "");
+      if (step) studio.step?.();
+      onInput(area.value);
+      if (step) studio.step?.();
+    });
+  }
   function richField({ value, key, placeholder = "", list = false, single = false, numbered = false, onInput }) {
     const area = richText({ value, list, single, numbered, placeholder, palette: studio.info?.palette || {} });
     area.dataset.key = key;
-    area.addEventListener("input", () => onInput(area.value));
+    onRich(area, onInput);
     if (single) area.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) area.blur(); });
     return h(`div.rich-field${single ? ".single" : ""}`, {}, area);
   }

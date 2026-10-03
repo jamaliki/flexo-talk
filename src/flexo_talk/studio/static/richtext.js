@@ -264,7 +264,9 @@ export function richText({ value = "", list = false, single = false, numbered = 
   write(value);
   Object.defineProperty(area, "value", { get: read, set: write });
   area.rich = true;
-  const changed = () => area.dispatchEvent(new Event("input", { bubbles: true }));
+  // A change of look (bold, a colour, a link) or a paste says it is a step of its own, for
+  // the history: typing runs together, these do not (a native ⌘B says so by its inputType).
+  const changed = (step = false) => area.dispatchEvent(new CustomEvent("input", { bubbles: true, detail: { step } }));
   area.addEventListener("input", () => area.classList.toggle("empty", !area.textContent.trim() && !area.querySelector(".rt-line + .rt-line")));
 
   // -- the caret --
@@ -318,10 +320,13 @@ export function richText({ value = "", list = false, single = false, numbered = 
     line.dataset.level = String(Math.max(0, Math.min(level, most)));
   };
 
+  // Words drawn bold (a title) are bold already: the markup has no "not bold" to give them.
+  const boldAlready = () => Number(getComputedStyle(area).fontWeight) >= 600;
   area.addEventListener("keydown", (event) => {
     const mod = event.metaKey || event.ctrlKey;
     if (mod && !event.altKey && ["b", "i"].includes(event.key.toLowerCase())) {
       event.preventDefault();
+      if (event.key.toLowerCase() === "b" && boldAlready()) return;
       document.execCommand(event.key.toLowerCase() === "b" ? "bold" : "italic");
       return;
     }
@@ -376,7 +381,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     if (label instanceof Node) button.append(label); else button.innerHTML = label;
     Object.assign(button.style, style);
     // The words stay chosen: the button never takes the caret.
-    button.addEventListener("mousedown", (event) => { event.preventDefault(); run(); changed(); showBar(); });
+    button.addEventListener("mousedown", (event) => { event.preventDefault(); run(); changed(true); showBar(); });
     return button;
   };
   const wrapChosen = (make) => {
@@ -403,14 +408,15 @@ export function richText({ value = "", list = false, single = false, numbered = 
       if (url && linkRange) {
         place(linkRange);
         wrapChosen((text) => { const a = plainNode("a", "", text); a.dataset.href = url; a.title = url; return a; });
-        changed();
+        changed(true);
       }
       linkInput.hidden = true;
       area.focus();
     } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); linkInput.hidden = true; if (linkRange) place(linkRange); area.focus(); }
   });
+  const boldTool = tool("<b>B</b>", "Bold (⌘B)", () => document.execCommand("bold"));
   bar.append(
-    tool("<b>B</b>", "Bold (⌘B)", () => document.execCommand("bold")),
+    boldTool,
     tool("<i>I</i>", "Italic (⌘I)", () => document.execCommand("italic")),
     tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code", () => wrapChosen((text) => plainNode("code", "", text))),
     tool("<span style=\"font-family: Georgia, serif; font-style: italic\">x²</span>", "Equation: the words chosen as LaTeX", () => wrapChosen((text) => plainNode("span", "rt-maths", `$${text}$`))),
@@ -427,6 +433,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const inside = s.rangeCount && area.contains(s.anchorNode) && area.contains(s.focusNode);
     if (!inside || s.isCollapsed) { if (document.activeElement !== linkInput) bar.hidden = true; return; }
     if (!bar.isConnected) document.body.append(bar);
+    boldTool.hidden = boldAlready();
     bar.hidden = false;
     const chosen = s.getRangeAt(0).getBoundingClientRect(), own = bar.getBoundingClientRect();
     const above = chosen.top - own.height - 8;
@@ -443,10 +450,12 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const text = event.clipboardData?.getData("text/plain");
     if (text === undefined) return;
     event.preventDefault();
+    changed(true);
     const parts = text.replace(/\r\n?/g, "\n").split("\n");
-    if (single) { document.execCommand("insertText", false, parts.join(" ")); return; }
+    if (single) { document.execCommand("insertText", false, parts.join(" ")); changed(true); return; }
     if (!list) {
       parts.forEach((part, n) => { if (n) document.execCommand("insertLineBreak"); if (part) document.execCommand("insertText", false, part); });
+      changed(true);
       return;
     }
     document.execCommand("insertText", false, parts[0]);
@@ -460,7 +469,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
       line = next;
     }
     if (line) { const caret = document.createRange(); caret.selectNodeContents(line); caret.collapse(false); place(caret); }
-    changed();
+    changed(true);
   });
   return area;
 }
