@@ -1685,18 +1685,24 @@ def _equation(canvas: _Canvas, identifier: str, block: _Math, box: Box, *, draw:
                 "(\\\\ inside aligned) or giving it more room."
             )
     canvas.say_maths(block.source, formula.problems)
+    # Space above and below, as LaTeX sets a displayed equation apart from the words.
+    skip = size * DISPLAY_SKIP
     if draw:
         x = {"start": box.x, "middle": box.x + (box.width - formula.width) / 2.0,
              "end": box.x + box.width - formula.width}.get(block.align, box.x)
         role, fill = _paint_of(block.colour, "ink")
 
         draw_formula(
-            canvas.layer, formula, x, box.y + formula.height, colour=formula_paint(canvas.palette),
+            canvas.layer, formula, x, box.y + skip + formula.height, colour=formula_paint(canvas.palette),
             attributes={"id": identifier, "data__flexo__talk": "math", "data__flexo__size": number(size),
                         "data__flexo__align": block.align,
                         **paint_attributes(palette=canvas.palette, fill_role=role, fill=fill)},
         )
-    return formula.height + formula.depth
+    return skip + formula.height + formula.depth + skip
+
+
+DISPLAY_SKIP = 0.4
+"""The space above and below a displayed equation, in ems of its size."""
 
 
 def _height(canvas: _Canvas, block, width: float) -> float:

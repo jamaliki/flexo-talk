@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, same, themeField, readable, mathWords } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
@@ -59,7 +59,7 @@ const FIGURE_EXPORTS = [
   { label: "SVG", formats: ["editable"], hint: "Editable SVG with Inkscape layers and live text" },
   { label: "PDF", formats: ["pdf"], hint: "PDF with embedded fonts" },
   { label: "PNG", formats: ["png"], hint: "PNG image" },
-  { label: "YAML", formats: ["yaml"], hint: "Flexo figure file, using the deck's theme" },
+  { label: "Flexo Figure", formats: ["yaml"], hint: "A figure file of its own, in the deck's theme, to open in Flexo" },
 ];
 
 const LAYOUT_NAMES = {
@@ -683,6 +683,7 @@ export function mount(studio, container) {
   // -- the stage --
   const hover = h("div.hit.hover", { hidden: true }, h("span.hit-label"));
   const chosen = h("div.hit.selected", { hidden: true }, h("span.hit-label"));
+  const target = h("div.hit.target", { hidden: true }, h("span.hit-label"));  // what a menu item would act on
   let pageNode = null;
   const stageMeta = h("div.slide-meta");
   const stageMessages = h("div.slide-messages.messages", { hidden: true });
@@ -724,7 +725,7 @@ export function mount(studio, container) {
       if (svg) widenLines(svg);
       // What the pointer was over has moved, or gone: shown again when it moves.
       hover.hidden = true;
-      pageNode.append(hover, chosen);
+      pageNode.append(hover, chosen, target);
       pageNode.addEventListener("mousemove", onHover);
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
       pageNode.addEventListener("click", onPick);
@@ -741,7 +742,7 @@ export function mount(studio, container) {
     clear(stageMeta,
       h("span.slide-count", {}, `${state.slide + 1} / ${list.length}`),
       page?.steps > 1 ? h("span.chip", {}, icon("reveal"), `${page.steps} steps`) : null,
-      here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), entry.who.name, entry.doing ? h("span.muted", {}, ` · ${entry.doing}`) : null)),
+      here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), nameOf(entry.who), entry.doing ? h("span.muted", {}, ` · ${entry.doing}`) : null)),
       h("span.spacer", { style: { flex: 1 } }),
       pending ? h("span.row.drawing", {}, h("span.spinner"), "Updating…") : learning ? h("span.stage-hint", {}, "Click to select · Drag to move · Double-click to edit text") : null);
     clear(stageMessages, own.map(messageView));
@@ -1414,13 +1415,23 @@ export function mount(studio, container) {
       renderInspector();
     };
     const blank = () => Array(columns).fill("");
+    // The row or column an item acts on, outlined on the slide while the item is pointed at.
+    const table = blockId(at);
+    const outline = (cells, on) => {
+      if (!on) { target.hidden = true; return; }
+      const boxes = cells.map(([r, c]) => cellBox(`${table}.${r}.${c}`)).filter(Boolean);
+      if (!boxes.length) return;
+      const left = Math.min(...boxes.map((b) => b.left)), top = Math.min(...boxes.map((b) => b.top));
+      place(target, { left, top, width: Math.max(...boxes.map((b) => b.left + b.width)) - left, height: Math.max(...boxes.map((b) => b.top + b.height)) - top });
+    };
+    const theRow = (on) => outline(rows[row].map((_, c) => [row, c]), on), theColumn = (on) => outline(rows.map((_, r) => [r, col]), on);
     return [
-      { icon: "plus", label: "Add Row Above", run: () => reshape((grid) => grid.splice(row, 0, blank())) },
-      { icon: "plus", label: "Add Row Below", run: () => reshape((grid) => grid.splice(row + 1, 0, blank())) },
-      { icon: "plus", label: "Add Column Before", run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 0, "")); align?.splice(col, 0, align[col]); }) },
-      { icon: "plus", label: "Add Column After", run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col + 1, 0, "")); align?.splice(col + 1, 0, align[col]); }) },
-      { icon: "trash", label: "Delete Row", disabled: rows.length < 2, run: () => reshape((grid) => grid.splice(row, 1)) },
-      { icon: "trash", label: "Delete Column", disabled: columns < 2, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 1)); align?.splice(col, 1); }) },
+      { icon: "plus", label: "Add Row Above", show: theRow, run: () => reshape((grid) => grid.splice(row, 0, blank())) },
+      { icon: "plus", label: "Add Row Below", show: theRow, run: () => reshape((grid) => grid.splice(row + 1, 0, blank())) },
+      { icon: "plus", label: "Add Column Before", show: theColumn, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 0, "")); align?.splice(col, 0, align[col]); }) },
+      { icon: "plus", label: "Add Column After", show: theColumn, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col + 1, 0, "")); align?.splice(col + 1, 0, align[col]); }) },
+      { icon: "trash", label: "Delete Row", disabled: rows.length < 2, show: theRow, run: () => reshape((grid) => grid.splice(row, 1)) },
+      { icon: "trash", label: "Delete Column", disabled: columns < 2, show: theColumn, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 1)); align?.splice(col, 1); }) },
     ];
   }
   // A figure's exports, as the menu that Export Figure… opens.
@@ -3433,8 +3444,8 @@ export function mount(studio, container) {
       renderInspector();
     } }))];
     // A figure is made and changed on its slide; to use it elsewhere, it is exported.
-    const exports = ui.field("Export", h("div.row", {}, FIGURE_EXPORTS.map(({ label, formats, hint }) =>
-      ui.button(label, () => exportFigure(at, formats), { small: true, icon: "export", title: hint }))));
+    // One button for the figure's exports, as its right-click menu has one item.
+    const exports = ui.field("Export", ui.button("Export Figure…", (event) => menu(event.currentTarget, exportItems(at)), { small: true, icon: "export", title: "SVG, PDF, PNG or a Flexo figure file" }));
     if (mode === "inline") {
       parts.push(h("div.figure-card", {},
         h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`), h("div.hint-line", {}, "Stored in the deck, using the deck's theme"))));
