@@ -939,3 +939,19 @@ def test_an_empty_title_or_text_holds_its_place_and_shows_only_in_the_studio() -
     kept = r'<text[^>]*y="([\d.]+)"[^>]*>(?:(?!</text>).)*Kept'
     assert re.findall(kept, exported[0], re.S) == re.findall(kept, studio[0], re.S)
     assert not [layout for layout in render_slide(deck, deck.slides[0]).lists if layout.id == "slide1.body.0"]
+
+
+def test_a_powerpoint_file_carries_the_talks_title_and_author_not_the_templates(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    from flexo_talk.export import write_pptx
+
+    document = yaml.safe_load(
+        'deck: {id: cache}\nslides:\n  - {layout: title, title: "Making it **fast**", author: Ada Lovelace}\n'
+    )
+    deck = deck_from_document(document, tmp_path)
+    properties = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).core_properties
+    assert (properties.title, properties.author, properties.last_modified_by) == (
+        "Making it fast", "Ada Lovelace", "Ada Lovelace"
+    )
+    assert "python-pptx" not in (properties.comments or "") and properties.created.year >= 2026

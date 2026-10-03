@@ -109,6 +109,7 @@ def write_pptx(
     presentation = Presentation()
     presentation.slide_width = Pt(deck.style.width)
     presentation.slide_height = Pt(deck.style.height)
+    _properties(presentation, deck)
     blank = presentation.slide_layouts[6]
     for item in rendered:
         slide = presentation.slides.add_slide(blank)
@@ -155,6 +156,27 @@ def write_pptx(
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())
     return target
+
+
+def _properties(presentation: Presentation, deck: Deck) -> None:
+    """The file's own properties, as PowerPoint shows them in its Properties: the talk's
+    title and author, made now -- never python-pptx's template's (its author, its 2013
+    dates, "generated using python-pptx")."""
+
+    import datetime
+
+    opening = next((slide for slide in deck.slides if slide.layout == "title"), None)
+    titled = opening or next((slide for slide in deck.slides if slide.title_runs), None)
+    properties = presentation.core_properties
+    properties.title = "".join(run.text for run in titled.title_runs) if titled else str(deck.id)
+    properties.author = str((opening.source.get("author") if opening else "") or "")
+    properties.last_modified_by = properties.author
+    properties.comments = ""
+    properties.subject = ""
+    properties.keywords = ""
+    properties.revision = 1
+    now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+    properties.created = properties.modified = now
 
 
 def _drop_lists(group: Group, found: dict[str, list] | None = None) -> dict[str, list]:

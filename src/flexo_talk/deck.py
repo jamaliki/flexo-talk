@@ -1059,11 +1059,21 @@ def _blank(cell: object) -> bool:
 
 
 def _numeric(cell: object) -> bool:
+    """A number, with what may go with one: a sign, ± a spread, a %, a multiple (k, M, x)
+    or a unit (38 ms, 1.2 GB, 400 req/s)."""
+
     if isinstance(cell, int | float):
         return True
     text = str(cell).strip().replace("$", "").replace("*", "").replace(",", "")
     text = text.replace("\\pm", "±").rstrip("%").strip()
-    return bool(re.fullmatch(r"[-+\u2212]?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?\s*[kKMGTBx\u00d7]?", text))
+    return bool(re.fullmatch(_NUMBER, text))
+
+
+_NUMBER = (
+    r"[-+\u2212]?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?"
+    r"\s*([kKMGTBx\u00d7]|[A-Za-z\u00b5\u03bc\u00b0\u03a9]{1,4}(/[A-Za-z\u00b5\u03bc]{1,3})?)?"
+)
+"""A number as a table's cell gives one (see ``_numeric``)."""
 
 
 class Slide:

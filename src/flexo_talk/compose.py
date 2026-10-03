@@ -1141,7 +1141,9 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float, *, said: bool = Fa
         # A little slack, so a slide program measuring a hair wider keeps each cell's lines.
         slack = 2 * pad + size * 0.2
         measured = [[canvas.measure(cell, size, None, weight(r)) for cell in row] for r, row in enumerate(block.rows)]
-        widths = [max((row[c].width for row in measured), default=0.0) + slack for c in range(columns)]
+        # A column with nothing in it yet (one just added) is as wide as a short word, so
+        # there is somewhere to click and type.
+        widths = [(max((row[c].width for row in measured), default=0.0) or size * 2.5) + slack for c in range(columns)]
         if sum(widths) <= width:
             break
         least = [
@@ -1223,8 +1225,14 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     y = box.y
     for r, row in enumerate(plan.cells):
         for c, cell in enumerate(row):
+            x = left + total - sum(plan.widths[: c + 1]) if plan.rtl else left + sum(plan.widths[:c])
+            if not cell and PLACEHOLDERS.get():
+                # An empty cell, for an editor: where it is, to click and type in. Drawn nothing.
+                element(
+                    group, "rect", id=f"{identifier}.{r}.{c}", x=x, y=y, width=plan.widths[c],
+                    height=plan.heights[r], fill="none", data__flexo__placeholder="",
+                )
             if cell:
-                x = left + total - sum(plan.widths[: c + 1]) if plan.rtl else left + sum(plan.widths[:c])
                 inner = Box(x + plan.pad, y + plan.baseline, plan.widths[c] - 2 * plan.pad, 0.0)
                 metrics = canvas.measure(
                     cell, plan.size, plan.widths[c] - 2 * plan.pad - plan.size * 0.2,

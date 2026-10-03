@@ -96,6 +96,13 @@ function emphasis(tokens) {
   return paired;
 }
 
+// A line pasted into a list as an item: how deep it was indented (two spaces or a tab a
+// level) and its words without the bullet or number it came with.
+function listed(line) {
+  const indent = /^[ \t]*/.exec(line)[0].replace(/\t/g, "  ").length;
+  return { depth: Math.floor(indent / 2), words: line.trim().replace(/^(?:[-*+•◦▪‣·–]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s+/i, "") };
+}
+
 // -- markup to the page and back -------------------------------------------------------
 
 function wrapped(node, { bold, italic }) {
@@ -546,20 +553,46 @@ export function richText({ value = "", list = false, single = false, numbered = 
       changed(true);
       return;
     }
-    document.execCommand("insertText", false, parts[0]);
+    // Lines pasted are items: their own bullets and numbers ("- ", "• ", "3. ") left
+    // off, their indents kept as levels under the item pasted into, and the words after
+    // the caret moved to the end of the last one.
     let line = lineAt(selection().anchorNode);
-    for (const part of parts.slice(1)) {
+    // The first line goes on with the item pasted into as it was typed, unless that is empty.
+    const items = parts.length > 1 ? parts.map(listed) : [{ depth: 0, words: parts[0] }];
+    if (line?.textContent.trim()) items[0] = { depth: items[0].depth, words: parts[0] };
+    const level = Number(line?.dataset.level) || 0;
+    let rest = null;
+    if (line && items.length > 1) {
+      const after = document.createRange();
+      const s = selection();
+      after.setStart(s.getRangeAt(0).endContainer, s.getRangeAt(0).endOffset);
+      after.setEnd(line, line.childNodes.length);
+      if (!s.isCollapsed) document.execCommand("delete");  // what was chosen goes, as a paste replaces it
+      rest = after.extractContents();
+    }
+    document.execCommand("insertText", false, items[0].words);
+    line = lineAt(selection().anchorNode);
+    const first = items[0].depth;
+    for (const item of items.slice(1)) {
       if (!line) break;
-      const next = lineNode(Number(line.dataset.level) || 0, "");
-      next.replaceChildren(document.createTextNode(part.trim()) );
-      if (!part.trim()) next.replaceChildren(document.createElement("br"));
+      const next = lineNode(Math.max(0, Math.min(4, level + item.depth - first)), "");
+      next.replaceChildren(item.words ? document.createTextNode(item.words) : document.createElement("br"));
       line.after(next);
       line = next;
     }
-    if (line) { const caret = document.createRange(); caret.selectNodeContents(line); caret.collapse(false); place(caret); }
+    if (line) {
+      const caret = document.createRange();
+      caret.selectNodeContents(line);
+      caret.collapse(false);
+      if (rest?.textContent) {
+        if (!line.textContent) line.replaceChildren();
+        line.append(rest);
+      }
+      place(caret);
+    }
     changed(true);
   });
   return area;
 }
 
-export { serialise as markupFromNodes, inlineNodes as nodesFromMarkup };
+export { serialise as markupFromNodes, inlineNodes as nodesFromMarkup, escaped as markupOfWords };

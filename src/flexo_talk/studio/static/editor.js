@@ -8,7 +8,7 @@ import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus,
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
-import { richText } from "/static/kinds/deck/richtext.js";
+import { richText, markupOfWords } from "/static/kinds/deck/richtext.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -244,7 +244,8 @@ function bulletsFrom(text) {
 function numeric(cell) {
   if (typeof cell === "number") return true;
   const text = String(cell).trim().replace(/\$/g, "").replace(/\*/g, "").replace(/,/g, "").replace(/\\pm/g, "±").replace(/%$/, "").trim();
-  return /^[-+−]?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?\s*[kKMGTBx×]?$/.test(text);
+  // As deck.py's _NUMBER: a number with a spread, a multiple or a unit (38 ms, 400 req/s).
+  return /^[-+−]?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?\s*([kKMGTBx×]|[A-Za-zµμ°Ω]{1,4}(\/[A-Za-zµμ]{1,3})?)?$/.test(text);
 }
 
 function autoAlign(rows, header) {
@@ -2326,13 +2327,14 @@ export function mount(studio, container) {
     if (!text) return;
     if (!regionsOf(slideAt()).length) { toast("This layout has no room for text. Choose a different layout first.", { icon: "info" }); return; }
     event.preventDefault();
+    // Words pasted are words: a * or $ in them is that mark, not markup.
     const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-    insertBlock(lines.length > 1 ? "bullets" : "text", lines.length > 1 ? { bullets: lines.map((line) => line.replace(/^[-*•·]\s+/, "")) } : { text });
+    insertBlock(lines.length > 1 ? "bullets" : "text", lines.length > 1 ? { bullets: lines.map((line) => markupOfWords(line.replace(/^[-*•·]\s+/, ""))) } : { text: markupOfWords(text) });
   });
   function pasteClip(clip) {
     if (clip.what === "slides") {
       const at = Math.min(Math.max(...chosenSlides()) + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => structuredClone(slide))); });
+      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => copyOf(slide))); });
       select(at);
       state.picked = clip.slides.map((_, n) => at + n);
       renderRail();
