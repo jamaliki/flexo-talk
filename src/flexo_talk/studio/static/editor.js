@@ -329,10 +329,14 @@ function tinted(node, palette = {}) {
   return node;
 }
 
+// One stop for Tab, the arrow keys going from card to card -- ↓ to the card below -- and
+// Return or Space choosing, the keys staying on the grid as the inspector is drawn again.
 function layoutGrid(current, onPick, layouts, palette) {
-  return tinted(h("div.layout-grid", {}, layouts.map((layout) => h(`button.layout-card${layout.name === current ? ".on" : ""}`, {
-    type: "button", title: layout.note, onclick: () => onPick(layout.name),
+  const grid = tinted(h("div.layout-grid", { role: "radiogroup", "aria-label": "Layout" }, layouts.map((layout) => h(`button.layout-card${layout.name === current ? ".on" : ""}`, {
+    type: "button", role: "radio", "aria-checked": String(layout.name === current), title: layout.note, onclick: () => onPick(layout.name),
   }, glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name])))), palette);
+  ui.roving(grid, () => [...grid.children], "layouts");
+  return grid;
 }
 
 // -- the editor -------------------------------------------------------------------------
@@ -2840,10 +2844,13 @@ export function mount(studio, container) {
     parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts, studio.info?.palette),
       layout === "two-columns" ? splitControl(slide) : null,
       layout === "columns" ? columnsControls(slide) : null,
-      // Unset, the slide follows the deck's Design: said, so it is not taken for one of the others.
-      allowed.has("align") ? ui.field(styleName("align"), ui.select({ value: slide.align ?? "", options: [
+      // Unset, the slide follows the deck's Design: said, so it is not taken for one of the
+      // others -- and the Design's own choice is offered only as that, not twice by one name
+      // (unless the slide already sets it).
+      allowed.has("align") ? ui.field(styleName("align"), ui.select({ value: slide.align ?? "", key: "slide.align", options: [
         { value: "", label: `As in Design (${choiceName("align", deckStyle("align") || "auto")})` },
-        ...["auto", "top", "middle"].map((value) => ({ value, label: choiceName("align", value) }))],
+        ...["auto", "top", "middle"].filter((value) => value !== (deckStyle("align") || "auto") || value === slide.align)
+          .map((value) => ({ value, label: choiceName("align", value) }))],
         onChange: (value) => editSlide((s) => setOption(s, "align", value), { quiet: true }) })) : null));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Footnotes"), footnotesControls(slide)));
@@ -2952,10 +2959,16 @@ export function mount(studio, container) {
         renderInspector();
       } })];
     if (mode === "colour") {
-      const swatch = h("input", { type: "color", value: /^#[0-9a-f]{6}$/i.test(background) ? background : "#1b2a41", style: { width: "44px", height: "30px", border: 0, background: "none", padding: 0 },
-        oninput: () => { hex.value = swatch.value; editSlide((s) => { s.background = swatch.value; }, { quiet: true, merge: `${state.slide}-bg` }); } });
-      const hex = ui.input({ value: background, mono: true, key: "background", onInput: (value) => { if (/^#[0-9a-f]{3,8}$/i.test(value)) { if (value.length === 7) swatch.value = value; editSlide((s) => { s.background = value; }, { quiet: true, merge: `${state.slide}-bg` }); } } });
-      parts.push(h("div.row", {}, h("div.fixed", {}, swatch), hex));
+      // Chosen as every colour is: the theme's, as chips, and any other from the system's
+      // picker in the well after them.
+      const palette = studio.info?.palette || {};
+      const seen = new Set();
+      const colours = [["#1b2a41", "Navy"], [palette.ink, "Text"], [palette.accent, "Accent"],
+        ...[2, 3, 4, 5].map((n) => [palette[`accent${n}`], `Accent ${n}`]), [palette.muted, "Muted"]]
+        .filter(([colour]) => /^#[0-9a-f]{6}$/i.test(colour || "") && !seen.has(colour.toLowerCase()) && seen.add(colour.toLowerCase()))
+        .map(([colour, title]) => ({ value: colour.toLowerCase(), colour, title }));
+      parts.push(ui.swatches({ value: String(background).toLowerCase(), colours, none: false, custom: true, key: "slide.background",
+        onChange: (value) => editSlide((s) => { s.background = value; }, { quiet: true, merge: `${state.slide}-bg` }) }));
     }
     if (mode === "picture") {
       parts.push(fileRow(background, ["image"], (path) => editSlide((s) => { s.background = path; }), "Picture file"));
@@ -3001,8 +3014,9 @@ export function mount(studio, container) {
       } },
     regionsOf(slide).length > 1 ? h("div.region-head", {}, region.name) : null,
     h("div.blocks", {}, blocks.map((block, index) => blockRow(block, region, index)),
-      h("button.add-row", { type: "button", onclick: (event) => menu(event.currentTarget, Object.entries(BLOCKS).filter(([, info]) => !info.hidden).map(([kind, info]) => ({
-        icon: info.icon, label: `${info.label}${CHOOSE.has(kind) ? "…" : ""}`, hint: info.hint, run: () => insertBlock(kind, null, { region: region.key, index: blocks.length - 1 }),
+      // In the order of the bar's buttons and its More menu, as the Mac's Insert menu has them.
+      h("button.add-row", { type: "button", onclick: (event) => menu(event.currentTarget, [...MAIN_BLOCKS, "-", ...MORE_BLOCKS].map((kind) => (kind === "-" ? "-" : {
+        icon: BLOCKS[kind].icon, label: `${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, hint: BLOCKS[kind].hint, run: () => insertBlock(kind, null, { region: region.key, index: blocks.length - 1 }),
       }))) }, icon("plus"), "Add Object")));
     return node;
   }
@@ -3074,13 +3088,28 @@ export function mount(studio, container) {
     return h(`div.rich-field${single ? ".single" : ""}`, {}, area);
   }
 
+  // What the slide draws of an object, in the slide's points: the size of its words (as
+  // drawn, shrunk to fit or not), its width and its height. A number field left to "Auto"
+  // steps from these.
+  function drawnOf(at) {
+    const element = blockElement(at.region, at.index);
+    const scale = element?.ownerSVGElement?.getScreenCTM?.()?.a;
+    const box = element?.getBoundingClientRect();
+    if (!scale || !box?.width) return {};
+    const words = [...element.querySelectorAll("text")].find((text) => text.textContent.trim().length > 1);
+    const size = words ? parseFloat(getComputedStyle(words).fontSize) * ((words.getScreenCTM()?.a || scale) / scale) : null;
+    return { size: Number.isFinite(size) ? size : null, width: box.width / scale, height: box.height / scale };
+  }
+
   // -- the form for each kind of part --
   function blockForm(block, kind, at) {
     const merge = (name) => `${state.slide}-${at.region}-${at.index}-${name}`;
     const key = (name) => `block.${name}`;
     const set = (name, fallback) => (value) => editBlock(at, (b) => setOption(b, name, value, fallback), { merge: merge(name) });
     const edit = (mutate, name) => editBlock(at, mutate, { merge: merge(name) });
-    const size = () => ui.field("Font Size", ui.number({ value: block.size, placeholder: "Auto", min: 4, step: 1, key: key("size"), onChange: set("size") }), { hint: "In points" });
+    // In points, said in the field ("18 pt"); ↑ from "Auto" goes from the size the slide draws.
+    const size = () => ui.field("Font Size", ui.number({ value: block.size, placeholder: "Auto", min: 4, max: 400, step: 1, unit: "pt", start: 18, key: key("size"),
+      current: () => drawnOf(at).size, onChange: set("size") }));
     const toneSwatches = (name, { none = true, extra = [], fallback } = {}) => {
       const palette = studio.info?.palette || {};
       // A palette of five fills more tones by going round again: each colour is offered once.
@@ -3124,7 +3153,8 @@ export function mount(studio, container) {
       case "plot":
         return [ui.field("Function", functionInput(block.plot, (value) => edit((b) => { b.plot = value; }, "plot")), { hint: "file.py:function" }),
           h("div.hint-line", {}, "A function that returns a matplotlib figure. It runs inside ", h("code", {}, "deck.plotting()"), " and receives the deck if it takes an argument."),
-          ui.field("Aspect Ratio", ui.number({ value: block.aspect, placeholder: "Auto", min: 0.2, step: 0.1, key: key("aspect"), onChange: set("aspect") }), { hint: "Width ÷ height" })];
+          ui.field("Aspect Ratio", ui.number({ value: block.aspect, placeholder: "Auto", min: 0.2, step: 0.1, start: 1.5, key: key("aspect"),
+            current: () => { const drawn = drawnOf(at); return drawn.width && drawn.height ? drawn.width / drawn.height : null; }, onChange: set("aspect") }), { hint: "Width ÷ height" })];
       case "math": return mathForm(block, at, edit, toneSwatches, size);
       case "mechanism": return mechanismForm(block, at, edit, toneSwatches);
       default:
@@ -3145,8 +3175,13 @@ export function mount(studio, container) {
       area.setSelectionRange(at, at);
       area.dispatchEvent(new Event("input"));
     };
+    // Put in by the pointer (the LaTeX keeping the keys), or by Space or Return on the chip
+    // with the keys; the chips one stop for Tab, the arrow keys going along them.
     const chips = MATH_SNIPPETS.map(([label, title, snippet]) => h("button.math-chip", { type: "button", title,
-      onmousedown: (event) => { event.preventDefault(); insert(snippet); } }, label));
+      onmousedown: (event) => { event.preventDefault(); insert(snippet); },
+      onclick: (event) => { if (event.detail === 0) insert(snippet); } }, label));
+    const chipRow = h("div.math-chips", { role: "toolbar", "aria-label": "Insert" }, chips);
+    ui.roving(chipRow, () => chips, "math.chips");
     // What could not be read in it, said beside it (the slide shows it in red), and said
     // afresh with each drawing as it is typed.
     const notes = h("div.math-notes");
@@ -3159,7 +3194,7 @@ export function mount(studio, container) {
     };
     note();
     mathNotes = note;
-    return [area, h("div.math-chips", {}, chips), notes,
+    return [area, chipRow, notes,
       h("div.hint-line", {}, "Type LaTeX. ", h("code", {}, "\\\\"), " starts a new line and ", h("code", {}, "&"),
         " aligns lines. In text, put maths between ", h("code", {}, "$"), " signs, or ", h("code", {}, "$$"), " for maths on its own line."),
       ui.field("Align", ui.segmented({ value: block.align || "middle", options: [
@@ -3564,6 +3599,8 @@ export function mount(studio, container) {
     const auto = autoAlign(rows, header);
     const write = () => edit((b) => { b.table = rows.map((row) => [...row]); }, "cells");
     const restructure = (mutate) => { mutate(); editBlock(at, (b) => { b.table = rows.map((row) => [...row]); if (b.align) delete b.align; }); renderInspector(); };
+    // Each column's cells set as the slide sets them: as its alignment says, else as its words do.
+    const aligned = given || auto;
     const input = (r, c) => {
       const cell = ui.cell({ value: rows[r][c], dataset: { key: `cell.${r}.${c}` },
         oninput: () => { rows[r][c] = cell.value; write(); },
@@ -3582,19 +3619,25 @@ export function mount(studio, container) {
       cell.spellcheck = false;  // h() leaves out what is false
       return cell;
     };
+    // Over each column, its pop-up as Numbers has one: the alignment it is set in, shown by
+    // its icon and named in its menu -- never cut to "Aut…" -- and the column's commands
+    // under it, as the slide's menu names them; each row's number opens the row's.
+    const ALIGN_ICONS = { start: "align-left", middle: "align-centre", end: "align-right" };
     const alignRow = h("tr", {}, h("th.corner"), Array.from({ length: columns }, (_, c) => h("th", {},
-      ui.select({ value: given ? given[c] : "", options: [{ value: "", label: `Auto (${auto[c] === "end" ? "Right" : "Left"})` }, { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
+      ui.select({ value: given ? given[c] : "", icons: true, title: `Column ${c + 1}`, key: `table.column.${c}`,
+        options: [{ value: "", label: `Align Automatically (${auto[c] === "end" ? "Right" : "Left"})`, icon: ALIGN_ICONS[auto[c]] || "align-left" },
+          { value: "start", label: "Align Left", icon: "align-left" }, { value: "middle", label: "Align Centre", icon: "align-centre" }, { value: "end", label: "Align Right", icon: "align-right" }],
+        actions: tableItems(at, { row: 0, col: c }).filter((item) => / Column/.test(item.label)),
         onChange: (value) => editBlock(at, (b) => {
           const next = given ? [...given] : [...auto];
           next[c] = value || auto[c];
           if (next.every((v, i) => v === auto[i])) delete b.align; else b.align = next;
-        }) }))), h("th.corner"));
+        }) }))));
     const table = h("table", {}, alignRow, rows.map((row, r) => h(`tr${header && r === 0 ? ".header" : ""}`, {},
-      h("td.corner", {}, r + 1),
-      row.map((_, c) => h("td", {}, input(r, c))),
-      h("td.corner", {}, rows.length > 1 ? h("button", { type: "button", title: "Delete Row", onclick: () => restructure(() => rows.splice(r, 1)) }, icon("close")) : null))),
-    h("tr", {}, h("td.corner"), Array.from({ length: columns }, (_, c) => h("td.corner", {}, columns > 1 ? h("button", { type: "button", title: "Delete Column", onclick: () => restructure(() => rows.forEach((row) => row.splice(c, 1))) }, icon("close")) : null)), h("td.corner")));
-    table.querySelectorAll("th select").forEach((el) => el.classList.remove("select"));
+      h("td.corner", {}, h("button.row-pick", { type: "button", title: `Row ${r + 1}`, "aria-haspopup": "menu",
+        onclick: (event) => menu(event.currentTarget, tableItems(at, { row: r, col: 0 }).filter((item) => / Row/.test(item.label))) }, String(r + 1))),
+      // A number with its unit ("40 ms") is kept on one line, as the slide sets it.
+      row.map((cell, c) => h(`td${numeric(cell) ? ".number" : ""}`, { style: { textAlign: { start: "left", middle: "center", end: "right" }[aligned[c]] || "left" } }, input(r, c))))));
     return [h("div.table-edit.scroll-thin", {}, table),
       h("div.row", {},
         ui.button("Add Row", () => restructure(() => rows.push(Array(columns).fill(""))), { kind: "ghost", icon: "plus", small: true }),
@@ -3611,18 +3654,26 @@ export function mount(studio, container) {
       fileRow(block.image, ["image"], (path) => { editBlock(at, (b) => { b.image = path; }, {}); preview.src = studio.raw(path); preview.hidden = false; }, "picture.png"),
       /\.svg$/i.test(block.image || "") ? h("div.hint-line", {}, "An SVG picture stays as vectors: editable shapes and text in PowerPoint.") : null,
       widthField(block, at),
-      // As Keynote's Description: read out for whoever cannot see the picture.
-      ui.field("Description", ui.input({ value: block.description || "", placeholder: "What the picture shows", key: "block.description",
-        onInput: (text) => editBlock(at, (b) => setOption(b, "description", text), { merge: `${state.slide}-${at.region}-${at.index}-description` }) }),
-      { hint: "Read aloud by screen readers, and PowerPoint's alt text" })];
+      // As Keynote's Description: read out for whoever cannot see the picture, its lines
+      // growing to hold it; Return is done, as it is one paragraph.
+      ui.field("Description", described(ui.textarea({ value: block.description || "", rows: 1, placeholder: "What the picture shows", key: "block.description",
+        onInput: (text) => editBlock(at, (b) => setOption(b, "description", text.replace(/\n+/g, " ")), { merge: `${state.slide}-${at.region}-${at.index}-description` }) })),
+      { hint: "Alt text for screen readers" })];
   }
 
-  // A figure's or picture's width: as its place sets it, or as its corners were dragged to.
+  function described(area) {
+    area.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); area.blur(); } });
+    return area;
+  }
+
+  // A figure's or picture's width, in points: as its place sets it, or as its corners were
+  // dragged to; ↑ from "Auto" goes from the width it is drawn at.
   function widthField(block, at) {
     return ui.field("Width", h("div.row", {},
-      ui.number({ value: block.width, placeholder: "Auto", min: 10, step: 10, key: "block.width", onChange: (value) => editBlock(at, (b) => setOption(b, "width", value)) }),
+      ui.number({ value: block.width, placeholder: "Auto", min: 10, step: 10, unit: "pt", start: 300, key: "block.width",
+        current: () => drawnOf(at).width, onChange: (value) => editBlock(at, (b) => setOption(b, "width", value)) }),
       block.width != null ? ui.button("Reset Size", () => { editBlock(at, (b) => setOption(b, "width", null)); renderInspector(); }, { small: true, kind: "ghost" }) : null),
-    { hint: "In points, or drag a corner on the slide" });
+    { hint: "Or drag a corner on the slide" });
   }
 
   function galleryForm(block, at, edit, size) {
@@ -3641,8 +3692,8 @@ export function mount(studio, container) {
         if (path) { items.push({ picture: path, caption: "" }); write(); renderInspector(); }
       }, { kind: "ghost", icon: "plus", small: true })),
       h("div.grid2", {},
-        ui.field("Columns", ui.number({ value: block.columns, placeholder: "Auto", min: 1, step: 1, key: "gallery.columns", onChange: (value) => editBlock(at, (b) => setOption(b, "columns", value)) })),
-        ui.field("Height", ui.number({ value: block.height, placeholder: "Auto", min: 10, step: 5, key: "gallery.height", onChange: (value) => editBlock(at, (b) => setOption(b, "height", value)) }), { hint: "In points" })),
+        ui.field("Columns", ui.number({ value: block.columns, placeholder: "Auto", min: 1, step: 1, start: Math.min(4, Math.max(1, items.length)), key: "gallery.columns", onChange: (value) => editBlock(at, (b) => setOption(b, "columns", value)) })),
+        ui.field("Height", ui.number({ value: block.height, placeholder: "Auto", min: 10, step: 5, unit: "pt", start: 80, key: "gallery.height", onChange: (value) => editBlock(at, (b) => setOption(b, "height", value)) }))),
       ui.field("Crop", ui.segmented({ value: block.crop || "", options: [{ value: "", label: "None" }, { value: "circle", label: "Circle" }, { value: "square", label: "Square" }],
         onChange: (value) => { editBlock(at, (b) => setOption(b, "crop", value)); renderInspector(); } })),
       size()];
@@ -3651,7 +3702,10 @@ export function mount(studio, container) {
   function figureForm(block, at, edit) {
     const value = block.figure;
     const mode = typeof value === "string" ? (value.includes(".py:") ? "python" : "file") : "inline";
-    const turn = ui.toggle({ value: block.turn !== false, label: "Swap rows and columns to fit", onChange: (on) => editBlock(at, (b) => setOption(b, "turn", on ? null : false)) });
+    // A figure of one shape (a structure by itself) has no rows and columns to swap.
+    const shapes = mode === "inline" ? (value?.nodes || []).length : figure && figureBlock() === block ? figure.parts.model?.nodes?.length : undefined;
+    const turn = shapes !== undefined && shapes < 2 ? null
+      : ui.toggle({ value: block.turn !== false, label: "Swap rows and columns to fit", onChange: (on) => editBlock(at, (b) => setOption(b, "turn", on ? null : false)) });
     const parts = [ui.field("Source", ui.segmented({ value: mode, options: [
       { value: "inline", label: "In Deck" }, { value: "file", label: "File" }, { value: "python", label: "Python" }],
     onChange: async (next) => {
@@ -3685,8 +3739,9 @@ export function mount(studio, container) {
       } });
       area.classList.remove("grow"); area.style.maxHeight = "300px"; area.style.overflow = "auto";
       parts.push(h("details.more", {}, h("summary", {}, icon("chevron"), "JSON"), h("div.inner", {}, area)));
-      // Written in the deck, it is edited where it is drawn: where it is kept is put by.
-      return [exports, widthField(block, at), turn, h("details.more", {}, h("summary", {}, icon("chevron"), "Source"), h("div.inner", {}, parts))];
+      // Written in the deck, it is edited where it is drawn: where it is kept is put by, under
+      // Advanced, as a figure's shape keeps its name in the file.
+      return [exports, widthField(block, at), turn, h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
       parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"),
         h("div.hint-line", {}, "Edit the figure on the slide. Your changes are saved to the file, and changes made to the file appear here."));
@@ -3707,7 +3762,7 @@ export function mount(studio, container) {
   function fileRow(value, types, onChoose, placeholder) {
     const input = ui.input({ value: value || "", placeholder, mono: true, onChange: (text) => text && onChoose(text) });
     return h("div.list-row", {}, input,
-      ui.button("", async () => { const path = await chooseFile({ title: "Choose a File", types }); if (path) { input.value = path; onChoose(path); } }, { icon: "folder", small: true, title: "Choose…" }));
+      ui.button("Choose…", async () => { const path = await chooseFile({ title: "Choose a File", types }); if (path) { input.value = path; onChoose(path); } }, { icon: "folder", small: true, title: "Choose a file" }));
   }
 
   function functionInput(value, onInput) {
@@ -3851,9 +3906,11 @@ export function mount(studio, container) {
       let control;
       if (field.kind === "bool") control = ui.select({ value: changes[field.name] === undefined ? "" : String(changes[field.name]), options: [{ value: "", label: `Default (${fallback ? "On" : "Off"})` }, { value: "true", label: "On" }, { value: "false", label: "Off" }], onChange: (v) => setStyle(v === "" ? null : v === "true") });
       else if (field.kind === "choice") control = ui.select({ value: changes[field.name] ?? "", options: [{ value: "", label: `Default (${choiceLabel(fallback)})` }, ...field.choices.map((choice) => ({ value: choice, label: choiceLabel(choice) }))], onChange: (v) => setStyle(v || null) });
-      else control = ui.number({ value: changes[field.name], placeholder: String(fallback ?? "Auto"), step: "any", key: `style.${field.name}`, onChange: setStyle });
+      // A length's unit is said in its field ("28 pt"), as every number's is, not in its note.
+      const points = /,? in points$/i.test(field.note || "");
+      if (!control) control = ui.number({ value: changes[field.name], placeholder: String(fallback ?? "Auto"), step: "any", unit: points ? "pt" : undefined, key: `style.${field.name}`, onChange: setStyle });
       const set = changes[field.name] !== undefined;
-      return h("div.style-row", {}, h("span.name", {}, h(`span${set ? ".changed" : ""}`, {}, styleName(field.name)), h("span.note", {}, field.note)), control,
+      return h("div.style-row", {}, h("span.name", {}, h(`span${set ? ".changed" : ""}`, {}, styleName(field.name)), h("span.note", {}, String(field.note || "").replace(/,? in points$/i, ""))), control,
         ui.button("", () => { setStyle(null); renderInspector(); }, { kind: "ghost", icon: "undo", small: true, title: "Reset", disabled: !set }));
     });
     const changed = Object.keys(changes).length;

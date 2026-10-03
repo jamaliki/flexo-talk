@@ -60,6 +60,9 @@
 .deck-stage { position: relative; overflow: auto; display: grid; place-items: center; padding: 28px 40px 32px; }
 .slide-wrap { position: relative; width: 100%; max-width: var(--slide-max, 1400px); }
 .slide-page { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #fff; box-shadow: var(--shadow-page); border-radius: 3px; line-height: 0; cursor: default; }
+/* Drawn, the slide is its own page (its drawing paints its background): white behind it
+   showed as a hairline along the rounded edge of a dark slide. */
+.slide-page:has(> svg) { background: transparent; }
 /* Letters at the widths they were set at: rounded to whole pixels at small sizes, a line of code ran past its panel. */
 .slide-page svg { text-rendering: geometricPrecision; }
 .slide-page > svg { width: 100%; height: 100%; display: block; border-radius: 3px; -webkit-user-select: none; user-select: none; }
@@ -289,22 +292,30 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .table-edit table { border-collapse: collapse; width: 100%; }
 /* A column is at least as wide as its longest word (a cell's words set in .cell-view give it
    its width); the rest of the room goes to the columns with the most to say. */
-.table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 56px; vertical-align: top; }
+/* No column is held wider than its words and its pop-up need: the room goes to the columns
+   with the most to say, so their words wrap no more than they must. */
+.table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 40px; vertical-align: top; }
+.table-edit .cell-area, .table-edit .cell-view { padding-inline: 6px; }
 .table-edit tr.header .cell-area, .table-edit tr.header .cell-view { font-weight: 600; }
-/* The row numbers and the row's delete buttons keep to their width: the room is the words'. */
-.table-edit tr > .corner:first-child, .table-edit tr > .corner:last-child { width: 24px; }
+/* The row numbers keep to their width: the room is the words'. */
+.table-edit tr > .corner:first-child { width: 24px; }
 .table-edit tr.header .cell-view b { font-weight: 700; }
 .table-edit th { background: var(--sunken); }
-/* A column's alignment: a pop-up button as any other, made small to fit its head. */
-.table-edit th .select { height: 24px; gap: 2px; padding: 0 4px 0 7px; border: 0; border-radius: 0; background: transparent; box-shadow: none; font: var(--text-hint); }
-.table-edit th .select:not(.default) > span { color: var(--ink-2); }
+/* A column's pop-up: its alignment's icon (grey while automatic) and a chevron, the width of
+   the column; what it is set to is in its tooltip and its menu. */
+.table-edit th .select { width: 100%; height: 24px; justify-content: space-between; padding: 0 3px 0 6px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.table-edit th .select:not(.default) > span { color: var(--ink); }
 .table-edit th .select > svg { width: 12px; height: 12px; }
-/* Its words give way (…) rather than widen the column. */
-.table-edit th .select > span { width: 0; }
+.table-edit th .select:focus-visible { box-shadow: inset 0 0 0 2px var(--focus-ring); }
+/* A cell's words set as its column's are on the slide: left, centred or right. */
+.table-edit .cell-area, .table-edit .cell-view { text-align: inherit; }
+.table-edit td.number .cell-view { white-space: pre; }
 .table-edit .corner { min-width: 24px; text-align: center; vertical-align: middle; color: var(--ink-3); font: var(--text-hint); background: var(--sunken); }
-.table-edit .corner button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 3px; display: grid; place-items: center; width: 100%; }
-.table-edit .corner button:hover { color: var(--error); }
-.table-edit .corner button svg { width: 11px; height: 11px; }
+/* A row's number opens the row's commands, as a row's header does in Numbers. */
+.table-edit td.corner:has(.row-pick) { position: relative; }
+.table-edit .corner .row-pick { position: absolute; inset: 0; border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 0; font: var(--text-hint); }
+.table-edit .corner .row-pick:hover, .table-edit .corner .row-pick.menu-open { color: var(--ink); background: var(--line); }
+.table-edit .corner .row-pick:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
 
 .preview-pic { width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); }
 .math-notes { display: grid; gap: 6px; }
