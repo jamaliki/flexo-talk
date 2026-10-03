@@ -61,7 +61,7 @@
 .slide-wrap { position: relative; width: 100%; max-width: var(--slide-max, 1400px); }
 .slide-page { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #fff; box-shadow: var(--shadow-page); border-radius: 3px; line-height: 0; cursor: default; }
 .slide-page > svg { width: 100%; height: 100%; display: block; border-radius: 3px; -webkit-user-select: none; user-select: none; }
-.slide-page.pending > svg { opacity: 0.6; transition: opacity 0.2s 0.3s; }
+.slide-page.pending > svg { cursor: progress; }
 .slide-page.error { outline: 2px solid var(--error); outline-offset: 3px; }
 .slide-page .placeholder { display: grid; place-items: center; height: 100%; }
 /* A frame on the slide is where its part is, at once: it never glides, nor trails a resizing window. */
