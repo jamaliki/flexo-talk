@@ -697,7 +697,7 @@ export function mount(studio, container) {
     const link = where && where.region !== null;
     return h(`div.message.${message.severity}${link ? ".link" : ""}`, { onclick: () => { if (link) focusBlock(where.region, where.index); } },
       icon(message.severity === "error" ? "error" : message.severity === "note" ? "info" : "warning"),
-      h("div", {}, message.text, message.where ? h("div.where", {}, message.where) : null));
+      h("div", {}, message.text, message.where ? h("div.where", {}, message.place || message.where) : null));
   }
 
   function fitStage() {

@@ -421,6 +421,17 @@ class _Callout:
 
 
 @dataclass(slots=True)
+class _Missing:
+    """What stands for a picture or figure whose file is not there, as the slide is
+    edited: a box saying so, where it would be."""
+
+    what: str
+    """``picture``, ``figure`` or ``plot``."""
+    name: str
+    """The file, as the document names it."""
+
+
+@dataclass(slots=True)
 class _Math:
     source: str
     """LaTeX maths, without its ``$$``."""
@@ -522,7 +533,7 @@ def made(value: object) -> object:
 
 type _Block = (
     _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery | _Quote | _Stats | _Callout
-    | _Math
+    | _Math | _Missing
 )
 
 
@@ -932,6 +943,14 @@ class Region:
         width = _width(width)
         self.blocks.append(_Image(str(source), width))
         self._record("image", str(source), width=width)
+        return self
+
+    def stand_in(self, what: str, name: str) -> Region:
+        """A box where the ``what`` (picture, figure, plot) in the file ``name`` would be,
+        saying it is missing: the rest of the slide is drawn while the file is not there."""
+
+        self.blocks.append(_Missing(what, name))
+        self.sources.append({})
         return self
 
     def table(

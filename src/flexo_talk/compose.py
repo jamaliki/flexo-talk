@@ -52,6 +52,7 @@ from flexo_talk.deck import (
     _Gallery,
     _Image,
     _Math,
+    _Missing,
     _Plot,
     _Quote,
     _Stats,
@@ -776,7 +777,7 @@ OPTICAL = 0.4
 """The share of the free room left above a picture standing alone: its optical centre
 is above the middle, as a page's text block is set above its middle."""
 
-_PICTURES = (_Figure, _Image, _Plot, _Gallery, _Quote, _Table, _Code, _Stats)
+_PICTURES = (_Figure, _Image, _Plot, _Gallery, _Missing, _Quote, _Table, _Code, _Stats)
 """Blocks that stand on their own -- pictures, and the graphics made of words: a table,
 a listing, a row of numbers -- set in the room they have when nothing else shares it."""
 
@@ -857,8 +858,8 @@ def _plan_figures(
     height each other picture has."""
 
     style = canvas.deck.style
-    worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot | _Gallery)]
-    pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot | _Gallery)]
+    worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
+    pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
     # Words take what they need; pictures share the height that is left.
     needed = sum(_height(canvas, block, box.width) for block in worded)
     gaps = style.block_gap * max(0, len(blocks) - 1)
@@ -952,6 +953,8 @@ def _region(
             top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Plot):
             top += _plot(canvas, identifier, block, Box(box.x, top, box.width, max(share, 60.0)))
+        elif isinstance(block, _Missing):
+            top += _missing(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Table):
             top += _table(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Code):
@@ -982,7 +985,7 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
 
     style = canvas.deck.style
     blocks = [_capped(canvas, block) for block in region.blocks]
-    pictures = sum(isinstance(block, _Figure | _Image | _Plot | _Gallery) for block in blocks)
+    pictures = sum(isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing) for block in blocks)
     room = box.height - style.block_gap * max(0, len(blocks) - 1) - PICTURE_LEAST * pictures
 
     def needed(scale: float) -> float:
@@ -2890,6 +2893,26 @@ def _place_svg(
         else:
             child.attrib.pop(inkscape_attr("groupmode"), None)
             group.append(child)
+
+
+def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> float:
+    """A dashed box where a picture or figure whose file is not there would be, saying so."""
+
+    style = canvas.deck.style
+    height = min(box.height, max(box.width * 0.6, 40.0))
+    ink = canvas.palette.get("muted-ink")
+    group = element(canvas.layer, "g", id=identifier, data__flexo__talk="missing")
+    element(
+        group, "rect", id=f"{identifier}.box", x=box.x, y=box.y, width=box.width, height=height, rx=6.0,
+        fill=ink, fill_opacity=0.06, stroke=ink, stroke_opacity=0.6, stroke_width=1.5, stroke_dasharray="6 4",
+    )
+    # The name as the document writes it, not read as markup.
+    runs = (TextRun(f"Missing {block.what}: {block.name}"),)
+    size, pad = style.small_size, style.small_size
+    words = canvas.measure(runs, size, max(box.width - 2 * pad, 1.0))
+    place = Box(box.x + pad, box.y + max((height - words.height) / 2.0, 0.0), max(box.width - 2 * pad, 1.0), 0.0)
+    canvas.words(f"{identifier}.words", runs, place, size=size, align="middle", role="muted-ink", parent=group)
+    return height
 
 
 def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:

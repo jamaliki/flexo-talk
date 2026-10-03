@@ -27,6 +27,7 @@ from flexo_talk.document import (
     SCHEMA_VERSION,
     SLIDE_KEYS,
     DeckDocumentError,
+    MissingFile,
     UntrustedCode,
     deck_from_document,
     dump_document,
@@ -131,6 +132,21 @@ CHOICE_LABELS = {
 """What the studio shows for a style setting's choices, where it is not the value
 capitalised (``title_align: middle`` is Centre)."""
 
+BLOCK_LABELS = {
+    "bullets": "List", "text": "Text", "figure": "Figure", "image": "Picture", "plot": "Plot", "table": "Table",
+    "gallery": "Gallery", "code": "Code", "quote": "Quote", "stats": "Numbers", "callout": "Callout",
+    "math": "Equation", "mechanism": "Mechanism",
+}
+"""What the studio calls each kind of block."""
+
+FIELD_LABELS = {
+    "title": "Title", "subtitle": "Subtitle", "author": "Author", "date": "Date", "words": "Statement",
+    "by": "Attribution", "notes": "Notes", "footnotes": "Footnotes", "background": "Background",
+    "shade": "Background", "layout": "Layout", "columns": "Columns", "widths": "Columns", "split": "Columns",
+    "dark": "Background", "align": "Content Position",
+}
+"""What the studio calls a slide's settings, where a message names one."""
+
 CACHE_SIZE = 600
 CACHE_BYTES = 200_000_000
 BUDGET = 0.4
@@ -195,6 +211,37 @@ class DeckKind:
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )
+
+    def malformed(self, document: Any) -> str | None:
+        """What makes a document no deck the editor can show, if anything: slides that
+        are no list, deck settings that are no mapping. A wrong slide or block is said on
+        its slide instead."""
+
+        from flexo.diagnostics import described
+
+        if not isinstance(document, dict):
+            return "it is not a deck (a mapping with deck and slides)"
+        slides, deck = document.get("slides"), document.get("deck")
+        if slides is not None and not isinstance(slides, list):
+            return f"slides must be a list of slides, not {described(slides)}"
+        if deck is not None and not isinstance(deck, dict):
+            return f"deck must be a mapping of deck settings, not {described(deck)}"
+        for number, slide in enumerate(slides or [], start=1):
+            if not isinstance(slide, dict):
+                continue  # said on its slide
+            for key in ("body", "left", "right", "columns"):
+                value = slide.get(key)
+                if value is not None and not isinstance(value, list):
+                    return f"slide {number}'s {key} must be a list, not {described(value)}"
+            regions = [("body", slide.get("body")), ("left", slide.get("left")), ("right", slide.get("right"))]
+            for column in slide.get("columns") or []:
+                if column is not None and not isinstance(column, list):
+                    return f"slide {number}'s columns must each be a list, not {described(column)}"
+                regions.append(("columns", column))
+            for key, blocks in regions:
+                if any(block is None for block in blocks or []):
+                    return f"slide {number}'s {key} has an empty item (a “-” with nothing after it)"
+        return None
 
     def check(self, document: Any, base: Path) -> list[str]:
         errors: list[DeckDocumentError] = []
@@ -299,11 +346,14 @@ class DeckKind:
         try:
             deck = deck_from_document(document, base, errors=errors)
         except DeckDocumentError as error:
-            return Drawing([], [Message(_plain_message(error), "error", error.where)])
+            return Drawing([], _placed([Message(_plain_message(error), "error", error.where)], document))
         except Exception as error:
-            return Drawing([], [Message(explain(error), "error", "deck")])
+            return Drawing([], _placed([Message(explain(error), "error", "deck")], document))
         slides = document.get("slides") or []
-        failed = {_slide_of(error.where): error for error in errors}
+        # A picture or figure whose file is missing is said, and a box stands in for it:
+        # the rest of its slide is drawn.
+        absent = [error for error in errors if isinstance(error, MissingFile)]
+        failed = {_slide_of(error.where): error for error in errors if not isinstance(error, MissingFile)}
         deck_data = document.get("deck") or {}
         from flexo.studio import code_allowed
 
@@ -372,6 +422,9 @@ class DeckKind:
         for index, (slide, data) in enumerate(zip(deck.slides, slides, strict=True)):
             identifier = slide.id
             done = self._slides.get(keys[index])
+            for error in absent:
+                if _slide_of(error.where) == index:
+                    messages.append(Message(_plain_message(error), "error", error.where, identifier, "deck.missing"))
             if index in failed:
                 error = failed[index]
                 messages.append(Message(_plain_message(error), "error", error.where, identifier, "deck.document"))
@@ -395,8 +448,8 @@ class DeckKind:
                     messages.append(Message(text, "warning", f"slides[{index}]", identifier, "code.untrusted"))
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
-        return Drawing(pages, messages, sorted(watched), {"palette": _palette(deck), "tones": _tones(deck),
-                                                          "unsettled": unsettled})
+        return Drawing(pages, _placed(messages, document), sorted(watched),
+                       {"palette": _palette(deck), "tones": _tones(deck), "unsettled": unsettled})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck
@@ -452,20 +505,52 @@ class DeckKind:
             return answer
         raise EditError("This figure is made in Python. Edit it in its Python file.")
 
-    def export(self, document: dict[str, Any], base: Path, stem: str, formats: list[str]) -> list[Path]:
-        deck = deck_from_document(document, base)
-        result = deck.build(base / "build", formats=tuple(formats))
+    def export(
+        self,
+        document: dict[str, Any],
+        base: Path,
+        stem: str,
+        formats: list[str],
+        *,
+        into: Path | None = None,
+        steps: bool = False,
+    ) -> list[Path]:
+        """The deck's files, in ``build/`` beside it, named after the deck (talk.pdf,
+        talk-01.png), or ``into`` a folder of the page's, where each slide's pictures go in
+        a folder named after the deck, as slide-01.png. The PDF has a page per slide,
+        showing it whole, as Keynote's does; with ``steps``, a page per stage of each list
+        a slide reveals."""
+
+        from flexo_talk.export import build_deck, file_stem
+
+        try:
+            deck = deck_from_document(document, base)
+        except DeckDocumentError as error:
+            # Said where it is as a person says it (“Slide 4 · Picture”), not as the document does.
+            place = _place(error.where, document)
+            raise ValueError(f"{place}: {error.message}" if place else error.message) from error
+        folder = into or base / "build"
+        images = folder / file_stem(deck.id) if into is not None else None
+        result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images)
         written = [result.pptx, result.pdf, *result.svgs, *result.pngs]
         return [path for path in written if path]
 
     def export_part(
-        self, document: dict[str, Any], base: Path, stem: str, part: dict[str, Any], formats: list[str]
+        self,
+        document: dict[str, Any],
+        base: Path,
+        stem: str,
+        part: dict[str, Any],
+        formats: list[str],
+        *,
+        into: Path | None = None,
     ) -> list[Path]:
         """A figure on a slide written out as a figure of its own, in the deck's look: its
         document (``yaml``, a flexo figure file) and what flexo builds of it (``editable``
         and ``portable`` SVG, ``pdf``, ``png``). It is laid out as written, not as fitted
         to the slide. Files go in ``build/`` beside the deck, the files the figure names
-        (a theme, structures, pictures) named from there."""
+        (a theme, structures, pictures) named from there; or ``into`` a folder of the
+        page's, naming those files by where they are."""
 
         import os
         from dataclasses import replace
@@ -500,7 +585,7 @@ class DeckKind:
             if isinstance(source, str) and source and not Path(source).is_absolute() and (origin / source).is_file():
                 properties["source"] = str((origin / source).resolve())
         spec = parse_figure(data)
-        folder = base / "build"
+        folder = into or base / "build"
         folder.mkdir(parents=True, exist_ok=True)
         name = f"{stem}-{spec.id}"
         written: list[Path] = []
@@ -508,9 +593,9 @@ class DeckKind:
 
             def beside(value: object) -> object:
                 # A file inside the folder is named from where the figure file is.
-                if isinstance(value, str) and Path(value).is_absolute() and Path(value).is_relative_to(base.resolve()):
-                    return os.path.relpath(value, folder)
-                return value
+                if into is not None or not (isinstance(value, str) and Path(value).is_absolute()):
+                    return value
+                return os.path.relpath(value, folder) if Path(value).is_relative_to(base.resolve()) else value
 
             for key in ("style", "theme", "palette"):
                 if key in data["figure"]:
@@ -525,7 +610,13 @@ class DeckKind:
         built = [item for item in formats if item != "yaml"]
         if built:
             result = build(spec, folder, stem=name, formats=tuple(built))
-            written += list(result.outputs.existing())
+            made = list(result.outputs.existing())
+            if into is not None and "editable" not in built and len(made) > 1:
+                # The editable SVG is written whatever is asked for: made aside, to be
+                # handed over, only what was asked for is.
+                result.outputs.editable_svg.unlink()
+                made.remove(result.outputs.editable_svg)
+            written += made
         return written
 
     def text(self, document: dict[str, Any]) -> str:
@@ -598,18 +689,33 @@ def _figure_file(base: Path, value: str) -> Path:
 
 
 def _restore(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
-    """A figure file written as ``text`` -- as an edit made on its slide found it (undone)
-    or left it (done again) -- only while it is still ``expect``: a change made to the
-    file since, by hand or by someone else, is not lost."""
+    """A figure file put back as an edit made on its slide found it (undone) or left it
+    (done again): from ``expect``, the file as the edit left (found) it, to ``text``. A
+    change made to the file since, by hand or by someone else, is kept: the edit is
+    taken back around it, unless it changed the same lines."""
 
     from flexo.studio.figure_edit import EditError
 
     value = str(action.get("file") or "")
     path = _figure_file(base, value)
-    if path.read_text(encoding="utf-8") != action.get("expect"):
-        raise EditError(f"“{value}” has changed since this edit, so it was left unchanged.")
-    path.write_text(str(action.get("text") or ""), encoding="utf-8")
+    now, expect, text = path.read_text(encoding="utf-8"), str(action.get("expect") or ""), str(action.get("text") or "")
+    if now != expect:
+        text = _merged_lines(expect, now, text)
+        if text is None or _figure_data(text, path.suffix) is None:
+            raise EditError(f"“{value}” has changed in the same place since this edit, so it was left as it is.")
+    path.write_text(text, encoding="utf-8")
     return {"document": document, "file": value}
+
+
+def _merged_lines(base: str, ours: str, theirs: str) -> str | None:
+    """Two changes to a file's text, merged line by line; None where they touch the same
+    words, so neither is lost (merged both ways round, the two must agree)."""
+
+    from flexo.studio.merge import merge_lists
+
+    lines = [text.splitlines(keepends=True) for text in (base, ours, theirs)]
+    one, other = merge_lists(*lines), merge_lists(lines[0], lines[2], lines[1])
+    return "".join(one) if one == other else None
 
 
 def _figure_data(text: str, suffix: str) -> Any:
@@ -850,6 +956,8 @@ def _files(data: object, base: Path) -> set[Path]:
                         if path.suffix == ".py":
                             # Python beside it may be what it imports: a change there counts.
                             found.update(sorted(path.parent.glob("*.py"))[:50])
+                    elif not path.exists():
+                        found.add(path)  # missing: watched, so the slide is drawn again once it is there
             elif isinstance(value, dict | list) and not (key == "figure" and isinstance(value, dict)):
                 found |= _files(value, base)
             elif key == "gallery" and isinstance(value, list):
@@ -888,6 +996,43 @@ def _diagnostic(text: str, identifier: str, index: int, severity: str) -> Messag
     if region and not region.group(1).startswith(("its", "the")):
         return Message(region.group(2), severity, f"{where} {region.group(1)}", identifier)
     return Message(rest, severity, where, identifier)
+
+
+def _placed(messages: list[Message], document: Any) -> list[Message]:
+    for message in messages:
+        message.place = _place(message.where, document)
+    return messages
+
+
+def _place(where: str, document: Any) -> str:
+    """A message's ``where`` as a person says it: ``slides[3].body[1] (image)`` is
+    “Slide 4 · Picture”, ``deck.style.title_size`` “Design · Title Size”."""
+
+    found = re.match(r"slides\[(\d+)\](.*)", where or "")
+    if not found:
+        if not (where or "").startswith("deck"):
+            return ""
+        key = where.split(".")[-1]
+        named = STYLE_LABELS.get(key) or FIELD_LABELS.get(key)
+        return f"Design · {named}" if named and key != "deck" else "Design"
+    index, rest = int(found.group(1)), found.group(2)
+    kind = re.search(r"\((\w+)\)", rest)
+    block = re.match(r"\s*\.?(?:(body|left|right)|columns\[(\d+)\]|column(\d+))[\[.](\d+)", rest)
+    field = re.match(r"\.(\w+)", rest)
+    named = None
+    if kind:
+        named = BLOCK_LABELS.get(kind.group(1))
+    elif block:
+        try:
+            slide = document["slides"][index]
+            column = int(block.group(2)) if block.group(2) else int(block.group(3) or 1) - 1  # drawn ids count from 1
+            region = slide[block.group(1)] if block.group(1) else slide["columns"][column]
+            named = next((BLOCK_LABELS[key] for key in region[int(block.group(4))] if key in BLOCK_LABELS), None)
+        except (KeyError, IndexError, TypeError, ValueError):
+            named = None
+    elif field:
+        named = FIELD_LABELS.get(field.group(1))
+    return f"Slide {index + 1} · {named}" if named else f"Slide {index + 1}"
 
 
 def _blank(deck, slide) -> str:

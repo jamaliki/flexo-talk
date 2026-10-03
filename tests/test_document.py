@@ -183,6 +183,80 @@ def test_the_studio_reports_a_wrong_slide_on_its_page(tmp_path: Path) -> None:
     assert [page.extra["error"] for page in drawing.pages] == [False, True]
     (message,) = [message for message in drawing.messages if message.severity == "error"]
     assert message.page == "slide2" and message.where == "slides[1].body[0] (stats)"
+    assert message.place == "Slide 2 · Numbers"
+
+
+def test_a_missing_picture_or_figure_file_stands_aside_and_its_slide_is_drawn(tmp_path: Path) -> None:
+    from flexo.confine import folder_root
+
+    from flexo_talk.document import MissingFile
+
+    kind = DeckKind()
+    document = {"deck": {}, "slides": [
+        {"title": "Mine", "body": [{"bullets": ["One point"]}, {"image": "photo.png"}]},
+        {"title": "Flow", "background": "paper.png", "body": [{"figure": "flow.yaml"}]},
+    ]}
+    root = folder_root.set(tmp_path)
+    try:
+        drawing = kind.draw(document, tmp_path, {})
+    finally:
+        folder_root.reset(root)
+    assert [page.extra["error"] for page in drawing.pages] == [False, False]
+    first, second = (page.svg for page in drawing.pages)
+    assert "One point" in first and "Missing picture: photo.png" in first
+    assert "Missing figure: flow.yaml" in second
+    said = [(message.text, message.place) for message in drawing.messages if message.severity == "error"]
+    assert said == [
+        ("Can't find photo.png in the deck's folder.", "Slide 1 · Picture"),
+        ("Can't find paper.png in the deck's folder.", "Slide 2 · Background"),
+        ("Can't find flow.yaml in the deck's folder.", "Slide 2 · Figure"),
+    ]
+    # Watched while missing, so the slide is drawn again once the file is there.
+    assert {tmp_path / "photo.png", tmp_path / "flow.yaml"} <= {Path(file) for file in drawing.files}
+    # Built for real, a missing file is an error still.
+    with pytest.raises(MissingFile, match=r"Cannot find photo\.png"):
+        deck_from_document(document, tmp_path)
+
+
+def test_a_message_says_where_as_a_person_would() -> None:
+    from flexo_talk.studio import _place
+
+    document = {"slides": [{"title": "A", "layout": "columns", "columns": [[{"text": "a"}], [{"table": [["x"]]}]]}]}
+    assert _place("slides[0].columns[1][0] (table)", document) == "Slide 1 · Table"
+    assert _place("slides[0] column2.0", document) == "Slide 1 · Table"
+    assert _place("slides[0].title", document) == "Slide 1 · Title"
+    assert _place("slides[0]", document) == "Slide 1"
+    assert _place("deck.style.title_size", document) == "Design · Title Size"
+    assert _place("deck", document) == "Design"
+    assert _place("", document) == ""
+
+
+def test_a_deck_its_editor_cannot_show_is_not_taken_in_or_written_over(tmp_path: Path) -> None:
+    import time
+
+    from flexo.studio.workspace import Workspace
+
+    talk = tmp_path / "talk.yaml"
+    talk.write_text(dump_document({"deck": {"id": "talk"}, "slides": [{"title": "A"}]}), encoding="utf-8")
+    assert DeckKind().malformed({"slides": 5}) == "slides must be a list of slides, not a number (5)"
+    assert "empty item" in DeckKind().malformed({"slides": [{"body": [None]}]})
+    assert DeckKind().malformed({"slides": [{"title": "A", "body": [{"text": "x"}]}, "odd"]}) is None
+    workspace = Workspace(tmp_path)
+    try:
+        doc = workspace.open("talk.yaml")
+        talk.write_text("schema_version: 1\nslides: 5\n", encoding="utf-8")
+        deadline = time.monotonic() + 5
+        while not doc.held and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert doc.held and "slides must be a list" in (doc.problem or "")
+        assert doc.document["slides"] == [{"title": "A"}]
+        doc.update({**doc.document, "slides": [{"title": "B"}]}, doc.version, {"id": "p", "kind": "person"})
+        workspace.flush()
+        assert talk.read_text(encoding="utf-8") == "schema_version: 1\nslides: 5\n"
+        with pytest.raises(ValueError, match="nothing was changed"):
+            doc.update({"slides": 5}, doc.version, {"id": "agent", "kind": "agent"})
+    finally:
+        workspace.close()
 
 
 def test_the_studio_catalog_offers_every_look_layout_and_block() -> None:
@@ -382,11 +456,17 @@ def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: P
     assert path.read_text() == NEW_FIGURE
     restore(result["now"], result["was"])  # done again
     assert path.read_text() == result["now"]
-    # Changed since by hand: left as it is.
+    # Changed since by hand, elsewhere in the file: undone and done again around it.
     path.write_text(result["now"] + "\n# mine\n", encoding="utf-8")
-    with pytest.raises(EditError, match="changed since"):
+    restore(result["was"], result["now"])
+    assert path.read_text() == NEW_FIGURE + "\n# mine\n"
+    restore(result["now"], result["was"])
+    assert path.read_text() == result["now"] + "\n# mine\n"
+    # Changed since in the same place: left as it is.
+    path.write_text(result["now"].replace("backbone", "trunk") + "\n# mine\n", encoding="utf-8")
+    with pytest.raises(EditError, match="changed in the same place since"):
         restore(result["was"], result["now"])
-    assert path.read_text().endswith("# mine\n")
+    assert "trunk" in path.read_text() and path.read_text().endswith("# mine\n")
     with pytest.raises(EditError, match="Can't find the figure file"):
         kind.act(document, {"do": "figure-file", "file": "../elsewhere.yaml", "text": "", "expect": ""}, tmp_path)
 

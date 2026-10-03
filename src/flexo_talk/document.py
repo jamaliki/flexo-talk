@@ -128,6 +128,15 @@ class DeckDocumentError(ValueError):
         self.message = message
 
 
+class MissingFile(DeckDocumentError):
+    """A file the document names (a picture, a figure file) that is not there: ``name``
+    as the document writes it."""
+
+    def __init__(self, where: str, message: str, name: str) -> None:
+        super().__init__(where, message)
+        self.name = name
+
+
 class UntrustedCode(DeckDocumentError):
     """Python a deck names, in a folder the studio has not been told to trust: not run."""
 
@@ -299,8 +308,10 @@ def deck_from_document(
     """A deck from its document. Files it names are found from ``base``.
 
     With ``errors`` given, a slide that cannot be made is reported there and
-    stands in the deck as a blank slide, so the others keep their places;
-    without it, the first such slide raises ``DeckDocumentError``.
+    stands in the deck as a blank slide, so the others keep their places, and a
+    picture or figure whose file is missing is reported there and stands in its
+    slide as a box saying so; without it, the first such slide raises
+    ``DeckDocumentError``.
     """
 
     base = Path(base).resolve()
@@ -321,7 +332,7 @@ def deck_from_document(
     for index, data in enumerate(slides):
         where = f"slides[{index}]"
         try:
-            add_slide(deck, data, base, where)
+            add_slide(deck, data, base, where, missing=errors)
         except DeckDocumentError as error:
             if errors is None:
                 raise
@@ -390,8 +401,11 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
     return deck
 
 
-def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
-    """Add the slide ``data`` describes to ``deck``."""
+def add_slide(
+    deck: Deck, data: object, base: Path, where: str, *, missing: list[DeckDocumentError] | None = None
+) -> Slide:
+    """Add the slide ``data`` describes to ``deck``. With ``missing`` given, a file it names
+    that is not there is said there, and the slide is made without it (see ``add_block``)."""
 
     if not isinstance(data, dict):
         raise DeckDocumentError(where, "A slide must be a mapping (title, layout, body, \u2026).")
@@ -403,11 +417,17 @@ def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
     background = data.get("background")
     if isinstance(background, str) and not background.startswith("#"):
-        background = str(_file(base, background, f"{where}.background"))
+        try:
+            background = str(_file(base, background, f"{where}.background"))
+        except MissingFile as error:
+            if missing is None:
+                raise
+            missing.append(error)
+            background = None
     shade = data.get("shade", 0.0)
     text = _text_of(data, where)
     try:
-        slide = _slide_of(deck, data, layout, background, shade, text, base, where)
+        slide = _slide_of(deck, data, layout, background, shade, text, base, where, missing)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError) as error:
@@ -441,7 +461,8 @@ def _is_words(value: object) -> bool:
 
 
 def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object, shade: object,
-              text: Callable[[str], str], base: Path, where: str) -> Slide:
+              text: Callable[[str], str], base: Path, where: str,
+              missing: list[DeckDocumentError] | None = None) -> Slide:
     if layout == "title":
         slide = deck.title(
             text("title"), subtitle=text("subtitle"), author=text("author"), date=text("date"),
@@ -486,7 +507,7 @@ def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object,
             if not isinstance(blocks, list):
                 raise DeckDocumentError(names[name], "A region must be a list of blocks.")
             for index, block in enumerate(blocks):
-                add_block(slide.regions[name], block, base, f"{names[name]}[{index}]")
+                add_block(slide.regions[name], block, base, f"{names[name]}[{index}]", missing=missing)
     return slide
 
 
@@ -504,8 +525,15 @@ def _text_of(data: dict[str, Any], where: str) -> Callable[[str], str]:
     return text
 
 
-def add_block(region: Region, block: object, base: Path, where: str) -> None:
-    """Add the block ``block`` describes to ``region``."""
+_STAND_INS = {"image": "picture", "gallery": "picture", "figure": "figure", "plot": "plot"}
+"""What a block stands for, said in the box standing in for it while its file is missing."""
+
+
+def add_block(
+    region: Region, block: object, base: Path, where: str, *, missing: list[DeckDocumentError] | None = None
+) -> None:
+    """Add the block ``block`` describes to ``region``. With ``missing`` given, a picture
+    or figure whose file is not there is said there, and a box saying so stands in for it."""
 
     if not isinstance(block, dict):
         raise DeckDocumentError(where, f"A block must be a mapping named by its kind ({', '.join(BLOCKS)}).")
@@ -562,6 +590,11 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
             region.plot(_plot(base, value, here, region), **options)
         elif kind == "mechanism":
             region.mechanism(_steps(value, here), **options)
+    except MissingFile as error:
+        if missing is None or kind not in _STAND_INS:
+            raise
+        missing.append(error)
+        region.stand_in(_STAND_INS[kind], error.name)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError, OSError) as error:
@@ -945,7 +978,10 @@ def _file(base: Path, name: str, where: str = "") -> Path:
         # carry a file of yours into its slides.
         raise DeckDocumentError(where, f"{name} is outside the folder.")
     if not path.exists():
-        raise DeckDocumentError(where, f"Cannot find {name} (looked in {path.parent}).")
+        if root is not None:
+            # In the studio a file is named as the deck names it: from the deck's folder.
+            raise MissingFile(where, f"Can't find {name} in the deck's folder.", name)
+        raise MissingFile(where, f"Cannot find {name} (looked in {path.parent}).", name)
     return path
 
 
