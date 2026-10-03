@@ -18,6 +18,9 @@
 .thumb.on .frame { box-shadow: 0 0 0 2.5px var(--accent); }
 .thumb.on .num { color: var(--accent); font-weight: 700; }
 .rail-list:focus-visible .thumb.on .frame { box-shadow: 0 0 0 2.5px var(--accent), 0 0 0 5px var(--accent-soft); }
+/* With something on the slide chosen, the slide's thumbnail shows it is chosen but not where keys go, as a Mac list out of focus does. */
+.deck:has(.hit.selected:not([hidden])) .rail-list:not(:focus) .thumb.on .frame { box-shadow: 0 0 0 2.5px var(--line-strong); }
+.deck:has(.hit.selected:not([hidden])) .rail-list:not(:focus) .thumb.on .num { color: var(--ink-2); }
 .thumb .picture { width: 100%; height: 100%; }
 .thumb .frame { content-visibility: auto; contain-intrinsic-size: auto 90px; }
 .thumb .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); font-size: 10.5px; padding: 6px; text-align: center; background: var(--raised); }
