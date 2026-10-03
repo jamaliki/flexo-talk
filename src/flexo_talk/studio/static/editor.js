@@ -809,7 +809,9 @@ export function mount(studio, container) {
       page?.steps > 1 ? h("span.chip", {}, icon("reveal"), `${page.steps} steps`) : null,
       here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), nameOf(entry.who), entry.doing ? h("span.muted", {}, ` · ${entry.doing}`) : null)),
       h("span.spacer", { style: { flex: 1 } }),
-      pending ? h("span.row.drawing", {}, h("span.spinner"), "Updating…") : learning ? h("span.stage-hint", {}, "Click to select · Drag to move · Double-click to edit text") : null);
+      // With the studio away nothing is drawn: said so, not a spinner that never ends.
+      pending ? (studio.state === "offline" ? h("span.stage-hint", {}, "Drawn again when the studio is back")
+        : h("span.row.drawing", {}, h("span.spinner"), "Updating…")) : learning ? h("span.stage-hint", {}, "Click to select · Drag to move · Double-click to edit text") : null);
     clear(stageMessages, own.map(messageView));
     stageMessages.hidden = !own.length;
     fitStage();
