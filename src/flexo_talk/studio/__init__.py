@@ -468,6 +468,11 @@ class DeckKind:
 
         from flexo.studio.figure_edit import EditError, apply, apply_to_data, model
 
+        if action.get("do") == "structure-fetch":
+            # A PDB entry downloaded before a structure is made of it: its ID, or why not.
+            from flexo.studio.figure_kind import fetched
+
+            return {"document": document, "id": fetched(str(action.get("id") or ""))}
         if action.get("do") == "mechanism":
             return _mechanism(document, action, base)
         if action.get("do") == "inline":

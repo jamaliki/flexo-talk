@@ -3282,7 +3282,7 @@ export function mount(studio, container) {
       const actions = [];
       if (types.some((type) => ["image", "figure", "structure"].includes(type))) actions.push({ label: "Upload…", run: () => { upload.click(); return false; } });
       if (types.includes("structure")) actions.push({ label: "PDB ID…", run: () => {
-        ask("Enter a PDB ID", "1UBQ").then((id) => { if (id) finish(id.toUpperCase()); });
+        askEntry().then((id) => { if (id) finish(id); });
         return false;
       } });
       if (create === "figure") actions.push({ label: "New Figure File…", run: () => {
@@ -3299,7 +3299,8 @@ export function mount(studio, container) {
         const shown = files.filter((file) => file !== studio.file.split("/").pop());
         clear(list, shown.length ? shown.map((file) => h("button.menu-item", { type: "button", onclick: () => finish(file) },
           types.includes("image") ? h("img.pic", { src: studio.raw(file), alt: "" }) : icon(types.includes("python") ? "code" : types.includes("structure") ? "structure" : "figure"),
-          h("span.menu-text", {}, h("span", {}, file.split("/").pop()), h("span.menu-hint", {}, file))))
+          // Its name, and its folder only when it is in one.
+          h("span.menu-text", {}, h("span", {}, file.split("/").pop()), file.includes("/") ? h("span.menu-hint", {}, file.slice(0, file.lastIndexOf("/") + 1)) : null)))
           : h("div.empty", {}, types.includes("structure") ? "No structure files in the deck's folder. Upload a PDB or mmCIF file, or enter a PDB ID." : "No matching files in the deck's folder"));
       });
     });
@@ -3315,6 +3316,35 @@ export function mount(studio, container) {
           resolve(value.trim());
         } }], onClose: () => resolve(null) });
       setTimeout(() => input.focus(), 30);
+    });
+  }
+
+  // A PDB entry, downloaded before it is added: if it can't be, the dialog says why and
+  // nothing is added (as in the figure editor).
+  function askEntry() {
+    return new Promise((resolve) => {
+      let done = false;
+      const input = ui.input({ placeholder: "1UBQ", mono: true });
+      const note = h("div.field-problem", { hidden: true });
+      const fetchIt = async () => {
+        const id = input.value.trim().toUpperCase();
+        if (!id) { input.focus(); return; }
+        clear(note, h("span.spinner"), h("span", {}, `Downloading ${id}…`));
+        note.hidden = false;
+        try {
+          const found = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "structure-fetch", id } });
+          if (!done) { done = true; resolve(found.id); box.close(); }
+        } catch (error) {
+          clear(note, icon("warning"), h("span", {}, error.message));
+          input.focus();
+        }
+      };
+      input.addEventListener("input", () => { note.hidden = true; });
+      input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); fetchIt(); } });
+      const box = dialog({ title: "Add a Structure from the PDB", body: [ui.field("PDB ID", input, { hint: "Four characters, like 1UBQ" }), note],
+        actions: [{ label: "Cancel", run: () => { done = true; resolve(null); } }, { label: "Download", kind: "primary", run: () => { fetchIt(); return false; } }],
+        onClose: () => { if (!done) { done = true; resolve(null); } } });
+      setTimeout(() => input.focus(), 20);
     });
   }
 
