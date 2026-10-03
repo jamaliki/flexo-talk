@@ -35,7 +35,12 @@
 /* Who else is on a slide: in its lower corner, clear of its title. */
 .thumb .here { position: absolute; right: 4px; bottom: 4px; display: flex; }
 .thumb:hover .here { visibility: hidden; }
-.thumb .more { position: absolute; right: 2px; bottom: 2px; opacity: 0; background: var(--raised); }
+/* A small chip in the corner, the same in light and dark: raised off the slide by its edge
+   and shadow, whatever the slide's colour under it. */
+.thumb .more { position: absolute; right: 4px; bottom: 4px; opacity: 0; width: 22px; height: 16px; padding: 0; border-radius: 5px;
+  background: var(--raised); border-color: var(--line-strong); box-shadow: var(--shadow-1); color: var(--ink-2); }
+.thumb .more:hover { background: var(--raised); color: var(--ink); }
+.thumb .more svg { width: 14px; height: 14px; }
 .thumb:hover .more, .thumb .more:focus-visible { opacity: 1; }
 .thumb.dragging { opacity: 0.35; }
 .thumb.stale .frame .picture { opacity: 0.55; }
@@ -70,6 +75,7 @@
 .slide-page.pending > svg { cursor: progress; }
 .slide-page.error { outline: 2px solid var(--error); outline-offset: 3px; }
 .slide-page .placeholder { display: grid; place-items: center; height: 100%; }
+.slide-page .placeholder.away { padding: 8%; color: #8c8c88; font: 500 clamp(15px, 2.4vw, 26px)/1.3 var(--font); text-align: center; overflow-wrap: anywhere; }
 /* A frame on the slide is where its part is, at once: it never glides, nor trails a resizing window. */
 .hit { position: absolute; pointer-events: none; border-radius: 5px; }
 /* Two-toned, so a frame shows on a dark band as on the page. */
@@ -77,10 +83,20 @@
 .hit.selected { border: 2px solid var(--accent); background: rgba(61, 90, 254, 0.04); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.9); }
 .hit-label { position: absolute; top: -21px; left: -2px; background: var(--accent); color: var(--accent-ink); font: 600 10.5px/19px var(--font); padding: 0 7px; border-radius: 4px 4px 4px 0; white-space: nowrap; }
 .hit.hover .hit-label { background: var(--raised); color: var(--accent); border: 1px solid var(--accent-line); line-height: 17px; }
+/* Off the words above it: under its frame, or inside its top right corner (clearOfWords). */
+.hit-label.below { top: auto; bottom: -21px; border-radius: 0 4px 4px 4px; }
+.hit-label.inside { top: 3px; left: auto; right: 3px; border-radius: 4px; }
 .hit.selected.holder { border: 1.5px dashed var(--accent-line); background: none; }
 /* The row or column a table's menu item acts on. */
 .hit.target { border: 2px solid var(--accent); background: rgba(61, 90, 254, 0.12); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9); }
 .hit.target .hit-label { display: none; }
+/* What another person has chosen: framed in their colour, their name on its corner. */
+.others-frames { position: absolute; inset: 0; pointer-events: none; }
+.hit.other { border: 1.5px solid var(--other); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7); }
+.hit.other.editing { border-width: 2px; }
+.hit.other .hit-label { left: auto; right: -1.5px; background: var(--other); color: #fff; border-radius: 4px 4px 0 4px; }
+.hit.other .hit-label.below { border-radius: 4px 0 4px 4px; }
+.hit.other .hit-label.inside { right: 3px; border-radius: 4px; }
 .hit.selected.holder .hit-label { display: none; }
 /* What is chosen is framed, not named: a name tag over it covered the words above it (the inspector names it). */
 .hit.selected .hit-label { display: none; }
@@ -146,12 +162,25 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
    bullets and levels; the measures come from the drawn words (positionInline). */
 .inline-editor.in-place .rich { position: relative; padding: 5px; outline: none; line-height: var(--rt-line, 1.22); caret-color: var(--accent); white-space: pre-wrap; overflow-wrap: break-word; cursor: text; min-height: 1.2em; }
 .rich { position: relative; }
+/* Words typed on the slide are set as the slide sets them, at their true widths (not hinted
+   to the pixel), so they lie on the drawn ones and nothing moves when the typing is done. */
+.inline-editor.in-place .rich, .inline-editor.in-place .textarea { text-rendering: geometricPrecision; }
+/* A title slide's author or date typed in its byline, the other part beside it as drawn. */
+.inline-editor.in-place.byline-part { display: flex; align-items: baseline; gap: 0; }
+.inline-editor.in-place.byline-part .rich { flex: 0 1 auto; min-width: 2.5em; }
+.inline-editor.in-place.byline-part .rich.rt-empty::before { white-space: nowrap; }
+.inline-editor.in-place.byline-part[data-before]:not([data-before=""])::before { content: attr(data-before); white-space: pre; padding: 5px 0 5px 5px; line-height: var(--rt-line, 1.22); }
+.inline-editor.in-place.byline-part[data-before]:not([data-before=""]) .rich { padding-left: 0; }
+.inline-editor.in-place.byline-part[data-after]:not([data-after=""])::after { content: attr(data-after); white-space: pre; padding: 5px 5px 5px 0; line-height: var(--rt-line, 1.22); }
+.inline-editor.in-place.byline-part[data-after]:not([data-after=""]) .rich { padding-right: 0; }
 /* A placeholder in the words' own colour, faint: it reads on a dark band as on the page. */
-.rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: currentColor; opacity: 0.4; pointer-events: none; }
+.rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: currentColor; opacity: 0.4; pointer-events: none; }
 /* An empty list's placeholder sits where its first item's words start. */
-.inline-editor.in-place .rich.rt-list.empty::after { content: attr(data-placeholder); position: absolute; top: 5px; left: calc(5px + var(--rt-text, 1.4em)); color: currentColor; opacity: 0.4; pointer-events: none; }
-.rich code { font-family: var(--mono); font-size: 0.88em; }
-.rich .rt-maths { font-family: var(--mono); font-size: 0.82em; padding: 0 2px; border-radius: 3px; background: var(--accent-soft); }
+.inline-editor.in-place .rich.rt-list.rt-empty::after { content: attr(data-placeholder); position: absolute; top: 5px; left: calc(5px + var(--rt-text, 1.4em)); color: currentColor; opacity: 0.4; pointer-events: none; }
+/* Code and maths are typed as written (LaTeX, backticks dropped), each plainly marked as
+   what it is: code on a tint of the words' own colour, maths on the accent's. */
+.rich code { font-family: var(--mono); font-size: 0.88em; padding: 0 2px; border-radius: 3px; background: color-mix(in srgb, currentColor 10%, transparent); }
+.rich .rt-maths { font-family: var(--mono); font-size: 0.82em; padding: 0 2px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 20%, transparent); box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 45%, transparent); }
 .rich a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .rich.rt-list { padding-left: 0; counter-reset: rt; }
 .rich .rt-line { --rt-at: 0; position: relative; padding-left: calc(var(--rt-text, 1.4em) + var(--rt-at) * var(--rt-step, 1.3em)); padding-bottom: var(--rt-gap, 0.35em); line-height: var(--rt-line, 1.22); }
@@ -168,7 +197,7 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich-field .rich { min-height: 22px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--raised); outline: none; line-height: 1.4; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; caret-color: var(--accent); position: relative; }
 .rich-field:not(.single) .rich { min-height: 52px; }
 .rich-field .rich:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.rich-field .rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: var(--ink-3); pointer-events: none; }
+.rich-field .rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: var(--ink-3); pointer-events: none; }
 .rich-field .rich.rt-list { padding-left: 4px; }
 .rich-field .rich .rt-line { --rt-text: 1.3em; --rt-mark-x: 0.55em; --rt-mark-y: 0.7em; --rt-gap: 2px; --rt-line: 1.4; --rt-r: 2.5px; --rt-r2: 2px; --rt-step: 1.2em; }
 /* The format bar looks as every text's does (.rt-bar, .markup-tools: studio.css). */
@@ -178,11 +207,20 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 /* What needs words chosen, with only a caret (⌃Tab to the bar): there, but off. */
 .rt-bar button:disabled { opacity: 0.35; cursor: default; background: transparent; }
 .rt-bar button[hidden] { display: none; }
-.rt-bar .rt-unlink { margin-left: 2px; font-size: 12px; }
+/* Remove Link: a small push button beside the address, as a Mac's is, not words alone. */
+.rt-bar .rt-unlink { width: auto; height: 22px; margin-left: 6px; padding: 0 8px; font-size: 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--raised); box-shadow: var(--shadow-1); color: var(--ink); }
+.rt-bar .rt-unlink:hover { background: var(--sunken); }
 .rt-swatch.rt-plain { background: var(--ink); }
 .rt-link { width: 180px; height: 24px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); font: 12px var(--mono); }
 .rt-link[hidden] { display: none; }
-.rich.rt-numbered .rt-line::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: auto; right: calc(100% - var(--rt-text, 1.4em) - var(--rt-at) * var(--rt-step, 1.3em) + 0.3em); }
+.rt-link[aria-invalid="true"] { border-color: var(--error); box-shadow: 0 0 0 3px var(--error-soft); }
+.rt-link-note { margin: 0 4px 0 6px; font-size: 11.5px; color: var(--error); white-space: nowrap; }
+.rt-link-note[hidden] { display: none; }
+.rich.rt-numbered .rt-line::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: var(--rt-num-x, auto); right: var(--rt-num-right, calc(100% - var(--rt-text, 1.4em) - var(--rt-at) * var(--rt-step, 1.3em) + 0.3em)); }
+/* Deeper numbers stand where the level above's words start, an indent on a level, and their
+   words after the room they take (as the slide sets them: --rt-num1-x, --rt-text1 measured). */
+.rich.rt-numbered .rt-line:not([data-level="0"]) { padding-left: calc(var(--rt-text1, calc(var(--rt-text, 1.4em) + var(--rt-step, 1.3em))) + (var(--rt-at) - 1) * var(--rt-step, 1.3em)); }
+.rich.rt-numbered .rt-line:not([data-level="0"])::before { left: calc(var(--rt-num1-x, var(--rt-text, 1.4em)) + (var(--rt-at) - 1) * var(--rt-step, 1.3em)); right: auto; }
 .rich.rt-numbered .rt-line[data-level="1"]::before { content: counter(rt1, lower-alpha) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
 .rich.rt-numbered .rt-line[data-level="2"]::before { content: counter(rt2, lower-roman) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
 .rich.rt-numbered .rt-line[data-level="3"]::before { content: counter(rt3) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
@@ -220,6 +258,7 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .insp-tab svg { width: 14px; height: 14px; }
 .insp-tab:hover { color: var(--ink); }
 .insp-tab.on { background: var(--seg-on); color: var(--ink); box-shadow: var(--seg-shadow); }
+.insp-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 0; }
 .deck .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; font: var(--text-small); }
 .deck .crumbs > svg { width: 12px; height: 12px; color: var(--ink-3); }
 .deck .crumb { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 3px 6px; border-radius: 6px; color: var(--ink-2); cursor: pointer; font: inherit; }
@@ -300,12 +339,17 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 /* No column is held wider than its words and its pop-up need: the room goes to the columns
    with the most to say, so their words wrap no more than they must. */
 .table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 40px; vertical-align: top; }
-.table-edit .cell-area, .table-edit .cell-view { padding-inline: 6px; }
+.table-edit .cell-area, .table-edit .cell-view { padding-inline: 6px; overflow-wrap: normal; }
+.table-edit td.short .cell-view { white-space: pre; }
+/* A long cell wraps, but in a column wide enough to read. */
+.table-edit td:not(.short):not(.corner) { min-width: 9em; }
 .table-edit tr.header .cell-area, .table-edit tr.header .cell-view { font-weight: 600; }
 /* The row numbers keep to their width: the room is the words'. */
 .table-edit tr > .corner:first-child { width: 24px; }
 .table-edit tr.header .cell-view b { font-weight: 700; }
 .table-edit th { background: var(--sunken); }
+/* The column or row a pop-up acts on, while its menu is open. */
+.table-edit .acting, .table-edit th.acting { background: var(--accent-soft); }
 /* A column's pop-up: its alignment's icon (grey while automatic) and a chevron, the width of
    the column; what it is set to is in its tooltip and its menu. */
 .table-edit th .select { width: 100%; height: 24px; justify-content: space-between; padding: 0 3px 0 6px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
@@ -425,7 +469,7 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .mech-code { font: 400 10.5px var(--mono); color: var(--ink-3); }
 .mech-hint { color: var(--ink-2); }
 .mech-arrows { display: grid; gap: 4px; }
-.mech-list-head { font-size: 11px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.mech-list-head { font-size: 11.5px; font-weight: 600; color: var(--ink-3); }
 .mech-arrow-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .mech-arrow-row .mech-said { flex: 1; }
 .mech-arrow-row code { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }

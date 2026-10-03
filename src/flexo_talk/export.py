@@ -5,9 +5,9 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
-from flexo.drawing import Drawing, Group, Text, ink_bounds, read_drawing
+from flexo.drawing import Drawing, Group, Image, Shape, Text, ink_bounds, read_drawing
 from flexo.export import rasterise
-from flexo.pdf import write_pdf
+from flexo.pdf import ARTIFACT, Tag, Tagger, write_pdf
 from flexo.portable import portable_svg
 from lxml import etree
 from pptx import Presentation
@@ -59,7 +59,15 @@ def build_deck(
         raise ValueError(f"Unknown {'format' if len(unknown) == 1 else 'formats'} {', '.join(sorted(unknown))}. "
                          f"Available formats: {', '.join(FORMATS)}.")
     directory.mkdir(parents=True, exist_ok=True)
-    rendered = deck.render()
+    if "svg" in formats:
+        rendered = deck.render()
+    else:
+        # Only an SVG carries its fonts: a PDF embeds its own, a PNG draws outlines, and a
+        # PowerPoint names them, so none is cut down and embedded for nothing.
+        from flexo.svg_resources import fonts_linked
+
+        with fonts_linked():
+            rendered = deck.render()
     name = file_stem(deck.id)
     diagnostics = [message for item in rendered for message in item.diagnostics]
     svgs: list[Path] = []
@@ -89,7 +97,8 @@ def build_deck(
             for page in ([item.svg] if handout else [item.at_step(step) for step in range(1, item.steps + 1)])
         ]
         title, author = _named(deck)
-        pdf = write_pdf(pages, directory / f"{name}.pdf", title=title or name, author=author)
+        pdf = write_pdf(pages, directory / f"{name}.pdf", title=title or name, author=author,
+                        tags=_tagger(rendered))
     pptx = None
     if "pptx" in formats:
         pptx = directory / f"{name}.pptx"
@@ -142,13 +151,17 @@ def write_pptx(
                 add_drawing(tree, Drawing(drawing.width, drawing.height, Group(None, [shape])), Placement(), **drawn)
             worded = {words.id: words for words in item.worded}
             span = (deck.style.margin, deck.style.width - deck.style.margin)
+            # The headings' words as written, for the breaks typed in them.
+            written = {f"{item.slide.id}.title": item.slide.title_runs,
+                       f"{item.slide.id}.subtitle": item.slide.subtitle_runs}
             for heading, kind in headings:
+                runs = written.get(heading.id or "")
                 add_heading(
                     tree, heading, kind, words=worded.get(heading.id), formulas=_formulas(heading)
                     if isinstance(heading, Group) else None, deck=deck, palette=deck.palette, editable=editable_maths,
-                    span=span,
+                    span=span, source="".join(run.text for run in runs) if runs else None,
                 )
-            add_drawing(tree, drawing, Placement(), name=item.slide.id, **drawn)
+            add_drawing(tree, drawing, Placement(), **drawn)
             _describe(tree, item.slide)
             if editable_maths:
                 editable_maths_of(tree, drawing, item.worded, deck, deck.palette)
@@ -191,8 +204,44 @@ def _figure_said(block: _Figure) -> str:
     return f"A figure: {', '.join(words)}" if words else ""
 
 
+def _structures_said(block: _Figure) -> dict[str, str]:
+    """The alt text of each molecule a figure draws as a picture, by the picture's id in
+    the figure: what the figure calls it, and which structure it is, from where ("Trypsin
+    with its inhibitor: the molecular structure 1GBT, from 1gbt.cif")."""
+
+    import re
+
+    spec = block.figure
+    nodes = getattr(spec, "nodes", None) or getattr(getattr(spec, "spec", None), "nodes", None) or []
+    said = {}
+    for node in nodes:
+        if getattr(node, "kind", "") != "structure":
+            continue
+        source = str(node.property("source") or "").strip()
+        name = Path(source).name
+        stem = re.sub(r"\.(pdb|cif|mmcif|ent)$", "", name, flags=re.IGNORECASE)
+        entry = re.fullmatch(r"[0-9][A-Za-z0-9]{3}", stem)
+        what = f"the molecular structure {stem.upper() if entry else name}" if name else "a molecular structure"
+        where = (", from the Protein Data Bank" if entry and stem == name else f", from {name}") if name else ""
+        label = " ".join("".join(run.text for run in node.label).split())
+        text = f"{label}: {what}{where}." if label else f"{what[0].upper()}{what[1:]}{where}."
+        said[f"{node.id}.molecule"] = text
+    return said
+
+
 def _describe(tree: etree._Element, slide: Slide) -> None:
-    """Each picture's description as its alt text, on the shape drawn for it."""
+    """Each picture's description as its alt text, on the shape drawn for it: a figure's,
+    and each molecule's in it, as well as a picture's own."""
+
+    described = _descriptions(slide)
+    for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
+        if text := described.get(properties.get("name", "")):
+            properties.set("descr", text)
+
+
+def _descriptions(slide: Slide) -> dict[str, str]:
+    """What each picture on a slide shows, in words, by the id it is drawn with: a
+    picture's own description, a figure's words, each molecule's in a figure."""
 
     described = {
         f"{slide.id}.{region.name}.{index}": block.description if isinstance(block, _Image) else _figure_said(block)
@@ -200,10 +249,110 @@ def _describe(tree: etree._Element, slide: Slide) -> None:
         for index, block in enumerate(region.blocks)
         if (isinstance(block, _Image) and block.description) or isinstance(block, _Figure)
     }
-    described = {key: text for key, text in described.items() if text}
-    for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
-        if text := described.get(properties.get("name", "")):
-            properties.set("descr", text)
+    for region in slide.regions.values():
+        for index, block in enumerate(region.blocks):
+            if isinstance(block, _Figure):
+                described |= {f"{slide.id}.{region.name}.{index}.{key}": text
+                              for key, text in _structures_said(block).items()}
+    return {key: text for key, text in described.items() if text}
+
+
+_BLOCKS = {"figure": "Figure", "bullets": "L", "table": "Table", "code": "P", "quote": "BlockQuote",
+           "stats": "Div", "callout": "Div", "gallery": "Div", "missing": "Div"}
+"""The structure element each kind of block on a slide is, in a tagged PDF."""
+
+
+def _tagger(rendered: list[RenderedSlide]) -> Tagger:
+    """How a deck's PDF is tagged (``flexo.pdf.Tagger``), as a screen reader reads a
+    slide: its title a heading, then its blocks in order -- paragraphs, lists of items in
+    their levels, tables of rows and header cells, figures and pictures described in words,
+    formulas -- and its bands, rules, marks and page numbers passed over."""
+
+    import re
+
+    described: dict[str, str] = {}
+    levels: dict[str, list[int]] = {}
+    headed: dict[str, bool] = {}
+    for item in rendered:
+        described |= _descriptions(item.slide)
+        levels |= {layout.id: [level for level, _, _ in layout.items] for layout in item.lists}
+        headed |= {layout.id: layout.header for layout in item.tables}
+
+    def holder(within: Tag | None, kind: str) -> tuple[tuple[str, str], ...] | None:
+        """The path to the innermost element of ``kind`` ``within`` is in, if any."""
+
+        path = within.path if within is not None else ()
+        found = [index for index, (named, _) in enumerate(path) if named == kind]
+        return path[: found[-1] + 1] if found else None
+
+    def listed(base: tuple[tuple[str, str], ...], ident: str) -> Tag | None:
+        # An item's words, or its bullet or number: in its item, within the item it is under.
+        owner = base[-1][1]
+        match = re.fullmatch(rf"{re.escape(owner)}\.(\d+)(\.mark)?", ident)
+        if match is None:
+            return None
+        index, steps = int(match.group(1)), levels.get(owner, [])
+        chain = [index]
+        while chain[0] < len(steps) and (above := next(
+                (j for j in range(chain[0] - 1, -1, -1) if steps[j] < steps[chain[0]]), None)) is not None:
+            chain.insert(0, above)
+        path = list(base)
+        for depth, at in enumerate(chain):
+            if depth:
+                path.append(("L", f"{owner}.{chain[depth - 1]}.list"))
+            path.append(("LI", f"{owner}.{at}"))
+        path.append(("Lbl", f"{ident}") if match.group(2) else ("LBody", f"{ident}.body"))
+        return Tag(tuple(path))
+
+    def tag(item: object, within: Tag | None) -> Tag | None:
+        ident = getattr(item, "id", None) or ""
+        role = ident.split(".", 1)[1] if "." in ident else ""
+        inside = within.path[-1][0] if within is not None and within.path else None
+        if isinstance(item, Group):
+            block = _BLOCKS.get(item.data.get("data-flexo-talk", ""))
+            if block is not None and inside not in {"Figure", "Formula"}:
+                # A figure is described by its words, and by what each molecule in it shows.
+                alt = " ".join([described.get(ident, "A figure"), *(
+                    text for key, text in described.items() if key.startswith(f"{ident}."))])
+                return Tag((*(within.path if within else ()), (block, ident)), alt=alt if block == "Figure" else "")
+            # Words with a formula in them (a title's, a paragraph's, an item's) are tagged as
+            # words are, the formula read in its place.
+            kinds = {"data-flexo-talk", "data-flexo-entity", "data-flexo-math"}
+            worded = not kinds & set(item.data) and any(
+                isinstance(child, Group) and "data-flexo-math" in child.data for child in item.items)
+            if not (worded and role):
+                return None
+        if isinstance(item, Shape):
+            return None if inside in {"Figure", "Formula"} else ARTIFACT
+        if isinstance(item, Image):
+            if inside in {"Figure", "Formula"}:
+                return None
+            if ident in described or re.fullmatch(r"slide\d+\.[\w-]+\.\d+", ident):
+                return Tag((*(within.path if within else ()), ("Figure", ident)), alt=described.get(ident, ""))
+            return ARTIFACT
+        # Words: a heading, a page's furniture, an item of a list, a cell of a table; the
+        # words within words (a title's, with a formula in it) are theirs.
+        if inside in {"Figure", "Formula", "H1", "P", "Lbl", "LBody", "TH", "TD"}:
+            return None
+        if role in {"number", "footer"} or (role.endswith(".mark") and holder(within, "L") is None):
+            # A page's number and footer, a quotation's mark: furniture, not words to read.
+            return ARTIFACT
+        if role == "title":
+            return Tag((("H1", ident),))
+        if (base := holder(within, "L")) is not None and (found := listed(base, ident)):
+            return found
+        if (base := holder(within, "Table")) is not None:
+            match = re.fullmatch(rf"{re.escape(base[-1][1])}\.(\d+)\.(\d+)", ident)
+            if match:
+                row = int(match.group(1))
+                cell = "TH" if headed.get(base[-1][1]) and row == 0 else "TD"
+                return Tag((*base, ("TR", f"{base[-1][1]}.{row}"), (cell, ident)))
+            return ARTIFACT
+        if within is not None and within.path:
+            return Tag((*within.path, ("P", ident)))
+        return Tag((("P", ident),)) if isinstance(item, Group) else None
+
+    return tag
 
 
 _HEADINGS = {

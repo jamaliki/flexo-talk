@@ -296,6 +296,14 @@ def paint_role(colour: str) -> str:
     return {"muted": "muted-ink"}.get(colour, colour)
 
 
+def named_colour(value: object) -> bool:
+    """Whether a slide's background names one of its theme's colours (``accent``,
+    ``accent2``..., ``ink``, ``muted``) -- painted as the theme paints it, so a change of
+    theme repaints the slide -- rather than a ``#rrggbb`` colour or a picture file."""
+
+    return isinstance(value, str) and bool(value) and not value.startswith("#") and paint_role(value) in _roles()
+
+
 _ROLES: set[str] = set()
 
 
@@ -331,6 +339,8 @@ class _Bullets:
     size: float | None = None
     numbered: bool = False
     reveal: bool = False
+    colour: str | None = None
+    """The words' paint, as a text's ``colour``; the bullets and numbers keep the theme's."""
 
 
 @dataclass(slots=True)
@@ -699,6 +709,10 @@ class Region:
         self.blocks: list[_Block] = []
         self.sources: list[dict[str, object]] = []
         """Each block as a deck document writes it (see ``flexo_talk.document``)."""
+        self.placeholders: set[int] = set()
+        """The blocks (by index) that are placeholders: put there to be made one's own (the
+        studio's sample table, figure or equation), drawn faintly while editing and never
+        presented or exported until changed."""
 
     def _record(self, kind: str, value: object, **options: object) -> None:
         self.sources.append({kind: value, **{key: item for key, item in options.items() if item is not None}})
@@ -709,13 +723,16 @@ class Region:
         size: float | None = None,
         numbered: bool = False,
         reveal: bool = False,
+        colour: str | None = None,
     ) -> Region:
         """A bulleted list. A nested list of strings is the level below the item before it.
         ``numbered=True`` numbers every level, each in its tier (1., a., i.), as Keynote does.
         ``reveal=True`` shows the outer items one at a time: a click each in the
-        PowerPoint, a page each in the PDF (the SVG and PNG show them all)."""
+        PowerPoint, a page each in the PDF (the SVG and PNG show them all). ``colour``
+        paints its words, as a text's does."""
 
         size, numbered, reveal = _size(size), _flag(numbered, "numbered"), _flag(reveal, "reveal")
+        colour = _colour(colour)
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
 
         def add(entries: Iterable[str | Sequence[str]], level: int) -> None:
@@ -731,8 +748,10 @@ class Region:
                     flattened.append((level, inline(_words(entry, "A bullet"))))
 
         add(items, 0)
-        self.blocks.append(_Bullets(flattened, size, numbered, reveal))
-        self._record("bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None)
+        self.blocks.append(_Bullets(flattened, size, numbered, reveal, colour))
+        self._record(
+            "bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None, colour=colour
+        )
         return self
 
     def text(
@@ -1153,7 +1172,8 @@ class Slide:
         self.source: dict[str, object] = {}
         """The slide's settings as a deck document writes them (see ``flexo_talk.document``)."""
         self.background = str(background) if background is not None else None
-        """This slide's own background: a colour (``#1b2a41``) or a picture file."""
+        """This slide's own background: a colour of its theme's (``accent``), any colour
+        (``#1b2a41``) or a picture file."""
         self.shade = shade
         """How much a background picture is darkened (0 to 1), for words over it."""
         self.dark = dark
@@ -1184,6 +1204,8 @@ class Slide:
         """What the slide is drawn on when not the deck's page: its own background,
         or the accent colour that fills a section slide in a look that fills them."""
 
+        if named_colour(self.background):
+            return self.deck.palette.get(paint_role(self.background))
         if self.background:
             return self.background
         if self.layout == "section" and self.deck.style.sections == "fill":
@@ -1229,8 +1251,9 @@ class Slide:
         size: float | None = None,
         numbered: bool = False,
         reveal: bool = False,
+        colour: str | None = None,
     ) -> Slide:
-        next(iter(self.regions.values())).bullets(*items, size=size, numbered=numbered, reveal=reveal)
+        next(iter(self.regions.values())).bullets(*items, size=size, numbered=numbered, reveal=reveal, colour=colour)
         return self
 
     def text(self, words: str, **options: object) -> Slide:
@@ -1577,7 +1600,16 @@ class Deck:
 
     @property
     def palette(self) -> Palette:
-        return with_tone_roles(resolve_palette(self.theme, self.palette_name))
+        # Asked for scores of times a slide: derived once for the theme and palette as they
+        # are (a theme file read again is a theme of its own).
+        from flexo.themes import theme as named_theme
+
+        named = self.palette_name
+        key = (self.theme, named if isinstance(named, str | None) else tuple(named), id(named_theme(self.theme)))
+        painted = getattr(self, "_painted", None)
+        if painted is None or painted[0] != key:
+            painted = self._painted = (key, with_tone_roles(resolve_palette(self.theme, self.palette_name)))
+        return painted[1]
 
     def plot_style(self) -> dict[str, object]:
         """matplotlib settings for plots in the deck's look: its font and figure
@@ -1703,6 +1735,8 @@ class ListLayout:
     """How far an outer item's words start from its number's left edge, when numbered."""
     palette: Palette | None = None
     """The slide's paints (light words on a dark slide); the deck's when unset."""
+    ink: str | None = None
+    """The words' colour, when the list has one of its own; else the palette's ink."""
     steps: list[float] = field(default_factory=list)
     """Each item's line height: a formula taller than the words opens its item's lines."""
     opened: list[tuple[float, float, int]] = field(default_factory=list)
@@ -1787,6 +1821,8 @@ class TableLayout:
     """Whether the table reads from the right (its header is in a right-to-left script)."""
     palette: Palette | None = None
     """The slide's paints (light words on a dark slide); the deck's when unset."""
+    room: tuple[float, float] | None = None
+    """The left edge and the width of the place the table was set in: how wide it may grow."""
 
 
 @dataclass(slots=True)

@@ -76,12 +76,13 @@ from flexo_talk.deck import (
     _Figure,
     _Plot,
     displayed,
+    named_colour,
 )
 
 SCHEMA_VERSION = 1
 
 BLOCKS: dict[str, tuple[str, ...]] = {
-    "bullets": ("size", "numbered", "reveal"),
+    "bullets": ("size", "numbered", "reveal", "colour"),
     "text": ("size", "align", "muted", "colour"),
     "figure": ("turn", "width"),
     "image": ("width", "description"),
@@ -416,7 +417,8 @@ def add_slide(
         )
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
     background = data.get("background")
-    if isinstance(background, str) and not background.startswith("#"):
+    # A picture file, unless it names a colour (#1b2a41, or one of the theme's: accent).
+    if isinstance(background, str) and not background.startswith("#") and not named_colour(background):
         try:
             background = str(_file(base, background, f"{where}.background"))
         except MissingFile as error:
@@ -550,10 +552,13 @@ def add_block(
             where, f"This block names more than one kind ({', '.join(kinds)}). Name only one of {', '.join(BLOCKS)}."
         )
     kind = kinds[0]
-    _only(block, (kind, *BLOCKS[kind]), f"{where} ({kind})")
+    # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``.
+    _only(block, (kind, *BLOCKS[kind], "placeholder"), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
+    if not isinstance(block.get("placeholder", False), bool):
+        raise DeckDocumentError(here, "placeholder must be true or false.")
     try:
         if kind == "bullets":
             items = value if isinstance(value, list) else [value]
@@ -605,6 +610,8 @@ def add_block(
     except (ValueError, TypeError, OSError) as error:
         raise DeckDocumentError(here, str(error)) from error
     region.sources[-1] = dict(block)
+    if block.get("placeholder"):
+        region.placeholders.add(len(region.blocks) - 1)
 
 
 def _steps(value: object, where: str) -> str | list[str | dict[str, object]]:

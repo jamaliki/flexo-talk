@@ -313,7 +313,11 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
             stand_in(slide, attribute, (TextRun(words),), f"{slide.id}.{name}", words)
     for name, region in slide.regions.items():
         for index, block in enumerate(region.blocks):
-            if isinstance(block, _Words) and not _worded(block.runs):
+            # A sample (a new table, figure or equation) stands in for what will be made of
+            # it, as itself: faint for an editor, and left out until it is changed.
+            if index in region.placeholders:
+                empty[f"{slide.id}.{name}.{index}"] = "Placeholder"
+            elif isinstance(block, _Words) and not _worded(block.runs):
                 stand_in(block, "runs", (TextRun("Text"),), f"{slide.id}.{name}.{index}", "Text")
             elif isinstance(block, _Bullets) and not any(_worded(runs) for _, runs in block.items):
                 stand_in(block, "items", [(0, (TextRun("Text"),))], f"{slide.id}.{name}.{index}", "Text")
@@ -403,8 +407,9 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
     if empty:
         _placeholders(canvas.root, empty)
         if not PLACEHOLDERS.get():
-            # Nor are they written natively (PowerPoint's own lists).
+            # Nor are they written natively (PowerPoint's own lists and tables).
             canvas.lists = [layout for layout in canvas.lists if layout.id not in empty]
+            canvas.tables = [layout for layout in canvas.tables if layout.id not in empty]
     stylesheet = element(canvas.defs, "style", id=f"{slide.id}.fonts", type="text/css")
     embed_fonts(stylesheet, canvas.root, deck.layout_style)
     if deck.title_font:
@@ -455,7 +460,8 @@ def _paint_rect(canvas: _Canvas, identifier: str, box: Box, role: str | None, *,
 @contextlib.contextmanager
 def _on_field(canvas: _Canvas):
     """Words set on the accent field (a band): an accent word or a link in them is lifted
-    off the field, rather than drawn in its colour on it."""
+    off the field, rather than drawn in its colour on it -- a link, being words to read, as
+    far as words must be (4.5:1), its accent or its blue."""
 
     from flexo.colour import with_contrast
 
@@ -465,7 +471,7 @@ def _on_field(canvas: _Canvas):
         role: with_contrast(colour, field, 3.0)
         for role, colour in saved.paints.items() if role.endswith(("-stroke", "-motif"))
     })
-    canvas.link = link and link_colour(saved, field)
+    canvas.link = link_colour(saved, field) or with_contrast(saved.get("tone-1-stroke"), field, 4.5)
     try:
         yield
     finally:
@@ -1262,7 +1268,7 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     left = box.x + box.width - total if plan.rtl else box.x
     if canvas.alone:
         left = box.x + (box.width - total) / 2.0
-    plan.x, plan.y, plan.id = left, box.y, identifier
+    plan.x, plan.y, plan.id, plan.room = left, box.y, identifier, (box.x, box.width)
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="table")
     ink = canvas.palette.get("ink")
     mirrored = {"start": "end", "end": "start", "middle": "middle"}
@@ -1937,6 +1943,10 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     size = block.size or style.body_size
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="bullets")
     layout = _list_layout(canvas, block, box)
+    # Its words in its colour, if it has one; the bullets and numbers in the theme's.
+    ink_role, ink_fill = _paint_of(block.colour, "ink")
+    if block.colour:
+        layout.ink = ink_fill or canvas.palette.get(ink_role)
     top = box.y
     numbers = list_numbers([level for level, _ in block.items]) if block.numbered else []
     # A revealed list's steps follow those of the lists revealed before it on the slide,
@@ -1984,7 +1994,7 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
             )
         render_runs(
             item, f"{identifier}.{index}", metrics, x=across(offset), y=baseline,
-            typography=canvas.deck.typography(size), palette=canvas.palette, fill_role="ink",
+            typography=canvas.deck.typography(size), palette=canvas.palette, fill_role=ink_role, fill=ink_fill,
             anchor="end" if rtl else None,
         )
         layout.items.append((level, runs, baseline))
@@ -2061,6 +2071,17 @@ def _layout_said(layout: str) -> str:
     return f"To fit the slide, {how}."
 
 
+def _fit_in_box(*args, **options) -> object:
+    """``flexo.fit_in_box`` for a slide: the figure's words are set in the slide's own fonts,
+    embedded once for the slide, so the figure's own copies -- cut down for each layout
+    tried -- are not made only to be thrown away."""
+
+    from flexo.svg_resources import fonts_linked
+
+    with fonts_linked():
+        return flexo.fit_in_box(*args, **options)
+
+
 def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
     """A figure laid out for ``box`` by flexo (``flexo.fit_in_box``): at the width
     that sets its words at the deck's figure size, as written or turned, spaced
@@ -2090,17 +2111,23 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
         keep = _LAYOUTS.get(where) if EDITING.get() else None
-        fit = flexo.fit_in_box(
+        fit = _fit_in_box(
             spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
             turn=block.turn, keep=keep,
         )
         shown = _SCALES.get(where)
-        if keep is not None and fit.layout == keep and shown and fit.scale < shown * SHRUNK:
+        # Kept folded, its lines might now cross (a loop added across the fold): a fold is
+        # the layout's own doing, so a better way is looked for at once too.
+        crossed = keep is not None and fit.layout == keep and "folded" in keep and any(
+            item.code == "routing.connector.crossing"
+            for item in lint_compilation(fit.compilation, style=fit.style).diagnostics
+        )
+        if keep is not None and fit.layout == keep and ((shown and fit.scale < shown * SHRUNK) or crossed):
             # Kept, the figure would shrink a good deal (a shape added to a long row): its
             # best layout is found now, in one drawing, rather than a moment later, when it
             # would jump under its person's eyes.
             keep = None
-            fit = flexo.fit_in_box(
+            fit = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
                 turn=block.turn,
             )
@@ -2114,17 +2141,22 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         if (keep is None or fit.layout != keep) and previous and fit.layout != previous:
             # A figure already shown one way stays that way unless another is clearly
             # larger: it doesn't turn under its person for a little more room.
-            held = flexo.fit_in_box(
+            held = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
                 turn=block.turn, keep=previous,
             )
-            if held.layout == previous and fit.scale < held.scale * STEADY:
+            kept = [
+                diagnostic.code
+                for diagnostic in lint_compilation(held.compilation, style=held.style).diagnostics
+                if diagnostic.code != "layout.width.grown"
+            ]
+            # Nor does it stay a way that now makes lines cross (a fold, its parts changed)
+            # when the way found does not.
+            crossing = "routing.connector.crossing"
+            calm = kept.count(crossing) <= codes.count(crossing)
+            if held.layout == previous and fit.scale < held.scale * STEADY and calm:
                 fit = held
-                codes = [
-                    diagnostic.code
-                    for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics
-                    if diagnostic.code != "layout.width.grown"
-                ]
+                codes = kept
         laid = {
             "svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes,
             "scale": fit.scale,

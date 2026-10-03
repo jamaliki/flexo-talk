@@ -262,6 +262,18 @@ def test_a_numbered_list_is_numbered_natively(tmp_path: Path) -> None:
     assert ">1.<" in svg and ">a.<" in svg and ">2.<" in svg
 
 
+def test_a_list_in_a_colour_of_its_own_keeps_it_in_the_pptx(tmp_path: Path) -> None:
+    deck = Deck("coloured")
+    with deck.slide("Points") as slide:
+        slide.bullets("First", ["a detail"], colour="#c0392b")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    svg = result.svgs[0].read_text()
+    # The words in its colour, the bullets in the theme's.
+    assert 'fill="#c0392b"' in svg.lower()
+    slide_xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert slide_xml.count('<a:srgbClr val="C0392B"/>') >= 2
+
+
 def test_a_revealed_list_builds_click_by_click(tmp_path: Path) -> None:
     deck = Deck("reveal")
     with deck.slide("Steps") as slide:
@@ -712,6 +724,15 @@ def test_escaped_backticks_and_brackets_are_themselves() -> None:
     ]
 
 
+def test_code_as_the_studio_writes_it_keeps_its_backticks_and_its_look() -> None:
+    # A backtick in code is written \` in it; code bold, italic, coloured or linked is
+    # written round the backticks.
+    runs = inline(r"Run `a\`b`, **`bold`**, *`slanted`*, [`red`]{accent} and [`see`](https://example.com).")
+    assert [(run.text, run.weight, run.italic, run.color, run.link) for run in runs if run.code] == [
+        ("a`b", 400, False, "", ""), ("bold", 700, False, "", ""), ("slanted", 400, True, "", ""),
+        ("red", 400, False, "accent", ""), ("see", 400, False, "", "https://example.com")]
+
+
 def test_bold_and_italic_that_meet_inside_a_word_are_read_as_the_studio_writes_them() -> None:
     # "Second para" bold and "paragraph." italic: the studio closes the bold alone there,
     # never a close and a reopen run together (which read as ****).
@@ -957,11 +978,12 @@ def test_every_title_is_its_slide_s_title_placeholder(tmp_path: Path) -> None:
     deck.slide("", layout="blank").text("Nothing on top.")
     deck.slide("").text("No title.")
     deck.slide("A title long enough that it has to break onto a second line of the slide to fit").text("Words.")
+    deck.slide("Broken here\nby hand").text("Words.")
     result = deck.build(tmp_path, formats=("pptx",))
     slides = list(Presentation(str(result.pptx)).slides)  # type: ignore[arg-type]
     assert [slide.slide_layout.name for slide in slides] == [
         "Title Slide", "Title Only", "Title Only", "Section Header", "Title Only", "Blank", "Blank",
-        "Title Only",
+        "Title Only", "Title Only",
     ]
     assert _placeholders(slides[0]) == {PLACEHOLDER.CENTER_TITLE: "A bold talk", PLACEHOLDER.SUBTITLE: "Its subtitle"}
     assert _placeholders(slides[1]) == {PLACEHOLDER.TITLE: "Outline"}
@@ -971,10 +993,16 @@ def test_every_title_is_its_slide_s_title_placeholder(tmp_path: Path) -> None:
     assert _placeholders(slides[4]) == {PLACEHOLDER.TITLE: "One thing, said large"}
     # No title, no title placeholder; and none of the layout's empty ones.
     assert _placeholders(slides[5]) == _placeholders(slides[6]) == {}
-    # A title Flexo broke is one paragraph, broken where it was.
+    from pptx.util import Pt
+
+    # A title Flexo wrapped is one paragraph that PowerPoint wraps, as wide as its longest
+    # line; only a break typed in it is kept.
     title = slides[7].shapes.title
-    assert len(title.text_frame.paragraphs) == 1 and title.text_frame.text.count("\v") == 1
+    assert len(title.text_frame.paragraphs) == 1 and "\v" not in title.text_frame.text
+    assert title.text_frame.word_wrap is True and title.width < Pt(deck.style.width - 2 * deck.style.margin)
     assert _placeholders(slides[7])[PLACEHOLDER.TITLE] == "".join(run.text for run in deck.slides[7].title_runs)
+    typed = slides[8].shapes.title.text_frame
+    assert len(typed.paragraphs) == 1 and typed.text == "Broken here\vby hand"
     # Read first, its link still a link, and its words written once: no drawn copy.
     xml = _slides(result.pptx)  # type: ignore[arg-type]
     for slide in (slides[1], slides[2], slides[3], slides[4], slides[7]):
@@ -1008,13 +1036,13 @@ def test_a_title_placeholder_is_where_the_title_was_drawn_and_says_how_it_looks(
         # What it would take from its layout and master is said: no capitals, bullet,
         # indent, autofit or inset.
         assert 'cap="none"' in shape and "<a:buNone/>" in shape and 'marL="0" indent="0"' in shape
-        assert "<a:noAutofit/>" in shape and 'lIns="0" tIns="0"' in shape and 'wrap="none"' in shape
+        assert "<a:noAutofit/>" in shape and 'lIns="0" tIns="0"' in shape and 'wrap="square"' in shape
 
 
 def test_a_title_is_first_on_its_slide_and_over_what_it_was_drawn_on(tmp_path: Path) -> None:
     from pptx import Presentation
 
-    for look, first in (("classic", ["slide1.title", "slide1"]), ("band", ["slide1.band", "slide1.title", "slide1"])):
+    for look, first in (("classic", ["slide1.title"]), ("band", ["slide1.band", "slide1.title"])):
         deck = Deck(look, look=look)
         deck.slide("On the slide").bullets("A point")
         slide = Presentation(str(deck.build(tmp_path / look, formats=("pptx",)).pptx)).slides[0]
@@ -1032,7 +1060,7 @@ def test_a_title_with_maths_is_a_placeholder_with_its_equation_or_room_for_it(tm
     # leaving room for the formula, drawn over them.
     assert '<p:ph type="title"/>' in choice and "<a14:m" in choice
     assert '<p:ph type="title"/>' in fallback and "<a:custGeom>" in fallback and re.search(r'spc="\d+"', fallback)
-    assert xml.index("<mc:AlternateContent") < xml.index('name="slide1"')
+    assert xml.index("<mc:AlternateContent") < xml.index('name="slide1.body.0')
     drawn = _slides(deck.build(tmp_path / "drawn", formats=("pptx",), editable_maths=False).pptx)[0]  # type: ignore[arg-type]
     assert "AlternateContent" not in drawn and drawn.count('<p:ph type="title"/>') == 1 and "<a:custGeom>" in drawn
 
@@ -1143,6 +1171,91 @@ def test_a_code_listing_is_one_text_box_in_powerpoint(tmp_path: Path) -> None:
     # A paragraph a line, the blank one kept, so each line is where it was drawn.
     lines = [paragraph.text for paragraph in listing[0].text_frame.paragraphs]
     assert lines == ["def greet(name):", "    # say hello", "", "    return name"]
+
+
+def test_the_pdf_is_tagged_as_a_screen_reader_reads_each_slide(tmp_path: Path) -> None:
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", zlib.crc32(tag + payload))
+
+    source = tmp_path / "p.png"
+    source.write_bytes(
+        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00" + bytes(6) + b"\x00" + bytes(6))) + chunk(b"IEND", b"")
+    )
+    deck = Deck("tagged")
+    deck.slide("Points").bullets("One", ["Under one"], "Two")
+    deck.slide("Numbers").table([["State", "Count"], ["Open", "3"]])
+    deck.slide("A picture").image(source, description="Two dark pixels")
+    deck.slide("A ratio").math(r"\frac{a+b}{2}")
+    pdf = deck.build(tmp_path, formats=("pdf",)).pdf.read_bytes()  # type: ignore[union-attr]
+    assert b"/MarkInfo << /Marked true >>" in pdf and b"/StructTreeRoot" in pdf
+    kinds = re.findall(rb"/Type /StructElem /S /(\w+)", pdf)
+    # A section a slide, its title a heading; a list's items in their levels, a table's rows
+    # and header cells, a picture by its description and a formula by its words.
+    assert kinds.count(b"Sect") == 4 and kinds.count(b"H1") == 4
+    assert kinds.count(b"L") == 2 and kinds.count(b"LI") == 3 and kinds.count(b"LBody") == 3
+    assert kinds.count(b"TR") == 2 and kinds.count(b"TH") == 2 and kinds.count(b"TD") == 2
+    assert b"/S /Figure" in pdf and b"/Alt (Two dark pixels)" in pdf
+    assert re.search(rb"/S /Formula /P \d+ 0 R /Pg \d+ 0 R /Alt \(\\\(a \+ b\\\)/2\)", pdf)
+
+
+def test_a_molecule_s_picture_says_what_it_shows() -> None:
+    from types import SimpleNamespace
+
+    from flexo.ir.semantic import NodeSpec, TextRun
+
+    from flexo_talk.export import _structures_said
+
+    nodes = [
+        NodeSpec("pocket", "structure", (TextRun("Trypsin with its inhibitor"),),
+                 properties=(("source", "assets/1gbt.cif"),)),
+        NodeSpec("fetched", "structure", properties=(("source", "4hhb"),)),
+        NodeSpec("box", "block", (TextRun("Not a molecule"),)),
+    ]
+    said = _structures_said(SimpleNamespace(figure=SimpleNamespace(nodes=nodes)))  # type: ignore[arg-type]
+    assert said == {
+        "pocket.molecule": "Trypsin with its inhibitor: the molecular structure 1GBT, from 1gbt.cif.",
+        "fetched.molecule": "The molecular structure 4HHB, from the Protein Data Bank.",
+    }
+
+
+def test_a_figure_s_lines_are_connectors_joined_to_what_they_join(tmp_path: Path) -> None:
+    from lxml import etree
+
+    deck = Deck("lines")
+    with deck.slide("A flow", layout="figure") as slide, slide.figure() as figure:
+        with figure.row("steps") as row:
+            start = row.block("start", label="Start")
+            middle = row.block("middle", label="Middle", input=start)
+            row.block("end", label="End", input=middle)
+        figure.connect(middle, start, label="again")
+    xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
+    tree = etree.fromstring(xml.encode())
+    p = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    names = {int(nv.get("id")): nv.get("name") for nv in tree.iter(f"{p}cNvPr")}
+    joined = []
+    for line in tree.iter(f"{p}cxnSp"):
+        # Each line is the slide program's connector, joined at each end to a block's
+        # shape and ending in its own arrowhead, named for what it joins.
+        start_at, end_at = line.find(f".//{a}stCxn"), line.find(f".//{a}endCxn")
+        assert start_at is not None and end_at is not None and line.find(f".//{a}tailEnd") is not None
+        assert names[int(start_at.get("id"))].endswith(".body") and names[int(end_at.get("id"))].endswith(".body")
+        joined.append(line.find(f".//{p}cNvPr").get("name"))
+    assert sorted(joined) == ["Line from Middle to End", "Line from Middle to Start", "Line from Start to Middle"]
+    assert "arrowhead" not in xml and "Line\"" not in xml
+
+    # Groups only where they mean something: the figure, each block, a line with its words.
+    def depth(element, level: int = 0) -> int:
+        return max([level, *(depth(child, level + 1) for child in element.iter(f"{p}grpSp") if child is not element
+                              and child.getparent() is element)])
+
+    assert depth(tree.find(f"{p}cSld/{p}spTree")) <= 3
+    assert not any(name.endswith((".root", ".components", ".connectors", ".content", ".steps")) or name == "slide1"
+                   for name in names.values())
 
 
 def test_a_numbered_list_numbers_every_level_in_its_tier(tmp_path: Path) -> None:

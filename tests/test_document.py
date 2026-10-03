@@ -42,7 +42,8 @@ def _small() -> dict:
         "slides": [
             {"layout": "title", "title": "A talk", "subtitle": "About things", "author": "Ada"},
             {"layout": "section", "title": "Part one"},
-            {"title": "Points", "body": [{"bullets": ["One", "Two", ["under two"]], "numbered": True}],
+            {"title": "Points",
+             "body": [{"bullets": ["One", "Two", ["under two"]], "numbered": True, "colour": "accent"}],
              "notes": "Say it slowly", "footnotes": ["[1] A source"]},
             {"layout": "two-columns", "title": "Both", "split": 0.4,
              "left": [{"text": "Words with $x$", "align": "middle"}],
@@ -55,6 +56,18 @@ def _small() -> dict:
             {"layout": "blank", "body": [{"code": "x = 1\n# a comment"}]},
         ],
     }
+
+
+def test_a_slide_background_in_a_theme_colour_follows_the_theme() -> None:
+    def drawn(palette: str) -> str:
+        document = {"deck": {"id": "t", "palette": palette}, "slides": [{"title": "A", "background": "accent2"}]}
+        deck = deck_from_document(document, ROOT)
+        assert deck.slides[0].background == "accent2"
+        svg = render_slide(deck, deck.slides[0]).svg
+        return re.search(r'id="canvas.background"[^>]*fill="(#[0-9a-f]+)"', svg).group(1)
+
+    # Named, not written as a colour: a palette changed later repaints it.
+    assert drawn("Okabe-Ito") != drawn("Tableau")
 
 
 def test_the_demo_as_a_document_draws_the_same_slides() -> None:
@@ -283,7 +296,15 @@ def test_the_studio_names_what_a_change_did_slide_by_slide() -> None:
     grown = {"slides": [{"title": "Plan", "body": [{"bullets": ["Entirely", "different", "words", "pasted in"]}]}]}
     assert [note["text"] for note in kind.describe(pasted, grown)] == ["edited the list on slide 1"]
     added = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"table": [["a", "b"]]}], "date": "2026"}]}
-    assert [note["text"] for note in kind.describe(pasted, added)] == ["added a table to slide 1"]
+    assert [note["text"] for note in kind.describe(pasted, added)] == ["added Table to slide 1"]
+    # Added and deleted by the name the studio gives them, never "a numbers" or "a code".
+    numbers = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"stats": [{"value": "", "label": ""}]}]}]}
+    assert [note["text"] for note in kind.describe(pasted, numbers)] == ["added Numbers to slide 1"]
+    coded = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"code": "print()"}]}]}
+    assert [note["text"] for note in kind.describe(coded, pasted)] == ["deleted Code from slide 1"]
+    flow = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"figure": {"nodes": [
+        {"id": "start", "kind": "terminal", "label": "Start"}, {"id": "end", "kind": "terminal", "label": "End"}]}}]}]}
+    assert [note["text"] for note in kind.describe(pasted, flow)] == ["added Flow Chart to slide 1"]
     dated = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}], "date": "2026"}]}
     assert [note["text"] for note in kind.describe(pasted, dated)] == ["edited the date on slide 1"]
 
@@ -1026,6 +1047,37 @@ def test_a_new_quote_callout_code_or_numbers_is_a_placeholder_until_typed_in() -
     assert "data-flexo-placeholder" not in exported and ">Quote<" not in exported and ">Kept<" in exported
 
 
+def test_a_sample_table_figure_or_equation_is_a_placeholder_until_changed(tmp_path: Path) -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    document = yaml.safe_load(
+        'deck: {id: samples}\nslides:\n  - title: Samples\n    body:\n'
+        '      - {placeholder: true, table: [[Item, Value], [First, "1.0"]]}\n'
+        '      - {placeholder: true, math: "a^2 + b^2 = c^2"}\n'
+        '      - {placeholder: true, figure: {figure: {id: f}, nodes: [{id: input, label: Input}]}}\n'
+        '      - {table: [[Kept, Too]]}\n'
+    )
+    deck = deck_from_document(document, Path("."))
+    exported = render_slide(deck, deck.slides[0])
+    token = PLACEHOLDERS.set(True)
+    try:
+        studio = render_slide(deck, deck.slides[0]).svg
+    finally:
+        PLACEHOLDERS.reset(token)
+    placed = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder=', studio)
+    assert placed == ["slide1.body.0", "slide1.body.1", "slide1.body.2"]
+    # Drawn as itself while editing; neither drawn nor a native table when exported.
+    assert ">Item<" in studio and ">Item<" not in exported.svg and ">Kept<" in exported.svg
+    assert [table.id for table in exported.tables] == ["slide1.body.3"]
+    # Written back as it was read; a figure changed is the person's own.
+    assert deck_document(deck)["slides"][0]["body"][0]["placeholder"] is True
+    changed = DeckKind().act(document, {"do": "figure", "at": {"slide": 0, "region": "body", "index": 2},
+                                        "edit": {"do": "update", "target": {"type": "node", "id": "input"},
+                                                 "values": {"label": "Load"}}}, tmp_path)
+    assert "placeholder" not in changed["document"]["slides"][0]["body"][2]
+    assert changed["document"]["slides"][0]["body"][0]["placeholder"] is True
+
+
 def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tmp_path: Path) -> None:
     from pptx import Presentation
 
@@ -1042,4 +1094,4 @@ def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tm
     names = [element.get("name") for element in slide._element.iter() if element.tag.endswith("}cNvPr")]
     described = {element.get("name"): element.get("descr") for element in slide._element.iter() if element.get("descr")}
     assert described == {"slide1.body.0": "A figure: Customer, Orders API"}
-    assert {"Customer", "Orders API", "Line"} <= set(names)
+    assert {"Customer", "Orders API", "Line from Customer to Orders API"} <= set(names)

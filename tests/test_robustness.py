@@ -750,6 +750,21 @@ def test_a_link_is_told_from_the_words_in_every_theme(theme: str) -> None:
     assert _ink_of(link, palette, ink).lower() != ink.lower()  # the PowerPoint's list too
 
 
+@pytest.mark.parametrize("theme", ["print", "paper", "dark"])
+def test_a_link_on_a_band_reads_as_words_must(theme: str) -> None:
+    import re
+
+    from flexo.colour import contrast
+
+    from flexo_talk.deck import accent_field
+
+    deck = Deck("l", theme=theme, look="band")
+    deck.title("Thank you", subtitle="Questions welcome: [me](mailto:me@example.org)")
+    (rendered,) = deck.render()
+    fills = re.findall(r'<a href="mailto:me@example.org"><tspan[^>]*fill="(#[0-9a-fA-F]{6})"', rendered.svg)
+    assert fills and all(contrast(fill, accent_field(deck.palette)) >= 4.5 for fill in fills)
+
+
 def test_a_table_that_fits_breaks_none_of_its_words() -> None:
     import re
 

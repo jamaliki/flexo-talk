@@ -463,6 +463,7 @@ class DeckKind:
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
         return Drawing(pages, _placed(messages, document), sorted(watched),
                        {"palette": _palette(deck), "tones": _tones(deck), "order": _palette_order(deck),
+                        "own": _palette_order(deck, own=True),
                         "unsettled": unsettled})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
@@ -510,6 +511,9 @@ class DeckKind:
         if isinstance(value, dict):
             made = apply_to_data(value, edit, base=base)
             block["figure"] = made["data"]
+            if made["data"] != value:
+                # A sample figure changed is the person's own: presented and exported.
+                block.pop("placeholder", None)
             return {"document": changed, "select": made["select"], "model": made["model"]}
         if isinstance(value, str) and value and ".py:" not in value:
             path = _figure_file(base, value)
@@ -877,7 +881,7 @@ def _slide_note(verb: str, slides: list, index: int, what: str = "") -> dict[str
     slide = slides[index] if index < len(slides) and isinstance(slides[index], dict) else {}
     title = str(slide.get("words") or slide.get("title") or "").strip()
     named = f", “{title[:40]}”" if title and verb == "added" else ""
-    # "edited the title on slide 4", "added a table to slide 2", "added slide 5, “Methods”":
+    # "edited the title on slide 4", "added Table to slide 2", "added slide 5, “Methods”":
     # what changed first, as said aloud.
     where = {"added": "to", "deleted": "from"}.get(verb, "on")
     text = f"{verb} {what} {where} slide {index + 1}" if what else f"{verb} slide {index + 1}{named}"
@@ -896,36 +900,45 @@ def _kin(old: Any, new: Any) -> bool:
     return same_title or old.get("layout") == new.get("layout")
 
 
-_OBJECTS = {"bullets": "list", "text": "text", "figure": "figure", "image": "picture", "table": "table",
-            "math": "equation", "code": "code", "quote": "quote", "callout": "callout", "stats": "numbers",
-            "gallery": "gallery", "plot": "plot", "mechanism": "mechanism"}
-"""Each object a slide holds, by name."""
+_OBJECTS = {"bullets": "List", "text": "Text", "figure": "Figure", "image": "Picture", "table": "Table",
+            "math": "Equation", "code": "Code", "quote": "Quote", "callout": "Callout", "stats": "Numbers",
+            "gallery": "Gallery", "plot": "Plot", "mechanism": "Mechanism"}
+"""Each object a slide holds, by its name in the studio (its Insert menu, its inspector)."""
+
+
+def _object_name(block: Any) -> str:
+    """An object's name in the studio: a figure of steps and decisions is a Flow Chart, one of
+    structures alone a Structure."""
+
+    kind = next((key for key in block if key in _OBJECTS), "") if isinstance(block, dict) else ""
+    figure = block.get("figure") if kind == "figure" else None
+    nodes = [node for node in figure.get("nodes") or [] if isinstance(node, dict)] if isinstance(figure, dict) else []
+    if nodes and all(node.get("kind") == "structure" for node in nodes):
+        return "Structure"
+    if any(node.get("kind") in ("terminal", "decision") for node in nodes):
+        return "Flow Chart"
+    return _OBJECTS.get(kind, "Object")
 
 
 def _objects(old: Any, new: Any) -> tuple[str, str]:
     """What changed among a slide's objects, as said aloud: ("edited", "the list"), ("added",
-    "a table"), ("edited", "the list and the figure")."""
+    "Table") -- an object added or deleted by its name, as the studio names it -- ("edited",
+    "the list and the figure")."""
 
-    def name(block: Any) -> str:
-        kind = next((key for key in block if key in _OBJECTS), "") if isinstance(block, dict) else ""
-        return _OBJECTS.get(kind, "object")
+    name = _object_name
 
     was = old if isinstance(old, list) else []
     now = new if isinstance(new, list) else []
     if len(now) > len(was):
         kept = [json.dumps(block, sort_keys=True, default=str) for block in was]
         added = [block for block in now if json.dumps(block, sort_keys=True, default=str) not in kept]
-        return ("added", _a(name(added[0]))) if added else ("edited", "its content")
+        return ("added", name(added[0])) if added else ("edited", "its content")
     if len(now) < len(was):
         kept = [json.dumps(block, sort_keys=True, default=str) for block in now]
         gone = [block for block in was if json.dumps(block, sort_keys=True, default=str) not in kept]
-        return ("deleted", _a(name(gone[0]))) if gone else ("edited", "its content")
-    changed = list(dict.fromkeys(f"the {name(b)}" for a, b in zip(was, now, strict=True) if a != b))
+        return ("deleted", name(gone[0])) if gone else ("edited", "its content")
+    changed = list(dict.fromkeys(f"the {name(b).lower()}" for a, b in zip(was, now, strict=True) if a != b))
     return "edited", " and ".join(changed[:2]) or "its content"
-
-
-def _a(noun: str) -> str:
-    return f"{'an' if noun[:1] in 'aeiou' else 'a'} {noun}"
 
 
 def _what_changed(old: Any, new: Any) -> tuple[str, str]:
@@ -1148,14 +1161,15 @@ def _tones(deck) -> dict[str, Any]:
     return {"colours": colours, "used": {}}
 
 
-def _palette_order(deck) -> list[str]:
+def _palette_order(deck, *, own: bool = False) -> list[str]:
     """The colours the deck's tones come from, in the order they take them: what Customise…
-    writes into a theme of its own, so the copy looks as the deck did."""
+    writes into a theme of its own, so the copy looks as the deck did. ``own``: its theme's
+    own colours, a palette of the deck's aside (the Palette pop-up's first choice)."""
 
     from flexo.themes import palette_order
 
     try:
-        return palette_order(deck.theme, deck.palette_name)
+        return palette_order(deck.theme, None if own else deck.palette_name)
     except Exception:
         return []
 

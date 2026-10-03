@@ -125,7 +125,10 @@ function listed(line) {
 const BLOCKS_HTML = "address, article, aside, blockquote, center, dd, div, dl, dt, figcaption, figure, footer, h1, h2, h3, h4, h5, h6, header, hr, li, main, nav, ol, p, pre, section, table, tbody, tfoot, thead, tr, ul";
 function itemsOfHtml(html) {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  // Word's own bullets and numbers are words in its HTML; the list's levels say them.
+  // Word's own bullets and numbers are words in its HTML; the list's levels say them, and
+  // its numbers ("1.", "a.", "iv)") that it is numbered, as an <ol> says it.
+  const marks = [...doc.querySelectorAll("[style*='mso-list:ignore' i], [style*='mso-list: ignore' i]")].map((node) => node.textContent.replace(/[\s\u00a0]+/g, ""));
+  const numbered = marks.length ? marks.every((mark) => /^\(?(?:\d{1,3}|[a-z]{1,4})[.)]$/i.test(mark)) : Boolean(doc.querySelector("ol")) && !doc.querySelector("ul");
   doc.querySelectorAll("script, style, meta, link, img, svg, title, template, [style*='mso-list:ignore' i], [style*='mso-list: ignore' i]").forEach((node) => node.remove());
   doc.querySelectorAll("a[href]").forEach((link) => { link.dataset.href = link.getAttribute("href"); });
   // Headings bold, the way a slide marks them.
@@ -141,36 +144,67 @@ function itemsOfHtml(html) {
   let run = null, depth = 0;
   const flush = () => {
     if (!run) return;
-    const markup = serialise(run).replace(/\u00a0/g, " ").replace(/\n$/, "");
+    const markup = serialise(run, lookOf(run, { bold: false, italic: false })).replace(/\u00a0/g, " ").replace(/\n$/, "");
     for (const part of markup.split("\n")) items.push({ depth, markup: part.trim() });
     run = null;
   };
-  const walk = (node, lists) => {
+  // (`look`: the bold and italic of the blocks it is in -- a heading's -- which its words,
+  // taken out of it into an item, keep.)
+  const walk = (node, lists, look) => {
     for (const child of [...node.childNodes]) {
       const element = child.nodeType === Node.ELEMENT_NODE;
       if (element && (child.matches(BLOCKS_HTML) || child.querySelector(BLOCKS_HTML))) {
         flush();
         // Word's list items are paragraphs, each saying its level ("mso-list:l0 level2 lfo1").
         const word = /mso-list:\s*l\d+\s+level(\d+)/i.exec(child.getAttribute("style") || "");
-        walk(child, word ? Number(word[1]) : lists + (child.matches("ul, ol") ? 1 : 0));
+        walk(child, word ? Number(word[1]) : lists + (child.matches("ul, ol") ? 1 : 0), lookOf(child, look));
         flush();
         continue;
       }
       if (!run) {
         if (!child.textContent.trim() && !(element && (child.nodeName === "BR" || child.querySelector("br")))) continue;
         run = doc.createElement("span");
+        if (look.bold) run.style.fontWeight = "700";
+        if (look.italic) run.style.fontStyle = "italic";
         depth = Math.max(0, lists - 1);
       }
       run.append(child);
     }
   };
-  walk(doc.body, 0);
+  walk(doc.body, 0, { bold: false, italic: false });
   flush();
   // Blank lines one at a time, and none at either end.
   const kept = items.filter((item, n) => item.markup || (n && items[n - 1].markup));
   while (kept.length && !kept[kept.length - 1].markup) kept.pop();
   while (kept.length && !kept[0].markup) kept.shift();
+  kept.numbered = numbered;
   return kept;
+}
+
+// A range of cells copied from a spreadsheet (Numbers, Excel and Google Sheets put a
+// <table> and its rows as lines of tab-separated cells on the clipboard): its rows of
+// cells as markup, each row as long as the longest; else null. Words with a tab in them
+// alone are a range only over two lines or more.
+function cellsOf(html, text) {
+  let rows = null;
+  if (html && /<table[\s>]/i.test(html)) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("script, style, meta, link, title, template").forEach((node) => node.remove());
+    doc.querySelectorAll("a[href]").forEach((link) => { link.dataset.href = link.getAttribute("href"); });
+    const table = doc.querySelector("table");
+    rows = [...table.rows].map((row) => [...row.cells].map((cell) => {
+      const texts = doc.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+      for (let node = texts.nextNode(); node; node = texts.nextNode()) node.data = node.data.replace(/[ \t\r\n\f]+/g, " ");
+      return serialise(cell, { bold: false, italic: false }).replace(/\u00a0/g, " ").replace(/\s*\n\s*/g, " ").trim();
+    }));
+  } else if (text && text.includes("\t")) {
+    const lines = text.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+    if (lines.length > 1 && lines.every((line) => line.includes("\t"))) rows = lines.map((line) => line.split("\t").map((cell) => escaped(cell.trim())));
+  }
+  if (!rows?.length) return null;
+  const columns = Math.max(...rows.map((row) => row.length));
+  if (rows.length * columns < 2) return null;
+  return rows.map((row) => [...row, ...Array(columns - row.length).fill("")]);
 }
 
 // -- markup to the page and back -------------------------------------------------------
@@ -223,25 +257,61 @@ function inlineNodes(words, colours, outer = { bold: false, italic: false }) {
   return nodes;
 }
 
+// A node's own look: bold or italic as its tag or its style says (a weight or slant set
+// in its style is its own, even on a <b>: Google Docs wraps all it copies in a <b> of
+// normal weight), else as `style`, the look it is in.
+function lookOf(node, style) {
+  const tag = node.nodeName, css = node.style || {};
+  return {
+    bold: css.fontWeight ? /^bold/.test(css.fontWeight) || Number(css.fontWeight) >= 600 : style.bold || tag === "B" || tag === "STRONG",
+    italic: css.fontStyle ? css.fontStyle !== "normal" : style.italic || tag === "I" || tag === "EM",
+  };
+}
+const colourOf = (node, names) => node.dataset?.colour || (node.nodeName === "FONT" && node.getAttribute("color") ? names(node.getAttribute("color")) : null);
+
+// Code or an equation: words held as one, with no look of their own inside.
+const isAtom = (node) => node?.nodeType === Node.ELEMENT_NODE && (node.nodeName === "CODE" || node.classList.contains("rt-maths"));
+
+// Code as markup: in backticks, a backtick in it escaped (deck.py reads \` in code as one).
+const codeMarkup = (text) => `\`${text.replace(/\u00a0/g, " ").replace(/`/g, "\\`")}\``;
+
+// The look of the words in code or an equation, a format applied after it was made having
+// gone inside it: what all of them have, which the slide gives the whole -- bold, italic,
+// a colour, a link.
+function atomLook(node, style, names) {
+  const texts = [];
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) if (text.data.trim()) texts.push(text);
+  const each = (find) => texts.map((text) => { for (let at = text.parentNode; at && at !== node; at = at.parentNode) { const it = find(at); if (it) return it; } return null; });
+  const all = (find) => { const found = each(find); return found.length && found.every((it) => it && it === found[0]) ? found[0] : null; };
+  const plain = { bold: false, italic: false };
+  return {
+    bold: style.bold || Boolean(all((at) => (lookOf(at, plain).bold ? "yes" : null))),
+    italic: style.italic || Boolean(all((at) => (lookOf(at, plain).italic ? "yes" : null))),
+    colour: all((at) => colourOf(at, names)),
+    href: all((at) => (at.nodeName === "A" && at.dataset.href) || null),
+  };
+}
+
 // The runs a node holds: words with their emphasis, or markup kept as written (maths,
 // code, a link, a colour).
 function runsOf(node, style, runs, names, inside = false) {
   for (const child of node.childNodes) {
-    if (child.nodeType === Node.TEXT_NODE) { runs.push({ text: child.data.replace(/ /g, " "), ...style, inside }); continue; }
+    if (child.nodeType === Node.TEXT_NODE) { runs.push({ text: child.data.replace(/\u00a0/g, " "), ...style, inside }); continue; }
     if (child.nodeType !== Node.ELEMENT_NODE) continue;
     const tag = child.nodeName;
     if (tag === "BR") { runs.push({ text: "\n", ...style }); continue; }
-    // Maths keeps the emphasis it is in, as the slide reads it.
-    if (child.classList.contains("rt-maths")) { runs.push({ raw: child.textContent, ...style, wrap: true }); continue; }
-    const css = child.style || {};
-    // A weight or slant set in its style is its own, even on a <b> (Google Docs wraps
-    // all it copies in a <b> of normal weight).
-    const next = {
-      bold: css.fontWeight ? /^bold/.test(css.fontWeight) || Number(css.fontWeight) >= 600 : style.bold || tag === "B" || tag === "STRONG",
-      italic: css.fontStyle ? css.fontStyle !== "normal" : style.italic || tag === "I" || tag === "EM",
-    };
-    if (tag === "CODE") { runs.push({ raw: `\`${child.textContent.replace(/`/g, "")}\``, ...next, wrap: true }); continue; }
-    const colour = child.dataset?.colour || (tag === "FONT" && child.getAttribute("color") ? names(child.getAttribute("color")) : null);
+    // Maths keeps the emphasis it is in, as the slide reads it; so does code.
+    if (isAtom(child)) {
+      const look = atomLook(child, tag === "CODE" ? lookOf(child, style) : style, names);
+      let raw = tag === "CODE" ? codeMarkup(child.textContent) : child.textContent;
+      if (look.colour && look.colour !== "ink") raw = `[${raw}]{${look.colour}}`;
+      if (look.href) raw = `[${raw}](${address(look.href)})`;
+      runs.push({ raw, bold: look.bold, italic: look.italic, wrap: true });
+      continue;
+    }
+    const next = lookOf(child, style);
+    const colour = colourOf(child, names);
     // The ink is the words' own colour: no colour of their own. A link or a colour over a
     // line's end is one on each line, as markup has no line in one.
     if ((tag === "A" && child.dataset.href) || (colour && colour !== "ink")) {
@@ -345,8 +415,9 @@ function serialise(node, style = { bold: false, italic: false }, names = (colour
 // `list` makes it a list (Tab and Shift-Tab change an item's level, Return starts the
 // next item, Return on an empty item moves it out a level); `single` a line of its own
 // (Return is left to whoever holds it); else words in lines. `palette` gives the
-// theme's colours by name, for [words]{accent}.
-export function richText({ value = "", list = false, single = false, numbered = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null } = {}) {
+// theme's colours by name, for [words]{accent}. `onCells` takes a spreadsheet's cells
+// pasted in it; `docked` keeps its format bar under it (a panel's field).
+export function richText({ value = "", list = false, single = false, numbered = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, onCells = null, docked = false } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}`;
   area.contentEditable = "true";
@@ -393,22 +464,50 @@ export function richText({ value = "", list = false, single = false, numbered = 
     if (list) {
       for (const raw of String(text ?? "").split("\n")) {
         const indent = /^[ \t]*/.exec(raw)[0].replace(/\t/g, "  ").length;
-        area.append(lineNode(Math.floor(indent / 2), raw.trim()));
+        // Only the indent goes: a space just typed at an item's end stays (a list written
+        // again under the typing, as another's change comes in).
+        area.append(lineNode(Math.floor(indent / 2), raw.replace(/^[ \t]*/, "")));
       }
       if (!area.children.length) area.append(lineNode(0, ""));
     } else area.append(...inlineNodes(String(text ?? ""), colours));
-    area.classList.toggle("empty", !String(text ?? "").trim());
+    area.classList.toggle("rt-empty", !String(text ?? "").trim());
   };
   write(value);
-  Object.defineProperty(area, "value", { get: read, set: write });
+  Object.defineProperty(area, "value", { get: read, set: (text) => rewrite(text) });
   area.rich = true;
   // A change of look (bold, a colour, a link) or a paste says it is a step of its own, for
   // the history: typing runs together, these do not (a native ⌘B says so by its inputType).
   const changed = (step = false) => area.dispatchEvent(new CustomEvent("input", { bubbles: true, detail: { step } }));
-  area.addEventListener("input", () => area.classList.toggle("empty", !area.textContent.trim() && !area.querySelector(".rt-line + .rt-line")));
+  // (Its own name for it: a page's .empty is a panel's note that it has nothing, centred.)
+  area.addEventListener("input", () => area.classList.toggle("rt-empty", !area.textContent.trim() && !area.querySelector(".rt-line + .rt-line")));
   // Only the look the slide keeps is offered: bold and italic, not underline and the like
   // (a menu's or the system's), which saving would drop.
-  area.addEventListener("beforeinput", (event) => { if (/^format/.test(event.inputType) && !["formatBold", "formatItalic"].includes(event.inputType)) event.preventDefault(); });
+  area.addEventListener("beforeinput", (event) => {
+    if (/^format/.test(event.inputType) && !["formatBold", "formatItalic"].includes(event.inputType)) event.preventDefault();
+    // A line of its own takes no second line, however asked for (⌃O, a menu).
+    if (single && /^insert(LineBreak|Paragraph)$/.test(event.inputType)) event.preventDefault();
+    // Typing at a link's end goes on after it, as in Pages and Keynote: a link ends where it
+    // ends (the caret in its last letters or just past it, where the browser would type in it).
+    const s = getSelection();
+    if (event.inputType !== "insertText" || !event.data || !s.rangeCount || !s.isCollapsed || !area.contains(s.anchorNode)) return;
+    let leaf = s.anchorNode;
+    if (leaf.nodeType === Node.TEXT_NODE) { if (s.anchorOffset < leaf.data.length) return; }
+    else { leaf = leaf.childNodes[s.anchorOffset - 1] || null; while (leaf?.lastChild) leaf = leaf.lastChild; }
+    const link = leaf ? outerLink(leaf) : null;
+    if (!link) return;
+    const rest = document.createRange();
+    rest.setStartAfter(leaf);
+    rest.setEnd(link, link.childNodes.length);
+    if (rest.toString()) return;
+    event.preventDefault();
+    let after = link.nextSibling;
+    if (after?.nodeType !== Node.TEXT_NODE) { after = document.createTextNode(""); link.after(after); }
+    after.insertData(0, event.data);
+    const caret = document.createRange();
+    caret.setStart(after, event.data.length);
+    place(caret);
+    area.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: event.data }));
+  });
 
   // -- the caret --
   const selection = () => getSelection();
@@ -541,7 +640,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     if (mod && !event.altKey && ["b", "i"].includes(event.key.toLowerCase())) {
       event.preventDefault();
       if (event.key.toLowerCase() === "b" && boldAlready()) return;
-      document.execCommand(event.key.toLowerCase() === "b" ? "bold" : "italic");
+      format(event.key.toLowerCase() === "b" ? "bold" : "italic");
       return;
     }
     if (event.key === "Tab" && list) {
@@ -565,7 +664,8 @@ export function richText({ value = "", list = false, single = false, numbered = 
       return;
     }
     if (event.key !== "Enter" || event.isComposing) return;
-    if (single) { event.preventDefault(); if (event.shiftKey) { document.execCommand("insertLineBreak"); } return; }
+    // One line (a title, a cell): no line break, which it would not keep.
+    if (single) { event.preventDefault(); return; }
     event.preventDefault();
     if (!list || event.shiftKey) { document.execCommand("insertLineBreak"); return; }
     // Return ends an item and starts the next at its level; on an empty item, it moves out a level.
@@ -662,8 +762,9 @@ export function richText({ value = "", list = false, single = false, numbered = 
   // bold, italic, a colour, a link -- as they had it. Chosen after, unless `choose` is false.
   const wrapChosen = (make, { strip = null, given = null, choose = true } = {}) => {
     const s = selection();
-    const range = given || (s.rangeCount && !s.isCollapsed && area.contains(s.anchorNode) ? s.getRangeAt(0) : null);
-    if (!range || range.collapsed) return false;
+    const chosen = given || (s.rangeCount && !s.isCollapsed && area.contains(s.anchorNode) ? s.getRangeAt(0) : null);
+    if (!chosen || chosen.collapsed) return false;
+    const range = settled(chosen);
     // A line at a time (a list's items, a paragraph's lines), the last first, so each is
     // where it was when its turn comes: markup has no link, colour or code over a line's end.
     let start = null, end = null;
@@ -742,17 +843,108 @@ export function richText({ value = "", list = false, single = false, numbered = 
   const linkNode = (href) => { const a = document.createElement("a"); a.dataset.href = href; a.title = href; return a; };
   // Words in one of the theme's colours, or (none) in the words' own, as they are drawn.
   const recolour = (name) => wrapChosen(name ? (words) => { const span = colourNode(name); span.append(words); return span; } : null, { strip: isColour });
-  const asCode = () => wrapChosen((words) => inTheirLook(words, plainNode("code", "", words.textContent)));
-  const asMaths = () => wrapChosen((words) => inTheirLook(words, plainNode("span", "rt-maths", `$${words.textContent}$`)));
+  // -- code and equations: words held as one --
+  // The code or equation round a point in the words, if any.
+  const atomAt = (node) => { for (let at = node; at && at !== area; at = at.parentNode) if (isAtom(at)) return at; return null; };
+  // A range as a look is given to it: its ends on the words chosen, not before an element
+  // round them (so a link the words start is not cut in two), and code or an equation
+  // it is in taken whole -- its look is the whole one's, given round it, not inside.
+  const onWords = (range) => {
+    const out = range.cloneRange();
+    let first = null, last = null;
+    const walker = document.createTreeWalker(area, NodeFilter.SHOW_TEXT);
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      if (!range.intersectsNode(text)) continue;
+      const from = text === range.startContainer ? range.startOffset : 0, to = text === range.endContainer ? range.endOffset : text.data.length;
+      if (to <= from) continue;
+      first ||= [text, from];
+      last = [text, to];
+    }
+    if (first) { out.setStart(...first); out.setEnd(...last); }
+    return out;
+  };
+  const settled = (range) => {
+    const out = onWords(range);
+    const head = atomAt(out.startContainer), tail = atomAt(out.endContainer);
+    if (head) out.setStartBefore(head);
+    if (tail) out.setEndAfter(tail);
+    return out;
+  };
+  // Bold or italic (⌘B, ⌘I) on words that are code or an equation: on the whole of it.
+  const format = (command) => {
+    const s = selection();
+    const range = s.rangeCount && !s.isCollapsed && area.contains(s.anchorNode) ? s.getRangeAt(0) : null;
+    if (range && (atomAt(range.startContainer) || atomAt(range.endContainer))) place(settled(range));
+    document.execCommand(command);
+  };
+  // An equation's LaTeX without its marks ($...$, $$...$$, \(...\), \[...\]).
+  const unmarked = (source) => (/^\$\$([\s\S]*)\$\$$/.exec(source) || /^\\\(([\s\S]*)\\\)$/.exec(source) || /^\\\[([\s\S]*)\\\]$/.exec(source) || /^\$([\s\S]*)\$$/.exec(source))?.[1] ?? source;
+  // The words chosen as letters, each equation in them its LaTeX alone (one equation of all).
+  const textOfWords = (words, unmark) => {
+    const copy = words.cloneNode(true);
+    if (unmark) for (const maths of copy.querySelectorAll(".rt-maths")) maths.textContent = unmarked(maths.textContent);
+    return copy.textContent;
+  };
+  // ⌘E makes the words chosen code, ⌥⌘E an equation; again, as ⌘B, words once more: code
+  // chosen in part, those words. Code made an equation is that equation, and an equation
+  // made code, that code; part of an equation is none of its own.
+  const toggleAtom = (kind) => {
+    const s = selection();
+    if (!s.rangeCount || s.isCollapsed || !area.contains(s.anchorNode)) return false;
+    // (The words chosen, wherever the ends of the choice are: round code just made bold.)
+    const range = onWords(s.getRangeAt(0));
+    const head = atomAt(range.startContainer), atom = head && head === atomAt(range.endContainer) ? head : null;
+    if (!atom) return wrapChosen((words) => inTheirLook(words, kind === "code" ? plainNode("code", "", textOfWords(words, false)) : plainNode("span", "rt-maths", `$${textOfWords(words, true)}$`)));
+    const code = atom.nodeName === "CODE", whole = range.toString() === atom.textContent;
+    const source = code ? atom.textContent : unmarked(atom.textContent);
+    if (!code && !whole) return false;
+    let made = null, parts = [];
+    if (kind === (code ? "code" : "maths")) {
+      // Words again: all of them, or (in code) those chosen, the rest code either side
+      // (the spaces between them words too).
+      const side = (start, end) => { const piece = document.createRange(); piece.setStart(...start); piece.setEnd(...end); return piece.toString(); };
+      const before = whole ? "" : side([atom, 0], [range.startContainer, range.startOffset]), after = whole ? "" : side([range.endContainer, range.endOffset], [atom, atom.childNodes.length]);
+      made = document.createTextNode(whole ? source : range.toString());
+      const lead = before.slice(before.trimEnd().length), trail = after.slice(0, after.length - after.trimStart().length);
+      parts = [before.trim() && plainNode("code", "", before.trimEnd()), lead, made, trail, after.trim() && plainNode("code", "", after.trimStart())].filter(Boolean);
+    } else {
+      made = kind === "code" ? plainNode("code", "", source) : plainNode("span", "rt-maths", `$${source}$`);
+      parts = [made];
+    }
+    // The look given inside it (bold, a colour) stays the words'.
+    const look = atomLook(atom, { bold: false, italic: false }, names);
+    parts = parts.map((part) => (typeof part === "string" ? document.createTextNode(part) : part)).map((part) => {
+      let out = wrapped(part, look);
+      if (look.colour && look.colour !== "ink") { const span = colourNode(look.colour); span.append(out); out = span; }
+      if (look.href) { const a = linkNode(look.href); a.append(out); out = a; }
+      return out;
+    });
+    atom.replaceWith(...parts);
+    const after = document.createRange();
+    after.selectNodeContents(made);
+    place(after);
+    return after;
+  };
+  const asCode = () => toggleAtom("code");
+  const asMaths = () => toggleAtom("maths");
 
   // -- links: ⌘K, or the bar's link button, on words; on a link, its address to change or remove --
+  // A scheme known as one, though a number follows it (doi:10.1000/182, tel:+44...), where
+  // "example.com:8080" is a web page's address.
+  const SCHEMES = /^(?:https?|ftps?|mailto|tel|sms|doi|urn|isbn|geo|file|news|webcal|facetime|maps|zotero|obsidian|slack|zoommtg):/i;
   // An address as typed, as a link goes: "example.com/page" a web page's (https://), and
-  // "name@example.com" an email's (mailto:); one with its scheme, or a place, as it is.
+  // "name@example.com" an email's (mailto:); one with its scheme, or a place, as it is. Not
+  // an address (null): words with a space in them, or a script to run (javascript:), which
+  // a slide never links to.
   const addressOf = (typed) => {
-    const text = typed.trim();
+    let text = typed.trim();
     if (!text) return "";
+    if (/^(?:javascript|vbscript|data):/i.test(text.replace(/[\s\u0000-\u001f]+/g, ""))) return null;
+    // A telephone number is written with spaces, and linked without them.
+    if (/^(?:tel|sms):/i.test(text)) text = text.replace(/\s+/g, "");
+    if (/\s/.test(text)) return null;
     if (text.startsWith("//")) return `https:${text}`;
-    if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(text) || /^[#/.?]/.test(text)) return text;
+    if (SCHEMES.test(text) || /^[a-z][a-z0-9+.-]*:(?!\d)/i.test(text) || /^[#/.?]/.test(text)) return text;
     if (/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(text)) return `mailto:${text}`;
     return `https://${text}`;
   };
@@ -769,9 +961,15 @@ export function richText({ value = "", list = false, single = false, numbered = 
   // keys go back to the words, unless they have gone elsewhere (`back` false).
   const finishLink = (apply, back = true) => {
     if (linkInput.hidden) return;
+    const typed = linkInput.value.trim();
+    let url = apply ? addressOf(typed) : "";
+    // Not an address: said, and the field kept to put right (clicked away from, set aside).
+    if (url === null && back) { linkNote.hidden = false; linkInput.setAttribute("aria-invalid", "true"); linkInput.focus(); return; }
+    if (url === null) { url = ""; apply = false; }
     linkInput.hidden = true;
+    linkNote.hidden = true;
+    linkInput.removeAttribute("aria-invalid");
     unlinkTool.hidden = true;
-    const url = apply ? addressOf(linkInput.value) : "";
     const link = editing?.isConnected ? editing : null, range = linkRange;
     editing = null;
     linkRange = null;
@@ -786,6 +984,13 @@ export function richText({ value = "", list = false, single = false, numbered = 
       changed(true);
     } else if (apply && url && range && !range.collapsed) {
       if (wrapChosen((words) => { const a = linkNode(url); a.append(words); return a; }, { strip: isLink, given: range, choose: back })) changed(true);
+    } else if (apply && url && range && area.contains(range.startContainer)) {
+      // No words chosen: the address typed is the link's words, as in Pages.
+      const a = linkNode(url);
+      a.textContent = typed;
+      range.insertNode(a);
+      if (back) { const caret = document.createRange(); caret.setStartAfter(a); caret.collapse(true); place(caret); }
+      changed(true);
     }
     showBar();
   };
@@ -794,17 +999,25 @@ export function richText({ value = "", list = false, single = false, numbered = 
     link.replaceWith(...kids);
     if (choose && kids.length) { const range = document.createRange(); range.setStartBefore(kids[0]); range.setEndAfter(kids[kids.length - 1]); place(range); }
   };
+  const linkNote = document.createElement("span");
+  linkNote.className = "rt-link-note";
+  linkNote.textContent = "Not a link address";
+  linkNote.hidden = true;
+  linkInput.addEventListener("input", () => { linkNote.hidden = true; linkInput.removeAttribute("aria-invalid"); });
   linkInput.addEventListener("keydown", (event) => {
     // Its keys are its own: none reaches the words or the slide.
     event.stopPropagation();
     if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); finishLink(true); }
     else if (event.key === "Escape") { event.preventDefault(); finishLink(false); }
   });
+  // Not being typed in, it shows an address from its start, as a Mac's field does.
+  linkInput.addEventListener("blur", () => { linkInput.scrollLeft = 0; });
   // Clicked away from, it applies what was typed, as a Mac link field does.
   linkInput.addEventListener("blur", () => setTimeout(() => { if (!linkInput.hidden && area.isConnected && document.activeElement !== linkInput) finishLink(true, false); }, 0));
   const unlinkTool = tool("Remove", "Remove Link", () => {
     const link = editing?.isConnected ? editing : null;
     linkInput.hidden = true;
+    linkNote.hidden = true;
     unlinkTool.hidden = true;
     editing = null;
     area.focus();
@@ -816,8 +1029,8 @@ export function richText({ value = "", list = false, single = false, numbered = 
   });
   unlinkTool.classList.add("rt-unlink");
   unlinkTool.hidden = true;
-  const boldTool = tool("<b>B</b>", "Bold (⌘B)", () => document.execCommand("bold"));
-  const italicTool = tool("<i>I</i>", "Italic (⌘I)", () => document.execCommand("italic"));
+  const boldTool = tool("<b>B</b>", "Bold (⌘B)", () => format("bold"));
+  const italicTool = tool("<i>I</i>", "Italic (⌘I)", () => format("italic"));
   function askLink() {
     const s = selection();
     if (!s.rangeCount || !area.contains(s.anchorNode)) return false;
@@ -825,26 +1038,29 @@ export function richText({ value = "", list = false, single = false, numbered = 
     // Words in a link, or the caret: that link, its address shown to change or remove.
     const start = outerLink(range.startContainer), end = outerLink(range.endContainer);
     editing = start && start === end ? start : null;
-    if (!editing && range.collapsed) return false;
     linkRange = range.cloneRange();
     linkInput.value = editing?.dataset.href || "";
     unlinkTool.hidden = !editing;
     linkInput.hidden = false;
     showBar({ caret: true });
-    setTimeout(() => { linkInput.focus(); linkInput.select(); }, 0);
+    // All of it chosen, with its start in view (the scheme and the host), not its end.
+    setTimeout(() => { linkInput.focus(); linkInput.setSelectionRange(0, linkInput.value.length, "backward"); linkInput.scrollLeft = 0; }, 0);
     return false;
   }
   // The words' own colour, as they are drawn here (light on a dark slide), not the ink's.
   const plainTool = palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default colour", () => recolour(null), { words: true }) : "";
+  const codeTool = tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code (⌘E)", asCode, { words: true });
+  const mathsTool = tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX (⌥⌘E)", asMaths, { words: true });
   bar.append(
     boldTool,
     italicTool,
-    tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code (⌘E)", asCode, { words: true }),
-    tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX (⌥⌘E)", asMaths, { words: true }),
+    codeTool,
+    mathsTool,
     tool(icon("link"), "Link (⌘K)", () => askLink()),
     ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => recolour(name), { words: true })),
     plainTool,
     linkInput,
+    linkNote,
     unlinkTool);
   // Along the bar from the keys, as along a Mac toolbar; Esc and Tab go back to the words.
   bar.addEventListener("keydown", (event) => {
@@ -880,22 +1096,76 @@ export function richText({ value = "", list = false, single = false, numbered = 
     // Pressed where the words chosen are bold or italic, as a Mac format bar shows.
     boldTool.classList.toggle("on", document.queryCommandState("bold"));
     italicTool.classList.toggle("on", document.queryCommandState("italic"));
+    // And where they are code or an equation: pressed again, they are words once more.
+    const atom = s.rangeCount ? atomAt(s.getRangeAt(0).startContainer) : null;
+    codeTool.classList.toggle("on", atom?.nodeName === "CODE");
+    mathsTool.classList.toggle("on", Boolean(atom && atom.nodeName !== "CODE"));
     for (const button of bar.querySelectorAll("[data-words]")) button.disabled = s.isCollapsed;
     if (plainTool) plainTool.firstElementChild.style.background = getComputedStyle(area).color || palette.ink;
     bar.hidden = false;
-    // Over the thing being edited, never on it (`frame`: a table for its cell), else under
-    // it; and in its `room` (the slide's stage), never over the panels beside it.
+    // Just over the words chosen, clear of them, as Pages' and Keynote's bar is, and under
+    // them when there is no room over them in its `room` (the slide's stage: never over the
+    // panels beside it). A cell's is over its table (`frame`), clear of the cells; a panel's
+    // field has it under the field (`docked`), clear of the controls over it.
     const range = s.getRangeAt(0);
-    const chosen = range.getClientRects().length ? range.getBoundingClientRect() : (area.closest(".inline-editor, .rich-field") || area).getBoundingClientRect();
+    const field = (area.closest(".inline-editor, .rich-field") || area).getBoundingClientRect();
+    const at = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+    const chosen = [...range.getClientRects()].some((rect) => rect.width || rect.height) ? range.getBoundingClientRect() : (area.contains(at) ? at : area).getBoundingClientRect();
     const own = bar.getBoundingClientRect();
-    const around = frame?.() || (area.closest(".inline-editor, .rich-field") || area).getBoundingClientRect();
     const bounds = room?.() || { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
-    const above = Math.min(chosen.top, around.top) - own.height - 8;
-    const top = above > bounds.top + 8 ? above : Math.max(chosen.bottom, around.bottom) + 8;
-    const left = Math.max(bounds.left + 8, Math.min(chosen.left + chosen.width / 2 - own.width / 2, bounds.right - own.width - 8));
+    let top = field.bottom + 6, left = field.left;
+    if (!docked) {
+      const over = frame?.() || chosen;
+      const above = over.top - own.height - 6;
+      top = above >= bounds.top + 4 ? above : over.bottom + 6;
+      left = chosen.left + chosen.width / 2 - own.width / 2;
+    }
+    top = Math.max(bounds.top + 4, Math.min(top, bounds.bottom - own.height - 4));
+    left = Math.max(bounds.left + 8, Math.min(left, bounds.right - own.width - 8));
     Object.assign(bar.style, { top: `${top}px`, left: `${left}px` });
   };
   document.addEventListener("selectionchange", showBar);
+
+  // The words written again under the field (another's change come in, an undo) while the
+  // bar or the link field has the keys: what they act on is the same letters, moved as the
+  // words before them moved, and a link being changed is still that link.
+  area.holding = () => !linkInput.hidden || keyed();
+  const lettersOf = (range) => [[range.startContainer, range.startOffset], [range.endContainer, range.endOffset]].map(([container, offset]) => {
+    const upTo = document.createRange();
+    upTo.setStart(area, 0);
+    upTo.setEnd(container, offset);
+    return lettersIn(upTo.cloneContents()).length;
+  });
+  const rangeOf = ([start, end]) => {
+    const from = pointAt(start), to = pointAt(end);
+    if (!from || !to) return null;
+    const range = document.createRange();
+    range.setStart(...from);
+    range.setEnd(...to);
+    return range;
+  };
+  // Where the letter at `at` in `was` is in `now`: before the change, where it was; after
+  // it, moved with the words; inside it, at its end.
+  const through = (was, now, at) => {
+    let start = 0, end = 0;
+    while (start < was.length && start < now.length && was[start] === now[start]) start += 1;
+    while (end < was.length - start && end < now.length - start && was[was.length - 1 - end] === now[now.length - 1 - end]) end += 1;
+    return at <= start ? at : at >= was.length - end ? at + now.length - was.length : now.length - end;
+  };
+  const rewrite = (text) => {
+    if (!area.holding()) { write(text); return; }
+    const whole = editing?.isConnected ? document.createRange() : null;
+    whole?.selectNodeContents(editing);
+    const held = [linkRange, kept, whole].map((range) => (range && area.contains(range.startContainer) ? lettersOf(range) : null));
+    const was = area.letters();
+    write(text);
+    const now = area.letters();
+    const moved = held.map((at) => at && at.map((n) => through(was, now, n)));
+    [linkRange, kept] = moved.slice(0, 2).map((at) => at && rangeOf(at));
+    // The link being changed, found by a letter inside it.
+    const inside = moved[2] && moved[2][1] > moved[2][0] ? pointAt(moved[2][0] + 1) : null;
+    if (editing) editing = inside ? outerLink(inside[0]) : null;
+  };
   // Whoever closes the field takes its bar with it, and the address being typed is applied.
   // (A field the page has dropped writes nothing more.)
   area.dispose = () => {
@@ -934,6 +1204,10 @@ export function richText({ value = "", list = false, single = false, numbered = 
     matchStyle = false;
     if (text === undefined && !html) return;
     event.preventDefault();
+    // A range of a spreadsheet's cells is given to whoever holds the field (`onCells`): a
+    // table's cell fills the cells from it on, words have a table made after them.
+    const cells = onCells ? cellsOf(html, text) : null;
+    if (cells) { event.stopPropagation(); onCells(cells); return; }
     changed(true);
     // What was pasted, as items: each its depth in a list and its words as markup.
     const formatted = html ? itemsOfHtml(html).filter((item) => !list || item.markup) : null;
@@ -941,7 +1215,8 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const items = formatted?.length ? formatted
       : plainParts.length > 1 && list ? plainParts.map(listed).map((item) => ({ depth: item.depth, markup: escaped(item.words) }))
         : plainParts.map((part) => ({ depth: 0, markup: escaped(part) }));
-    if (single) { insertMarkup(items.map((item) => item.markup).join(" ")); changed(true); return; }
+    // On one line, the lines pasted are words a space apart (a blank line, or a tab, is no more).
+    if (single) { insertMarkup(items.map((item) => item.markup.replace(/\t/g, " ").trim()).filter(Boolean).join(" ")); changed(true); return; }
     if (!list) { insertMarkup(...items.map((item) => item.markup)); changed(true); return; }
     // In a list, items: their indents kept as levels under the item pasted into, and the
     // words after the caret moved to the end of the last one. The first goes on with the
@@ -982,4 +1257,4 @@ export function richText({ value = "", list = false, single = false, numbered = 
   return area;
 }
 
-export { serialise as markupFromNodes, inlineNodes as nodesFromMarkup, escaped as markupOfWords, itemsOfHtml };
+export { serialise as markupFromNodes, inlineNodes as nodesFromMarkup, escaped as markupOfWords, itemsOfHtml, cellsOf };

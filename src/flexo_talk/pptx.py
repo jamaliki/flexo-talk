@@ -2,16 +2,20 @@
 
 A drawing (``flexo.drawing``) is placed straight into a slide's shape tree:
 
-- a rectangle is a rectangle or a rounded rectangle, an ellipse an ellipse, so
-  they stay editable as what they are; any other path is a freeform shape with
-  the same lines and curves;
-- an arrowhead is drawn exactly, as a small filled shape grouped with its line
-  (PowerPoint's own line ends come in three sizes and would not match);
+- a rectangle is a rectangle or a rounded rectangle, an ellipse an ellipse, a
+  decision's diamond a diamond, so they stay editable as what they are; any other
+  path is a freeform shape with the same lines and curves;
+- a figure's line that runs straight or turns through right angles is the slide
+  program's own connector, joined to the shapes at its ends so it follows them when
+  they move, its arrowheads its own line ends; any other line is drawn exactly, an
+  arrowhead as a small filled shape grouped with it. Each is named for what it joins;
 - text is a text box per label, its lines and runs as written -- italic,
   weight, face, colour, raised scripts -- placed so each baseline lands where
   Flexo set it. A label whose runs step back over one another (stacked
   scripts, an accent's mark) is set as one box per run instead;
-- groups keep Flexo's groups and ids, so a component moves as one.
+- a group is kept where it means something to a person moving the shapes -- a
+  figure, each of its components (named by its words), a line with its words -- and
+  a group that only lays shapes out is left out, its shapes standing in the one above.
 
 Coordinates are points on the drawing; ``place`` maps them onto the slide (an
 offset and a scale), so a figure can be put anywhere on a slide at any size.
@@ -105,6 +109,41 @@ type Pictures = Callable[[bytes, str], str]
 """Adds a picture's bytes (and media type) to the slide; returns its relationship id."""
 
 
+@dataclass(slots=True)
+class _Body:
+    """A shape of a figure's component that its lines may join: its id on the slide, the
+    component's name, its box on the drawing, and its connection sites by side."""
+
+    id: int
+    name: str
+    box: tuple[float, float, float, float]
+    sites: dict[str, int]
+
+
+@dataclass(slots=True)
+class _Line:
+    """A figure's line, named for what it joins once every shape is written (``_join``);
+    a connector is joined to those shapes too."""
+
+    named: list[etree._Element]
+    ends: list[tuple[tuple[float, float], tuple[float, float]]]
+    """Each end's point on the drawing, and the way the line runs into what it meets there."""
+    width: float
+    """The line's width on the drawing: how near an end comes to the shape it meets."""
+    connector: etree._Element | None = None
+    several: bool = False
+    """A net: lines joining several shapes."""
+
+
+_SITES = {
+    "box": {"top": 0, "left": 1, "bottom": 2, "right": 3},
+    "ellipse": {"top": 0, "left": 2, "bottom": 4, "right": 6},
+}
+"""The connection sites a shape's line may end at, by side, as the slide program numbers
+them: a rectangle's, a rounded one's, a diamond's and a freeform's (``_custom``), and an
+ellipse's (whose other four lie between)."""
+
+
 class _Ids:
     def __init__(
         self, start: int, pictures: Pictures | None = None, backdrop: str | None = None
@@ -113,6 +152,10 @@ class _Ids:
         self.pictures = pictures
         self.backdrop = backdrop
         """The page colour, for drawing a multiply blend (which slide programs lack)."""
+        self.component: str | None = None
+        """The name of the figure component being written: its shapes are what lines join."""
+        self.bodies: list[_Body] = []
+        self.lines: list[_Line] = []
 
     def __call__(self) -> int:
         self.next += 1
@@ -124,7 +167,6 @@ def add_drawing(
     drawing: Drawing,
     placement: Placement | None = None,
     *,
-    name: str | None = None,
     background: bool = True,
     groups: bool = True,
     pictures: Pictures | None = None,
@@ -132,10 +174,14 @@ def add_drawing(
 ) -> None:
     """Append ``drawing`` to a slide's shape tree (``slide.shapes._spTree``).
 
-    ``groups=False`` lays every shape flat on the slide instead of in Flexo's
-    groups -- for renderers that cannot draw a freeform inside a group (macOS
-    Quick Look). ``pictures`` adds an image's bytes to the slide (see
-    ``slide_pictures``); without it, pictures are left out.
+    Its shapes stand on the slide as if placed there by hand: a group only where one
+    means something to a person moving them (``_wrapper``) -- a figure, each of its
+    components, a line with its words. A figure's lines that the slide program's own
+    connectors can draw are connectors, joined to the shapes they run between.
+
+    ``groups=False`` lays every shape flat on the slide instead -- for renderers that
+    cannot draw a freeform inside a group (macOS Quick Look). ``pictures`` adds an image's
+    bytes to the slide (see ``slide_pictures``); without it, pictures are left out.
     """
 
     placement = placement or Placement()
@@ -146,21 +192,44 @@ def add_drawing(
         for item in drawing.root.items
         if background or not (isinstance(item, Group) and item.id == "layer.background")
     ]
-    group = Group(name or drawing.root.id, items)
-    element = _group(group, placement, ids)
-    if element is None:
-        return
-    if groups:
-        tree.append(element)
-        return
-    for leaf in element.iter(f"{{{_P}}}sp"):
-        tree.append(leaf)
+    parts = [part for item in items for part in _parts(item, placement, ids)]
+    _join(ids)
+    for part in parts:
+        if groups:
+            tree.append(part)
+        else:
+            for leaf in part.iter(f"{{{_P}}}sp", f"{{{_P}}}cxnSp"):
+                tree.append(leaf)
+
+
+def _wrapper(group: Group) -> bool:
+    """Whether a group only lays out what is in it, and means nothing to a person moving
+    its shapes: a drawing's layers, a figure's canvas and its rows and columns, the boxes
+    holding a figure's components and its lines, or a group with no name and nothing to
+    say. Its shapes stand in the group above it instead."""
+
+    data = group.data
+    if data.get("data-flexo-entity") == "group":
+        return data.get("data-flexo-role") in {"canvas", "layout"}
+    if data:
+        return False
+    return not group.id or group.label in {"Background", "Slide", "Components", "Connectors"}
+
+
+def _parts(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids) -> list[etree._Element]:
+    """What ``item`` is on the slide: a group that only lays its shapes out (``_wrapper``)
+    as those shapes; anything else as itself."""
+
+    if isinstance(item, Group) and _wrapper(item):
+        return [part for child in item.items for part in _parts(child, placement, ids)]
+    element = _item(item, placement, ids)
+    return [] if element is None else [element]
 
 
 def _shown_name(group: Group) -> str:
     """What PowerPoint's Selection Pane calls a group: a figure's shape by its words
-    ("Orders API"), a line as a line; anything else by its id, which other writers here
-    find it by."""
+    ("Orders API"), a line as a line (named for what it joins once all is written); anything
+    else by its id, which other writers here find it by."""
 
     entity = group.data.get("data-flexo-entity")
     if entity == "component":
@@ -209,26 +278,31 @@ def _listing(group: Group) -> Group:
 def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | None:
     if group.data.get("data-flexo-talk") == "code":
         group = _listing(group)
-    children = [child for item in group.items if (child := _item(item, placement, ids)) is not None]
+    entity = group.data.get("data-flexo-entity")
+    if entity in {"connector", "net"}:
+        return _figure_line(group, placement, ids)
+    outer, first = ids.component, len(ids.bodies)
+    if entity == "component":
+        ids.component = _shown_name(group)
+    try:
+        children = [part for item in group.items for part in _parts(item, placement, ids)]
+    finally:
+        ids.component = outer
     if not children:
         return None
+    if entity == "component" and len(ids.bodies) > first:
+        # A line meets a component wherever it meets what it draws (a person's words under
+        # its figure, too), and is joined to its largest shape.
+        boxes = [_extent(child) for child in children]
+        across = [((box[0] + side * box[2]) / EMU_PER_POINT - placement.x) / placement.scale
+                  for box in boxes for side in (0, 1)]
+        down = [((box[1] + side * box[3]) / EMU_PER_POINT - placement.y) / placement.scale
+                for box in boxes for side in (0, 1)]
+        largest = max(ids.bodies[first:], key=lambda body: (body.box[2] - body.box[0]) * (body.box[3] - body.box[1]))
+        ids.bodies[first:] = [replace(largest, box=(min(across), min(down), max(across), max(down)))]
     if len(children) == 1 and not group.id:
         return children[0]
-    boxes = [_extent(child) for child in children]
-    left = min(box[0] for box in boxes)
-    top = min(box[1] for box in boxes)
-    right = max(box[0] + box[2] for box in boxes)
-    bottom = max(box[1] + box[3] for box in boxes)
-    element = etree.fromstring(
-        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(_shown_name(group), {'"': '&quot;'})}\"/>"
-        f"<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>"
-        f'<a:off x="{left}" y="{top}"/><a:ext cx="{right - left}" cy="{bottom - top}"/>'
-        f'<a:chOff x="{left}" y="{top}"/><a:chExt cx="{right - left}" cy="{bottom - top}"/>'
-        f"</a:xfrm></p:grpSpPr></p:grpSp>"
-    )
-    for child in children:
-        element.append(child)
-    return element
+    return _wrap(children, _shown_name(group), ids)
 
 
 def _extent(element: etree._Element) -> tuple[int, int, int, int]:
@@ -238,7 +312,11 @@ def _extent(element: etree._Element) -> tuple[int, int, int, int]:
         xfrm = element.find(f".//{{{_P}}}xfrm")
     off = xfrm.find(f"{{{_A}}}off")
     ext = xfrm.find(f"{{{_A}}}ext")
-    return int(off.get("x")), int(off.get("y")), int(ext.get("cx")), int(ext.get("cy"))
+    x, y, width, height = int(off.get("x")), int(off.get("y")), int(ext.get("cx")), int(ext.get("cy"))
+    if round(int(xfrm.get("rot", "0")) / 5400000) % 2:
+        # Turned a quarter, about its centre: as wide as it was high.
+        x, y, width, height = x + (width - height) // 2, y + (height - width) // 2, height, width
+    return x, y, width, height
 
 
 def _item(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids):
@@ -251,6 +329,287 @@ def _item(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids):
     if isinstance(item, Image):
         return _picture(item, placement, ids)
     return None
+
+
+# -- a figure's lines ------------------------------------------------------------------
+
+
+def _figure_line(group: Group, placement: Placement, ids: _Ids) -> etree._Element | None:
+    """A figure's line (a connector, or a net of them) with its words. A single line the
+    slide program's own connectors draw -- straight, or turning through right angles, ending
+    in an arrowhead it has -- is one of them, joined to the shapes it runs between so it
+    follows them when they move; anything else is drawn as Flexo drew it. Named for what it
+    joins (``_join``), once every shape is written."""
+
+    paths = [item for item in group.items if isinstance(item, Shape) and item.kind == "path" and item.paint.stroke]
+    several = group.data.get("data-flexo-entity") == "net" or len(paths) != 1
+    children: list[etree._Element] = []
+    named: list[etree._Element] = []
+    ends: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    connector = None
+    for item in group.items:
+        if not any(item is path for path in paths):
+            children.extend(_parts(item, placement, ids))
+            continue
+        made = None if several else _connector(item, placement, ids)  # type: ignore[arg-type]
+        connector = connector if made is None else made
+        made = made if made is not None else _shape(item, placement, ids)  # type: ignore[arg-type]
+        if made is not None:
+            children.append(made)
+            named.append(made)
+        ends.extend(_ends(item))  # type: ignore[arg-type]
+    if not children:
+        return None
+    element = children[0] if len(children) == 1 else _wrap(children, "Line", ids)
+    if element is not children[0] or not named:
+        named.append(element)
+    width = max((path.paint.stroke_width for path in paths), default=1.0)
+    ids.lines.append(_Line(named, ends, width, connector, several))
+    return element
+
+
+def _ends(shape: Shape) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Where a line starts and ends -- at an arrowhead's tip, where it has one -- and the
+    way it runs into what it meets at each."""
+
+    import math
+
+    points = [point for segment in shape.segments for point in segment.points]
+    if len(points) < 2:
+        return []
+    heads = {head.end: head for head in shape.arrowheads}
+    found = []
+    for at, others, end in ((points[0], points[1:], "start"), (points[-1], points[-2::-1], "end")):
+        towards = next((point for point in others if math.dist(point, at) > 1e-6), None)
+        if towards is None:
+            return []
+        tip = _tip(heads[end]) if end in heads else at
+        length = math.dist(at, towards)
+        found.append((tip, ((at[0] - towards[0]) / length, (at[1] - towards[1]) / length)))
+    return found
+
+
+def _tip(head) -> tuple[float, float]:
+    """An arrowhead's point: the end of its outline furthest along the way it points."""
+
+    import math
+
+    along = (math.cos(head.angle), math.sin(head.angle))
+    points = [point for segment in head.outline for point in segment.points]
+    return max(points, key=lambda point: point[0] * along[0] + point[1] * along[1]) if points else head.tip
+
+
+def _join(ids: _Ids) -> None:
+    """Name each of a drawing's lines for what it joins ("Line from Customer to Orders
+    API"), and join each connector to the shapes at its ends."""
+
+    for line in ids.lines:
+        met = [_met(ids.bodies, point, way, line.width) for point, way in line.ends]
+        if line.several:
+            names = list(dict.fromkeys(body.name for body, _ in filter(None, met)))
+            said = f"Lines joining {', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else "Lines"
+        else:
+            first, last = (met[0], met[-1]) if met else (None, None)
+            said = "Line" + (f" from {first[0].name}" if first else "") + (f" to {last[0].name}" if last else "")
+        for element in line.named:
+            properties = element.find(f".//{{{_P}}}cNvPr")
+            if properties is not None:
+                properties.set("name", said)
+        if line.connector is None or not met:
+            continue
+        joined = line.connector.find(f".//{{{_P}}}cNvCxnSpPr")
+        for tag, found in (("stCxn", met[0]), ("endCxn", met[-1])):
+            if found is not None:
+                body, side = found
+                etree.SubElement(joined, f"{{{_A}}}{tag}", id=str(body.id), idx=str(body.sites[side]))
+
+
+def _met(
+    bodies: list[_Body], point: tuple[float, float], way: tuple[float, float], width: float
+) -> tuple[_Body, str] | None:
+    """The shape a line's end meets -- the nearest, within the room a line keeps from what
+    it points at -- and the side it goes in by."""
+
+    import math
+
+    reach = 5.0 * width + 1.0
+    best: tuple[float, float, _Body] | None = None
+    for body in bodies:
+        left, top, right, bottom = body.box
+        gap = math.hypot(max(left - point[0], 0.0, point[0] - right), max(top - point[1], 0.0, point[1] - bottom))
+        area = (right - left) * (bottom - top)
+        if gap <= reach and (best is None or (gap, -area) < (best[0], best[1])):
+            best = (gap, -area, body)
+    if best is None:
+        return None
+    across = abs(way[0]) >= abs(way[1])
+    side = ("left" if way[0] > 0 else "right") if across else ("top" if way[1] > 0 else "bottom")
+    return best[2], side
+
+
+_HEADS = {"triangle": "triangle", "latex": "triangle", "stealth": "stealth", "open": "arrow"}
+"""Flexo's arrowheads that a slide program's line ends draw, by the line end's name."""
+
+_CONNECTORS = {2: "straightConnector1", 3: "bentConnector2", 4: "bentConnector3", 5: "bentConnector4",
+               6: "bentConnector5"}
+"""The slide program's connector for a line with so many corners (its ends among them)."""
+
+
+def _connector(shape: Shape, placement: Placement, ids: _Ids) -> etree._Element | None:
+    """A line as the slide program's own connector, or None where none draws it."""
+
+    import math
+
+    paint = shape.paint
+    if paint.fill is not None or paint.stroke is None:
+        return None
+    points = _polyline(shape.segments, paint.stroke_width)
+    if points is None:
+        return None
+    ends = {}
+    for head in shape.arrowheads:
+        kind = _HEADS.get(head.shape)
+        colour = head.paint.fill or head.paint.stroke
+        if kind is None or colour is None or _colour(colour) != _colour(paint.stroke):
+            return None
+        # The line runs on to the head's tip, where the slide program's line end has its own.
+        points[0 if head.end == "start" else -1] = _tip(head)
+
+        def size(value: float) -> str:
+            share = max(value / max(paint.stroke_width, 1e-6), 1e-6)
+            return min(("sm", 2.0), ("med", 3.0), ("lg", 5.0), key=lambda pair: abs(math.log(share / pair[1])))[0]
+
+        tag = "headEnd" if head.end == "start" else "tailEnd"
+        ends[tag] = f'<a:{tag} type="{kind}" w="{size(head.width)}" len="{size(head.length)}"/>'
+    fitted = _fitted(points)
+    if fitted is None:
+        return None
+    preset, (left, top, width, height), turn, flip_h, flip_v, adjust = fitted
+    x, y = placement.point(left, top)
+    guides = "".join(f'<a:gd name="adj{index}" fmla="val {round(value * 100000)}"/>'
+                     for index, value in enumerate(adjust, 1))
+    turned = (f' rot="{turn * 60000}"' if turn else "") + (' flipH="1"' if flip_h else "") + (
+        ' flipV="1"' if flip_v else "")
+    line = _line(paint, placement).replace("</a:ln>", f"{ends.get('headEnd', '')}{ends.get('tailEnd', '')}</a:ln>")
+    return etree.fromstring(
+        f'<p:cxnSp {_NS}><p:nvCxnSpPr><p:cNvPr id="{ids()}" name="Line"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>'
+        f'<p:spPr><a:xfrm{turned}><a:off x="{x}" y="{y}"/>'
+        f'<a:ext cx="{placement.length(width)}" cy="{placement.length(height)}"/></a:xfrm>'
+        f'<a:prstGeom prst="{preset}"><a:avLst>{guides}</a:avLst></a:prstGeom>{line}</p:spPr></p:cxnSp>'
+    )
+
+
+def _polyline(segments: tuple[Segment, ...], width: float) -> list[tuple[float, float]] | None:
+    """A line's corners, ends among them, when it runs straight or turns only through right
+    angles (a corner Flexo rounds is taken at its corner); else None."""
+
+    import math
+
+    points: list[tuple[float, float]] = []
+    for index, segment in enumerate(segments):
+        if (segment.kind == "M" and index == 0) or (segment.kind == "L" and points):
+            points.append(segment.points[0])
+        elif segment.kind == "C" and points:
+            start, (first, second, end) = points[-1], segment.points
+            # A rounded corner is a quarter curve whose two handles point at its corner.
+            corner = (start[0] + 1.5 * (first[0] - start[0]), start[1] + 1.5 * (first[1] - start[1]))
+            again = (end[0] + 1.5 * (second[0] - end[0]), end[1] + 1.5 * (second[1] - end[1]))
+            if math.dist(corner, again) > 0.05 * width + 0.01 or math.dist(corner, start) > 12.0 * width:
+                return None
+            points.extend([corner, end])
+        else:
+            return None
+    corners: list[tuple[float, float]] = []
+    for point in points:
+        if corners and math.dist(point, corners[-1]) < 1e-3:
+            continue
+        if len(corners) >= 2:
+            (ax, ay), (bx, by) = corners[-2], corners[-1]
+            across = (bx - ax) * (point[1] - by) - (by - ay) * (point[0] - bx)
+            onward = (bx - ax) * (point[0] - bx) + (by - ay) * (point[1] - by)
+            if abs(across) < 1e-3 * max(1.0, math.dist(corners[-2], point)) and onward > 0:
+                corners[-1] = point  # straight on
+                continue
+        corners.append(point)
+    if len(corners) < 2 or len(corners) > len(_CONNECTORS) + 1:
+        return None
+    square = all(abs(a[0] - b[0]) < 1e-3 or abs(a[1] - b[1]) < 1e-3 for a, b in pairwise(corners))
+    return corners if len(corners) == 2 or square else None
+
+
+def _fitted(points: list[tuple[float, float]]):
+    """The slide program's connector that runs through ``points`` (a line's corners): its
+    preset, its box before it is turned (left, top, width, height), its turn (degrees) and
+    flips, and its adjustments; None when none does.
+
+    A connector runs from its box's top left to its bottom right, its bends where its
+    adjustments put them; it is flipped, then turned about its centre, into place."""
+
+    import math
+
+    preset = _CONNECTORS.get(len(points))
+    if preset is None:
+        return None
+    (sx, sy), (ex, ey) = points[0], points[-1]
+    middle = ((sx + ex) / 2.0, (sy + ey) / 2.0)
+    fits = []
+    for turn in (0, 90, 180, 270):
+        cos, sin = round(math.cos(math.radians(turn))), round(math.sin(math.radians(turn)))
+        for flip_h in (False, True):
+            for flip_v in (False, True):
+                local = []
+                for x, y in points:
+                    dx, dy = x - middle[0], y - middle[1]
+                    u, v = dx * cos + dy * sin, -dx * sin + dy * cos
+                    local.append((-u if flip_h else u, -v if flip_v else v))
+                width, height = local[-1][0] - local[0][0], local[-1][1] - local[0][1]
+                if width < -1e-3 or height < -1e-3:
+                    continue
+                width, height = max(width, 0.0), max(height, 0.0)
+                adjust = _adjustments([(u - local[0][0], v - local[0][1]) for u, v in local], width, height)
+                if adjust is not None:
+                    box = (middle[0] - width / 2.0, middle[1] - height / 2.0, width, height)
+                    fits.append((preset, box, turn, flip_h, flip_v, adjust))
+    # Of the ways of writing it, one as PowerPoint writes its own: LibreOffice draws a bent
+    # connector again from its ends, and draws some of the others the wrong way round.
+    return min(fits, key=lambda fit: fit[2:5] not in _AS_POWERPOINT_WRITES, default=None)
+
+
+_AS_POWERPOINT_WRITES = {
+    (0, False, False), (0, False, True), (180, False, False), (180, False, True),
+    (90, False, False), (90, True, False), (90, True, True), (270, True, False), (270, False, True),
+}
+"""The turns and flips (horizontal, vertical) a connector is written with by preference."""
+
+
+def _adjustments(corners: list[tuple[float, float]], width: float, height: float) -> list[float] | None:
+    """A connector's adjustments (shares of its box) that put its bends at ``corners``
+    (from its start, in its own frame), or None when its bends cannot go there."""
+
+    def near(a: float, b: float) -> bool:
+        return abs(a - b) <= 0.05
+
+    count = len(corners)
+    if count == 2:
+        return []
+    if count == 3:
+        return [] if near(corners[1][0], width) and near(corners[1][1], 0.0) else None
+    x1, y2 = corners[1][0], corners[2][1]
+    shape = [near(corners[1][1], 0.0), near(corners[2][0], x1)]
+    if count == 4:
+        shape.append(near(y2, height))
+        shares = [(x1, width)]
+    elif count == 5:
+        shape += [near(corners[3][0], width), near(corners[3][1], y2)]
+        shares = [(x1, width), (y2, height)]
+    else:
+        x3 = corners[3][0]
+        shape += [near(corners[3][1], y2), near(corners[4][0], x3), near(corners[4][1], height)]
+        shares = [(x1, width), (y2, height), (x3, width)]
+    # A bend far outside a box with no breadth (ends level with each other) cannot be said.
+    if not all(shape) or any(whole < 0.5 or abs(part / whole) > 20.0 for part, whole in shares):
+        return None
+    return [part / whole for part, whole in shares]
 
 
 def slide_pictures(slide) -> Pictures:
@@ -338,8 +697,12 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
     left, top = placement.point(x, y)
     flips = (' flipH="1"' if image.flip_x else "") + (' flipV="1"' if image.flip_y else "")
     label = escape(image.id or "picture", {'"': "&quot;"})
+    number = ids()
+    if ids.component is not None:
+        # A component drawn as a picture (a structure) is what the figure's lines join.
+        ids.bodies.append(_Body(number, ids.component, (x, y, x + width, y + height), _SITES["box"]))
     return etree.fromstring(
-        f'<p:pic {_NS}><p:nvPicPr><p:cNvPr id="{ids()}" name="{label}"/>'
+        f'<p:pic {_NS}><p:nvPicPr><p:cNvPr id="{number}" name="{label}"/>'
         f'<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
         f'<p:blipFill><a:blip r:embed="{embed}">{blip_extension}</a:blip>{crop_rect}'
         f"<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
@@ -439,7 +802,7 @@ def _wrap(parts: list[etree._Element], name: str | None, ids: _Ids) -> etree._El
     right = max(box[0] + box[2] for box in boxes)
     bottom = max(box[1] + box[3] for box in boxes)
     element = etree.fromstring(
-        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(name or 'line')}\"/>"
+        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(name or 'line', {'"': '&quot;'})}\"/>"
         f"<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>"
         f'<a:off x="{left}" y="{top}"/><a:ext cx="{right - left}" cy="{bottom - top}"/>'
         f'<a:chOff x="{left}" y="{top}"/><a:chExt cx="{right - left}" cy="{bottom - top}"/>'
@@ -459,6 +822,9 @@ def _geometry_shape(
     x, y = placement.point(shape.x, shape.y)
     width = max(1, placement.length(shape.width))
     height = max(1, placement.length(shape.height))
+    # A closed shape of a figure's component is what the figure's lines join.
+    body = ids.component is not None and name is None and (
+        shape.kind != "path" or bool(shape.segments and shape.segments[-1].kind == "Z"))
     if shape.kind == "rect" and shape.radius <= 0:
         geometry = '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
     elif shape.kind == "rect":
@@ -468,16 +834,38 @@ def _geometry_shape(
         geometry = f'<a:prstGeom prst="roundRect"><a:avLst>{corner}</a:avLst></a:prstGeom>'
     elif shape.kind == "ellipse":
         geometry = '<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+    elif _diamond(shape):
+        # A decision's diamond stays one, as the slide program draws and joins it.
+        geometry = '<a:prstGeom prst="diamond"><a:avLst/></a:prstGeom>'
     else:
-        geometry = _custom(shape.segments, shape.x, shape.y, width, height, placement, filled=paint.fill is not None)
+        geometry = _custom(shape.segments, shape.x, shape.y, width, height, placement,
+                           filled=paint.fill is not None, sites=body)
     label = escape(name or shape.id or shape.kind, {'"': "&quot;"})
+    number = ids()
+    if body:
+        box = (shape.x, shape.y, shape.x + shape.width, shape.y + shape.height)
+        ids.bodies.append(_Body(number, ids.component, box, _SITES["ellipse" if shape.kind == "ellipse" else "box"]))
     return etree.fromstring(
-        f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{label}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
+        f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{number}\" name=\"{label}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
         f'<p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm>'
         f"{geometry}{_fill(_blended(paint.fill, paint.blend, ids.backdrop), paint.fill_opacity * paint.opacity)}"
         f"{_line(paint, placement)}</p:spPr>"
         f"</p:sp>"
     )
+
+
+def _diamond(shape: Shape) -> bool:
+    """Whether a path is a diamond: its four corners at the middles of its box's sides."""
+
+    corners = [segment.points[0] for segment in shape.segments if segment.kind in {"M", "L"}]
+    if len(corners) == 5 and abs(corners[0][0] - corners[4][0]) + abs(corners[0][1] - corners[4][1]) < 0.01:
+        corners.pop()
+    if len(corners) != 4 or [segment.kind for segment in shape.segments][-1] != "Z" or shape.width <= 0:
+        return False
+    x, y, middle, centre = shape.x, shape.y, shape.x + shape.width / 2.0, shape.y + shape.height / 2.0
+    wanted = {(round(middle, 2), round(y, 2)), (round(x + shape.width, 2), round(centre, 2)),
+              (round(middle, 2), round(y + shape.height, 2)), (round(x, 2), round(centre, 2))}
+    return {(round(px, 2), round(py, 2)) for px, py in corners} == wanted
 
 
 def _custom(
@@ -489,6 +877,7 @@ def _custom(
     placement: Placement,
     *,
     filled: bool,
+    sites: bool = False,
 ) -> str:
     def point(p: tuple[float, float]) -> str:
         return (
@@ -506,8 +895,12 @@ def _custom(
         else:
             body.append("<a:close/>")
     fill = "" if filled else ' fill="none"'
+    # A component's outline is joined by its lines at the middles of its box's sides, as a
+    # rectangle is (``_SITES``).
+    joins = "".join(f'<a:cxn ang="{angle}"><a:pos x="{x}" y="{y}"/></a:cxn>' for angle, x, y in (
+        ("3cd4", "hc", "t"), ("cd2", "l", "vc"), ("cd4", "hc", "b"), ("0", "r", "vc"))) if sites else ""
     return (
-        "<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>"
+        f"<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst>{joins}</a:cxnLst>"
         '<a:rect l="0" t="0" r="r" b="b"/><a:pathLst>'
         f'<a:path w="{width}" h="{height}"{fill}>{"".join(body)}</a:path>'
         "</a:pathLst></a:custGeom>"
@@ -731,12 +1124,14 @@ def _flat_text(text: Text, placement: Placement, ids: _Ids) -> etree._Element | 
 
 
 def _text_box(
-    text: Text, placement: Placement, ids: _Ids, *, name: str | None, breaks: bool = False, steps: bool = False
+    text: Text, placement: Placement, ids: _Ids, *, name: str | None, joins: list[str] | None = None,
+    steps: bool = False,
 ) -> etree._Element | None:
     """Words as one text box, each line where Flexo set it: a paragraph a line, or with
-    ``breaks`` one paragraph broken where Flexo broke it (a title is one paragraph). With
-    ``steps``, a run set further on than the one before it ends (past a mark or a script
-    drawn apart from the words) is spaced out to where it was set."""
+    ``joins`` (a heading's, see ``_joins``) one paragraph that the slide program wraps,
+    broken only where its words were broken by hand. With ``steps``, a run set further on
+    than the one before it ends (past a mark or a script drawn apart from the words) is
+    spaced out to where it was set."""
 
     lines = text.lines
     spacing = text.line_height or text.size * 1.2
@@ -745,6 +1140,9 @@ def _text_box(
     left = min(line.left for line in written_lines)
     right = max(line.right for line in written_lines)
     slack = 2.0
+    # Wrapped by the slide program, the box is as wide as Flexo's longest line, so the lines
+    # break where Flexo broke them, with room for a face set a little wider than measured.
+    room = text.size * 0.5 if joins and any(join != "\n" for join in joins) else 0.0
     first = lines[0].baseline
     top = first - ascent(lines[0].runs[0].face if lines[0].runs else None) * spacing
     height = spacing * len(lines)
@@ -769,17 +1167,27 @@ def _text_box(
             f"{runs}</a:p>"
         )
 
-    if breaks and len({rtl for rtl, _ in written}) == 1:
-        # Exactly spaced, a broken line sits where the next paragraph's would.
+    one = joins is not None and len({rtl for rtl, _ in written}) == 1
+    if one:
+        # Exactly spaced, a broken line sits where the next paragraph's would; a wrapped
+        # one takes back the space it was wrapped at.
         br = f'<a:br><a:rPr lang="en-GB" sz="{round(text.size * 100)}" dirty="0"/></a:br>'
-        paragraphs = [paragraph(written[0][0], br.join(runs for _, runs in written))]
+        joined = [written[0][1]]
+        for join, line, (_, runs) in zip(joins, lines, written[1:], strict=False):
+            last = (line.logical or line.runs or (None,))[-1]
+            if join == "\n" or last is None:
+                joined.append(br)
+            elif join == " ":
+                joined.append(_run_xml(replace(last, text=" ", shift=0.0, link="")))
+            joined.append(runs)
+        paragraphs = [paragraph(written[0][0], "".join(joined))]
     else:
         paragraphs = [paragraph(rtl, runs) for rtl, runs in written]
     # Room to spare on the side the words are not set against, so they start (or end)
     # where Flexo set them.
-    spare = {"start": 0.0, "middle": slack, "end": 2 * slack}[text.anchor]
+    spare = {"start": 0.0, "middle": slack + room / 2.0, "end": 2 * slack + room}[text.anchor]
     x, y = placement.point(left - spare, top)
-    width = placement.length(right - left + 2 * slack)
+    width = placement.length(right - left + 2 * slack + room)
     box = placement.length(height)
     label = escape(name or "text", {'"': "&quot;"})
     body = "".join(paragraphs)
@@ -789,7 +1197,8 @@ def _text_box(
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{label}\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
         f'<p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{width}" cy="{box}"/></a:xfrm>'
         f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
-        f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
+        f'<p:txBody><a:bodyPr wrap="{"square" if one else "none"}" lIns="0" tIns="0" rIns="0" bIns="0" '
+        f'anchor="t" rtlCol="0">'
         f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{body}</p:txBody></p:sp>"
     )
 
@@ -899,7 +1308,8 @@ def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None
     # flexo's shared stack: it holds the families measuring adopted for other scripts.
     stack = font_stack(typography)
     palette = layout.palette or deck.palette
-    ink = palette.get("ink")
+    # The list's own colour for its words, if it has one, as it is drawn.
+    ink = layout.ink or palette.get("ink")
     accent = _colour(palette.get("tone-1-stroke"))
     muted = _colour(palette.get("muted-ink"))
 
@@ -1149,10 +1559,11 @@ def editable_maths(tree: etree._Element, drawing: Drawing, worded: list, deck, p
     return count
 
 
-def _passage(words, deck, palette, ids: _Ids, *, native: bool, breaks: bool = False) -> etree._Element:
+def _passage(words, deck, palette, ids: _Ids, *, native: bool, joins: list[str] | None = None) -> etree._Element:
     """Words with maths in them (a ``WordsLayout``) as one text box where they were set:
     the maths PowerPoint's own equations (``native``), or room for the drawn formulas.
-    With ``breaks``, one paragraph broken where Flexo broke it."""
+    With ``joins`` (a heading's, see ``_joins``), one paragraph that the slide program
+    wraps, broken only where its words were broken by hand."""
 
     from flexo.text import font_stack
 
@@ -1179,23 +1590,33 @@ def _passage(words, deck, palette, ids: _Ids, *, native: bool, breaks: bool = Fa
         f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
     )
     end = f'<a:endParaRPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:p>'
-    if breaks:
+    room = 0.0
+    if joins is not None:
         br = f'<a:br><a:rPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:br>'
-        paragraphs = start + br.join(lines) + end
+        weight = 700 if bold else 400
+        space = _run_xml(_ListRun(" ", words.size, weight, False, stack.face(weight, False), words.fill))
+        joined = [lines[0]]
+        for join, line in zip(joins, lines[1:], strict=False):
+            joined.append(br if join == "\n" else space if join == " " else "")
+            joined.append(line)
+        paragraphs = start + "".join(joined) + end
+        # As wide as the longest line, and a little more (see ``_text_box``).
+        room = words.size * 0.5 if any(join != "\n" for join in joins) else 0.0
     else:
         paragraphs = "".join(start + line + end for line in lines)
-    left = {"start": words.x, "middle": words.x - words.width / 2.0, "end": words.x - words.width}.get(
-        words.align, words.x)
+    left = {"start": words.x, "middle": words.x - (words.width + room) / 2.0,
+            "end": words.x - words.width - room}.get(words.align, words.x)
     top = words.baseline - baseline_down(stack.face(400, False), spacing, plain)
     height = spacing * len(words.lines)
     return etree.fromstring(
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(words.id, {'"': '&quot;'})}\"/>"
         f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"
         f'<p:spPr><a:xfrm><a:off x="{round(left * EMU_PER_POINT)}" y="{round(top * EMU_PER_POINT)}"/>'
-        f'<a:ext cx="{round((words.width + 0.5) * EMU_PER_POINT)}" '
+        f'<a:ext cx="{round((words.width + 0.5 + room) * EMU_PER_POINT)}" '
         f'cy="{round(height * EMU_PER_POINT)}"/></a:xfrm>'
         f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
-        f'<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="t" rtlCol="0">'
+        f'<p:txBody><a:bodyPr wrap="{"none" if joins is None else "square"}" lIns="0" tIns="0" rIns="0" bIns="0" '
+        f'anchor="t" rtlCol="0">'
         f"<a:noAutofit/></a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody></p:sp>"
     )
 
@@ -1312,9 +1733,13 @@ def add_heading(
     palette=None,
     editable: bool = False,
     span: tuple[float, float] | None = None,
+    source: str | None = None,
 ) -> None:
     """A slide's heading -- its title, its subtitle -- appended to its shape tree as the
     slide's placeholder of ``kind`` (``PLACEHOLDER_KINDS``), where Flexo drew it and as it drew it.
+
+    Its words are one paragraph, wrapped by the slide program as they are edited there,
+    and broken only where ``source`` (the words as written) breaks them by hand.
 
     A ``Text`` is written as its text box was; a run that steps back over the words (an
     accent's mark, the second of a stacked pair of scripts) is drawn on its own, as it was.
@@ -1323,31 +1748,60 @@ def add_heading(
     show them) PowerPoint's own equations in the words, with the former as the fallback
     for other slide programs (see ``alternate``).
 
-    Some slide programs wrap a placeholder's words at its box, however it says not to:
-    the box reaches across ``span`` (the slide's left and right margins, in points) on
-    the side its words are not set against, so words a little wider there stay on one line."""
+    Words on one line keep to it however a slide program measures them: the box reaches
+    across ``span`` (the slide's left and right margins, in points) on the side its words
+    are not set against. Words Flexo wrapped are wrapped as wide as its longest line, so
+    they break where Flexo broke them."""
 
     existing = [int(item) for item in tree.xpath(".//@id") if str(item).isdigit()]
     ids = _Ids(max(existing, default=1))
+    if isinstance(heading, Text):
+        written = ["".join(run.text for run in line.logical or line.runs) for line in heading.lines]
+    else:
+        written = ["".join(run.text for run in line) for line in words.lines]
+    joins = _joins(written, source)
+    wrapped = any(join != "\n" for join in joins)
 
     def made(shape: etree._Element) -> etree._Element:
-        return _widened(placeholder(shape, kind), span) if span else placeholder(shape, kind)
+        return _widened(placeholder(shape, kind), span) if span and not wrapped else placeholder(shape, kind)
 
     if isinstance(heading, Text):
         flowing, apart = _apart(heading)
-        tree.append(made(_text_box(flowing, Placement(), ids, name=heading.id, breaks=True, steps=bool(apart))))
+        tree.append(made(_text_box(flowing, Placement(), ids, name=heading.id, joins=joins, steps=bool(apart))))
         if apart and (marks := _flat_text(apart, Placement(), ids)) is not None:
             tree.append(marks)
         return
-    drawn = [made(_passage(words, deck, palette, ids, native=False, breaks=True))]
+    drawn = [made(_passage(words, deck, palette, ids, native=False, joins=joins))]
     if formulas and (shapes := _group(Group(None, list(formulas)), Placement(), ids)) is not None:
         drawn.append(shapes)
     if not (editable and _expressible(run for line in words.lines for run in line)):
         tree.extend(drawn)
         return
-    wrapper = alternate(made(_passage(words, deck, palette, ids, native=True, breaks=True)), None)
+    wrapper = alternate(made(_passage(words, deck, palette, ids, native=True, joins=joins)), None)
     wrapper[-1].extend(drawn)
     tree.append(wrapper)
+
+
+def _joins(lines: list[str], source: str | None) -> list[str]:
+    """How each line of a heading follows the one before: ``"\\n"`` where its words were
+    broken by hand (in ``source``, as written), ``" "`` where Flexo wrapped them at a space,
+    ``""`` where it broke a word too long for the line (a web address)."""
+
+    if not source:
+        return [" "] * (len(lines) - 1)
+    # What follows each letter of the words as written, counted without their spaces.
+    follows: dict[int, str] = {}
+    count = 0
+    for character in source:
+        if not character.isspace():
+            count += 1
+        elif count and follows.get(count) != "\n":
+            follows[count] = "\n" if character == "\n" else " "
+    joins, count = [], 0
+    for line in lines[:-1]:
+        count += sum(not character.isspace() for character in line)
+        joins.append(follows.get(count, ""))
+    return joins
 
 
 def _apart(text: Text) -> tuple[Text, Text | None]:
@@ -1420,17 +1874,20 @@ def add_table(tree: etree._Element, deck, layout, *, formulas: list | None = Non
     ink = palette.get("ink")
     colour = _colour(ink)
 
+    # Formulas drawn over the cells stay where Flexo set them, and their columns with them.
+    left, columns = (layout.x, list(layout.widths)) if formulas else _headroom(layout)
+
     def table(frame_id: int, native: bool) -> etree._Element:
         rows = _table_rows(layout, typography, stack, palette, ink, colour, native)
-        widths = list(reversed(layout.widths)) if layout.rtl else layout.widths
+        widths = list(reversed(columns)) if layout.rtl else columns
         grid = "".join(f'<a:gridCol w="{round(width * EMU_PER_POINT)}"/>' for width in widths)
-        width = round(sum(layout.widths) * EMU_PER_POINT)
+        width = round(sum(columns) * EMU_PER_POINT)
         height = round(sum(layout.heights) * EMU_PER_POINT)
         return etree.fromstring(
             f'<p:graphicFrame {_NS}><p:nvGraphicFramePr><p:cNvPr id="{frame_id}" name="{escape(layout.id)}"/>'
             f'<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/>'
             f'</p:nvGraphicFramePr>'
-            f'<p:xfrm><a:off x="{round(layout.x * EMU_PER_POINT)}" y="{round(layout.y * EMU_PER_POINT)}"/>'
+            f'<p:xfrm><a:off x="{round(left * EMU_PER_POINT)}" y="{round(layout.y * EMU_PER_POINT)}"/>'
             f'<a:ext cx="{width}" cy="{height}"/></p:xfrm>'
             f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
             f'<a:tbl><a:tblPr firstRow="{1 if layout.header else 0}" bandRow="0"/><a:tblGrid>{grid}</a:tblGrid>'
@@ -1448,6 +1905,33 @@ def add_table(tree: etree._Element, deck, layout, *, formulas: list | None = Non
     tree.append(table(frame_id, native=False))
     if drawn is not None:
         tree.append(drawn)
+
+
+HEADROOM = 0.2
+"""How much wider than its words a table's column is in the slide program, where its
+place allows: a reader without the deck's font sees another in its place, and a face a
+fifth wider (DejaVu Sans's bold, against Figtree's) still keeps every word whole."""
+
+
+def _headroom(layout) -> tuple[float, list[float]]:
+    """A table's left edge and its columns' widths in the slide program: each column wider
+    than its words by ``HEADROOM``, as far as the table's place allows, the table staying
+    against the side it was set against (or centred, as it was)."""
+
+    if layout.room is None:
+        return layout.x, list(layout.widths)
+    start, space = layout.room
+    total = sum(layout.widths)
+    slack = 2 * layout.pad + layout.size * 0.2
+    wanted = [HEADROOM * max(width - slack, 0.0) for width in layout.widths]
+    share = min(1.0, max(0.0, space - total) / sum(wanted)) if sum(wanted) > 0 else 0.0
+    widths = [width + want * share for width, want in zip(layout.widths, wanted, strict=True)]
+    grown = sum(widths) - total
+    if abs(layout.x - start) < 0.01:
+        return layout.x, widths
+    if abs(layout.x + total - start - space) < 0.01:
+        return layout.x - grown, widths
+    return layout.x - grown / 2.0, widths
 
 
 def _table_rows(layout, typography, stack, palette, ink: str, colour: str, native: bool) -> list[str]:
