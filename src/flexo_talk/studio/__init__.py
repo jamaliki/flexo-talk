@@ -169,10 +169,9 @@ class DeckKind:
             "schema_version": SCHEMA_VERSION,
             "deck": {"id": path.stem, "theme": "paper", "look": "classic"},
             "slides": [
-                {"layout": "title", "title": "A talk worth giving", "subtitle": "What we found, and why it matters",
-                 "author": "Your name", "date": ""},
-                {"title": "The question", "body": [{"bullets": ["What we asked", "Why it was hard",
-                                                                 ["and why it still is"]]}]},
+                # Placeholders: each holds its place and shows only while editing.
+                {"layout": "title", "title": "", "subtitle": ""},
+                {"title": "", "body": [{"bullets": [""]}]},
             ],
         }
 
@@ -340,7 +339,7 @@ class DeckKind:
         """Draw what has changed, the slide in focus first and its neighbours next;
         slides not reached within ``BUDGET`` seconds are left pending for the next call."""
 
-        from flexo_talk.compose import EDITING, render_slide
+        from flexo_talk.compose import EDITING, PLACEHOLDERS, render_slide
 
         errors: list[DeckDocumentError] = []
         try:
@@ -396,7 +395,7 @@ class DeckKind:
             if drawn_one and time.perf_counter() - started > BUDGET:
                 break
             slide = deck.slides[index]
-            editing = EDITING.set(not settle)
+            editing, placeholders = EDITING.set(not settle), PLACEHOLDERS.set(True)
             try:
                 rendered = render_slide(deck, slide)
                 self._slides[keys[index]] = {"svg": rendered.svg, "steps": rendered.steps,
@@ -411,6 +410,7 @@ class DeckKind:
                 self._slides[keys[index]] = {"error": explain(error)}
             finally:
                 EDITING.reset(editing)
+                PLACEHOLDERS.reset(placeholders)
             drawn_one = True
         # Slides with photos carry them inside: the cache is held to a size in bytes too.
         while len(self._slides) > CACHE_SIZE or (

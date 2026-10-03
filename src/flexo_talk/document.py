@@ -441,6 +441,9 @@ def add_slide(
         raise DeckDocumentError(f"{where}.footnotes", "footnotes must be text or a list of text.")
     for note in footnotes:
         slide.footnote(str(note))
+    slide.placeholders = frozenset(
+        key for key in ("title", "subtitle", "words") if key in data and not str(data[key] or "").strip()
+    )
     slide.source = {key: value for key, value in data.items() if key not in {"body", "left", "right"}}
     if layout == "columns":
         slide.source.pop("columns", None)

@@ -1124,6 +1124,8 @@ class Slide:
         """Where the content sits in the body; the deck style's ``align`` when unset."""
         self.byline_runs: tuple[TextRun, ...] = ()
         """Who and when, on a title slide."""
+        self.placeholders: frozenset[str] = frozenset()
+        """The fields written but left empty (title, subtitle, words): each holds its place."""
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:

@@ -74,15 +74,17 @@ const TONES = ["accent", "accent2", "accent3", "accent4", "accent5", "accent6"];
 const ARROW_INK = "#d466d6";
 
 const NEW_SLIDES = {
-  content: () => ({ title: "A new slide", body: [{ bullets: ["The first point", "The second point"] }] }),
-  "two-columns": () => ({ layout: "two-columns", title: "Two sides", left: [{ bullets: ["On the left"] }], right: [{ text: "On the right." }] }),
-  columns: () => ({ layout: "columns", title: "Three things", columns: [[{ text: "**One**" }], [{ text: "**Two**" }], [{ text: "**Three**" }]] }),
-  figure: () => ({ layout: "figure", title: "The model", body: [NEW_BLOCKS.figure()] }),
-  title: () => ({ layout: "title", title: "A talk worth giving", subtitle: "What we found" }),
-  section: () => ({ layout: "section", title: "Part two" }),
-  statement: () => ({ layout: "statement", words: "One sentence that [matters]{accent}." }),
+  // Empty words are placeholders, as Keynote's: each holds its place, shows faintly while
+  // editing ("Title", "Text"), and is never presented or exported.
+  content: () => ({ title: "", body: [{ bullets: [""] }] }),
+  "two-columns": () => ({ layout: "two-columns", title: "", left: [{ bullets: [""] }], right: [{ bullets: [""] }] }),
+  columns: () => ({ layout: "columns", title: "", columns: [[{ text: "" }], [{ text: "" }], [{ text: "" }]] }),
+  figure: () => ({ layout: "figure", title: "", body: [NEW_BLOCKS.figure()] }),
+  title: () => ({ layout: "title", title: "", subtitle: "" }),
+  section: () => ({ layout: "section", title: "" }),
+  statement: () => ({ layout: "statement", words: "" }),
   agenda: () => ({ layout: "agenda" }),
-  blank: () => ({ layout: "blank", body: [{ text: "Anything at all." }] }),
+  blank: () => ({ layout: "blank", body: [] }),
 };
 
 // The words a new deck, slide or object starts with (and the studio's new deck, studio/__init__.py):
@@ -94,13 +96,11 @@ const STARTERS = new Set(["A talk worth giving", "What we found, and why it matt
 const starter = (text) => String(text ?? "").split("\n").every((line) => !line.trim() || STARTERS.has(line.trim()));
 
 const NEW_BLOCKS = {
-  bullets: () => ({ bullets: ["A point", "Another point"] }),
-  text: () => ({ text: "A paragraph." }),
+  bullets: () => ({ bullets: [""] }),
+  text: () => ({ text: "" }),
   figure: () => ({ figure: { figure: { id: `figure-${Date.now().toString(36)}` }, nodes: [
-    { id: "x", kind: "text", label: "Input $x$" },
-    { id: "model", label: "Model", properties: { tone: "encoder" } },
-    { id: "y", kind: "text", label: "Output $y$" }],
-    edges: [{ from: "x", to: "model" }, { from: "model", to: "y" }] } }),
+    { id: "input", label: "Input" }, { id: "process", label: "Process" }, { id: "output", label: "Output" }],
+    edges: [{ from: "input", to: "process" }, { from: "process", to: "output" }] } }),
   flow: () => ({ figure: { figure: { id: `flow-${Date.now().toString(36)}` }, nodes: [
     { id: "start", kind: "terminal", label: "Start" },
     { id: "step", label: "Do the next step" },
@@ -110,14 +110,14 @@ const NEW_BLOCKS = {
     groups: [{ id: "root", role: "canvas", layout: { kind: "row" }, children: ["start", "step", "check", "end"] }],
     edges: [{ from: "start", to: "step" }, { from: "step", to: "check" }, { from: "check", to: "end", label: "yes" }, { from: "check", to: "step", label: "no" }] } }),
   image: () => ({ image: "" }),
-  table: () => ({ table: [["Model", "Params", "Score"], ["Baseline", "25.6M", "76.1"], ["Ours", "24.0M", "**81.2**"]] }),
+  table: () => ({ table: [["Item", "Value", "Change"], ["First", "1.0", "+5%"], ["Second", "2.0", "−3%"]] }),
   stats: () => ({ stats: [{ value: "93%", label: "accuracy" }, { value: "4×", label: "faster" }] }),
   quote: () => ({ quote: "Words worth repeating.", by: "Someone wise" }),
   callout: () => ({ callout: "The one thing to remember.", title: "Key point" }),
-  code: () => ({ code: "def model(x):\n    # the whole idea\n    return head(encoder(x))" }),
+  code: () => ({ code: "def greet(name):\n    # say hello\n    return f\"Hello, {name}\"" }),
   gallery: () => ({ gallery: [] }),
   plot: () => ({ plot: "" }),
-  math: () => ({ math: "\\mathcal{L}(\\theta) = -\\frac{1}{N} \\sum_{i=1}^{N} \\log p_\\theta(y_i \\mid x_i)" }),
+  math: () => ({ math: "a^2 + b^2 = c^2" }),
   mechanism: () => ({ mechanism: [
     { smiles: "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4]", arrows: ["5 -> 2", "2=3 -> 3"], reagents: "NaOH" },
     { arrows: ["3 -> 2", "2-4 -> 4"], label: "tetrahedral intermediate" }] }),
@@ -429,9 +429,8 @@ export function mount(studio, container) {
   function addSlide(layout, at = slides().length) {
     studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, NEW_SLIDES[layout]()); });
     select(at);
-    // Its first words are ready to type over: the title, or a blank slide's text (it draws no title).
-    if (layout === "blank") setTimeout(() => openInline({ kind: "block", region: "body", index: 0 }, { selectAll: true }), 300);
-    else if (layout !== "agenda") setTimeout(() => openInline({ kind: "field", field: layout === "statement" ? "words" : "title" }, { selectAll: true }), 300);
+    // Its first words are ready to type: the title (a blank slide has none).
+    if (layout !== "agenda" && layout !== "blank") setTimeout(() => openInline({ kind: "field", field: layout === "statement" ? "words" : "title" }, { selectAll: true }), 300);
   }
 
   function moveSlide(from, to) {
@@ -1707,10 +1706,10 @@ export function mount(studio, container) {
       };
       mirror = `block.${kind}`;
       bullets = kind === "bullets";
-      if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered) }, (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }));
+      if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered), placeholder: "Text" }, (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text); }, { merge }));
       else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge }) });
       else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, onInput: (text) => editBlock(at, (b) => { b.math = text; }, { merge }) });
-      else editor = rich(block[kind] ?? "", {}, (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }));
+      else editor = rich(block[kind] ?? "", { placeholder: kind === "text" ? "Text" : "" }, (text) => editBlock(at, (b) => { b[kind] = text; }, { merge }));
       idOf = () => blockId(at);
       state.focus = at;
       renderInspector();
@@ -2127,7 +2126,20 @@ export function mount(studio, container) {
     inline.area.dispose?.();
     inline.node.remove();
     pageNode?.querySelector(`[id="${CSS.escape(inline.id)}"]`)?.style.removeProperty("visibility");
+    const left = inline.at && !inline.cell ? inline.at : null;
     inline = null;
+    if (fresh && left && fresh.slide === state.slide && fresh.region === left.region && fresh.index === left.index) {
+      const block = blocksAt(slideAt() || {}, left.region)[left.index];
+      const { entry } = fresh;
+      fresh = null;
+      if (block && blank(block)) {
+        // Added and left empty: taken back as if it had never been added, when nothing
+        // came after it; else deleted.
+        if (studio.past[studio.past.length - 1] === entry && same(studio.document, entry.after)) { studio.undo(); studio.future.pop(); }
+        else editSlide((s) => { blocksAt(s, left.region).splice(left.index, 1); });
+        state.focus = null;
+      }
+    }
     document.removeEventListener("mousedown", closeOnOutside, true);
     // What was typed is shown in the panel too.
     renderInspector();
@@ -2369,11 +2381,23 @@ export function mount(studio, container) {
     let index = 0;
     editSlide((s) => {
       const list = blocksAt(s, region, true);
+      // Where there is only a placeholder (an empty text or list), the new object takes its place.
+      if (list.length && list.every(blank)) { list.splice(0, list.length, block); index = 0; return; }
       index = anchor?.region === region ? Math.min(anchor.index + 1, list.length) : list.length;
       list.splice(index, 0, block);
     });
+    // A new text or list left empty goes again when it is left, as Keynote's does.
+    fresh = !given && blank(block) ? { entry: studio.past[studio.past.length - 1], slide: state.slide, region, index } : null;
     focusBlock(region, index);
     if (INLINE.has(kind) && !given) setTimeout(() => openInline({ kind: "block", region, index }, { selectAll: true }), 300);
+  }
+  let fresh = null;
+  // A text or list with no words: a placeholder.
+  function blank(block) {
+    const kind = kindOf(block);
+    if (kind === "text") return !String(block.text ?? "").trim();
+    if (kind === "bullets") return !JSON.stringify(block.bullets ?? "").replace(/[\[\]",\s]/g, "");
+    return false;
   }
 
   // The part moved, by name: a swap read from the slides alone could be either part's.

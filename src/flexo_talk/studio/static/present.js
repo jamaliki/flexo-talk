@@ -363,6 +363,7 @@ function dress() {
 .ss-audience > .ss-frame { position: absolute; inset: 0; }
 .ss-slide { width: min(100cqw, calc(100cqh * var(--ratio))); aspect-ratio: var(--ratio); background: #fff; line-height: 0; overflow: hidden; }
 .ss-slide svg { display: block; width: 100%; height: 100%; }
+.ss-slide [data-flexo-placeholder] { display: none; }
 .ss-end { position: absolute; inset: 0; display: grid; place-items: center; color: #8c8c8c; font-size: 17px; }
 .ss-hint { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: rgba(255,255,255,0.12);
   color: #ddd; padding: 6px 12px; border-radius: 8px; font-size: 13px; pointer-events: none; white-space: nowrap; }

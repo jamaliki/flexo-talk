@@ -134,6 +134,8 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
    bullets and levels; the measures come from the drawn words (positionInline). */
 .inline-editor.in-place .rich { position: relative; padding: 5px; outline: none; line-height: var(--rt-line, 1.22); caret-color: var(--accent); white-space: pre-wrap; overflow-wrap: break-word; cursor: text; min-height: 1.2em; }
 .rich.empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; color: var(--ink-3); opacity: 0.7; pointer-events: none; }
+/* An empty list's placeholder sits where its first item's words start. */
+.inline-editor.in-place .rich.rt-list.empty::after { content: attr(data-placeholder); position: absolute; top: 5px; left: calc(5px + var(--rt-text, 1.4em)); color: var(--ink-3); opacity: 0.7; pointer-events: none; }
 .rich code { font-family: var(--mono); font-size: 0.88em; }
 .rich .rt-maths { font-family: var(--mono); font-size: 0.82em; padding: 0 2px; border-radius: 3px; background: var(--accent-soft); }
 .rich a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }

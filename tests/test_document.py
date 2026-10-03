@@ -914,3 +914,28 @@ def test_a_structure_on_a_slide_says_the_mol_sketch_settings_it_is_drawn_with(tm
     # In the deck's look: a sketched theme draws in watercolour, the molecule's own pen over it.
     assert result["settings"]["look"] == "watercolour"
     assert result["settings"]["style"]["line.width"] == 2.5
+
+
+def test_an_empty_title_or_text_holds_its_place_and_shows_only_in_the_studio() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    document = yaml.safe_load(
+        'deck: {id: holds}\nslides:\n  - title: ""\n    body: [{bullets: [""]}, {text: ""}, {text: Kept}]\n'
+        '  - layout: title\n    title: ""\n    subtitle: ""\n'
+    )
+    deck = deck_from_document(document, Path("."))
+    exported = [render_slide(deck, slide).svg for slide in deck.slides]
+    token = PLACEHOLDERS.set(True)
+    try:
+        studio = [render_slide(deck, slide).svg for slide in deck.slides]
+    finally:
+        PLACEHOLDERS.reset(token)
+    placed = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', studio[0])
+    assert placed == [("slide1.title", "Title"), ("slide1.body.0", "Text"), ("slide1.body.1", "Text")]
+    assert re.findall(r'data-flexo-placeholder="([^"]+)"', studio[1]) == ["Title", "Subtitle"]
+    assert "data-flexo-placeholder" not in exported[0] + exported[1]
+    assert "Title" not in exported[1] and ">Text<" not in exported[0]
+    # What follows the empty ones is where it is in the studio.
+    kept = r'<text[^>]*y="([\d.]+)"[^>]*>(?:(?!</text>).)*Kept'
+    assert re.findall(kept, exported[0], re.S) == re.findall(kept, studio[0], re.S)
+    assert not [layout for layout in render_slide(deck, deck.slides[0]).lists if layout.id == "slide1.body.0"]

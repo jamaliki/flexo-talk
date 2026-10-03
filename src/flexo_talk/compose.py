@@ -289,6 +289,66 @@ class _Canvas:
 
 
 def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
+    # A title (subtitle, statement) or a text or list left empty holds its place, as
+    # Keynote's placeholders do: laid out as its placeholder's words, drawn faint for an
+    # editor, and not at all when presented or exported -- what is around it stays where
+    # it was either way.
+    empty: dict[str, str] = {}
+    kept: list[tuple[object, str, object]] = []
+
+    def stand_in(owner: object, attribute: str, value: object, identifier: str, words: str) -> None:
+        kept.append((owner, attribute, getattr(owner, attribute)))
+        setattr(owner, attribute, value)
+        empty[identifier] = words
+
+    for field, attribute in _PLACEHOLDER_RUNS.items():
+        if field in slide.placeholders and not getattr(slide, attribute):
+            words = PLACEHOLDER_WORDS[field]
+            name = "title" if field == "words" else field
+            stand_in(slide, attribute, (TextRun(words),), f"{slide.id}.{name}", words)
+    for name, region in slide.regions.items():
+        for index, block in enumerate(region.blocks):
+            if isinstance(block, _Words) and not _worded(block.runs):
+                stand_in(block, "runs", (TextRun("Text"),), f"{slide.id}.{name}.{index}", "Text")
+            elif isinstance(block, _Bullets) and not any(_worded(runs) for _, runs in block.items):
+                stand_in(block, "items", [(0, (TextRun("Text"),))], f"{slide.id}.{name}.{index}", "Text")
+    try:
+        return _render_slide(deck, slide, empty)
+    finally:
+        for owner, attribute, value in kept:
+            setattr(owner, attribute, value)
+
+
+def _worded(runs: tuple[TextRun, ...]) -> bool:
+    return any(run.text.strip() for run in runs)
+
+
+def _placeholders(root: ET.Element, empty: dict[str, str]) -> None:
+    """The placeholders' words marked faint for an editor, or taken out."""
+
+    parents = {child: parent for parent in root.iter() for child in parent}
+    for node in list(root.iter()):
+        words = empty.get(node.get("id", ""))
+        if words is None:
+            continue
+        if PLACEHOLDERS.get():
+            node.set("data-flexo-placeholder", words)
+            node.set("opacity", "0.38")
+        else:
+            parents[node].remove(node)
+
+
+PLACEHOLDERS = contextvars.ContextVar("flexo_talk_placeholders", default=False)
+"""Whether an empty title's placeholder is drawn (faintly, for an editor) or left out."""
+
+PLACEHOLDER_WORDS = {"title": "Title", "subtitle": "Subtitle", "words": "Text"}
+"""The words a placeholder shows."""
+
+_PLACEHOLDER_RUNS = {"title": "title_runs", "subtitle": "subtitle_runs", "words": "title_runs"}
+"""Where each field's words are kept on a slide (a statement's words are its title's)."""
+
+
+def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSlide:
     canvas = _Canvas(deck, slide)
     _held_back(canvas, slide)
     style = deck.style
@@ -324,6 +384,11 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
         else:
             _regions(canvas, slide, body)
     _furniture(canvas, slide)
+    if empty:
+        _placeholders(canvas.root, empty)
+        if not PLACEHOLDERS.get():
+            # Nor are they written natively (PowerPoint's own lists).
+            canvas.lists = [layout for layout in canvas.lists if layout.id not in empty]
     stylesheet = element(canvas.defs, "style", id=f"{slide.id}.fonts", type="text/css")
     embed_fonts(stylesheet, canvas.root, deck.layout_style)
     if deck.title_font:
