@@ -1812,6 +1812,7 @@ export function mount(studio, container) {
     const id = idOf();
     inline = { node, id, idOf, at, area, bullets, cell, under, read };
     // The inspector shows what is typed, as it is typed.
+    area.addEventListener("input", () => requestAnimationFrame(clearUnder));
     if (mirror) area.addEventListener("input", () => {
       const twin = inspectorBody.querySelector(`[data-key="${CSS.escape(mirror)}"]`);
       if (twin && twin !== document.activeElement && twin.value !== area.value) twin.value = area.value;
@@ -2153,6 +2154,26 @@ export function mount(studio, container) {
     Object.assign(inline.node.style, { left: `${left}px`, top: `${Math.max(8, top)}px`, width: `${width}px`, minHeight: box ? `${box.height}px` : "" });
     Object.assign(inline.area.style, { fontSize: `${size}px`, fontFamily: look?.family || "", fontWeight: look?.weight || "",
       color: look?.colour || "", textAlign: centred ? "center" : "left", paddingLeft: rich ? "" : `${5 + indent}px` });
+    clearUnder();
+  }
+  // Words typed that grow past their place (a title onto a second line) would lie over
+  // what is drawn under them until the slide is drawn again round them: what they cover
+  // steps aside meanwhile, as the words being edited do.
+  let underneath = [];
+  function clearUnder() {
+    for (const node of underneath) node.style.removeProperty("visibility");
+    underneath = [];
+    if (!inline || !pageNode) return;
+    const editing = inline.node.getBoundingClientRect();
+    for (const node of pageNode.querySelectorAll("[id]")) {
+      if (node.id === inline.id || !(WORDS.test(node.id) || BLOCK_ID.test(node.id))) continue;
+      const box = node.getBoundingClientRect();
+      if (!box.width || box.right <= editing.left || box.left >= editing.right) continue;
+      // Covered, not grazed by the editor's margin.
+      if (Math.min(box.bottom, editing.bottom) - Math.max(box.top, editing.top) < box.height * 0.3) continue;
+      node.style.visibility = "hidden";
+      underneath.push(node);
+    }
   }
 
   // Where the next column's objects start, right of `box` (as boxOf gives boxes), if any.
@@ -2236,6 +2257,7 @@ export function mount(studio, container) {
     pageNode?.querySelector(`[id="${CSS.escape(inline.id)}"]`)?.style.removeProperty("visibility");
     const left = inline.at && !inline.cell ? inline.at : null;
     inline = null;
+    clearUnder();
     if (fresh && left && fresh.slide === state.slide && fresh.region === left.region && fresh.index === left.index) {
       const block = blocksAt(slideAt() || {}, left.region)[left.index];
       const { entry } = fresh;
