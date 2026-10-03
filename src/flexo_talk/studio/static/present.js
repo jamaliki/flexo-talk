@@ -296,8 +296,11 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
         ahead ? frame(...ahead) : el("div", "ss-frame", el("div", "ss-over", state.ended ? "" : "End of slide show")),
         el("div", "ss-label", "Notes"),
         el("div", notes ? "ss-notes" : "ss-notes none", notes || "No notes"))),
-    el("div", "ss-keys", ["→ Space Return: next", "←: previous", "a number, Return: go to that slide", "B: black",
-      "W: white", paired ? "X: swap displays" : "X: show the slides", "Esc: end"].join("   ·   ")),
+    // The keys, each with what it does, as a Mac's presenter display lists them.
+    // ("→|Space": either key; "4 ↩": one after the other.)
+    el("div", "ss-keys", ...[["→|Space", "Next"], ["←", "Previous"], ["4 ↩", "Go to Slide 4"], ["B", "Black Screen"],
+      ["W", "White Screen"], ["X", paired ? "Swap Displays" : "Show the Slides"], ["Esc", "End"]].map(([keys, what]) =>
+      el("span", "ss-key", ...keys.split("|").flatMap((either, n) => [n ? el("i", "", "or") : null, ...either.split(" ").map((key) => el("kbd", "", key))]), el("span", "", what)))),
     blankWords ? el("div", "ss-status", blankWords) : null,
     goto].filter(Boolean));
 }
@@ -374,16 +377,23 @@ function dress() {
 .ss-count { font-size: 19px; color: #e6e6e6; }
 .ss-elapsed { margin-left: auto; font-size: 34px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .ss-clock { font-size: 19px; color: #9a9a9a; font-variant-numeric: tabular-nums; }
-.ss-main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; min-height: 0; }
+/* The slide being shown, large; beside it the next, smaller, over the notes, which take the
+   room left and are set large enough to read at a glance. */
+.ss-main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 28px; min-height: 0; }
 .ss-current { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; min-height: 0; }
-.ss-side { display: grid; grid-template-rows: auto minmax(0, 0.9fr) auto minmax(0, 1.1fr); gap: 8px; min-height: 0; }
-.ss-presenter .ss-frame { align-items: start; }
+.ss-side { display: grid; grid-template-rows: auto minmax(0, 0.8fr) auto minmax(0, 1.2fr); gap: 8px; min-height: 0; }
+/* Slides stand against their labels' left edge, not centred away from them. */
+.ss-presenter .ss-frame { place-items: start; }
 .ss-label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #8d8d8d; }
 .ss-press { cursor: pointer; }
 .ss-over { width: 100%; height: 100%; display: grid; place-items: center; background: #000; outline: 1px solid #2c2c2c; color: #8c8c8c; font-size: 16px; }
-.ss-notes { overflow: auto; font-size: 22px; line-height: 1.45; white-space: pre-wrap; color: #f4f4f4; user-select: text; -webkit-user-select: text; }
+.ss-notes { overflow: auto; font-size: clamp(18px, 1.55vw, 32px); line-height: 1.45; margin-top: 4px; white-space: pre-wrap; color: #f4f4f4; user-select: text; -webkit-user-select: text; }
 .ss-notes.none { color: #777; }
-.ss-keys { font-size: 12px; color: #8a8a8a; }
+.ss-keys { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13px; color: #9a9a9a; }
+.ss-key { display: inline-flex; align-items: center; gap: 4px; }
+.ss-key kbd { font: 12px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #ddd; padding: 3px 6px; border-radius: 5px; background: #2a2a2a; border: 1px solid #3a3a3a; }
+.ss-key span { margin-left: 3px; }
+.ss-key i { font-style: normal; color: #777; }
 .ss-status { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); background: #8f1d16; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 14px; }
 .ss-goto { position: absolute; left: 50%; bottom: 56px; transform: translateX(-50%); background: rgba(38,38,38,0.96); border: 1px solid #555;
   border-radius: 10px; padding: 10px 18px; font-size: 22px; color: #fff; text-align: center; }
