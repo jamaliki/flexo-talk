@@ -253,15 +253,19 @@ def test_a_figure_that_cannot_be_drawn_says_why_in_its_box_and_its_slide_is_draw
         drawing = kind.draw(document, tmp_path, {})
     finally:
         folder_root.reset(root)
-    # The slide is drawn, its title and words with it; the figure's box says what is wrong,
-    # in words, naming the shape by its own.
+    # The slide is drawn, its title and words with it -- and the figure, the shape it can't
+    # draw a plain box of its words; what is wrong is said under the slide, naming the shape
+    # by its own words, its place naming it to choose it by.
     (page,) = drawing.pages
     assert not page.extra["error"]
-    said = "In “Infection”, span 1 ends where it starts (5): it needs a later end."
-    shown = page.svg.replace("&#8220;", "“").replace("&#8221;", "”")
-    assert "One infection" in shown and "A point" in shown and said in shown
+    assert "One infection" in page.svg and "A point" in page.svg and "Infection" in page.svg
+    assert 'data-flexo-talk="invalid"' not in page.svg
     (message,) = [message for message in drawing.messages if message.severity == "error"]
-    assert message.text == f"This figure can\u2019t be drawn: {said}"
+    assert message.text == (
+        "\u201cInfection\u201d can\u2019t be drawn yet: span 1 ends where it starts (5): it needs a later end."
+        " Choose it to set this in its panel."
+    )
+    assert "#t:" in message.where
     # Built for real, it is an error still.
     with pytest.raises(InvalidFigure):
         deck_from_document(document, tmp_path)
@@ -975,7 +979,7 @@ def test_a_figure_arranged_by_hand_is_turned_to_fit_when_its_person_asks(tmp_pat
 
     # Arranged by hand (a row with parts under it), it is drawn as arranged...
     assert not layout().startswith("turned")
-    # ...unless its person turns "Swap rows and columns to fit" on for it.
+    # ...unless its person turns "Turn to Fit the Slide" on for it.
     assert layout(turn=True).startswith("turned")
     assert not layout(turn=False).startswith("turned")
 
@@ -1079,10 +1083,13 @@ def test_several_parts_dragged_together_land_together_in_their_order() -> None:
         [body, chosen, {"x": 100, "y": 105}],  # the fourth's upper half: before it
         [body, chosen, {"x": 100, "y": 395}],  # below them all
         [right, [{"region": "right", "index": 0}], {"x": 600, "y": 30}],  # its column, emptied
+        [body, chosen, {"x": 100, "y": 450}],  # under the region's room, on the slide: at its end
     ]
     code = (
-        f"import {{ groupDrop, gatherPlan }} from {json.dumps(script.as_uri())};\n"
+        f"import {{ groupDrop, gatherPlan, blockDrop }} from {json.dumps(script.as_uri())};\n"
         f"const out = {json.dumps(drops)}.map(([regions, all, point]) => groupDrop(regions, all, point));\n"
+        # One part, under the room: at the end too.
+        f"out.push(blockDrop({json.dumps(body)}, {{ region: 'body', index: 0 }}, {{ x: 100, y: 450 }}));\n"
         f"const chosen = {json.dumps(chosen)};\n"
         "out.push(gatherPlan({ body: 4 }, chosen, { kind: 'between', region: 'body', index: 4 }));\n"
         "const across = [{ region: 'left', index: 0 }, { region: 'right', index: 0 }];\n"
@@ -1091,22 +1098,24 @@ def test_several_parts_dragged_together_land_together_in_their_order() -> None:
     )
     done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
     found = json.loads(done.stdout)
-    assert found[:4] == [
+    assert found[:6] == [
         {"kind": "between", "region": "body", "index": 2},
         {"kind": "between", "region": "body", "index": 3},
         {"kind": "between", "region": "body", "index": 4},
         {"kind": "into", "region": "right", "index": 0},
+        {"kind": "between", "region": "body", "index": 4},
+        {"kind": "between", "region": "body", "index": 4},
     ]
     place = lambda region, index: {"region": region, "index": index}  # noqa: E731
     # Let go below them all: the two not chosen rise, the chosen two follow in their order.
-    assert found[4] == [
+    assert found[6] == [
         [place("body", 1), place("body", 0)],
         [place("body", 3), place("body", 1)],
         [place("body", 0), place("body", 2)],
         [place("body", 2), place("body", 3)],
     ]
     # From two columns to the end of the left: the right's part follows the left's.
-    assert found[5] == [
+    assert found[7] == [
         [place("left", 1), place("left", 0)],
         [place("left", 0), place("left", 1)],
         [place("right", 0), place("left", 2)],
@@ -1481,6 +1490,44 @@ def test_a_placeholder_added_and_taken_away_is_not_activity() -> None:
     assert [note["text"] for note in kind.describe(listed, columns)] == ["changed the layout on slide 1"]
 
 
+def test_activity_says_a_slide_moved_and_follows_an_object_where_it_goes() -> None:
+    import copy
+
+    kind = DeckKind()
+
+    def said(before: list, after: list) -> list[str]:
+        return [note["text"] for note in kind.describe({"slides": before}, {"slides": after})]
+
+    slides = [{"title": f"Slide {n}", "body": [{"text": f"words of slide {n}"}]} for n in range(1, 6)]
+    assert said(slides, [*slides[:2], slides[3], slides[2], slides[4]]) == ["moved slide 3 after slide 4"]
+    assert said(slides, [slides[0], slides[4], *slides[1:4]]) == ["moved slide 5 before slide 2"]
+    # A long title is cut at a word, and said to be.
+    longer = [*slides, {"title": "Part 1 · The signalling pathway and its last long step"}]
+    assert said(slides, longer) == ["added slide 6, “Part 1 · The signalling pathway and its…”"]
+    # An object put in an empty placeholder's place is added.
+    empty, filled = [{"title": "A", "body": [{"bullets": []}]}], [{"title": "A", "body": [{"image": "a.png"}]}]
+    assert said(empty, filled) == ["added a picture to slide 1"]
+    # A picture edited, then dragged to the slide before: its note goes to it there.
+    one = {"slides": [{"title": "A", "body": [{"text": "a"}]},
+                      {"title": "B", "body": [{"text": "b"}, {"image": "a.png"}]}]}
+    two = copy.deepcopy(one)
+    two["slides"][1]["body"][1]["image"] = "b.png"
+    where = kind.describe(one, two)[0]["where"]
+    assert where == {"page": 2, "label": "Slide 2", "object": {"region": "body", "index": 1}}
+    three = copy.deepcopy(two)
+    three["slides"][0]["body"].append(three["slides"][1]["body"].pop())
+    assert [note["text"] for note in kind.describe(two, three)] == ["moved the picture from slide 2 to slide 1"]
+    assert kind.follow(two, three)(where) == {
+        "page": 1, "label": "Now on slide 1", "object": {"region": "body", "index": 1}, "first": 2}
+    # Edited again where it is, it stays put; deleted, it is said to be gone.
+    again = copy.deepcopy(two)
+    again["slides"][1]["body"][1]["image"] = "c.png"
+    assert kind.follow(two, again)(where) is where
+    gone = copy.deepcopy(two)
+    del gone["slides"][1]["body"][1]
+    assert kind.follow(two, gone)(where)["gone"] == "That picture has since been deleted."
+
+
 def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tmp_path: Path) -> None:
     from pptx import Presentation
 
@@ -1550,6 +1597,46 @@ def test_a_drawn_protein_is_named_by_its_name_and_its_parts_by_what_they_are(tmp
     assert {"Protein sfGFP", "Feature β-barrel", "Site S65T", "Axis", "Tick 50", "Label “S65T”",
             "Line from Oxygen to Protein sfGFP"} <= set(names)
     assert "Shape" not in names and not any("50 100" in name for name in names)
+
+
+def test_a_drawn_things_words_are_read_its_name_first_then_its_parts_in_order(tmp_path: Path) -> None:
+    pdfium = pytest.importorskip("pypdfium2")
+    from pptx import Presentation
+
+    protein = {"id": "chea", "kind": "protein", "label": "CheA", "properties": {"length": 654, "features": [
+        {"type": "domain", "label": "P1", "start": 1, "end": 134},
+        {"type": "domain", "label": "P2", "start": 159, "end": 227},
+        {"type": "domain", "label": "P4 kinase", "start": 355, "end": 507},
+        {"type": "phosphorylation", "label": "His48", "at": 48}]}}
+    construct = {"id": "fret", "kind": "construct", "label": "Reporter", "properties": {"parts": [
+        {"type": "promoter", "label": "Ptrc"}, {"type": "cds", "label": "cheY"},
+        {"type": "terminator", "label": "T1"}]}}
+    timeline = {"id": "assay", "kind": "timeline", "label": "Assay", "properties": {
+        "unit": "s", "events": [{"at": 0, "label": "Added"}, {"at": 30, "label": "Back"}],
+        "spans": [{"start": 10, "end": 30, "label": "Adapted"}, {"start": 0, "end": 10, "label": "Adapting"}]}}
+    document = {"deck": {"id": "order"}, "slides": [
+        {"title": "Parts", "body": [{"figure": {"figure": {"id": "f"}, "nodes": [protein, construct]}}]},
+        {"title": "Times", "body": [{"figure": {"figure": {"id": "g"}, "nodes": [timeline]}}]},
+    ]}
+    deck = deck_from_document(document, tmp_path)
+    built = deck.build(tmp_path, formats=("pdf", "pptx"))
+    pages = pdfium.PdfDocument(built.pdf)  # type: ignore[arg-type]
+    said = [" ".join(pages[index].get_textpage().get_text_range().split()) for index in range(2)]
+    # Its name, then its parts from the N-terminus (a site among its domains) and 5' to 3';
+    # a timeline's in time order, then the times along its axis.
+    assert "CheA P1 His48 P2 P4 kinase 1 100" in said[0]
+    assert "Reporter Ptrc cheY T1" in said[0]
+    assert "Assay Added Adapting Adapted Back 0 s" in said[1]
+    # So in the PowerPoint: each drawn thing's name first, every piece of it named plainly.
+    slide = Presentation(str(built.pptx)).slides[0]
+    groups = {group.name: [shape.name for shape in group.shapes] for group in slide.shapes[-2].shapes}
+    chea, fret = groups["Protein CheA"], groups["Construct Reporter"]
+    assert chea[0] == "Label “CheA”" and fret[0] == "Label “Reporter”"
+    features = [name for name in chea if name.startswith("Feature")]
+    assert features == ["Feature P1", "Feature P2", "Feature P4 kinase"]
+    assert {"Chain", "Stem of Site His48", "Leader to Site His48"} <= set(chea)
+    assert {"Stem of Part Ptrc", "Arrowhead of Part Ptrc", "Part cheY", "Part T1"} <= set(fret)
+    assert not {"Shape", "Stem", "Head", "Leader"} & {*chea, *fret}
 
 
 def test_a_part_named_by_a_label_on_two_lines_is_named_with_a_space_where_it_wrapped() -> None:
@@ -1673,6 +1760,13 @@ def test_a_line_to_a_shape_there_is_none_of_is_left_out_of_the_slide_and_said(tm
         message.endswith("A line to \u201cnowhere\u201d has no shape to go to.") for message in drawn.diagnostics
     )
     assert 'data-flexo-talk="invalid"' not in drawn.svg
+    # Exported, it is said with its slide: not dropped without a word.
+    from flexo_talk.studio import DeckKind
+
+    kind = DeckKind()
+    document = {"slides": [{"title": "Lines", "body": [{"figure": figure}]}]}
+    assert kind.export(document, tmp_path, "t", ["pdf"])
+    assert kind.export_notes == ["Slide 1: A line to \u201cnowhere\u201d has no shape to go to. It is left out."]
 
 
 def test_a_paragraph_made_a_list_while_typed_in_is_one_list_with_the_words_typed() -> None:
@@ -1699,6 +1793,23 @@ def test_a_paragraph_made_a_list_while_typed_in_is_one_list_with_the_words_typed
     worded, typed = deck({"text": "One\nTwo"}), deck({"bullets": ["One", "Two, typed"]})
     merged = DeckKind().mended(merge3(base, worded, typed, notes), notes, base)
     assert merged["slides"][0]["body"] == [{"text": "First."}, {"text": "One\nTwo, typed"}]
+
+
+def test_a_column_taken_away_while_a_cell_in_it_is_typed_in_leaves_the_rows_aligned() -> None:
+    from flexo.studio.merge import merge3
+
+    def deck(rows: list[list[str]]) -> dict:
+        return {"slides": [{"title": "Q", "body": [{"table": rows}]}]}
+
+    base = deck([["Model", "Params"], ["Baseline", "25.6M"], ["Ours", "24.0M"]])
+    typed = deck([["Model", "Params"], ["Baseline, typed", "25.6M"], ["Ours", "24.0M"]])
+    taken = deck([["Params"], ["25.6M"], ["24.0M"]])
+    for ours, theirs in ((typed, taken), (taken, typed)):
+        notes: list = []
+        merged = DeckKind().mended(merge3(base, ours, theirs, notes), notes, base)
+        # The taking away wins: no row left a cell longer than the others.
+        assert merged["slides"][0]["body"] == [{"table": [["Params"], ["25.6M"], ["24.0M"]]}]
+        assert notes == []
 
 
 def test_an_object_written_with_two_kinds_is_made_the_one_it_became() -> None:
@@ -1796,3 +1907,183 @@ def test_the_studio_writes_a_deck_over_the_words_it_read(tmp_path: Path) -> None
         assert written == HAND_WRITTEN.replace('"The pipeline"', '"The pipeline, in short"')
     finally:
         workspace.close()
+
+
+def test_a_figure_with_a_shape_that_cannot_be_drawn_draws_the_rest_and_says_which(tmp_path: Path) -> None:
+    from flexo_talk.studio import DeckKind
+
+    figure = {
+        "figure": {"id": "f"},
+        "nodes": [{"id": "p", "kind": "protein", "label": "Spike"}, {"id": "q", "label": "Next"}],
+        "edges": [{"from": "p", "to": "q"}],
+    }
+    document = {"slides": [{"title": "Spike", "body": [{"figure": figure}]}]}
+    drawing = DeckKind().draw(document, tmp_path, {"settle": True})
+    (message,) = [item for item in drawing.messages if item.code == "deck.figure"]
+    # Said of the shape by its words, its place naming it, to choose it by: "#p:length".
+    assert message.text.startswith("“Spike” can\u2019t be drawn yet: a protein needs its length")
+    assert message.where.endswith("#p:length") and message.place == "Slide 1 · Figure"
+    # The rest of the figure is drawn, the protein a plain box of its words: no empty box.
+    svg = drawing.pages[0].svg
+    assert 'id="slide1.body.0.q"' in svg and 'id="slide1.body.0.p"' in svg
+    assert 'data-flexo-talk="invalid"' not in svg
+
+
+def test_a_figure_that_fails_as_it_is_laid_out_leaves_the_rest_of_its_slide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import flexo_talk.compose as compose
+    from flexo_talk.studio import DeckKind
+
+    fit = compose._fit_in_box
+
+    def failing(spec, *args, **options):
+        if any(node.id == "boom" for node in spec.nodes):
+            raise KeyError("boom")
+        return fit(spec, *args, **options)
+
+    monkeypatch.setattr(compose, "_fit_in_box", failing)
+    figure = {"figure": {"id": "f"}, "nodes": [{"id": "boom", "label": "Log it"}]}
+    document = {"slides": [{"title": "Kept", "body": [{"figure": figure}, {"text": "Words stay"}]}]}
+    drawing = DeckKind().draw(document, tmp_path, {"settle": True})
+    svg = drawing.pages[0].svg
+    assert "Kept" in svg and "Words stay" in svg and 'data-flexo-talk="invalid"' in svg
+    assert any("“Log it”" in message.text for message in drawing.messages)
+    kind = DeckKind()
+    assert kind.export(document, tmp_path, "t", ["pdf"])
+    assert kind.export_notes == ["Slide 1 has a figure left empty: it can\u2019t be drawn as it is."]
+
+
+def test_a_figure_edited_on_a_slide_is_said_as_the_figure_says_it() -> None:
+    from flexo_talk.studio import DeckKind
+
+    figure = {"figure": {"id": "f"}, "nodes": [{"id": "a", "label": "Start"}]}
+    before = {"slides": [{"title": "Flow", "body": [{"figure": figure}]}]}
+    grown = {**figure, "nodes": [*figure["nodes"], {"id": "x", "label": "Extra step"}]}
+    after = {"slides": [{"title": "Flow", "body": [{"figure": grown}]}]}
+    (note,) = DeckKind().describe(before, after)
+    assert note["text"] == "added “Extra step” to the figure on slide 1"
+
+
+def _captioned(tmp_path: Path) -> dict:
+    from PIL import Image
+
+    Image.new("RGB", (400, 300), (30, 90, 160)).save(tmp_path / "tracks.png")
+    figure = {"figure": {"id": "f"}, "nodes": [{"id": "r", "label": "Receptor"}, {"id": "k", "label": "Kinase"}],
+              "edges": [{"from": "r", "to": "k"}]}
+    return {"deck": {"id": "captions"}, "slides": [
+        {"title": "Tracks", "body": [{"image": "tracks.png", "caption": "Figure 1. Tracks", "description": "Tracks"}]},
+        {"title": "Cues", "body": [{"table": [["Receptor", "Cue"], ["Tar", "Aspartate"]], "caption": "Table 1. Cues"}]},
+        {"title": "Path", "body": [{"figure": figure, "caption": "Figure 2. Receptor to kinase"}]},
+    ]}
+
+
+def test_a_picture_table_or_figure_has_a_caption_under_it_tagged_and_grouped_with_it(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    import xml.etree.ElementTree as ET
+
+    from pptx import Presentation
+
+    deck = deck_from_document(_captioned(tmp_path), tmp_path)
+    for index, (slide, rendered) in enumerate(zip(deck.slides, deck.render(), strict=True)):
+        block = f"{slide.id}.body.0"
+        # Under it, centred under it and a size smaller -- and part of it: in its group, so it
+        # is chosen and moved with it.
+        group = next(item for item in ET.fromstring(rendered.svg).iter() if item.get("id") == block)
+        caption = next((item for item in group.iter() if item.get("id") == f"{block}.caption"), None)
+        assert caption is not None, index
+        assert caption.get("text-anchor") == "middle" and float(caption.get("font-size")) == deck.style.small_size
+    built = deck.build(tmp_path / "out", formats=("pdf", "pptx"))
+    # A caption of what it is under, in the PDF's tags.
+    pdf = built.pdf.read_bytes()  # type: ignore[union-attr]
+    parents = [re.search(rb"\b%s 0 obj\s*<< /Type /StructElem /S /(\w+)" % parent, pdf).group(1)
+               for parent in re.findall(rb"/S /Caption /P (\d+) 0 R", pdf)]
+    assert parents == [b"Figure", b"Table", b"Figure"]
+    # In the PowerPoint, a picture and a figure are grouped with theirs; a table (which no
+    # slide program groups) is followed by it.
+    slides = Presentation(str(built.pptx)).slides
+    picture = next(shape for shape in slides[0].shapes if shape.name == "Picture")
+    assert [shape.name for shape in picture.shapes] == ["Picture", "Caption “Figure 1. Tracks”"]
+    names = [shape.name for shape in slides[1].shapes]
+    assert names[names.index("Table") + 1] == "Caption “Table 1. Cues”"
+    figure = next(shape for shape in slides[2].shapes if shape.name == "Figure")
+    assert "Caption “Figure 2. Receptor to kinase”" in [shape.name for shape in figure.shapes]
+
+
+def test_words_set_as_a_caption_say_they_are_centred_and_keep_an_alignment_given_them(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    Image.new("RGB", (400, 300), (30, 90, 160)).save(tmp_path / "tracks.png")
+
+    def drawn(text: dict) -> str:
+        document = {"deck": {"id": "aligned"}, "slides": [{"title": "Tracks", "body": [{"image": "tracks.png"}, text]}]}
+        deck = deck_from_document(document, tmp_path)
+        return re.search(r'<text id="slide1\.body\.1"[^>]*>', render_slide(deck, deck.slides[0]).svg).group(0)
+
+    # Under a picture, words are centred as a caption is, and say so (the inspector shows
+    # Centre, as drawn); an alignment written for them is kept, Left too.
+    centred = drawn({"text": "Swimming tracks"})
+    assert 'text-anchor="middle"' in centred and 'data-flexo-align="middle"' in centred
+    left = drawn({"text": "Swimming tracks", "align": "start"})
+    assert "text-anchor" not in left and "data-flexo-align" not in left
+
+
+def test_any_object_builds_in_on_a_click_of_its_own_in_order(tmp_path: Path) -> None:
+    pytest.importorskip("PIL")
+    import zipfile
+
+    document = _captioned(tmp_path)
+    figure = document["slides"][2]["body"][0]
+    document["slides"].append({"title": "Builds", "layout": "two-columns", "left": [
+        {"bullets": ["One", "Two"], "reveal": True}], "right": [
+        {**figure, "build": True}, {"text": "Then this", "build": True}]})
+    document["slides"][1]["body"][0]["build"] = True
+    deck = deck_from_document(document, tmp_path)
+    rendered = deck.render()
+    builds = rendered[3]
+    # The list's items a click each, then the figure, then the words: as Keynote builds in.
+    assert builds.steps == 5 and builds.builds == [(4, "slide4.right.0"), (5, "slide4.right.1")]
+    assert 'id="slide4.right.0"' not in builds.at_step(3) and 'id="slide4.right.0"' in builds.at_step(4)
+    assert 'id="slide4.right.1"' not in builds.at_step(4)
+    built = deck.build(tmp_path / "out", formats=("pdf", "pptx"))
+    import pypdfium2 as pdfium
+
+    assert len(pdfium.PdfDocument(built.pdf)) == 1 + 2 + 1 + 5  # type: ignore[arg-type]
+    with zipfile.ZipFile(built.pptx) as archive:  # type: ignore[arg-type]
+        table, last = (archive.read(f"ppt/slides/slide{n}.xml").decode() for n in (2, 4))
+
+    def clicks(xml: str) -> list[list[tuple[str, str]]]:
+        names = dict(re.findall(r'<p:cNvPr id="(\d+)" name="([^"]*)"', xml))
+        timing = xml[xml.index("<p:timing"):]
+        found = re.split(r'<p:cond delay="indefinite"/>', timing)[1:]
+        return [[(names[spid], kind) for kind, spid in re.findall(r'nodeType="(\w+)".*?spid="(\d+)"', click)]
+                for click in found]
+
+    # In PowerPoint, an Appear on each click: a table with its caption together.
+    assert clicks(table) == [[("Table", "clickEffect"), ("Caption “Table 1. Cues”", "withEffect")]]
+    assert [[name for name, _ in click] for click in clicks(last)] == [
+        ["List “One Two”"], ["List “One Two”"], ["Figure"], ["Text “Then this”"]]
+    assert '<p:bldGraphic spid="' in table
+
+
+def test_a_figure_arranged_by_hand_drawn_small_says_turning_would_draw_it_larger(tmp_path: Path) -> None:
+    import itertools
+
+    from flexo_talk.studio import DeckKind
+
+    steps = [f"n{index}" for index in range(9)]
+    figure = {
+        "figure": {"id": "row"},
+        "nodes": [{"id": step, "label": f"Step number {index}"} for index, step in enumerate(steps)],
+        "edges": [{"from": a, "to": b} for a, b in itertools.pairwise(steps)],
+        "groups": [
+            {"id": "root", "layout": {"kind": "column"}, "role": "canvas", "children": ["line", "n8"]},
+            {"id": "line", "layout": {"kind": "row"}, "role": "layout", "children": steps[:8]},
+        ],
+    }
+    drawing = DeckKind().draw({"slides": [{"title": "Long", "body": [{"figure": figure}]}]}, tmp_path, {"settle": True})
+    (note,) = [message for message in drawing.messages if message.code.startswith("figure.small")]
+    # Coded for the studio to offer the switch in one click.
+    assert note.code == "figure.small.turn" and note.text.endswith("Turned to fit the slide, it would be larger.")
+    assert note.where == "slides[0] row"

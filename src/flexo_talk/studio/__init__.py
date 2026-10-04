@@ -176,6 +176,7 @@ class DeckKind:
 
         from flexo.studio.figure_edit import mend
 
+        _aligned(document, notes if notes is not None else [])
         _converted(document, notes if notes is not None else [], base)
         _one_kind(document, base)
         _laid_out(document)
@@ -324,8 +325,6 @@ class DeckKind:
     def describe(self, before: Any, after: Any) -> list[dict[str, Any]]:
         """What a change did, slide by slide, for the activity list and for following."""
 
-        import difflib
-
         before = before if isinstance(before, dict) else {}
         after = after if isinstance(after, dict) else {}
         notes: list[dict[str, Any]] = []
@@ -339,46 +338,110 @@ class DeckKind:
             said = list(dict.fromkeys(words.get(key, "the deck's settings") for key in changed))
             notes.append({"text": "changed " + " and ".join(said[:2]), "where": {"label": "Design"}})
         old, new = before.get("slides") or [], after.get("slides") or []
-        keys = [_stable(slide) for slide in old], [_stable(slide) for slide in new]
-        for tag, a1, a2, b1, b2 in difflib.SequenceMatcher(None, *keys, autojunk=False).get_opcodes():
-            if tag == "equal":
-                continue
-            if tag == "insert":
-                for index in range(b1, b2):
-                    notes.append(_slide_note("added", new, index))
-            elif tag == "delete":
-                at = min(a1 + 1, max(len(new), 1))
+        steps = _slide_pairs(old, new)
+        now = {a: b for step, a, b in steps if step in ("equal", "moved", "changed")}
+        was = {b: a for a, b in now.items()}
+        carried: list[tuple[dict[str, Any], str, str, int, int]] = []
+        for step, a, b in steps:
+            if step == "added":
+                notes.append(_slide_note("added", new, b))
+            elif step == "moved":
+                notes.append(_moved_note(a, b, new, was))
+            elif step == "deleted":
                 # Clicked, it goes where the slide was; it names no place, being gone.
-                notes.append({"text": f"deleted slide {a1 + 1}" if a2 - a1 == 1 else f"deleted {a2 - a1} slides",
-                              "where": {"page": at}})
-            else:
-                # Slides replaced by others: pair each new one with the old one it most resembles,
-                # or, as many in as out, with the one in its place if it is of a kind with it (its
-                # title or its layout): a list pasted into is that slide edited, not another.
-                unused = list(range(a1, a2))
-                for index in range(b1, b2):
-                    text = json.dumps(new[index], sort_keys=True, default=str)
-                    scored = [(_likeness(old[i], text), i) for i in unused]
-                    best = max(scored, default=(0.0, -1))
-                    placed = a1 + index - b1
-                    if best[0] <= 0.5 and a2 - a1 == b2 - b1 and placed in unused and _kin(old[placed], new[index]):
-                        best = (1.0, placed)
-                    if best[0] > 0.5:
-                        unused.remove(best[1])
-                        # A placeholder put there and taken away again (a Code left empty) is
-                        # nothing done: said neither as added nor as deleted.
-                        if _without_placeholders(old[best[1]]) == _without_placeholders(new[index]):
-                            continue
-                        verb, what = _what_changed(old[best[1]], new[index])
-                        notes.append(_slide_note(verb, new, index, what))
-                    else:
-                        notes.append(_slide_note("added", new, index))
-                if unused:
-                    at = min(b1 + 1, max(len(new), 1))
-                    count = len(unused)
-                    notes.append({"text": f"deleted slide {unused[0] + 1}" if count == 1 else f"deleted {count} slides",
-                                  "where": {"page": at}})
+                notes.append({"text": f"deleted slide {a[0] + 1}" if len(a) == 1 else f"deleted {len(a)} slides",
+                              "where": {"page": min(b + 1, max(len(new), 1))}})
+            elif step == "changed":
+                # A placeholder put there and taken away again (a Code left empty) is nothing
+                # done: said neither as added nor as deleted.
+                if _without_placeholders(old[a]) == _without_placeholders(new[b]):
+                    continue
+                verb, what = _what_changed(old[a], new[b])
+                note = _slide_note(verb, new, b, what)
+                # About one object, it is that object's: followed where it goes (`follow`).
+                if verb not in ("deleted", "emptied") and (thing := _object_changed(old[a], new[b])):
+                    note["where"]["object"] = thing
+                notes.append(note)
+                if verb in ("added", "deleted") and (one := _one_block(old[a], new[b])):
+                    carried.append((note, verb, one, a, b))
+        # An object taken from one slide and put on another (dragged to its thumbnail) is
+        # moved, said once: "moved the text from slide 3 to slide 6".
+        for note, _, one, a, _ in [item for item in carried if item[1] == "deleted"]:
+            there = next((item for item in carried if item[1] == "added" and item[2] == one), None)
+            if there is None or note not in notes or there[0] not in notes:
+                continue
+            name = _object_name(json.loads(one)).lower()
+            there[0]["text"] = f"moved the {name} from slide {a + 1} to slide {there[4] + 1}"
+            notes.remove(note)
         return notes
+
+    def follow(self, before: Any, after: Any) -> Any:
+        """Where the slides and objects of a deck before a change are after it: a function
+        from a place (a ``where`` of ``describe``'s) to where that is now -- the same slide
+        moved, an object dragged to another slide -- or to one saying it is gone. None if no
+        slide changed."""
+
+        old = (before if isinstance(before, dict) else {}).get("slides") or []
+        new = (after if isinstance(after, dict) else {}).get("slides") or []
+        if old == new:
+            return None
+        steps = _slide_pairs(old, new)
+        now = {a: b for step, a, b in steps if step in ("equal", "moved", "changed")}
+        # The objects that arrived on a slide with this change -- in no place of the slide it was.
+        arrived: dict[str, tuple[int, str, int]] = {}
+        for step, a, b in steps:
+            if step not in ("changed", "added"):
+                continue
+            there = {_stable(block) for key in _REGIONS for block in _blocks(old[a] if a is not None else {}, key)}
+            for key in _REGIONS:
+                for index, block in enumerate(_blocks(new[b], key)):
+                    if (text := _stable(block)) not in there:
+                        arrived.setdefault(text, (b, key, index))
+
+        def place(page: int, thing: dict[str, Any] | None = None) -> dict[str, Any]:
+            where = {"page": page + 1, "label": f"Slide {page + 1}"}
+            return {**where, "object": thing} if thing else where
+
+        def moved(where: Any) -> Any:
+            # (A place where slides were deleted names none, and is not followed.)
+            page = where.get("page") if isinstance(where, dict) and "label" in where else None
+            if not isinstance(page, int) or where.get("gone") or not 0 < page <= len(old):
+                return where
+            found = followed(where, page - 1)
+            if found.get("page") == page and found.get("object") == where.get("object"):
+                return where
+            # Somewhere else than its note says, it says so beside it: "Now on slide 3".
+            first = where.get("first", page)
+            if found.get("page") not in (None, first):
+                found = {**found, "label": f"Now on slide {found['page']}", "first": first}
+            return found
+
+        def followed(where: dict[str, Any], a: int) -> dict[str, Any]:
+            b = now.get(a)
+            thing = where.get("object")
+            blocks = _blocks(old[a], thing.get("region")) if isinstance(thing, dict) else []
+            index = thing.get("index") if isinstance(thing, dict) else None
+            block = blocks[index] if isinstance(index, int) and 0 <= index < len(blocks) else None
+            if block is None:
+                return place(b) if b is not None else _gone("slide")
+            key, region = _stable(block), thing["region"]
+            here = _blocks(new[b], region) if b is not None else []
+            # Where it is unchanged: in its slide (moved up or down in it), or on another.
+            same = [i for i, other in enumerate(here) if _stable(other) == key]
+            if same:
+                return place(b, {"region": region, "index": min(same, key=lambda i: abs(i - index))})
+            if key in arrived and arrived[key][0] != b:
+                to, into, at = arrived[key]
+                return place(to, {"region": into, "index": at})
+            if b is None:
+                return _gone("slide")
+            # Changed where it was (typed in, made another kind), or gone from its slide.
+            others = {_stable(other) for i, other in enumerate(blocks) if i != index}
+            if len(here) < len(blocks) and others <= {_stable(other) for other in here}:
+                return _gone(_object_name(block).lower())
+            return place(b, {"region": region, "index": min(index, max(len(here) - 1, 0))})
+
+        return moved
 
     def catalog(self) -> dict[str, Any]:
         from flexo.colour import design_palettes
@@ -528,9 +591,9 @@ class DeckKind:
             else:
                 self._slides.move_to_end(keys[index])
                 for text in done["diagnostics"]:
-                    messages.append(_diagnostic(text, identifier, index, "warning"))
+                    messages.append(_sized(_diagnostic(text, identifier, index, "warning")))
                 for text in done["notes"]:
-                    messages.append(_diagnostic(text, identifier, index, "note"))
+                    messages.append(_sized(_diagnostic(text, identifier, index, "note")))
                 for text in done.get("held", []):
                     messages.append(Message(text, "warning", f"slides[{index}]", identifier, "code.untrusted"))
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
@@ -561,7 +624,12 @@ class DeckKind:
             # A PDB entry downloaded before a structure is made of it: its ID, or why not.
             from flexo.studio.figure_kind import fetched
 
-            return {"document": document, "id": fetched(str(action.get("id") or ""))}
+            # One that can't be had is an answer, said on the page -- not a failed request
+            # (which the browser would also log as one).
+            try:
+                return {"document": document, "id": fetched(str(action.get("id") or ""))}
+            except EditError as error:
+                return {"document": document, "failed": explain(error)}
         if action.get("do") == "structure-name":
             # What structure files say they hold, to name the parts made of them.
             from flexo.structures import structure_caption
@@ -624,6 +692,7 @@ class DeckKind:
         showing it whole, as Keynote's does; with ``steps``, a page per stage of each list
         a slide reveals."""
 
+        from flexo_talk.compose import FIGURE_FAILED
         from flexo_talk.export import build_deck, file_stem
 
         errors: list[DeckDocumentError] = []
@@ -639,12 +708,28 @@ class DeckKind:
             place = _place(error.where, document)
             raise ValueError(f"{place}: {error.message}" if place else error.message) from error
         self.export_notes = [
-            f"{_place(error.where, document) or 'A figure'} is left empty: it can\u2019t be drawn as it is."
+            f"{_place(error.where, document) or 'A figure'}: {_drawn_plainly(error.message)}"
+            if getattr(error, "drawn", None) is not None
+            else f"{_place(error.where, document) or 'A figure'} is left empty: it can\u2019t be drawn as it is."
             for error in errors
         ]
         folder = into or base / "build"
         images = folder / file_stem(deck.id) if into is not None else None
         result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images)
+        # (One that failed only as it was laid out for its slide is left empty too, and said.)
+        self.export_notes += [
+            f"{_place(f'slides[{int(found[1]) - 1}]', document)} has a figure left empty: "
+            "it can\u2019t be drawn as it is."
+            for text in dict.fromkeys(result.diagnostics)
+            if (found := re.match(r"slide(\d+)\b.*" + re.escape(FIGURE_FAILED), text))
+        ]
+        # A line to a shape a figure has none of is left out of it, and said with its slide.
+        self.export_notes += [
+            f"{_place(f'slides[{int(found[1]) - 1}]', document)}: {found[2]} It is left out."
+            for text in dict.fromkeys(result.diagnostics)
+            if (found := re.match(r"slide(\d+)\S* \S+: (A line (?:to|from) .* has no shape to (?:go to|start from)\.)",
+                                  text))
+        ]
         written = [result.pptx, result.pdf, *result.svgs, *result.pngs]
         return [path for path in written if path]
 
@@ -967,10 +1052,132 @@ def _likeness(old: Any, text: str) -> float:
     return difflib.SequenceMatcher(None, json.dumps(old, sort_keys=True, default=str), text).ratio()
 
 
+_REGIONS = ("body", "left", "right")
+"""A slide's places for objects that an object is followed in (a column's are not)."""
+
+
+def _blocks(slide: Any, region: Any) -> list:
+    blocks = slide.get(region) if isinstance(slide, dict) and region in _REGIONS else None
+    return blocks if isinstance(blocks, list) else []
+
+
+def _slide_pairs(old: list, new: list) -> list[tuple[str, Any, Any]]:
+    """How a deck's slides before a change are those after it, in their order after:
+    ("equal", a, b), ("moved", a, b) -- the same slide taken out and put back elsewhere --
+    ("changed", a, b), ("added", None, b), and ("deleted", [a, ...], b), b where they were."""
+
+    import difflib
+
+    keys = [_stable(slide) for slide in old], [_stable(slide) for slide in new]
+    codes = difflib.SequenceMatcher(None, *keys, autojunk=False).get_opcodes()
+    out = [a for tag, a1, a2, _, _ in codes if tag in ("delete", "replace") for a in range(a1, a2)]
+    into = [b for tag, _, _, b1, b2 in codes if tag in ("insert", "replace") for b in range(b1, b2)]
+    moves: dict[int, int] = {}
+    for b in into:
+        a = next((a for a in out if keys[0][a] == keys[1][b] and a not in moves.values()), None)
+        if a is not None:
+            moves[b] = a
+    taken = set(moves.values())
+    steps: list[tuple[str, Any, Any]] = []
+    for tag, a1, a2, b1, b2 in codes:
+        if tag == "equal":
+            steps += [("equal", a1 + k, b1 + k) for k in range(a2 - a1)]
+            continue
+        # Slides replaced by others: pair each new one with the old one it most resembles,
+        # or, as many in as out, with the one in its place if it is of a kind with it (its
+        # title or its layout): a list pasted into is that slide edited, not another.
+        olds = [a for a in range(a1, a2) if a not in taken]
+        fresh = [b for b in range(b1, b2) if b not in moves]
+        unused = list(olds)
+        for b in range(b1, b2):
+            if b in moves:
+                steps.append(("moved", moves[b], b))
+                continue
+            text = json.dumps(new[b], sort_keys=True, default=str)
+            best = max(((_likeness(old[i], text), i) for i in unused), default=(0.0, -1))
+            placed = olds[fresh.index(b)] if len(olds) == len(fresh) else -1
+            # (The one in its place with its title is itself, however much else changed: an
+            # object dragged from it to the slide beside it leaves each slide itself.)
+            itself = placed in unused and _titled(old[placed]) == _titled(new[b]) != ""
+            if itself or (best[0] <= 0.5 and placed in unused and _kin(old[placed], new[b])):
+                best = (1.0, placed)
+            if best[0] > 0.5:
+                unused.remove(best[1])
+                steps.append(("changed", best[1], b))
+            else:
+                steps.append(("added", None, b))
+        if unused:
+            steps.append(("deleted", unused, b1))
+    return steps
+
+
+def _titled(slide: Any) -> str:
+    return str(slide.get("title") or slide.get("words") or "").strip() if isinstance(slide, dict) else ""
+
+
+def _moved_note(a: int, b: int, new: list, was: dict[int, int]) -> dict[str, Any]:
+    """A slide moved, by the slides it is now between: "moved slide 3 after slide 4" -- as
+    numbered before (two slides swapped, the first said moved down past the second)."""
+
+    after, before = was.get(b - 1), was.get(b + 1)
+    if after is not None and after > a:
+        text = f"moved slide {a + 1} after slide {after + 1}"
+    elif before is not None and before == a - 1 and (after is None or after < before):
+        text, b = f"moved slide {before + 1} after slide {a + 1}", b + 1
+    elif before is not None and before < a:
+        text = f"moved slide {a + 1} before slide {before + 1}"
+    else:
+        text = f"moved slide {a + 1} to slide {b + 1}"
+    return {"text": text, "where": {"page": b + 1, "label": f"Slide {b + 1}"}}
+
+
+def _object_changed(old: Any, new: Any) -> dict[str, Any] | None:
+    """The one object a change to a slide added or changed, as {region, index}; None if it
+    changed more, or less."""
+
+    regions = [key for key in _REGIONS if _blocks(old, key) != _blocks(new, key)]
+    if len(regions) != 1:
+        return None
+    was, now = _blocks(old, regions[0]), _blocks(new, regions[0])
+    kept = {_stable(block) for block in was}
+    if len(now) == len(was):
+        changed = [index for index, (a, b) in enumerate(zip(was, now, strict=True)) if a != b]
+    else:
+        changed = [index for index, block in enumerate(now) if _stable(block) not in kept]
+    return {"region": regions[0], "index": changed[0]} if len(changed) == 1 else None
+
+
+def _one_block(old: Any, new: Any) -> str | None:
+    """The one object a change to a slide took away or put there, by what it says (as JSON);
+    None if it did more."""
+
+    before = [json.dumps(block, sort_keys=True, default=str) for key in _REGIONS for block in _blocks(old, key)]
+    after = [json.dumps(block, sort_keys=True, default=str) for key in _REGIONS for block in _blocks(new, key)]
+    gone = [block for block in before if block not in after]
+    came = [block for block in after if block not in before]
+    return (gone or came)[0] if len(gone) + len(came) == 1 else None
+
+
+def _gone(what: str) -> dict[str, Any]:
+    """A place in the activity list that is no more: said so when it is clicked."""
+
+    return {"label": "Since deleted", "gone": f"That {what} has since been deleted."}
+
+
+def _clipped(text: str, limit: int = 40) -> str:
+    """A title as long as a note has room for: cut at a word, and said to be ("…")."""
+
+    if len(text) <= limit:
+        return text
+    cut = text[: limit + 1]
+    cut = cut.rsplit(" ", 1)[0] if " " in cut.strip() else text[:limit]
+    return cut.rstrip(" ,;:.-\u2013\u2014\u00b7") + "\u2026"
+
+
 def _slide_note(verb: str, slides: list, index: int, what: str = "") -> dict[str, Any]:
     slide = slides[index] if index < len(slides) and isinstance(slides[index], dict) else {}
     title = str(slide.get("words") or slide.get("title") or "").strip()
-    named = f", “{title[:40]}”" if title and verb == "added" else ""
+    named = f", “{_clipped(title)}”" if title and verb == "added" else ""
     # "edited the title on slide 4", "added Table to slide 2", "added slide 5, “Methods”":
     # what changed first, as said aloud.
     where = {"added": "to", "deleted": "from"}.get(verb, "on")
@@ -1092,6 +1299,41 @@ def _alike_lines(first: list[str], second: list[str]) -> float:
     while end < len(a) - start and end < len(b) - start and a[-1 - end] == b[-1 - end]:
         end += 1
     return 2 * (start + end) / (len(a) + len(b))
+
+
+def _aligned(document: object, notes: list) -> None:
+    """A table's cell kept for someone typing in it (merge3's ``{"kept": …}`` note) while the
+    other side took its column away: the cell goes with its column -- the rows stay aligned,
+    the taking away wins -- and its note is settled (taken out of ``notes``)."""
+
+    kept = [note for note in notes if "kept" in note and isinstance(note.get("item"), str)]
+    if not kept:
+        return
+
+    def walk(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+            return
+        if not isinstance(value, dict):
+            return
+        table = value.get("table")
+        if isinstance(table, list) and len(table) > 1 and all(isinstance(row, list) for row in table):
+            holds = [any(note["item"] in row for note in kept) for row in table]
+            others = [row for row, held in zip(table, holds, strict=True) if not held]
+            width = len(others[0]) if others else None
+            if others and all(len(row) == width for row in others):
+                for row in table:
+                    note = next((one for one in kept if one["item"] in row), None) if len(row) == width + 1 else None
+                    if note is None:
+                        continue
+                    row.pop(row.index(note["item"]))
+                    kept.remove(note)
+                    notes.remove(note)
+        for item in value.values():
+            walk(item)
+
+    walk(document)
 
 
 def _converted(document: object, notes: list, base: object) -> None:
@@ -1317,7 +1559,15 @@ def _what_changed(old: Any, new: Any) -> tuple[str, str]:
     if "body" in keys and len(bodies[0]) == len(bodies[1]):
         for was, now in zip(*bodies, strict=True):
             if isinstance(was, dict) and isinstance(now, dict) and _object_name(was) != _object_name(now):
+                # (One put in an empty placeholder's place is added: there was nothing to make.)
+                if _placeholder(was):
+                    return "added", _a(_object_name(now))
                 return "made", f"the {_object_name(was).lower()} {_a(_object_name(now))}"
+    # A figure's shapes changed, said as the figure says it: "added “Log it” to the flow chart".
+    if "body" in keys and len(bodies[0]) == len(bodies[1]):
+        changed = [(was, now) for was, now in zip(*bodies, strict=True) if was != now]
+        if len(changed) == 1 and (said := _figure_said(*changed[0])):
+            return said
     # An object added or deleted is what the change did. One that was there empty and is
     # typed in is filled in, and one made empty again (its typing undone) is emptied: still
     # there, neither added nor deleted.
@@ -1333,6 +1583,31 @@ def _what_changed(old: Any, new: Any) -> tuple[str, str]:
     said = list(dict.fromkeys(_objects(old.get(key), new.get(key))[1] if key == "body"
                               else names.get(key) or f"the {FIELD_LABELS.get(key, key).lower()}" for key in keys))
     return "edited", " and ".join(said[:2])
+
+
+def _figure_said(old: Any, new: Any) -> tuple[str, str] | None:
+    """A figure written in a slide, changed, as its activity says it: its first change and
+    the figure by its name ("added “Log it” to", "the flow chart"); None if it is not one."""
+
+    from flexo.studio.figure_kind import figure_changes
+
+    figures = [block.get("figure") if isinstance(block, dict) else None for block in (old, new)]
+    if not all(isinstance(figure, dict) for figure in figures):
+        return None
+    said = figure_changes(*figures)
+    if not said:
+        return None
+    what = f"the {_object_name(new).lower()}"
+    note = said[0]
+    if note.startswith("added "):
+        return f"{note} to", what
+    if note.startswith("deleted "):
+        return f"{note} from", what
+    if note == "rearranged the figure":
+        return "rearranged", what
+    if note == "changed the figure's settings":
+        return "changed the settings of", what
+    return f"{note} in", what
 
 
 class Unreadable(ValueError):
@@ -1463,15 +1738,33 @@ def _theme_files(deck: dict[str, Any], base: Path) -> list[Path]:
 
 
 def _label(data: object) -> str:
+    """A slide's name, as its title reads on it: its words, not their marks (``*E. coli*``)."""
+
+    from flexo_talk.deck import inline
+
     if not isinstance(data, dict):
         return ""
-    value = data.get("words") if data.get("layout") == "statement" else data.get("title")
-    return str(value or "")
+    value = str((data.get("words") if data.get("layout") == "statement" else data.get("title")) or "")
+    try:
+        return "".join(run.text for run in inline(value)).strip()
+    except Exception:
+        return value
 
 
 def _extra(data: object, *, error: bool = False) -> dict[str, Any]:
     layout = data.get("layout", "content") if isinstance(data, dict) else "content"
     return {"layout": layout, "error": error}
+
+
+def _sized(message: Message) -> Message:
+    """A figure drawn small, its message coded for the studio to offer what makes it larger:
+    turning it to fit (``figure.small.turn``), else room (``figure.small``)."""
+
+    from flexo_talk.compose import TURNED_LARGER
+
+    if "small for a talk" in message.text or "too small to read" in message.text:
+        message.code = "figure.small.turn" if TURNED_LARGER in message.text else "figure.small"
+    return message
 
 
 def _diagnostic(text: str, identifier: str, index: int, severity: str) -> Message:
@@ -1573,6 +1866,15 @@ def _palette(deck) -> dict[str, str]:
 
 
 kind = DeckKind
+
+
+def _drawn_plainly(message: str) -> str:
+    """An export's note for a figure drawn with a shape it can't draw as a plain box: which,
+    from what is said of it (“Spike” can't be drawn yet: ...)."""
+
+    named = re.findall(r"\u201c[^\u201d]*\u201d(?= can\u2019t be drawn yet)", message)
+    shapes = " and ".join(dict.fromkeys(named)) or "A shape"
+    return f"{shapes} {'is' if len(set(named)) <= 1 else 'are'} drawn as a plain box: it can\u2019t be drawn as it is."
 
 
 def _plain_message(error: DeckDocumentError) -> str:

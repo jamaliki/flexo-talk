@@ -1659,7 +1659,8 @@ export function richText({ value = "", list = false, single = false, numbered = 
       start.setStart(line, 0);
       place(start);
     }
-    if (!formatted?.length && line?.textContent.trim() && plainParts.length > 1) items[0] = { depth: items[0].depth, markup: escaped(plainParts[0]) };
+    // (Its list mark taken off, as every other line's is: "- one" goes on the item as "one".)
+    if (!formatted?.length && line?.textContent.trim() && plainParts.length > 1) items[0] = { depth: items[0].depth, markup: escaped(listed(plainParts[0]).words) };
     const level = Number(line?.dataset.level) || 0;
     let rest = null;
     if (line && items.length > 1) {

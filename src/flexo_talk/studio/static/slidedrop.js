@@ -45,7 +45,17 @@ export function blockDrop(regions, from, point) {
     const above = region.blocks.filter((block) => block.box && (block.box.top + block.box.bottom) / 2 < point.y).length;
     return between(region, above);
   }
-  return null;
+  // Past a region's room, over or under it (under its last part, at the slide's foot): at its
+  // end, or its start.
+  const column = beside(regions, point);
+  if (!column) return null;
+  if (!column.blocks.some((block) => block.box && !isFrom(column, block))) return column.key === from.region ? { kind: "home" } : { kind: "into", region: column.key, index: 0 };
+  return between(column, point.y > column.room.bottom ? column.blocks.length : 0);
+}
+
+// The region whose room the pointer is over or under (across, within its edges), if any.
+function beside(regions, point) {
+  return regions.find((region) => region.room && point.x >= region.room.left && point.x <= region.room.right && (point.y > region.room.bottom || point.y < region.room.top)) || null;
 }
 
 // Letting it go at ``at``: the regions' lists (a key's list of parts, the slide's own
@@ -99,7 +109,12 @@ export function groupDrop(regions, all, point) {
     const below = region.blocks.find((block) => (block.box.top + block.box.bottom) / 2 >= point.y);
     return { kind: "between", region: region.key, index: below ? below.index : region.blocks[region.blocks.length - 1].index + 1 };
   }
-  return null;
+  // Past a region's room, over or under it: at its end (counting every part it holds), or
+  // its start.
+  const column = beside(regions, point);
+  if (!column) return null;
+  if (!column.blocks.some((block) => block.box && !dragged(column, block))) return { kind: "into", region: column.key, index: 0 };
+  return { kind: "between", region: column.key, index: point.y > column.room.bottom ? column.blocks.length : 0 };
 }
 
 // Letting them go at `at`: each taken out of its list, and all put in together where they

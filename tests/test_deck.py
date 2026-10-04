@@ -184,21 +184,23 @@ def test_a_text_that_is_one_formula_is_set_in_display_style() -> None:
     assert not any(run.math for run in simple)
 
 
-def test_a_formula_displayed_in_a_list_or_words_is_centred_set_apart_and_tagged(tmp_path: Path) -> None:
+def test_a_formula_displayed_in_words_is_centred_in_a_list_after_its_bullet_set_apart_and_tagged(
+    tmp_path: Path,
+) -> None:
     from flexo.drawing import Drawing, Group, ink_bounds, read_drawing
 
     from flexo_talk import compose
 
-    def build(gap: float) -> tuple[list[float], list[float], bytes | None]:
+    def build(gap: float) -> tuple[list[tuple[float, float]], list[float], float, bytes | None, str | None]:
         compose.DISPLAY_GAP, kept = gap, compose.DISPLAY_GAP
         try:
             deck = Deck("display")
             with deck.slide("Model") as slide:
                 slide.bullets("Let p be the fraction phosphorylated:", r"$$\frac{dp}{dt} = k_B (1 - p)$$",
-                              "Delay makes a cycle.", plain=True)
+                              "Delay makes a cycle.")
                 slide.text(r"The period is $$T = \frac{2\pi}{\omega}$$ about a day.")
             rendered = compose.render_slide(deck, deck.slides[0])
-            pdf = deck.build(tmp_path / str(gap), formats=("pdf",)).pdf.read_bytes() if gap else None  # type: ignore[union-attr]
+            built = deck.build(tmp_path / str(gap), formats=("pdf", "pptx")) if gap else None
         finally:
             compose.DISPLAY_GAP = kept
 
@@ -206,17 +208,24 @@ def test_a_formula_displayed_in_a_list_or_words_is_centred_set_apart_and_tagged(
             found = [group] if "data-flexo-math" in group.data else []
             return found + [inner for item in group.items if isinstance(item, Group) for inner in formulas(item)]
 
-        middles = []
+        spans = []
         for formula in formulas(read_drawing(rendered.svg).root):
             left, _, right, _ = ink_bounds(Drawing(0.0, 0.0, Group(None, list(formula.items))))
-            middles.append((left + right) / 2.0)
-        return middles, [baseline for _, _, baseline in rendered.lists[0].items], pdf
+            spans.append((left, right))
+        words = float(re.search(r'<text id="[^"]*\.0" x="([\d.]+)"', rendered.svg).group(1))
+        pdf = built.pdf.read_bytes() if built else None  # type: ignore[union-attr]
+        xml = _slides(built.pptx)[0] if built else None  # type: ignore[arg-type]
+        return spans, [baseline for _, _, baseline in rendered.lists[0].items], words, pdf, xml
 
-    middles, baselines, pdf = build(compose.DISPLAY_GAP)
-    # Centred in the room its words are set in (the region, 48 to 912), as LaTeX centres one.
-    assert middles == [pytest.approx(480.0, abs=1.0)] * 2
+    spans, baselines, words, pdf, xml = build(compose.DISPLAY_GAP)
+    # In a list's item, after its bullet where the item's words start; among words, centred in
+    # the room they are set in (the region, 48 to 912), as LaTeX centres one.
+    assert spans[0][0] == pytest.approx(words, abs=3.0)
+    assert (spans[1][0] + spans[1][1]) / 2.0 == pytest.approx(480.0, abs=1.0)
+    # So in PowerPoint's equations too: at the item's start, and centred among words.
+    assert xml is not None and re.findall(r'<m:jc m:val="(\w+)"/>', xml) == ["left", "centerGroup"]
     # Set apart from the items either side of it, by the same room above and below.
-    _, close, _ = build(0.0)
+    _, close, _, _, _ = build(0.0)
     apart = [now - before for now, before in zip(baselines, close, strict=True)]
     assert apart[0] == 0.0 and apart[1] == pytest.approx(8.0) and apart[2] == pytest.approx(16.0)
     # A formula in the PDF, described by its words, within the item and the paragraph it is in.
@@ -1570,3 +1579,39 @@ def test_a_numbered_list_numbers_every_level_in_its_tier(tmp_path: Path) -> None
     result = deck.build(tmp_path, formats=("pptx",))
     xml = _slides(result.pptx)[0]  # type: ignore[arg-type]
     assert xml.count('type="arabicPeriod"') == 2 and xml.count('type="alphaLcPeriod"') == 2
+
+
+def test_a_quotations_mark_is_a_curled_quotation_mark_in_every_theme() -> None:
+    import flexo
+    from flexo.fonts import hb_font
+    from flexo.outline import _outline
+    from flexo.text import FontStack
+
+    from flexo_talk import compose
+
+    for theme in flexo.THEMES:
+        deck = Deck("quoted", theme=theme)
+        with deck.slide("Why") as slide:
+            slide.quote("Nothing in biology makes sense", by="Dobzhansky")
+        svg = compose.render_slide(deck, deck.slides[0]).svg
+        mark = re.search(r'<text id="[^"]*\.mark"[^>]*font-family="([^"]+)"', svg)
+        assert mark is not None, theme
+        # Two wedges of straight strokes (Figtree's) read as "//" set so large: the mark is
+        # drawn in a face whose mark is curled where the title face's is not.
+        family = mark.group(1).split(",")[0].strip("'\" ")
+        face = FontStack(deck.typography(40, title=True).with_family(family)).face(400, False)
+        gid = hb_font(face, 400).get_nominal_glyph(ord("“"))
+        assert any(segment.kind == "C" for segment in _outline(face, 400, gid)), theme
+        # And carried with the slide, for a browser to draw it in that face too.
+        assert f"font-family:'{family}'" in svg, theme
+
+
+def test_a_caption_and_a_build_are_written_as_a_deck_document_writes_them() -> None:
+    from flexo_talk.document import deck_document
+
+    deck = Deck("written")
+    with deck.slide("Cues") as slide:
+        slide.table([["Receptor", "Cue"], ["Tar", "Aspartate"]], caption="Table 1.  Cues").build_in()
+    (block,) = deck_document(deck)["slides"][0]["body"]
+    assert block["caption"] == "Table 1. Cues" and block["build"] is True
+    assert deck.slides[0].regions["body"].builds == {0}

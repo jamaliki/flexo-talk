@@ -125,6 +125,9 @@
 .block-mover.block-sized { transition: none; }
 .block-mover.block-lifted { transition: none; filter: drop-shadow(0 6px 10px rgba(30, 25, 20, 0.22)); }
 .block-mover.block-astray { opacity: 0.55; }
+/* What is carried, over the slides' list: a copy under the pointer, as a drag image is. */
+.carry-ghost { position: fixed; z-index: 70; pointer-events: none; opacity: 0.85; filter: drop-shadow(0 6px 10px rgba(30, 25, 20, 0.22)); line-height: 0; }
+.carry-ghost[hidden] { display: none; }
 /* A slide's thumbnail an object is carried over: let go, it goes to that slide. */
 .thumb.drop-into .frame { box-shadow: 0 0 0 var(--frame) var(--accent), 0 0 0 calc(var(--frame) + 3.5px) var(--accent-soft); }
 .slide-page.block-dragging .hit { opacity: 0; }
@@ -168,6 +171,11 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 /* Typed in place: over the words, as they look on the slide; the tools float above. */
 .inline-editor.in-place { background: transparent; padding: 0; border-radius: 4px; box-shadow: 0 0 0 var(--frame) var(--accent), 0 0 0 calc(var(--frame) + 3.5px) var(--accent-soft); animation: none; }
 .inline-editor.in-place .markup { background: transparent; }
+/* Words of an object drawn round them (a callout's heading or words, a quote's): the ring
+   round the whole object, clear of its other lines; the words typed in marked inside it. */
+.hit.editing-whole { border: var(--frame) solid var(--accent); box-shadow: 0 0 0 3.5px var(--accent-soft); }
+.hit.editing-whole .hit-label { display: none; }
+.inline-editor.in-place.part-of { box-shadow: none; background: color-mix(in srgb, var(--accent) 8%, transparent); }
 /* Words typed with the studio away, shown as typed until the slide is drawn again with them. */
 .inline-editor.in-place.standin { box-shadow: none; pointer-events: none; z-index: 5; }
 .inline-editor.in-place.standin .rich { caret-color: transparent; cursor: default; }

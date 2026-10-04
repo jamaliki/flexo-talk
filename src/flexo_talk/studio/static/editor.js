@@ -85,7 +85,7 @@ const NEW_SLIDES = {
   columns: () => ({ layout: "columns", title: "", columns: [[{ text: "" }], [{ text: "" }], [{ text: "" }]] }),
   figure: () => ({ layout: "figure", title: "", body: [NEW_BLOCKS.figure()] }),
   title: () => ({ layout: "title", title: "", subtitle: "" }),
-  section: () => ({ layout: "section", title: "" }),
+  section: () => ({ layout: "section", title: "", subtitle: "" }),
   statement: () => ({ layout: "statement", words: "" }),
   agenda: () => ({ layout: "agenda" }),
   blank: () => ({ layout: "blank", body: [] }),
@@ -284,6 +284,35 @@ function alikeLines(first, second) {
 // _converted): an object kept for someone typing in it (a merge's `kept` note) while the
 // other side made it another kind, beside it -- a paragraph a list -- made one, of the new
 // kind, with both sides' words. Settled notes are taken out of `notes`.
+// Two edits merged (as the deck's kind mends its own: flexo_talk.studio's _aligned): a table's
+// cell kept for someone typing in it (a merge's `kept` note) while the other took its column
+// away goes with its column -- the rows stay aligned, the taking away wins; its note is settled.
+function aligned(document, notes) {
+  const kept = notes.filter((note) => "kept" in note && typeof note.item === "string");
+  if (!kept.length) return document;
+  const walk = (value) => {
+    if (Array.isArray(value)) { value.forEach(walk); return; }
+    if (!value || typeof value !== "object") return;
+    const table = value.table;
+    if (Array.isArray(table) && table.length > 1 && table.every(Array.isArray)) {
+      const holds = (row) => kept.some((note) => row.includes(note.item));
+      const others = table.filter((row) => !holds(row)), width = others[0]?.length;
+      if (others.length && others.every((row) => row.length === width)) {
+        for (const row of table) {
+          const note = row.length === width + 1 ? kept.find((one) => row.includes(one.item)) : null;
+          if (!note) continue;
+          row.splice(row.indexOf(note.item), 1);
+          kept.splice(kept.indexOf(note), 1);
+          notes.splice(notes.indexOf(note), 1);
+        }
+      }
+    }
+    Object.values(value).forEach(walk);
+  };
+  walk(document);
+  return document;
+}
+
 function converted(document, notes, base) {
   if (!notes.some((note) => "kept" in note)) return document;
   const lists = (slide) => (slide && typeof slide === "object" ? [...["body", "left", "right"].map((key) => slide[key]), ...(slide.columns || [])].filter(Array.isArray) : []);
@@ -317,10 +346,16 @@ function numeric(cell) {
   return /^[-+−]?([x×]\s?)?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?\s*([kKMGTBx×]|[A-Za-zµμ°Ω]{1,4}(\/[A-Za-zµμ]{1,3})?)?$/.test(text);
 }
 
+// A cell with nothing to say (as deck.py's _blank): a dash or "n/a" in a column of numbers.
+const blankCell = (cell) => ["", "-", "--", "\u2013", "\u2014", "n/a", "na"].includes(String(cell ?? "").trim().toLowerCase());
+
+// As the slide sets a column (deck.py): at its right when it holds numbers, a dash or an
+// empty cell among them.
 function autoAlign(rows, header) {
   const columns = Math.max(0, ...rows.map((row) => row.length));
   const body = rows.slice(header ? 1 : 0);
-  return Array.from({ length: columns }, (_, i) => (body.length && body.every((row) => i >= row.length || numeric(row[i])) ? "end" : "start"));
+  const cells = (i) => body.filter((row) => i < row.length).map((row) => row[i]);
+  return Array.from({ length: columns }, (_, i) => (cells(i).some(numeric) && cells(i).every((cell) => numeric(cell) || blankCell(cell)) ? "end" : "start"));
 }
 
 function alignList(value, columns) {
@@ -473,7 +508,7 @@ export function mount(studio, container) {
     }
     return document;
   }
-  studio.mended = (document, notes, base) => laidOut(converted(document, notes, base));
+  studio.mended = (document, notes, base) => laidOut(converted(aligned(document, notes), notes, base));
   const slides = () => doc().slides || [];
   const slideAt = (d = doc()) => (d.slides || [])[state.slide];
 
@@ -493,6 +528,7 @@ export function mount(studio, container) {
   const restyle = (at, style, { words } = {}) => {
     const block = blocksAt(slideAt(), at.region)[at.index];
     if (!block || (style === "text" ? kindOf(block) === "text" : listStyle(block) === style)) return;
+    if ((style === "text" || kindOf(block) === "text") && awayFrom("make words a list, or a list words")) return;
     // Its words being typed stay so, the caret where it was, as with Keynote's Bullets & Lists.
     const typing = inline && !inline.cell && inline.at && inline.at.region === at.region && inline.at.index === at.index ? inline.area.caretAt?.() || null : undefined;
     const renamed = (b, from, to, value, drop) => {
@@ -586,11 +622,10 @@ export function mount(studio, container) {
     remember("notes", on ? "1" : "0");
     notes.classList.toggle("open", on);
     if (!on) return;
-    // A long note opens at its top, not scrolled to its end: the caret where it was put,
-    // else (the note just shown, the caret left at its end) at the start.
-    const atEnd = notesArea.selectionStart === notesArea.value.length && notesArea.selectionEnd === notesArea.value.length;
+    // Opened to be written in: the caret at the end of what is there, so the words typed
+    // go on after it, as a Mac text view opened to type in has it.
     notesArea.focus({ preventScroll: true });
-    if (atEnd) { notesArea.setSelectionRange(0, 0); notesArea.scrollTop = 0; }
+    notesArea.setSelectionRange(notesArea.value.length, notesArea.value.length);
   }
   const center = h("section.deck-center", {}, stage, notes);
   const inspectorHead = h("div.insp-head");
@@ -867,6 +902,23 @@ export function mount(studio, container) {
     railList.focus({ preventScroll: true });
     renderRail();
   }
+  // Several slides moved together to `at` (a place as the list is now, before they leave it),
+  // in their order: one step, still chosen. (Undone or redone, chosen again: markSlides.)
+  function moveSlides(indices, at) {
+    const sorted = [...indices].sort((a, b) => a - b);
+    const start = at - sorted.filter((index) => index < at).length;
+    const after = sorted.map((_, n) => start + n);
+    if (after.every((index, n) => index === sorted[n])) return;
+    studio.change((d) => {
+      const taken = sorted.map((index) => d.slides[index]);
+      for (const index of [...sorted].reverse()) d.slides.splice(index, 1);
+      d.slides.splice(start, 0, ...taken);
+    }, { label: `Move ${sorted.length} Slides` });
+    markSlides(sorted, after);
+    select(after[0]);
+    state.picked = after;
+    renderRail();
+  }
   function duplicateSlides(indices) {
     const last = indices[indices.length - 1];
     studio.change((d) => { d.slides.splice(last + 1, 0, ...indices.map((index) => copyOf(d.slides[index]))); }, { label: `Duplicate ${indices.length} Slides` });
@@ -1072,6 +1124,9 @@ export function mount(studio, container) {
         if (dragFrom === null) return;
         event.preventDefault();
         let to = index + (node.classList.contains("drop-after") ? 1 : 0);
+        // One of several chosen: they all go there, in their order, one step.
+        const together = chosenSlides();
+        if (together.length > 1 && together.includes(dragFrom)) { moveSlides(together, to); return; }
         if (dragFrom < to) to -= 1;
         moveSlide(dragFrom, to);
       },
@@ -1082,7 +1137,7 @@ export function mount(studio, container) {
       // Another's ring inside the frame, never in place of this person's own (the chosen
       // slide's blue, without), nor out over the slide's number beside it.
       here.length ? h("div.ring", { style: { boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 3px ${colourOf(here[0].who)}` } }) : null,
-      worst ? h(`div.badge.${worst}`, { title: own.map((m) => m.text).join("\n") }, icon(worst === "error" ? "close" : "warning", { weight: "2" })) : null,
+      worst ? h(`div.badge.${worst}`, { title: own.map((m) => m.text).join("\n") }, icon(worst === "error" ? "exclaim" : "warning", { weight: "2" })) : null,
       page?.steps > 1 ? h("div.steps", { title: "Items appear one at a time" }, `${page.steps} steps`) : null,
       // Two at most, and how many more there are.
       here.length ? h("div.here", { title: here.map((entry) => nameOf(entry.who)).join(", ") }, here.slice(0, 2).map((entry) => avatar(entry.who, { size: 18 })),
@@ -1132,6 +1187,7 @@ export function mount(studio, container) {
   // -- the stage --
   const hover = h("div.hit.hover", { hidden: true }, h("span.hit-label"));
   const chosen = h("div.hit.selected", { hidden: true }, h("span.hit-label"));
+  const objectRing = h("div.hit.editing-whole", { hidden: true }, h("span.hit-label"));  // round an object whose words are typed (positionInline)
   const target = h("div.hit.target", { hidden: true }, h("span.hit-label"));  // what a menu item would act on
   let pageNode = null;
   const stageMeta = h("div.slide-meta");
@@ -1239,6 +1295,36 @@ export function mount(studio, container) {
   // their place and look (the editor's, without its frame) -- until the slide is drawn again
   // with them: never its old words meanwhile, as if the typing were lost. (Each goes once its
   // slide is drawn again, or its words are no longer the ones typed: an undo, another's change.)
+  // With the studio away the slide's drawing stays as it was: what would put its objects
+  // elsewhere -- adding, deleting, moving, converting them -- waits for the studio, said so;
+  // and should the slide no longer be as drawn (an undo while away), its objects are not
+  // chosen from the drawing (which would choose others) until it is drawn again.
+  const awayFrom = (what) => {
+    if (studio.state !== "offline") return false;
+    toast(`Can't ${what} while the studio is away: it is drawn again when the studio is back.`, { icon: "info", seconds: 4 });
+    return true;
+  };
+  // The slide each drawing was made from, by the drawing (its hash).
+  const drawnFrom = new Map();
+  studio.on("drawn", (result) => {
+    if (!result?.latest || result.unfinished) return;
+    if (drawnFrom.size > 400) drawnFrom.clear();
+    (result.pages || []).forEach((page, n) => { if (page?.hash) drawnFrom.set(page.hash, slides()[n]); });
+  });
+  let saidOut = 0;
+  function outOfStep(say = false) {
+    if (studio.state !== "offline") return false;
+    const was = drawnFrom.get(pages[state.slide]?.hash), now = slideAt();
+    if (!was || !now) return false;
+    const old = partsOf(was), cur = partsOf(now);
+    const map = follows(old.map((part) => part.block), cur.map((part) => part.block));
+    const out = old.length !== cur.length || old.some((part, k) => map[k] !== k || cur[k].region !== part.region);
+    if (out && say && Date.now() - saidOut > 4000) {
+      saidOut = Date.now();
+      toast("This slide has changed since it was drawn: its objects can be chosen again once the studio is back.", { icon: "info", seconds: 4 });
+    }
+    return out;
+  }
   let standIns = [];
   function standIn() {
     if (!inline?.area.rich || inline.under || studio.state !== "offline") return;
@@ -1267,8 +1353,9 @@ export function mount(studio, container) {
       }
       return keep;
     });
+    const stale = outOfStep();
     for (const each of standIns) {
-      if (each.slide !== state.slide) { each.node.remove(); continue; }
+      if (each.slide !== state.slide || stale) { each.node.remove(); continue; }
       if (each.node.parentNode !== center) center.append(each.node);
       pageNode?.querySelector(`[id="${CSS.escape(each.id)}"]`)?.style.setProperty("visibility", "hidden");
     }
@@ -1301,9 +1388,41 @@ export function mount(studio, container) {
     const where = placeOf(message.where);
     const link = where && where.region !== null;
     const place = onSlide ? String(message.place || "").replace(/^Slide \d+(?: · )?/, "") : message.where && (message.place || message.where);
-    return h(`div.message.${message.severity}${link ? ".link" : ""}`, { onclick: () => { if (link) focusBlock(where.region, where.index); } },
+    return h(`div.message.${message.severity}${link ? ".link" : ""}`, { onclick: () => { if (link) toMessage(message); } },
       icon(message.severity === "error" ? "error" : message.severity === "note" ? "info" : "warning"),
-      h("div", {}, message.text, place ? (onSlide ? h("span.where", {}, ` · ${place}`) : h("div.where", {}, place)) : null));
+      h("div", {}, message.text, place ? (onSlide ? h("span.where", {}, ` · ${place}`) : h("div.where", {}, place)) : null),
+      figureFix(message));
+  }
+  // A figure drawn small (code figure.small...): what makes it larger, in one click -- turned
+  // to fit the slide (its switch on, one step), or room made for it.
+  function figureFix(message) {
+    if (!String(message.code || "").startsWith("figure.small")) return null;
+    const found = /^slides\[(\d+)\]\s+(\S+)/.exec(message.where || "");
+    const slide = found ? Number(found[1]) : -1, data = slides()[slide];
+    const at = data && regionsOf(data).flatMap((region) => blocksAt(data, region.key).map((block, index) => ({ region: region.key, index, block })))
+      .find(({ block }) => block?.figure?.figure?.id === found[2]);
+    if (!at) return null;
+    const go = (run) => (event) => { event.stopPropagation(); if (state.slide !== slide) select(slide); run(); };
+    if (message.code === "figure.small.turn") {
+      return ui.button("Turn to Fit the Slide", go(() => {
+        swapAsked = `slide${slide + 1}`;
+        editBlock(at, (block) => setOption(block, "turn", true), { label: "Turn to Fit the Slide" });
+      }), { small: true, title: "Turn the figure to fit the slide, as its switch in the panel does" });
+    }
+    return ui.button("Make Room", go(() => {
+      focusBlock(at.region, at.index);
+      toast("Widen the figure (its Width in the panel), or move a part to a row of its own.", { icon: "info", seconds: 5 });
+    }), { small: true, title: "Choose the figure: it is larger with more room, or with fewer shapes in a row" });
+  }
+
+  // Where a message is: its object chosen -- about a shape of a figure (a place ending
+  // "#shape:what"), that shape, its panel at the field to put it right in.
+  function toMessage(message) {
+    const where = placeOf(message.where);
+    if (!where || where.region === null) return;
+    if (where.slide !== state.slide) select(where.slide);
+    const shape = /#([^\s:#]+):?(\S*)$/.exec(message.where || "");
+    focusBlock(where.region, where.index, shape ? () => figure?.parts.revealProblem(shape[1], shape[2]) : null);
   }
 
   function fitStage() {
@@ -1433,6 +1552,20 @@ export function mount(studio, container) {
     const outer = pageNode.getBoundingClientRect(), room = 8;
     return { left: ink.left - outer.left - room, top: ink.top - outer.top - room, width: ink.right - ink.left + 2 * room, height: ink.bottom - ink.top + 2 * room };
   }
+  // The ring round an object whose words are typed: a callout's panel; a quote's words, its
+  // attribution and its mark as inked (the mark's face is far taller than its ink, and runs
+  // into what follows) -- the room a line of words has round it.
+  function ringOf(at) {
+    return frameOf({ kind: "block", ...at, id: blockId(at) });
+  }
+  // A quote's top and bottom as inked -- its words, its attribution and its mark (whose face
+  // is far taller than its ink, and runs into what follows) -- in the page's pixels.
+  function quoteInk(id) {
+    const outer = pageNode.getBoundingClientRect();
+    const inks = [`${id}.words`, `${id}.by`, `${id}.mark`].map(inkOf).filter(Boolean);
+    if (!inks.length) return null;
+    return { top: Math.min(...inks.map((ink) => ink.top)) - outer.top, bottom: Math.max(...inks.map((ink) => ink.bottom)) - outer.top };
+  }
   // Where a line of words' letters are inked, on the page.
   function inkOf(id) {
     const element = pageNode?.querySelector(`[id="${CSS.escape(id)}"]`);
@@ -1509,6 +1642,7 @@ export function mount(studio, container) {
   // the figure itself -- pressed where none of its parts is, or before it is chosen, or
   // when it has one part only -- and any other part of the slide, to another place on the slide.
   function onPress(event) {
+    if (outOfStep(true)) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     if (figureBlock() && editable(figureBlock()) && inFigure(event) && figure.parts.model) {
       // A molecule chosen is grabbed to turn it.
@@ -1585,7 +1719,11 @@ export function mount(studio, container) {
     // One of several chosen: they are carried together (`all`, in the slide's order).
     const chosenNow = allOn() ? allBlocks().map(({ region, index }) => ({ region: region.key, index })) : [];
     const all = chosenNow.length > 1 && chosenNow.some((each) => samePlace(each, part)) ? chosenNow : null;
-    carry = { from: { region: part.region, index: part.index }, start: { x: event.clientX, y: event.clientY }, started: false, element, frame: 0, at: null, all };
+    // (Another typing in it, or in one of them: not moved from under their keys -- said so
+    // once the drag would start.)
+    const typer = studio.others().find((entry) => entry.where?.page === state.slide + 1 && entry.where?.editing
+      && (all || [part]).some((each) => entry.where?.block === `${each.region}[${each.index}]`));
+    carry = { from: { region: part.region, index: part.index }, start: { x: event.clientX, y: event.clientY }, started: false, element, frame: 0, at: null, all, typer };
     window.addEventListener("pointermove", carryMove);
     window.addEventListener("pointerup", carryEnd);
     window.addEventListener("pointercancel", carryCancel);
@@ -1658,6 +1796,12 @@ export function mount(studio, container) {
     carry.pointer = { x: event.clientX, y: event.clientY };
     if (!carry.started) {
       if (Math.hypot(event.clientX - carry.start.x, event.clientY - carry.start.y) < 4) return;
+      if (carry.typer) {
+        toast(`${nameOf(carry.typer.who)} is typing in it: it can be moved once they are done.`, { icon: "info", seconds: 4 });
+        finishCarry();
+        return;
+      }
+      if (awayFrom("move objects")) { finishCarry(); return; }
       carryStart();
       if (!carry) return;
     }
@@ -1673,6 +1817,49 @@ export function mount(studio, container) {
     carry.group.forEach((wrap, k) => { wrap.style.transform = `translate(${(dx + carry.offsets[k].x) * scaleOf(wrap)}px, ${(dy + carry.offsets[k].y) * scaleOf(wrap)}px)`; });
     const at = thumbAt(carry.pointer) || dropAt(carry.pointer);
     if (JSON.stringify(at) !== JSON.stringify(carry.at)) { carry.at = at; showDrop(at); }
+    ghostAt(carry.pointer);
+  }
+  // Out of the stage (over the slides' list, to drop on a thumbnail), what is carried is
+  // shown under the pointer by a copy of it: the stage would cut it off at its edge.
+  function ghostAt(point) {
+    const room = stage.getBoundingClientRect();
+    const out = point.x < room.left || point.x > room.right || point.y < room.top || point.y > room.bottom;
+    // The copy stands in for it: its own, cut off at the stage's edge, is not seen peeping in.
+    for (const wrap of [carry.lifted, ...carry.group]) wrap.style.visibility = out ? "hidden" : "";
+    if (!out) { if (carry.ghost) carry.ghost.hidden = true; return; }
+    if (!carry.ghost) {
+      // Everything carried (one object, or all those chosen with it), as it is now under
+      // the pointer: each where it is in the page's own room, in one copy of the page.
+      const svg = pageNode.querySelector("svg");
+      const toPage = svg?.getScreenCTM()?.inverse();
+      const wraps = [carry.lifted, ...carry.group];
+      const rects = wraps.map((wrap) => wrap.getBoundingClientRect()).filter((rect) => rect.width || rect.height);
+      if (!svg || !toPage || !rects.length) return;
+      const box = { left: Math.min(...rects.map((rect) => rect.left)), top: Math.min(...rects.map((rect) => rect.top)),
+        right: Math.max(...rects.map((rect) => rect.right)), bottom: Math.max(...rects.map((rect) => rect.bottom)) };
+      const from = new DOMPoint(box.left, box.top).matrixTransform(toPage), to = new DOMPoint(box.right, box.bottom).matrixTransform(toPage);
+      const copy = svg.cloneNode(false);
+      copy.removeAttribute("id");
+      copy.setAttribute("viewBox", `${from.x} ${from.y} ${to.x - from.x} ${to.y - from.y}`);
+      // No wider than a thumbnail, as a drag image over the slides' list is.
+      const shrink = Math.min(1, 160 / Math.max(1, box.right - box.left));
+      Object.assign(copy.style, { width: `${(box.right - box.left) * shrink}px`, height: `${(box.bottom - box.top) * shrink}px`, display: "block" });
+      const defs = svg.querySelector("defs");
+      if (defs) copy.append(defs.cloneNode(true));
+      for (const wrap of wraps) {
+        const at = toPage.multiply(wrap.getScreenCTM());
+        const moved = wrap.cloneNode(true);
+        moved.removeAttribute("style");
+        moved.removeAttribute("class");
+        moved.setAttribute("transform", `matrix(${at.a} ${at.b} ${at.c} ${at.d} ${at.e} ${at.f})`);
+        copy.append(moved);
+      }
+      carry.ghost = h("div.carry-ghost", {}, copy);
+      carry.ghostOffset = { x: (point.x - box.left) * shrink, y: (point.y - box.top) * shrink };
+      document.body.append(carry.ghost);
+    }
+    carry.ghost.hidden = false;
+    Object.assign(carry.ghost.style, { left: `${point.x - carry.ghostOffset.x}px`, top: `${point.y - carry.ghostOffset.y}px` });
   }
   // Over another slide's thumbnail, what is carried goes to that slide when let go, as in
   // Keynote's slide navigator.
@@ -1685,7 +1872,12 @@ export function mount(studio, container) {
     return null;
   }
 
-  const dropAt = (point) => (carry.all ? groupDrop(carry.regions, carry.all, point) : blockDrop(carry.regions, carry.from, point));
+  // (On the slide only: off it, what is carried goes home.)
+  const dropAt = (point) => {
+    const page = pageNode?.getBoundingClientRect();
+    if (!page || point.x < page.left || point.x > page.right || point.y < page.top || point.y > page.bottom) return null;
+    return carry.all ? groupDrop(carry.regions, carry.all, point) : blockDrop(carry.regions, carry.from, point);
+  };
 
   function showDrop(at) {
     for (const wrap of carry.shifted) wrap.style.transform = restAt(wrap);
@@ -1748,6 +1940,8 @@ export function mount(studio, container) {
     if (was.frame) cancelAnimationFrame(was.frame);
     was.zone.remove();
     was.line.remove();
+    was.ghost?.remove();
+    for (const wrap of [was.lifted, ...was.group]) wrap.style.visibility = "";
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
     pageNode?.classList.remove("block-dragging");
     document.body.classList.remove("block-grabbing");
@@ -1778,7 +1972,7 @@ export function mount(studio, container) {
     const picks = [...(was.all || [was.from])];
     const first = blocksAt(slideAt(), picks[0].region)[picks[0].index];
     const label = picks.length > 1 ? `Move ${picks.length} Objects to Slide ${index + 1}` : `Move ${blockLabel(first)} to Slide ${index + 1}`;
-    for (const wrap of [...was.shifted, ...was.group, was.lifted]) wrap.style.transform = "";
+    for (const wrap of [...was.shifted, ...was.group, ...(was.base?.keys() || []), was.lifted]) wrap.style.transform = "";
     studio.change((d) => {
       const from = d.slides[here], to = d.slides[index];
       const taken = picks.map((pick) => blocksAt(from, pick.region)[pick.index]).filter(Boolean);
@@ -1787,6 +1981,8 @@ export function mount(studio, container) {
       if (list.length && list.every((block) => layoutPlaceholder(to, block))) list.splice(0, list.length);
       list.push(...taken);
     }, { label });
+    // Undone, they are back here, chosen again.
+    markMany(picks.map(({ region, index }) => ({ region, index })), null);
     state.focus = null;
     allChosen = null;
     placeChosen(); renderInspector(); reportFocus();
@@ -2075,6 +2271,7 @@ export function mount(studio, container) {
   }
 
   function onPick(event) {
+    if (outOfStep(true)) return;
     if (figure?.parts.justDragged || swallowClick) return;
     if (event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
@@ -2105,6 +2302,7 @@ export function mount(studio, container) {
   };
 
   function onEdit(event) {
+    if (outOfStep(true)) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     hover.hidden = true;
     if (inFigure(event)) { whenFigure(() => figure.parts.dblclick(event)); return; }
@@ -2133,6 +2331,7 @@ export function mount(studio, container) {
   function onContext(event) {
     if (event.target.closest(".fig-inline, .figure-bar, .inline-editor, .size-handle, .fig-size")) return;
     event.preventDefault();
+    if (outOfStep(true)) return;
     closeInline();
     hover.hidden = true;
     const point = { x: event.clientX, y: event.clientY };
@@ -2212,6 +2411,8 @@ export function mount(studio, container) {
     items.push("-", { icon: "trash", label: "Delete", keys: "⌫", danger: true, run: () => deleteBlock(at) });
     menu(point, items);
   }
+  // Rows deleted here lately, with the step that deleted them (see followChange).
+  let rowsDeleted = [];
   // A table's rows and columns, from the cell under the pointer, as in Keynote. Each
   // column's alignment goes with it.
   function tableItems(at, { row, col }) {
@@ -2241,7 +2442,11 @@ export function mount(studio, container) {
       { icon: "plus", label: "Add Row Below", show: theRow, run: () => reshape((grid) => grid.splice(row + 1, 0, blank())) },
       { icon: "plus", label: "Add Column Before", show: theColumn, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 0, "")); align?.splice(col, 0, align[col]); }) },
       { icon: "plus", label: "Add Column After", show: theColumn, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col + 1, 0, "")); align?.splice(col + 1, 0, align[col]); }) },
-      { icon: "trash", label: "Delete Row", disabled: rows.length < 2, show: theRow, run: () => reshape((grid) => grid.splice(row, 1)) },
+      { icon: "trash", label: "Delete Row", disabled: rows.length < 2, show: theRow, run: () => {
+        reshape((grid) => grid.splice(row, 1));
+        // (Back, because another was typing in it: said, and this leaves the history -- followChange.)
+        rowsDeleted = [...rowsDeleted, { row: structuredClone(rows[row]), slide: state.slide, region: at.region, index: at.index, at: Date.now(), entry: studio.past[studio.past.length - 1] }];
+      } },
       { icon: "trash", label: "Delete Column", disabled: columns < 2, show: theColumn, run: () => reshape((grid, align) => { grid.forEach((line) => line.splice(col, 1)); align?.splice(col, 1); }) },
     ];
   }
@@ -2279,7 +2484,10 @@ export function mount(studio, container) {
       chosen.classList.remove("sizable", "holder");
       return;
     }
-    if (!focus || !pageNode || moving || landing || carry?.started || inline) { chosen.hidden = true; return; }
+    // (Nor while a figure's parts glide to where they are drawn now: its frame comes with
+    // them, once they are there -- parts.js's land ends in host.settled.)
+    const gliding = pageNode?.classList.contains("fig-landing");
+    if (!focus || !pageNode || moving || landing || gliding || carry?.started || inline) { chosen.hidden = true; return; }
     const region = regionsOf(slideAt()).find((r) => r.key === focus.region);
     const block = blocksAt(slideAt() || {}, focus.region)[focus.index];
     const box = region && frameOf({ kind: "block", ...focus, id: `slide${state.slide + 1}.${region.svg}.${focus.index}` });
@@ -2337,6 +2545,7 @@ export function mount(studio, container) {
   // to the end of the column beside its own. One step, and they stay chosen. Whether any
   // would move (`dry`), else false.
   function moveAll(arrow, dry = false) {
+    if (!dry && awayFrom("move objects")) return false;
     const keys = regionsOf(slideAt() || {}).map((region) => region.key);
     const chosenNow = allBlocks();
     const lists = Object.fromEntries(keys.map((key) => [key, blocksAt(slideAt(), key).map((_, index) => ({ region: key, index,
@@ -2420,6 +2629,7 @@ export function mount(studio, container) {
   const picked = () => allBlocks().map(({ region, index }) => ({ key: region.key, index })).sort((a, b) => b.index - a.index);
   // Those chosen deleted (or cut) at once, one step.
   function deleteAll(done = "deleted") {
+    if (awayFrom(`${done === "cut" ? "cut" : "delete"} objects`)) return;
     const gone = picked(), before = picksNow();
     allChosen = null;
     editSlide((s) => { for (const { key, index } of gone) blocksAt(s, key).splice(index, 1); }, { label: `${done === "cut" ? "Cut" : "Delete"} ${gone.length} Objects` });
@@ -2432,7 +2642,7 @@ export function mount(studio, container) {
   // chosen already.
   let band = null;
   stage.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || !pageNode || !slideAt() || carry || figure?.parts.dragging) return;
+    if (event.button !== 0 || !pageNode || !slideAt() || carry || figure?.parts.dragging || outOfStep()) return;
     const desk = event.target === stage || event.target.classList?.contains("slide-wrap");
     const onPage = pageNode.contains(event.target) && !event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size, .inline-editor") && !partAt(event);
     if (!desk && !onPage) return;
@@ -2597,19 +2807,43 @@ export function mount(studio, container) {
   const heldBy = new Set();
   // (Taken back, made again by ⇧⌘Z and Redo, by the figure that took it back.)
   const tookBack = [];
+  // When each was held, and taken back: one history, in time order, with the deck's own edits
+  // -- ⌘Z takes back the latest of either, ⇧⌘Z makes again the last taken back of either.
+  const heldTimes = [], tookTimes = [];
+  let deckUndoneAt = 0, puttingBack = false;
+  const heldNext = () => {
+    const last = heldTimes[heldTimes.length - 1], deck = studio.past[studio.past.length - 1];
+    return last && heldBy.has(last.by) && !(deck && deck.at > last.at) ? last : null;
+  };
+  const tookNext = () => {
+    const last = tookTimes[tookTimes.length - 1];
+    return last && !(deckUndoneAt > last.undone) ? last : null;
+  };
   studio.takeBack = () => {
-    const by = [...heldBy].pop();
-    if (!by?.parts.takeBackWaiting()) return false;
-    tookBack.push(by);
+    const next = heldNext();
+    if (!next?.by.parts.takeBackWaiting()) return false;
+    const place = heldTimes.lastIndexOf(next);
+    if (place >= 0) heldTimes.splice(place, 1);
+    tookTimes.push({ ...next, undone: Date.now() });
+    tookBack.push(next.by);
     studio.emit("status");
     return true;
   };
-  studio.takeBackLabel = () => [...heldBy].pop()?.parts.waitingLabel() || null;
+  studio.takeBackLabel = () => heldNext()?.by.parts.waitingLabel() || null;
+  // (Its row in the history, where it falls in time: Waiting.)
+  studio.heldRow = () => { const last = heldTimes[heldTimes.length - 1]; const label = last && heldBy.has(last.by) ? last.by.parts.waitingLabel() : null; return label ? { label, at: last.at } : null; };
   studio.putBack = () => {
+    const next = tookNext();
+    if (!next) return false;
+    tookTimes.pop();
     while (tookBack.length && !tookBack[tookBack.length - 1].parts.takenLabel()) tookBack.pop();
-    return Boolean(tookBack.pop()?.parts.putBackWaiting());
+    puttingBack = true;
+    let done = false;
+    try { done = Boolean(tookBack.pop()?.parts.putBackWaiting()); } finally { puttingBack = false; }
+    if (done) heldTimes.push({ by: next.by, at: next.at });
+    return done;
   };
-  studio.putBackLabel = () => [...tookBack].reverse().map((by) => by.parts.takenLabel()).find(Boolean) || null;
+  studio.putBackLabel = () => (tookNext() ? [...tookBack].reverse().map((by) => by.parts.takenLabel()).find(Boolean) || null : null);
   function whenFigure(then) {
     if (!figure) return;
     if (figure.parts.model) then();
@@ -2638,6 +2872,13 @@ export function mount(studio, container) {
       changed: () => { hover.hidden = true; renderInspector(); placeFigure(); },
       // Landed, the figure's frame is drawn round it as it now is (grown by a part, say).
       settled: () => { placeChosen(); placeFigure(); },
+      // A shape that can't be drawn as written, drawn as a plain box: said in its panel, as
+      // the slide says it (a message whose place ends "#shape:what").
+      problems: () => messages.flatMap((message) => {
+        const at = placeOf(message.where), named = /#([^\s:#]+):?(\S*)$/.exec(message.where || "");
+        return at && named && at.slide === own.slide && at.region === own.region && at.index === own.index
+          ? [{ id: named[1], text: message.text, what: named[2] }] : [];
+      }),
       chooseFile: async (options) => relativeTo(figureFolder(), await chooseFile(options)),
       tones: () => studio.info?.tones,
       palette: () => studio.info?.palette,
@@ -2646,11 +2887,19 @@ export function mount(studio, container) {
       // Undo take back the last of them first.)
       waiting: (on) => {
         studio.waiting = Math.max(0, (studio.waiting || 0) + (on ? 1 : -1));
-        if (on) heldBy.add(own); else heldBy.delete(own);
+        // (Its time kept when one is put back by ⇧⌘Z: not made anew.)
+        if (on) { heldBy.add(own); if (!heldTimes.some((one) => one.by === own)) heldTimes.push({ by: own, at: Date.now() }); }
+        else {
+          heldBy.delete(own);
+          // (Sent, or all taken back: nothing of it waits -- nor is to be made again, unless
+          // taken back and not sent.)
+          for (let n = heldTimes.length - 1; n >= 0; n--) if (heldTimes[n].by === own) heldTimes.splice(n, 1);
+          if (!own.parts?.takenLabel?.()) for (let n = tookTimes.length - 1; n >= 0; n--) if (tookTimes[n].by === own) tookTimes.splice(n, 1);
+        }
         studio.emit("status");
       },
       // Another edit held while it is away: Undo names it.
-      held: () => studio.emit("status"),
+      held: () => { if (heldBy.has(own) && !puttingBack) heldTimes.push({ by: own, at: Date.now() }); studio.emit("status"); },
       // (A label's ⌘Z, once someone else's words came into it, is the deck's undo: false when
       // that undo left the figure.)
       undo: () => { studio.undo(); return figure === own; },
@@ -2698,6 +2947,27 @@ export function mount(studio, container) {
   // group, and said -- the one who deleted it is told it is back (shapesBack). A figure kept
   // in a file of its own cannot be: there the typing ends, said once, rather than failing at
   // every key. (Not a shape just added, not in the deck yet.)
+  // Shapes chosen in the figure that another renamed meanwhile (their ids changed: an agent
+  // writing the file): chosen still, by their new names, and said -- never the choice left to
+  // fall back to the whole figure, for the next ⌫ to delete.
+  function shapesRenamed(was, who) {
+    const chosen = figure?.parts.selected || [];
+    if (!chosen.length || figure.parts.inline) return;
+    const old = blocksAt((was?.slides || [])[figure.slide], figure.region)[figure.index]?.figure;
+    const nodes = figureBlock()?.figure?.nodes;
+    if (typeof old !== "object" || !Array.isArray(old?.nodes) || !Array.isArray(nodes)) return;
+    const ids = new Set(nodes.map((node) => node?.id));
+    const renamed = chosen.map((id) => {
+      if (ids.has(id)) return [id, id];
+      const node = old.nodes.find((item) => item?.id === id);
+      const now = node ? nodes[follows([node], nodes)[0]] : null;
+      return [id, now && !old.nodes.some((item) => item?.id === now.id) ? now.id : null];
+    });
+    if (renamed.every(([id, now]) => id === now) || !renamed.some(([id, now]) => now && now !== id)) return;
+    figure.parts.select(renamed.map(([, now]) => now).filter(Boolean), { reveal: false });
+    const first = renamed.find(([id, now]) => now && now !== id);
+    toast(`${nameOf(who)} renamed the shape you chose to ${inQuotes(first[1])}. It's chosen still.`, { icon: "info", seconds: 6 });
+  }
   function shapeGone(was) {
     const typing = figure?.parts.inline;
     const id = typing?.id;
@@ -2821,7 +3091,18 @@ export function mount(studio, container) {
         if (result.was !== undefined) recordFile(result, at, label, merge, hold);
       }
       else if (!same(result.document, sent)) {
+        const top = studio.past[studio.past.length - 1];
         studio.change(() => result.document, { merge, hold, quiet: true, label });
+        // An edit held while the studio was away, sent now it is back: in the history where it
+        // was made, among the deck's edits made meanwhile -- not over them, as made just now.
+        const made = studio.past[studio.past.length - 1], heldAt = heldBy.has(own) ? heldTimes.find((one) => one.by === own)?.at : undefined;
+        if (made && made !== top && heldAt !== undefined) {
+          heldTimes.splice(heldTimes.findIndex((one) => one.by === own), 1);
+          made.at = heldAt;
+          let place = studio.past.length - 1;
+          while (place > 0 && studio.past[place - 1].at > heldAt) place -= 1;
+          if (place < studio.past.length - 1) { studio.past.splice(studio.past.length - 1, 1); studio.past.splice(place, 0, made); studio.lastMerge = null; studio.emit("status"); }
+        }
         if (settles) settling = true;
         if (action.do === "delete") {
           const name = action.ids?.length === 1 ? /“.*”/.exec(told || "")?.[0] || null : null;
@@ -3011,7 +3292,15 @@ export function mount(studio, container) {
       if (part) {
         read = (d) => { const now = blocksAt(slideNow(d) || {}, at.region)[at.index]; return now && kindOf(now) === kind ? String(now[part] ?? "") : undefined; };
         mirror = `block.${part}`;
-        editor = rich(String(block[part] ?? ""), { single: true, placeholder: OWN_LINES[kind][part], frame: whole }, write((b, text) => setOption(b, part, text)));
+        // (Emptied while open, it keeps its room -- a heading's placeholder drawn in its place --
+        // and goes once the typing ends: closeInline.) A callout's heading it has none of is put
+        // there empty as it is opened, as a slide's subtitle is: drawn as its placeholder, the
+        // words under it moved down for it, before a letter is typed. Left empty, taken back.
+        if (kind === "callout" && part === "title" && block.title === undefined) {
+          editBlock(at, (b) => { if (kindOf(b) === kind) b.title = ""; }, { merge, hold: true });
+          placed = { at: { ...at }, part, slide: state.slide, entry: studio.past[studio.past.length - 1], merge };
+        }
+        editor = rich(String(block[part] ?? ""), { single: true, placeholder: OWN_LINES[kind][part], frame: whole }, write((b, text) => { b[part] = text; }));
       } else if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered), plain: Boolean(block.plain), placeholder: "Text", onCells, onEnd, onListStart }, write((b, text) => { b.bullets = bulletsFrom(text, true); }));
       else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 1, mono: true, indent: true, placeholder: "Code", onInput: write((b, text) => { b.code = codeOf(text); }) });
       else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, placeholder: "E = mc^2", onInput: write((b, text) => { b.math = text; }) });
@@ -3131,15 +3420,17 @@ export function mount(studio, container) {
       : from.kind === "block" && stop.region === from.region && stop.index === from.index && (stop.part || null) === (from.part || null)));
     const next = stops[(now + (back ? -1 : 1) + stops.length) % stops.length];
     if (!next || next === stops[now]) return;
-    if (next.field) { openInline({ kind: "field", field: next.field }, { selectAll: true }); return; }
+    // (The caret at the words' end, never all of them chosen to be typed over: a tour round
+    // the slide that comes back to its title leaves the title as it is.)
+    if (next.field) { openInline({ kind: "field", field: next.field }); return; }
     // Within one object (its words to its own line, or back) it is the same one being
     // written: not taken back as left empty on the way.
     const within = from.kind === "block" && next.region === from.region && next.index === from.index, was = fresh;
     if (within) { fresh = null; holdHeading = true; }
     closeInline();
     if (within) { fresh = was; holdHeading = false; }
-    if (next.part) openInline({ kind: "block", ...next }, { selectAll: true });
-    else if (WORDY.has(kindOf(blocksAt(slide, next.region)[next.index]))) openInline({ kind: "block", ...next }, { selectAll: true, tabbed: true });
+    if (next.part) openInline({ kind: "block", ...next });
+    else if (WORDY.has(kindOf(blocksAt(slide, next.region)[next.index]))) openInline({ kind: "block", ...next }, { tabbed: true });
     else { focusBlock(next.region, next.index); toured = { slide: state.slide, ...next }; }
   }
   let holdHeading = false;
@@ -3152,6 +3443,7 @@ export function mount(studio, container) {
   // (`kept`: a list ended amid its items, how many stay -- those after them a list of their
   // own after the paragraph, set as this one is.)
   function paragraphAfter(at, kept = undefined) {
+    if (awayFrom("add a paragraph")) return;
     closeInline();
     let index = 0;
     editSlide((s) => {
@@ -3265,6 +3557,7 @@ export function mount(studio, container) {
   // An outline or a list pasted in words (`items`: each its depth, markup and whether it was
   // numbered): a list after them, its levels kept -- or, in an empty text, the text made it.
   function listAfter(at, items, split = null) {
+    if (awayFrom("paste a list")) return;
     const least = Math.min(...items.map((item) => item.depth || 0));
     const list = { bullets: bulletsFrom(items.map((item) => "  ".repeat((item.depth || 0) - least) + item.markup.trim()).join("\n")) };
     if (items.filter((item) => (item.depth || 0) === least).every((item) => item.ordered)) list.numbered = true;
@@ -3282,6 +3575,7 @@ export function mount(studio, container) {
   // whole, what was pasted after it) -- or in their place when there are none; and typed on
   // in at once, from the end of what was pasted.
   function pasteBlockIn(at, made, split, label) {
+    if (awayFrom("paste a table")) return;
     const here = blocksAt(slideAt() || {}, at.region)[at.index];
     if (!here) return;
     const text = kindOf(here) === "text";
@@ -3384,8 +3678,12 @@ export function mount(studio, container) {
   // one in its turn.
   // Where each of `before` is in `after`, by what it holds: kept, moved, or changed (and
   // moved and changed at once, as a paragraph another person moved while it was typed in).
+  // (Following the studio's answer to what this page sent, `answering`: of slides and objects
+  // alike, this page's own new ones are the later -- the studio puts others' added at one place
+  // before them -- and are followed so, two blank ones never taken one for the other.)
+  let answering = false;
   function follow(before, after) {
-    return follows(before, after);
+    return follows(before, after, answering);
   }
 
 
@@ -3445,6 +3743,23 @@ export function mount(studio, container) {
         if (at >= 0) { studio.past.splice(at, 1); studio.emit("status"); }
         deletedHere = deletedHere.filter((item) => item !== gone);
         come.splice(come.indexOf(back), 1);
+      }
+    }
+    // So too a table's row deleted here a moment ago, back because another was typing in it:
+    // said, and its deleting leaves the history (undone, it would put back a stale copy).
+    rowsDeleted = rowsDeleted.filter((item) => Date.now() - item.at < 60000);
+    if (remote && rowsDeleted.length) {
+      for (const gone of [...rowsDeleted]) {
+        const was = blocksAt(before[gone.slide], gone.region)[gone.index], to = follow(before, after)[gone.slide];
+        const now = to >= 0 ? blocksAt(after[to], gone.region)[follow(blocksAt(before[gone.slide], gone.region), blocksAt(after[to], gone.region))[gone.index]] : null;
+        if (!was || !now || kindOf(now) !== "table") continue;
+        const rows = tableRows(now), old = tableRows(was), had = new Set(follows(old, rows));
+        const back = rows.findIndex((row, k) => !had.has(k) && follows([gone.row], [row])[0] === 0);
+        if (back < 0) continue;
+        toast(`The row you deleted is back: ${nameOf(who)} was still typing in it.`, { icon: "info", seconds: 6 });
+        const at = studio.past.indexOf(gone.entry);
+        if (at >= 0) { studio.past.splice(at, 1); studio.emit("status"); }
+        rowsDeleted = rowsDeleted.filter((item) => item !== gone);
       }
     }
     // So too an object deleted here a moment ago, on whichever slide it comes back.
@@ -3541,11 +3856,14 @@ export function mount(studio, container) {
         // Followed there, as Keynote follows what is typed in: the deck goes to its slide and
         // the typing goes on in it, the caret where it was -- no key lost to the slide left.
         const area = inline.area, caret = area.rich ? area.caretAt()?.[1] : area.selectionEnd, run = inline.session, going = studio.lastMerge;
+        // (A table's cell: the same cell, where its row and column are in the table there.)
+        const cell = inline.cell ? cellTo(blocksAt(before[from], inline.at.region)[inline.at.index], blocksAt(after[went.slide], went.region)[went.index], inline.target) : null;
         closeInline({ going: true });
         state.slide = went.slide;
         state.focus = null; state.field = null;
-        openInline({ kind: "block", region: went.region, index: went.index }, { run });
-        if (going && inline) studio.lastMerge = { key: `${state.slide}-${went.region}-${went.index}-inline-${run}`, at: Date.now() };
+        if (cell) openInline({ kind: "cell", region: went.region, index: went.index, row: cell[0], col: cell[1] }, { run });
+        else openInline({ kind: "block", region: went.region, index: went.index }, { run });
+        if (going && inline) studio.lastMerge = { key: cell ? `${state.slide}-${went.region}-${went.index}-cell-${cell[0]}-${cell[1]}-${run}` : `${state.slide}-${went.region}-${went.index}-inline-${run}`, at: Date.now() };
         if (inline && Number.isInteger(caret)) {
           if (inline.area.rich) inline.area.caretTo(Math.min(caret, inline.area.letters().length));
           else inline.area.setSelectionRange(caret, caret);
@@ -3562,13 +3880,30 @@ export function mount(studio, container) {
       // added or taken away about it by another (Add Row Above, Delete Column) -- and typed on
       // there; its row or column taken away, the typing ends, said.
       const cell = inline.cell ? cellTo(blocksAt(before[from], inline.at.region)[inline.at.index], blocksAt(after[to], inline.at.region)[inlineTo], inline.target) : true;
-      if (!cell) { gone(); typedTo = -1; }
+      if (!cell) {
+        // Its row or column taken away (the taking away wins: the rows stay aligned): the
+        // typing ends, said, its words kept on the clipboard to be put where they belong.
+        const words = inline.area.value, row = follows(tableRows(blocksAt(before[from], inline.at.region)[inline.at.index] || {}), tableRows(blocksAt(after[to], inline.at.region)[inlineTo] || {}))[inline.target.row];
+        closeInline();
+        const what = `${nameOf(who)} deleted the ${row >= 0 ? "column" : "row"} you were typing in.`;
+        if (remote && String(words).trim()) navigator.clipboard?.writeText(readable(words)).then(() => toast(`${what} Your words are on the clipboard.`, { icon: "info", seconds: 6 }), () => toast(what, { icon: "info", seconds: 6 }));
+        else if (remote) toast(what, { icon: "info", seconds: 6 });
+        typedTo = -1;
+      }
       else {
         if (Array.isArray(cell)) [inline.target.row, inline.target.col] = cell;
         inline.at.index = inlineTo;
       }
     }
-    if (state.focus && !shared) { if (focusTo < 0) state.focus = null; else state.focus.index = focusTo; }
+    // (Chosen, not typed in, and put on another slide by another: followed there, and said.)
+    const chosenWent = state.focus && !shared && focusTo < 0 && remote && !inline ? wentTo(before, after, from, to, state.focus) : null;
+    if (chosenWent) {
+      leaveFigure(false);
+      state.slide = chosenWent.slide;
+      state.focus = { region: chosenWent.region, index: chosenWent.index };
+      const what = chosenWent.what.startsWith("“") ? `${chosenWent.what}, which you chose,` : `${chosenWent.what} you chose`;
+      toast(`${nameOf(who)} moved ${what} to slide ${chosenWent.slide + 1}.`, { icon: "info", seconds: 6 });
+    } else if (state.focus && !shared) { if (focusTo < 0) state.focus = null; else state.focus.index = focusTo; }
     else if (shared && typedTo < 0) state.focus = null;
     else if (shared && inline?.at) state.focus = inline.at;
     if (state.field) state.field.id = fieldId(state.field.field);
@@ -3830,6 +4165,11 @@ export function mount(studio, container) {
       return;
     }
     if (element && inline.hidden !== element) { inline.hidden?.style.removeProperty("visibility"); element.style.visibility = "hidden"; inline.hidden = element; }
+    // Words of an object drawn round them (a callout's, a quote's): the ring goes round the
+    // whole object, clear of its other lines, the words typed in marked inside it.
+    const owner = inline.at && !inline.cell ? kindOf(blocksAt(slideAt() || {}, inline.at.region)[inline.at.index]) : null;
+    inline.node.classList.toggle("part-of", Boolean(OWN_LINES[owner]));
+    objectRing.hidden = true;
     // The words being typed are what is chosen: no frame over them.
     chosen.hidden = true;
     hover.hidden = true;
@@ -3898,7 +4238,19 @@ export function mount(studio, container) {
     if (strong) { inline.area.style.setProperty("--rt-strong", strong); inline.area.style.setProperty("--rt-plain", look?.colour || "inherit"); }
     bylinePart(look, size, centred);
     codeOnLines(element, box, slide);
+    ringObject(owner);
     clearUnder();
+  }
+  // The ring round an object whose own words are typed (ringOf), and round the words being
+  // typed, however far their room runs.
+  function ringObject(owner) {
+    const whole = OWN_LINES[owner] ? ringOf(inline.at) : null;
+    if (!whole) return;
+    const page = pageNode.getBoundingClientRect(), typed = inline.node.getBoundingClientRect();
+    const left = Math.min(whole.left, typed.left - page.left - 3), top = Math.min(whole.top, typed.top - page.top - 3);
+    const right = Math.max(whole.left + whole.width, typed.right - page.left + 3), bottom = Math.max(whole.top + whole.height, typed.bottom - page.top + 3);
+    if (objectRing.parentNode !== pageNode) pageNode.append(objectRing);
+    place(objectRing, { left, top, width: right - left, height: bottom - top }, "");
   }
   // Code is typed on its lines as the slide draws them: on its panel (left in view), its
   // letters where the drawn ones are, line for line, so nothing moves when it is done.
@@ -3925,7 +4277,8 @@ export function mount(studio, container) {
   // typed stays in view beside the one that is, where the slide draws it. (A statement's
   // attribution is drawn after a dash, which stays too.)
   function bylinePart(look, size, centred) {
-    const key = inline.field;
+    // (A quote's attribution is drawn after a dash too.)
+    const key = inline.field || (inline.part === "by" ? "by" : null);
     const node = inline.node;
     if (key !== "author" && key !== "date" && key !== "by") return;
     const slide = slideAt() || {};
@@ -4027,7 +4380,11 @@ export function mount(studio, container) {
   function frameOf(part) {
     if (part.kind === "field") return roomy(part.id, wordsFrame(part.id));
     const block = blocksAt(slideAt() || {}, part.region)[part.index];
-    const kind = block ? kindOf(block) : "", framed = roomy(part.id, boxOf(part.id), kind);
+    const kind = block ? kindOf(block) : "";
+    let framed = roomy(part.id, boxOf(part.id), kind);
+    // A quote framed round its ink, top to bottom: never over what follows it.
+    const ink = framed && kind === "quote" ? quoteInk(part.id) : null;
+    if (ink) framed = { ...framed, top: ink.top - 5, height: ink.bottom - ink.top + 10 };
     // Words, or drawn to its edges (an equation's glyphs, a table's rules), it has the room
     // round it a line of the slide's words has (wordsFrame): its frame never touches them.
     return framed && (INKED.has(kind) || WIDE.has(kind)) ? { left: framed.left - 3, top: framed.top - 3, width: framed.width + 6, height: framed.height + 6 } : framed;
@@ -4214,7 +4571,7 @@ export function mount(studio, container) {
 
   // The words a slide keeps empty, as placeholders holding their places: its title, a
   // statement's words, a title slide's subtitle (as a new one has them).
-  const keptEmpty = (key) => key === "title" || key === "words" || (key === "subtitle" && layoutOf(slideAt()) === "title");
+  const keptEmpty = (key) => key === "title" || key === "words" || (key === "subtitle" && ["title", "section"].includes(layoutOf(slideAt())));
   function closeInline({ later = false, back = null, going = false, escaped = false } = {}) {
     if (!inline) return;
     // (Typed in again in a moment, `back`, its spaces wait on.)
@@ -4225,15 +4582,22 @@ export function mount(studio, container) {
     if (held && kindOf(held) === "callout" && held.title === "" && !blank(held)) {
       editBlock(inline.at, (b) => { if (b.title === "") delete b.title; }, { quiet: true, merge: `${state.slide}-${inline.at.region}-${inline.at.index}-inline-${inline.session}`, hold: true });
     }
+    // So too an object's own line (an attribution) emptied and left: it goes, with the typing.
+    else if (held && inline.part && held[inline.part] === "" && !(kindOf(held) === "callout" && blank(held))) {
+      const part = inline.part;
+      editBlock(inline.at, (b) => { if (b[part] === "") delete b[part]; }, { quiet: true, merge: `${state.slide}-${inline.at.region}-${inline.at.index}-inline-${inline.session}`, hold: true });
+    }
     // The typing done: what it left to say is said now.
     typedAt = 0;
     setTimeout(sayHeld);
     if (placed) {
-      const { key, slide, entry } = placed;
+      const { key, slide, entry, at, part } = placed;
       placed = null;
+      const empty = slide === state.slide && (part ? blocksAt(slideAt() || {}, at.region)[at.index]?.[part] === "" : slideAt()?.[key] === "");
       // Put there to be typed into, and left empty: taken back, as if never put there.
-      if (slide === state.slide && slideAt()?.[key] === "") {
+      if (empty && !holdHeading) {
         if (studio.past[studio.past.length - 1] === entry && same(studio.document, entry.after)) { studio.undo(); studio.future.pop(); }
+        else if (part) editBlock(at, (b) => { if (b[part] === "") delete b[part]; }, { quiet: true });
         else editSlide((s) => { delete s[key]; }, { quiet: true });
       }
     } else if (inline.field && inline.opened && slideAt()?.[inline.field] === "" && !keptEmpty(inline.field)) {
@@ -4245,6 +4609,7 @@ export function mount(studio, container) {
       if (state.field?.field === key) state.field = null;
     }
     inline.area.dispose?.();
+    objectRing.hidden = true;
     standIn();
     inline.node.remove();
     pageNode?.querySelector(`[id="${CSS.escape(inline.id)}"]`)?.style.removeProperty("visibility");
@@ -4586,6 +4951,7 @@ export function mount(studio, container) {
   // (`moving`: an object of the deck taken from where it is ({ slide, region, index }) in the
   // same step, put here: a cut and a paste made one move.)
   async function insertBlock(kind, given = null, where = null, label = null, moving = null) {
+    if (awayFrom("add objects")) return;
     // Typing ends first: a new object just put there and left empty goes as it is left, not
     // after this one is put in its place (or this one taken for it).
     closeInline();
@@ -4646,7 +5012,8 @@ export function mount(studio, container) {
       leaveFigure(false);
       placeChosen(); renderInspector(); reportFocus();
     }
-    if (INLINE.has(kind) && !given) openSoon({ kind: "block", region, index });
+    // (A callout from its heading, as it reads: Tab goes on to its words.)
+    if (INLINE.has(kind) && !given) openSoon({ kind: "block", region, index, ...(kind === "callout" ? { part: "title" } : {}) });
     // A new table is typed into at once, from its first cell, as Keynote's is.
     else if (kind === "table" && !given) openSoon({ kind: "cell", region, index, row: 0, col: 0 });
     // New numbers, from their first number's value, in the panel (where numbers are typed).
@@ -4694,6 +5061,7 @@ export function mount(studio, container) {
   const movedLabel = (from) => `Move ${blockLabel(blocksAt(slideAt() || {}, from.region)[from.index])}`;
 
   function moveBlock(from, to) {
+    if (awayFrom("move objects")) return;
     const label = movedLabel(from);
     editSlide((slide) => {
       const source = blocksAt(slide, from.region, true);
@@ -4712,6 +5080,7 @@ export function mount(studio, container) {
   }
 
   function deleteBlock(at, done = "deleted") {
+    if (awayFrom(`${done === "cut" ? "cut" : "delete"} objects`)) return;
     const block = blocksAt(slideAt(), at.region)[at.index];
     const label = block ? blockName(block) : "Object";
     editSlide((s) => { blocksAt(s, at.region).splice(at.index, 1); }, { label: done === "cut" ? `Cut ${label}` : null });
@@ -4789,6 +5158,10 @@ export function mount(studio, container) {
         regions.length > 1 ? ui.field("Column", ui.segmented({ value: at.region, options: regions.map((r) => ({ value: r.key, label: r.label })),
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
+      // As Keynote's Build In (Appear): it appears on a click of its own when presenting, in
+      // the order of the slide's objects -- a page each in the PDF, a click in PowerPoint.
+      kind === "bullets" && block.reveal ? null : h("div.section", {}, ui.toggle({ value: Boolean(block.build), label: "Build In on Click",
+        onChange: (on) => editBlock(at, (b) => setOption(b, "build", on, false)) })),
     ];
   }
 
@@ -4900,6 +5273,7 @@ export function mount(studio, container) {
   function changeLayout(layout) {
     const current = slideAt();
     if (!current || layoutOf(current) === layout) return;
+    if (awayFrom("change the layout")) return;
     const earlier = layoutStash.get(JSON.stringify(current));
     if (earlier && layoutOf(earlier) === layout) {
       editSlide((slide) => { for (const key of Object.keys(slide)) delete slide[key]; Object.assign(slide, structuredClone(earlier)); });
@@ -5209,8 +5583,9 @@ export function mount(studio, container) {
         onChange: (value) => editBlock(at, (b) => setOption(b, name, value, fallback), { merge: merge(name) }) });
     };
     // A spreadsheet's cells pasted in its words are a table after it, as on the slide.
-    const onCells = (cells) => { document.activeElement?.blur(); insertBlock("table", { table: cells }, at, "Paste Table"); };
-    const onList = (items) => { document.activeElement?.blur(); listAfter(at, items); };
+    // (As on the slide: the words split at the caret, typed on in on the slide, after what was pasted.)
+    const onCells = (cells, split) => { document.activeElement?.blur(); if (split) pasteBlockIn(at, { table: cells }, split, "Paste Table"); else insertBlock("table", { table: cells }, at, "Paste Table"); };
+    const onList = (items, split) => { document.activeElement?.blur(); listAfter(at, items, split); };
     switch (kind) {
       case "bullets":
         return [richField({ value: bulletsText(block.bullets), list: true, numbered: Boolean(block.numbered), plain: Boolean(block.plain), key: key("bullets"), placeholder: "Text",
@@ -5224,9 +5599,9 @@ export function mount(studio, container) {
       case "text":
         return [richField({ value: block.text ?? "", key: key("text"), placeholder: "Text", onInput: (text) => edit((b) => { b.text = text; }, "text"), onCells, onList }),
           listField(at, block),
-          ui.field("Align", ui.segmented({ value: block.align || "start", options: [
+          ui.field("Align", ui.segmented({ value: block.align || drawnAlign(at), options: [
             { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
-          onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "start")) })),
+          onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, drawnAlign(at))) })),
           ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
           size()];
       case "quote":
@@ -5725,7 +6100,7 @@ export function mount(studio, container) {
     // Each column's cells set as the slide sets them: as its alignment says, else as its words do.
     const aligned = given || auto;
     const input = (r, c) => {
-      const cell = ui.cell({ value: rows[r][c], dataset: { key: `cell.${r}.${c}` },
+      const cell = ui.cell({ value: rows[r][c], dataset: { key: `cell.${r}.${c}` }, "aria-label": `Row ${r + 1}, Column ${c + 1}`,
         oninput: () => { rows[r][c] = cell.value; write(); },
         onpaste: (event) => {
           const text = event.clipboardData.getData("text/plain");
@@ -5805,6 +6180,7 @@ export function mount(studio, container) {
         h("span.spacer", { style: { flex: 1 } })),
       h("div.hint-line", {}, "Paste cells from a spreadsheet into any cell."),
       ui.toggle({ value: header, label: "Header row", onChange: (value) => editBlock(at, (b) => setOption(b, "header", value ? null : false)) }),
+      captionField(block, at),
       size()];
   }
 
@@ -5819,12 +6195,24 @@ export function mount(studio, container) {
       fileRow(block.image, ["image"], (path) => { editBlock(at, (b) => { b.image = path; }, {}); preview.src = studio.raw(path); preview.hidden = false; }, "picture.png"),
       /\.svg$/i.test(block.image || "") ? h("div.hint-line", {}, "An SVG picture stays as vectors: editable shapes and text in PowerPoint.") : null,
       widthField(block, at),
+      captionField(block, at),
       // As Keynote's Description: read out for whoever cannot see the picture, its lines
       // growing to hold it; Return is done, as it is one paragraph.
       ui.field("Description", described(ui.textarea({ value: block.description || "", rows: 1, placeholder: "What the picture shows", key: "block.description",
         onInput: (text) => editBlock(at, (b) => setOption(b, "description", text.replace(/\n+/g, " ")), { merge: `${state.slide}-${at.region}-${at.index}-description`, hold: true }) })),
       { hint: "Alt text for screen readers" })];
   }
+
+  // As Keynote's Caption: words set under the object, centred and a size smaller -- part of
+  // it, moved and built in with it. One paragraph, as a description is.
+  function captionField(block, at) {
+    return ui.field("Caption", described(ui.textarea({ value: block.caption || "", rows: 1, placeholder: "Optional", key: "block.caption",
+      onInput: (text) => editBlock(at, (b) => setOption(b, "caption", text.replace(/\n+/g, " ")), { merge: `${state.slide}-${at.region}-${at.index}-caption`, hold: true }) })),
+    { hint: "Set under it, centred" });
+  }
+
+  // How a text is drawn across: as it says, or centred as words under a picture are.
+  const drawnAlign = (at) => blockElement(at.region, at.index)?.getAttribute("data-flexo-align") || "start";
 
   function described(area) {
     area.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); area.blur(); } });
@@ -5882,7 +6270,7 @@ export function mount(studio, container) {
     // A figure arranged by hand is kept as arranged unless the switch is turned on for it.
     const byHand = arranged(mode === "inline" ? value : figure && figureBlock() === block ? figure.parts.model : null);
     const turn = shapes !== undefined && shapes < 2 ? null
-      : ui.toggle({ value: block.turn ?? !byHand, label: "Swap rows and columns to fit", onChange: (on) => {
+      : ui.toggle({ value: block.turn ?? !byHand, label: "Turn to Fit the Slide", onChange: (on) => {
         if (on && byHand) swapAsked = `slide${state.slide + 1}`;
         editBlock(at, (b) => setOption(b, "turn", on && !byHand ? null : on));
       } });
@@ -5921,7 +6309,7 @@ export function mount(studio, container) {
       parts.push(h("details.more", {}, h("summary", {}, icon("chevron"), "JSON"), h("div.inner", {}, area)));
       // Written in the deck, it is edited where it is drawn: where it is kept is put by, under
       // Advanced, as a figure's shape keeps its name in the file.
-      return [exports, widthField(block, at), turn, figureDescription(block, at), h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
+      return [exports, widthField(block, at), turn, captionField(block, at), figureDescription(block, at), h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
       parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"),
         h("div.hint-line", {}, "Edit the figure on the slide. Your changes are saved to the file, and changes made to the file appear here."));
@@ -5929,7 +6317,7 @@ export function mount(studio, container) {
       parts.push(functionInput(value, (text) => edit((b) => { b.figure = text; }, "figure")),
         h("div.hint-line", {}, "A function that returns a ", h("code", {}, "flexo.Figure"), ". It runs again when its file changes."));
     }
-    parts.push(widthField(block, at), turn, figureDescription(block, at));
+    parts.push(widthField(block, at), turn, captionField(block, at), figureDescription(block, at));
     return [exports, ...parts];
   }
 
@@ -6066,6 +6454,7 @@ export function mount(studio, container) {
         busy(true);
         try {
           const found = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "structure-fetch", id } });
+          if (found.failed) throw new Error(found.failed);
           if (!done) { done = true; resolve(found.id); box.close(); }
         } catch (error) {
           clear(note, icon("warning"), h("span", {}, error.message));
@@ -6151,7 +6540,11 @@ export function mount(studio, container) {
       const points = /,? in points$/i.test(field.note || "");
       if (!control) control = ui.number({ value: changes[field.name], placeholder: String(fallback ?? "Auto"), step: "any", unit: points ? "pt" : undefined, key: `style.${field.name}`, onChange: setStyle });
       const set = changes[field.name] !== undefined;
-      return h("div.style-row", {}, h("span.name", {}, h(`span${set ? ".changed" : ""}`, {}, styleName(field.name)), h("span.note", {}, String(field.note || "").replace(/,? in points$/i, ""))), control,
+      // Its pop-up or field named by its name, for VoiceOver -- not by its value alone.
+      const nameId = `style-${field.name}`;
+      const named = control.matches?.("input, button") ? control : control.querySelector?.("input, button.select");
+      named?.setAttribute("aria-labelledby", nameId);
+      return h("div.style-row", {}, h("span.name", {}, h(`span${set ? ".changed" : ""}`, { id: nameId }, styleName(field.name)), h("span.note", {}, String(field.note || "").replace(/,? in points$/i, ""))), control,
         ui.button("", () => { setStyle(null); renderInspector(); }, { kind: "ghost", icon: "undo", small: true, title: "Reset", disabled: !set }));
     });
     const changed = Object.keys(changes).length;
@@ -6267,6 +6660,7 @@ export function mount(studio, container) {
   // the slide, else the slide.
   function duplicateChosen() {
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
+    if ((state.focus || allOn()) && awayFrom("duplicate objects")) return;
     // Several chosen (⌘A, ⇧-click): each copied after the last of them in its column, one step.
     if (allOn()) {
       const copies = picked();
@@ -6283,7 +6677,12 @@ export function mount(studio, container) {
       return;
     }
     const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
-    if (block) insertBlock(kindOf(block), copyOf(block), { ...state.focus }, `Duplicate ${blockLabel(block)}`);
+    if (block) {
+      const from = { ...state.focus };
+      insertBlock(kindOf(block), copyOf(block), from, `Duplicate ${blockLabel(block)}`);
+      // Undone, the one it was copied from is chosen; redone, the copy.
+      markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
+    }
     else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
     else if (slides().length) duplicateSlide(state.slide);
   }
@@ -6463,20 +6862,29 @@ export function mount(studio, container) {
   // reveals its items a click at a time.
   const builds = () => pages.some((page) => page?.steps > 1) || slides().some((slide) => regionsOf(slide).some(({ key }) =>
     blocksAt(slide, key).some((block) => kindOf(block) === "bullets" && block.reveal)));
+  // A "…" says a sheet or the Mac app's save panel comes next, as on a Mac -- not on an
+  // export that goes straight to the browser's downloads.
+  const asks = (sheet = false) => sheet || Boolean(window.pywebview?.api?.save_export);
   studio.exports = [
-    { format: "pdf", label: "PDF…", hint: "One page per slide, with embedded fonts",
+    { format: "pdf", get label() { return `PDF${asks(builds()) ? "…" : ""}`; }, hint: "One page per slide, with embedded fonts",
       // Each stage of builds as the person last chose it for this deck.
       get options() {
         const key = `steps-${studio.file}`;
         return builds() ? [{ name: "steps", label: "Include each stage of builds", value: remembered(key, "0") === "1", onChange: (value) => remember(key, value ? "1" : "0") }] : [];
       } },
-    { format: "pptx", label: "PowerPoint…", hint: "Editable shapes and text" },
+    { format: "pptx", get label() { return `PowerPoint${asks() ? "…" : ""}`; }, hint: "Editable shapes and text" },
     { format: "png", label: "Images…", icon: "image", hint: "A PNG or SVG image of each slide", choose: [{ format: "png", label: "PNG" }, { format: "svg", label: "SVG" }] },
   ];
   studio.present = () => present();
   studio.commands = () => [
     // The slides to go to: places, listed after every command (`later`).
     ...slides().map((slide, index) => ({ icon: "slide", label: `Slide ${index + 1}: ${slideTitle(slide)}`, later: true, run: () => select(index) })),
+    // A shape that can't be drawn as written is found by its name, to put it right.
+    ...drawnMessages.flatMap((message) => {
+      const at = placeOf(message.where), name = /^\u201c[^\u201d]*\u201d/.exec(message.text)?.[0];
+      return at && name && /#[^\s:#]+/.test(message.where || "")
+        ? [{ icon: "error", label: `Put Right ${name} on Slide ${at.slide + 1}`, hint: message.text, run: () => toMessage(message) }] : [];
+    }),
     // What the keys do (⇧⌘N, ⌘D, ⌫ in the slide list, the arrows), by name for the Mac
     // app's Slide and Edit menus. ⌘D in a field is the field's.
     { icon: "plus", label: "New Slide", keys: "⇧⌘N", run: () => newSlideLike(state.slide) },
@@ -6508,8 +6916,8 @@ export function mount(studio, container) {
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
     { icon: "play", label: "Present", keys: "⌘↩", hint: "Full screen; X for the presenter view, with notes", run: () => present() },
     // In the toolbar's Export menu's order.
-    { icon: "export", label: "Export as PDF…", hint: "One page per slide", run: () => studio.exportFiles(["pdf"]) },
-    { icon: "export", label: "Export as PowerPoint…", hint: "A .pptx file of editable shapes and text", run: () => studio.exportFiles(["pptx"]) },
+    { icon: "export", label: `Export as PDF${asks(builds()) ? "…" : ""}`, hint: "One page per slide", run: () => studio.exportFiles(["pdf"]) },
+    { icon: "export", label: `Export as PowerPoint${asks() ? "…" : ""}`, hint: "A .pptx file of editable shapes and text", run: () => studio.exportFiles(["pptx"]) },
     { icon: "export", label: "Export as Images…", hint: "A PNG or SVG image of each slide", run: () => studio.exportFiles(["png"]) },
   ];
   // The slide's commands, named and keyed as its menus have them: ⌘D duplicates the object
@@ -6573,9 +6981,13 @@ export function mount(studio, container) {
       { icon: "trash", label: `Delete ${name}`, keys: "⌫", run: () => deleteBlock(at) },
     ];
   }
-  studio.reveal = (where) => {
+  studio.reveal = (where, { quiet = false } = {}) => {
     if (where?.label === "Design") { state.tab = "design"; renderInspector(); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);
+    // Its object chosen, where it is now (the activity list follows it) -- not while
+    // following another's work, which is theirs to choose.
+    const thing = where?.object;
+    if (!quiet && where?.page && typeof thing?.region === "string" && blocksAt(slideAt(), thing.region)[thing.index]) focusBlock(thing.region, thing.index);
   };
 
   // -- what happens --
@@ -6619,30 +7031,55 @@ export function mount(studio, container) {
     const kept = slides().indexOf(was[where]);
     const to = kept >= 0 ? kept : follow(was, slides())[where];
     said.where = to >= 0 ? to : where;
+    // (The object it changed, if one: followed to another slide, should another move it there.)
+    const prior = own.before?.slides?.[where], made = was[where];
+    if (prior && made && said.object === undefined) {
+      const olds = partsOf(prior).map((part) => part.block);
+      said.object = partsOf(made).find((part) => !olds.some((old) => same(old, part.block)))?.block ?? null;
+    }
     said.place = typeof place === "string" ? place.replace(/^Slide \d+/, `Slide ${said.where + 1}`) : place;
+    // (Its place is in the deck as it is now: followed from here, change by change.)
+    said.of = studio.document;
+    said.live = true;
   };
   // Where each step in the history was made, followed change by change as slides move about it
   // -- moved, added or taken away, by another or here -- by the very slide the merge keeps,
   // else as merges know slides (two blank slides alike are not taken one for the other, as
   // they would be known later only by their words): its row says where it now is, and its
   // undo goes there. (Steps not yet said are said first, where they were made.)
-  function followPlaces(was) {
+  function followPlaces(was, remote = false) {
     const before = Array.isArray(was?.slides) ? was.slides : [], after = slides();
     const recent = [...studio.past.slice(-60), ...studio.future].filter((entry) => !entry.apply);
     if (before !== after && before.length) {
       let map = null;
       for (const entry of recent) {
         const said = entry.said;
-        if (!said || !Number.isInteger(said.where) || said.where >= before.length) continue;
+        // (Only a place in the deck before this change: one said since is in the deck after it.)
+        if (!said || said.of !== was || !Number.isInteger(said.where) || said.where >= before.length) { if (said) said.of = studio.document; continue; }
+        said.of = studio.document;
         const own = after.indexOf(before[said.where]);
         const to = own >= 0 ? own : (map ||= follow(before, after))[said.where];
         said.live = true;
-        if (to === undefined || to < 0 || to === said.where) continue;
-        said.where = to;
-        if (typeof said.place === "string") said.place = said.place.replace(/^Slide \d+/, `Slide ${to + 1}`);
+        let there = to;
+        // The object it changed, put on another slide by another: its step goes with it.
+        if (remote && said.object && to >= 0) {
+          // (Known among the slide's objects as a merge pairs them, not by likeness alone.)
+          const olds = partsOf(before[said.where]), news = partsOf(after[to]).map((part) => part.block);
+          let i = olds.findIndex((part) => part.block === said.object);
+          if (i < 0) i = olds.findIndex((part) => same(part.block, said.object));
+          const j = i >= 0 ? follows(olds.map((part) => part.block), news)[i] : -1;
+          if (j >= 0) said.object = news[j];
+          else if (i >= 0) {
+            const went = wentTo(before, after, said.where, to, olds[i]);
+            if (went) { there = went.slide; said.object = blocksAt(after[went.slide], went.region)[went.index] ?? null; }
+          }
+        }
+        if (there === undefined || there < 0 || there === said.where) continue;
+        said.where = there;
+        if (typeof said.place === "string") said.place = said.place.replace(/^Slide \d+/, `Slide ${there + 1}`);
       }
     }
-    for (const entry of recent) if (!entry.said) studio.said(entry).live = true;
+    for (const entry of recent) if (!entry.said) studio.said(entry);
   }
   // History names are macOS undo names: title-style, present tense ("Move List",
   // "Rename “Model” to “Encoder”"); a shape is named in quotes where it helps.
@@ -6652,9 +7089,9 @@ export function mount(studio, container) {
   };
   const differing = (a = {}, b = {}) => [...new Set([...Object.keys(a || {}), ...Object.keys(b || {})])].filter((key) => !same(a?.[key], b?.[key]));
   // Words typed, named as every run of typing is, wherever it is -- a title, a cell, code, a
-  // field, notes, a shape's label: by the words it typed ("Typing “away more”"), else by the
-  // words it was typed in ("Typing in “Second paragraph…”": typed into nothing, or only words
-  // taken away) -- typingName; null where it is not words.
+  // field, notes, a shape's label: by the words it typed ("Typing “away more”"), or, only
+  // taken away, by the words they were taken from ("Deleting in “Second paragraph…”") --
+  // typingName; null where it is not words.
   const typing = (now, was = "") => {
     if (typeof now !== "string" && typeof was !== "string") return null;
     // (All their lines, as they read.)
@@ -6738,7 +7175,8 @@ export function mount(studio, container) {
     return keys.length === 1 ? `Change ${SLIDE_NAMES[keys[0]] || keyTitle(keys[0])}` : "Edit Slide";
   }
   const BLOCK_NAMES = { description: "Description", align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering", plain: "Bullets",
-    reveal: "Build", header: "Header Row", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour" };
+    reveal: "Build", header: "Header Row", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour",
+    caption: "Caption", build: "Build In" };
   function blockChange(a, b) {
     const kind = kindOf(b), name = blockLabel(b), keys = differing(a, b).filter((key) => key !== "placeholder");
     if (!keys.length) return `Edit ${name}`;
@@ -6768,8 +7206,9 @@ export function mount(studio, container) {
       return (typed && typing(...typed)) || `Edit ${name}`;
     }
     if (keys.length === 1 && TYPED_FIELDS.has(keys[0]) && (typeof a[keys[0]] === "string" || typeof b[keys[0]] === "string")) return typing(b[keys[0]], a[keys[0]]);
-    // A figure's swapping to fit, as its switch says.
+    // A figure's swapping to fit, as its switch says; a list's build, as its switch says.
     if (keys.length === 1 && keys[0] === "turn") return b.turn === false ? "Don’t Swap Rows and Columns to Fit" : "Swap Rows and Columns to Fit";
+    if (keys.length === 1 && keys[0] === "reveal") return b.reveal ? "Reveal Items One at a Time" : "Don’t Reveal Items One at a Time";
     return `Change ${BLOCK_NAMES[keys[0]] || keyTitle(keys[0])}`;
   }
   // A table's change by what it did: a row or column more or fewer, else a cell typed in.
@@ -6796,7 +7235,10 @@ export function mount(studio, container) {
   function figureChange(a, b) {
     const byId = (list) => new Map((list || []).map((item) => [item.id, item]));
     const nodesA = byId(a.nodes), nodesB = byId(b.nodes), groupsA = byId(a.groups), groupsB = byId(b.groups);
-    const named = (item, id) => quoted(item?.label || id || "", 24) || "Shape";
+    // (A shape with no words by what it is -- "Shape", "Decision" -- never by its id.)
+    const named = (item, id) => quoted(item?.label || "", 24)
+      || (item && (nodesB.has(id) || nodesA.has(id)) ? { block: "Shape", terminal: "Start" }[item.kind || "block"] || catalog.figure_editor?.parts?.[item.kind]?.title || "Shape"
+        : item?.id ? "Group" : "Shape");
     const call = (id) => named(nodesB.get(id) || nodesA.get(id) || groupsB.get(id) || groupsA.get(id), id);
     const ref = (end) => (nodesB.has(end) || nodesA.has(end) ? end : String(end).slice(0, String(end).lastIndexOf(".")) || end);
     let added = [...nodesB.keys()].filter((id) => !nodesA.has(id)), removed = [...nodesA.keys()].filter((id) => !nodesB.has(id));
@@ -6839,6 +7281,23 @@ export function mount(studio, container) {
       }
       if (keys.length === 1 && keys[0] === "palette") return now.properties?.palette ? "Change Palette" : "Reset Palette";
       if (keys.length === 1 && keys[0] === "density") return now.properties?.density ? "Add Density Map" : "Remove Density Map";
+      // A row of a table of the shape's (a protein's features) added, deleted or changed:
+      // said as that row, and which of its cells.
+      if (keys.length === 1 && Array.isArray(was.properties?.[keys[0]]) && Array.isArray(now.properties?.[keys[0]])) {
+        const rows = [was.properties[keys[0]], now.properties[keys[0]]];
+        const field = (catalog.figure_editor?.parts?.[now.kind || "block"]?.fields || []).find((one) => one.key === `properties.${keys[0]}`);
+        const one = titled(String(field?.label || keyTitle(keys[0])).replace(/s$/i, "").replace(/ \(.*\)$/, ""));
+        if (rows[1].length === rows[0].length + 1) return `Add ${one}`;
+        if (rows[1].length === rows[0].length - 1) return `Delete ${one}`;
+        const at = rows[1].findIndex((row, index) => !same(row, rows[0][index]));
+        if (at >= 0 && rows[1].length === rows[0].length) {
+          const cells = differing(rows[0][at], rows[1][at]);
+          const column = (field?.columns || []).find((each) => each.name === cells[0]);
+          const row = rows[1][at]?.label ? quoted(String(rows[1][at].label), 18) : `${one} ${at + 1}`;
+          if (cells.length === 1) return `Change ${row} ${column?.label ? titled(column.label) : keyTitle(cells[0])}`;
+          return `Edit ${row}`;
+        }
+      }
       if (keys.length === 1) return `Change ${fieldLabel(now.kind, keys[0])}`;
       // A setting of the shape's own (its shadow), by name.
       const own = differing(was, now).filter((key) => !["label", "kind", "properties"].includes(key));
@@ -6858,6 +7317,14 @@ export function mount(studio, container) {
       const [now, was] = [newEdges[0].label, oldEdges[0].label];
       if (was && plain(String(was)).trim() === plain(String(now ?? "")).trim()) return lookChange(was, now, "Format Line");
       return typing(now ?? "", was ?? "");
+    }
+    // One line's setting changed, by its name in the panel ("Change Arrowhead"); its ends,
+    // the line moved.
+    if (newEdges.length === 1 && oldEdges.length === 1) {
+      const keys = differing(oldEdges[0], newEdges[0]);
+      if (keys.some((key) => key === "from" || key === "to")) return `Reconnect Line to ${call(ref(newEdges[0].to))}`;
+      const field = (catalog.figure_editor?.edge_fields || []).find((one) => one.key === keys[0]);
+      if (keys.length === 1 && field) return `Change ${titled(field.label)}`;
     }
     if (newEdges.length || oldEdges.length) return newEdges.length === oldEdges.length && newEdges.length === 1 ? "Edit Line" : "Edit Lines";
     // Its shapes arranged: grouped, ungrouped, or one moved in its row or to another.
@@ -6924,13 +7391,19 @@ export function mount(studio, container) {
     pages = after.map((_, index) => (from(index) >= 0 ? old[from(index)] : undefined));
     messages = messages.filter((m) => { const n = Number(/^slide(\d+)$/.exec(m.page || "")?.[1]); return !n || from(n - 1) === n - 1; });
   }
-  studio.on("change", ({ quiet, source, who, before, entry, base, incoming, merged }) => {
+  studio.on("change", ({ quiet, source, who, before, entry, base, incoming, merged, answer }) => {
+    answering = Boolean(answer);
+    try { changed({ quiet, source, who, before, entry, base, incoming, merged }); } finally { answering = false; }
+  });
+  function changed({ quiet, source, who, before, entry, base, incoming, merged }) {
+    // (A deck edit undone: what ⇧⌘Z makes again first -- see studio.putBack.)
+    if (source === "history" && entry && studio.future[studio.future.length - 1]?.said === entry) deckUndoneAt = Date.now();
     clearTimeout(settleTimer);
     undoing = source === "history";
     const was = lastDoc;
     lastDoc = doc();
     followSlides(was?.slides || [], slides());
-    followPlaces(was);
+    followPlaces(was, source === "remote");
     if (source === "remote") figureKept(was, who);
     if (source === "history" || source === "remote") followChange(was, who, source === "remote");
     // Undone or redone, the deck goes to the slide the change was made on.
@@ -6959,14 +7432,14 @@ export function mount(studio, container) {
     }
     if (source === "remote") { lastWho = who; shapesBack(was, who); }
     if (figure && source !== "edit") {
-      if (source === "remote") shapeGone(was);
+      if (source === "remote") { shapeGone(was); shapesRenamed(was, who); }
       // (Its words as they now are shown in the field being typed in, too.)
       if (figureBlock() && editable(figureBlock())) figure.parts.act({ do: "read" }, { select: false, fresh: true });
       else leaveFigure();
     }
     pageNode?.classList.add("pending");
     undoing = false;
-  });
+  }
   // What a merge kept of what is being edited here (session.js's "merged"): another's
   // deleting it, or their words written over the words typed, came to nothing here, so
   // without a word the change would seem never to have been made.
@@ -6978,6 +7451,9 @@ export function mount(studio, container) {
     // Edits made while the studio was away, kept though what they were made in went from the
     // file meanwhile (an agent deleting the slide): said, the slide or object named.
     if (away) {
+      // (Words typed here while it was away, in words another rewrote meanwhile: both kept.)
+      const rewritten = notes.find((one) => one.rewritten !== undefined);
+      if (rewritten) toast(`Your words and ${whose(rewritten.by)} were both kept.`, { icon: "info", seconds: 6 });
       const note = notes.find((one) => one.kept !== undefined);
       if (!note) return;
       const n = follows([note.kept], slides())[0];
@@ -7028,8 +7504,9 @@ export function mount(studio, container) {
     if (swapAsked && result.latest && !result.unfinished && !result.info?.unsettled) {
       const page = swapAsked;
       swapAsked = null;
-      if (!drawnMessages.some((m) => m.page === page && /rows and columns (were )?swapped|had their rows and columns swapped/.test(m.text))) {
-        toast("Already drawn as large as it can be: swapping its rows and columns would not make it larger.", { icon: "info", seconds: 5 });
+      // (Turned, the slide's note says so: "the chart was turned to run across".)
+      if (!drawnMessages.some((m) => m.page === page && /was turned( to run)?|groups were turned|rows and columns (were )?swapped/.test(m.text))) {
+        toast("Already drawn as large as it can be: turning it to fit would not make it larger.", { icon: "info", seconds: 5 });
       }
     }
     sayMessages();

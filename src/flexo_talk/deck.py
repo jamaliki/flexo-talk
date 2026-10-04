@@ -270,6 +270,12 @@ def _words(value: object, what: str) -> str:
     return str(value)
 
 
+def _caption(value: object) -> str:
+    """A caption's words, on one line of markup ("" for none)."""
+
+    return "" if value is None else " ".join(_words(value, "caption").split())
+
+
 def _colour(value: object, what: str = "colour") -> str | None:
     """A colour: a palette role (accent, muted, ink...) or #rgb / #rrggbb."""
 
@@ -382,6 +388,8 @@ class _Figure:
     """What is wrong with it that it is drawn despite: said when the slide is drawn."""
     description: str = ""
     """What it shows, for whoever cannot see it; else it is said from its shapes' words."""
+    caption: tuple[TextRun, ...] = ()
+    """Words set under it, centred, a size smaller: its caption, part of it (Keynote's)."""
 
 
 @dataclass(slots=True)
@@ -390,6 +398,8 @@ class _Image:
     width: float | None = None
     description: str = ""
     """What the picture shows, in words, for whoever cannot see it: its alt text."""
+    caption: tuple[TextRun, ...] = ()
+    """Words set under it, centred, a size smaller: its caption, part of it."""
 
 
 @dataclass(slots=True)
@@ -410,6 +420,8 @@ class _Table:
     size: float | None = None
     ragged: bool = False
     """Whether its rows were written with different numbers of cells (the short filled)."""
+    caption: tuple[TextRun, ...] = ()
+    """Words set under it, centred, a size smaller: its caption, part of it."""
 
 
 @dataclass(slots=True)
@@ -758,6 +770,9 @@ class Region:
         self.sources: list[dict[str, object]] = []
         """Each block as a deck document writes it (see ``flexo_talk.document``)."""
         self.placeholders: set[int] = set()
+        self.builds: set[int] = set()
+        """The blocks (by index) that build in: each appears on a click of its own, in the
+        order they are on the slide (see ``build_in``)."""
         """The blocks (by index) that are placeholders: put there to be made one's own (the
         studio's sample table, figure or equation), drawn faintly while editing and never
         presented or exported until changed."""
@@ -1047,7 +1062,7 @@ class Region:
 
     def add(
         self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
-        description: str | None = None,
+        description: str | None = None, caption: str | None = None,
     ) -> Region:
         """An existing flexo figure, laid out again in the deck's theme for this place.
 
@@ -1058,26 +1073,42 @@ class Region:
         It is drawn as large as its place lets its words be the size of the words round
         it; ``width`` (points) draws it that wide instead, smaller or larger, as far as
         its place allows.
-        ``description`` says what it shows, as a picture's does.
+        ``description`` says what it shows, as a picture's does; ``caption`` is set under it.
         """
 
         width = _width(width)
         description = " ".join(str(description).split()) if description is not None else ""
         turn = None if turn is None else _flag(turn, "turn")
-        self.blocks.append(_Figure(figure, turn, width, description=description))
-        self._record("figure", None, turn=turn, width=width, description=description or None)
+        caption = _caption(caption)
+        self.blocks.append(_Figure(figure, turn, width, description=description, caption=inline(caption)))
+        self._record("figure", None, turn=turn, width=width, description=description or None, caption=caption or None)
         return self
 
-    def image(self, source: str | Path, *, width: float | None = None, description: str | None = None) -> Region:
+    def image(
+        self, source: str | Path, *, width: float | None = None, description: str | None = None,
+        caption: str | None = None,
+    ) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture.
         ``description`` says what it shows, for whoever cannot see it (a screen reader,
-        PowerPoint's alt text)."""
+        PowerPoint's alt text); ``caption`` is set under it, centred, a size smaller."""
 
         width = _width(width)
         description = " ".join(str(description).split()) if description is not None else ""
-        self.blocks.append(_Image(str(source), width, description))
-        self._record("image", str(source), width=width, description=description or None)
+        caption = _caption(caption)
+        self.blocks.append(_Image(str(source), width, description, inline(caption)))
+        self._record("image", str(source), width=width, description=description or None, caption=caption or None)
+        return self
+
+    def build_in(self) -> Region:
+        """The block added last appears on a click when presenting, after what is on the
+        slide before it (Keynote's Build In, Appear): a click in the PowerPoint, a page in
+        the PDF. A list's items revealed one at a time (``reveal``) appear by themselves."""
+
+        if not self.blocks:
+            raise ValueError("Add a block before building it in.")
+        self.builds.add(len(self.blocks) - 1)
+        self.sources[-1]["build"] = True
         return self
 
     def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
@@ -1096,6 +1127,7 @@ class Region:
         header: bool = True,
         align: str | Sequence[str] = "",
         size: float | None = None,
+        caption: str | None = None,
     ) -> Region:
         """A table, ruled as in a paper: a rule above, one under the header, one below.
 
@@ -1103,6 +1135,7 @@ class Region:
         the first row is the header unless ``header=False``. ``align`` gives each
         column ``start``, ``middle``, or ``end`` (``"lrr"`` also works); by
         default a column of numbers is set flush right and any other flush left.
+        ``caption`` is set under it, centred, a size smaller.
         """
 
         if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
@@ -1131,9 +1164,13 @@ class Region:
                 else "start"
                 for index in range(columns)
             )
-        self.blocks.append(_Table(cells, header, aligned, size, ragged))
+        caption = _caption(caption)
+        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption)))
         given = align if isinstance(align, str) else list(align)
-        self._record("table", _plain(rows), header=None if header else False, align=given or None, size=size)
+        self._record(
+            "table", _plain(rows), header=None if header else False, align=given or None, size=size,
+            caption=caption or None,
+        )
         return self
 
     def code(self, source: str, *, size: float | None = None) -> Region:
@@ -1343,13 +1380,22 @@ class Slide:
 
     def add(
         self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
-        description: str | None = None,
+        description: str | None = None, caption: str | None = None,
     ) -> Slide:
-        next(iter(self.regions.values())).add(figure, turn=turn, width=width, description=description)
+        next(iter(self.regions.values())).add(figure, turn=turn, width=width, description=description, caption=caption)
         return self
 
-    def image(self, source: str | Path, *, width: float | None = None, description: str | None = None) -> Slide:
-        next(iter(self.regions.values())).image(source, width=width, description=description)
+    def image(
+        self, source: str | Path, *, width: float | None = None, description: str | None = None,
+        caption: str | None = None,
+    ) -> Slide:
+        next(iter(self.regions.values())).image(source, width=width, description=description, caption=caption)
+        return self
+
+    def build_in(self) -> Slide:
+        """The block added last appears on a click (see ``Region.build_in``)."""
+
+        next(iter(self.regions.values())).build_in()
         return self
 
     def gallery(self, items, **options: object) -> Slide:
@@ -1806,6 +1852,8 @@ class ListLayout:
     numbered: bool = False
     reveal: bool = False
     """Whether the outer items appear one click (one PDF page) at a time."""
+    stepped: list[int] = field(default_factory=list)
+    """The step each outer item appears at, when revealed: the slide's builds' order."""
     plain: bool = False
     """Whether the items have no bullets or numbers: each starts at its level's indent."""
     number_room: float = 0.0
@@ -1953,6 +2001,8 @@ class RenderedSlide:
     settled: bool = True
     """False when a figure on it kept the layout it had while it was being edited, rather
     than the best one being found (``compose.EDITING``): drawn again once edits stop."""
+    builds: list[tuple[int, str]] = field(default_factory=list)
+    """``(step, id)`` of each block that builds in: the step it appears at."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

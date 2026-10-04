@@ -32,7 +32,7 @@ from flexo.lint import lint_compilation
 from flexo.render_common import displayed_alone, render_runs
 from flexo.structures import structure_problem
 from flexo.style import Palette, TypographyStyle
-from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, xml_document
+from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, svg_tag, xml_document
 from flexo.svg_resources import embed_fonts
 from flexo.text import TextMeasurer
 from flexo.themes import figure_palette, figure_style
@@ -148,10 +148,14 @@ class _Canvas:
         self.settled = True
         """False when a figure on the slide kept its layout while being edited (``EDITING``)."""
         self.steps = 1
+        self.built: list[tuple[int, str]] = []
+        """``(step, id)`` of each block that builds in (see ``Region.builds``)."""
         self.alone = False
         """Whether the block being set has its region to itself."""
         self.centred = True
         """Whether a picture is centred across its region, or starts at its edge (beside a list)."""
+        self.span = (0.0, 0.0)
+        """Where across the slide the picture or table set last is drawn: ``(left, width)``."""
         """What the build did that the author may want to know (a figure turned to fit)."""
         self._figures = 0
 
@@ -166,12 +170,13 @@ class _Canvas:
         *,
         balance: bool = True,
         title: bool = False,
+        family: str | None = None,
     ) -> TextMetrics:
         """Words set at ``size`` in ``width``. A list wraps greedily (``balance=False``),
         as the slide program that edits it will; a title or caption is balanced.
-        ``title`` sets them in the deck's title font."""
+        ``title`` sets them in the deck's title font, ``family`` in another."""
 
-        typography = self.deck.typography(size, title=title)
+        typography = self._typography(size, title, family)
         for run in runs:
             if run.math:
                 from flexo.texmath import problems_in
@@ -187,6 +192,10 @@ class _Canvas:
             runs, max_width=width + 1e-6 if width else width, weight=weight, balance=balance,
             break_words=True,
         )
+
+    def _typography(self, size: float, title: bool, family: str | None) -> TypographyStyle:
+        typography = self.deck.typography(size, title=title)
+        return typography.with_family(family) if family else typography
 
     def _drawable(self, runs: tuple[TextRun, ...], typography: object) -> tuple[TextRun, ...]:
         """The runs with what no font here draws (emoji, pictographs) left out, and said
@@ -259,10 +268,12 @@ class _Canvas:
         wrap: bool = True,
         fill: str | None = None,
         balance: bool = True,
+        family: str | None = None,
     ) -> float:
         """Set ``runs`` in ``box`` from its top; return the height they took.
         ``wrap=False`` keeps each line whole (code keeps its indentation);
-        ``balance=False`` fills each line before the next (words on a panel)."""
+        ``balance=False`` fills each line before the next (words on a panel);
+        ``family`` sets them in a family of their own."""
 
         if not runs:
             return 0.0
@@ -281,7 +292,9 @@ class _Canvas:
         if align == "start" and _rtl(runs):
             # Right-to-left words start at the right.
             align = "end"
-        metrics = self.measure(runs, size, box.width if wrap else None, weight, title=title, balance=balance)
+        metrics = self.measure(
+            runs, size, box.width if wrap else None, weight, title=title, balance=balance, family=family,
+        )
         x = {"start": box.x, "middle": box.x + box.width / 2.0, "end": box.x + box.width}[align]
         # A formula displayed on a line of its own ($$...$$) is centred in the room the words
         # are set in, as LaTeX centres one: in the PowerPoint, the box is that room too.
@@ -290,7 +303,7 @@ class _Canvas:
         # lines, which the slide program wraps as one paragraph, stay as they are).
         spaced = None if title else self.spaced(metrics, size, weight)
         if any(run.math for run in runs):
-            typography = self.deck.typography(size, title=title)
+            typography = self._typography(size, title, family)
             colour = fill or self.palette.get(role)
             self.worded.append(WordsLayout(
                 identifier, x, box.y + metrics.baseline, room or metrics.width, metrics.line_height,
@@ -299,7 +312,7 @@ class _Canvas:
                 heights=[one.line_height for one in spaced[0]] if spaced else None,
             ))
         options = dict(
-            typography=self.deck.typography(size, title=title), palette=self.palette, fill_role=role, fill=fill,
+            typography=self._typography(size, title, family), palette=self.palette, fill_role=role, fill=fill,
             anchor=None if align == "start" else align, weight=weight, width=room,
         )
         if spaced:
@@ -425,10 +438,52 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                 block.items = [(value if _worded(value) else STAT_HINT, label if _worded(label) else LABEL_HINT)
                                for value, label in block.items]
     try:
-        return _render_slide(deck, slide, empty)
+        # A figure that fails as it is laid out for its place (what flexo did not foresee)
+        # is a box where it would be, as one that can't be read is: the slide is drawn, and
+        # why is said under it.
+        failed: list[str] = []
+        for _ in range(sum(len(region.blocks) for region in slide.regions.values()) + 1):
+            try:
+                rendered = _render_slide(deck, slide, empty)
+            except _FigureFailed as failure:
+                swapped = _swap_failed(slide, failure, kept)
+                if not swapped:
+                    raise failure.error from None
+                failed.append(failure.diagnostic)
+                continue
+            rendered.diagnostics.extend(failed)
+            return rendered
+        raise RuntimeError("A slide's figures could not be drawn.")
     finally:
         for owner, attribute, value in kept:
             setattr(owner, attribute, value)
+
+
+FIGURE_FAILED = "This figure can\u2019t be drawn as it is"
+"""How a figure that failed as it was laid out for its slide is said (the export's note
+finds it by these words)."""
+
+
+class _FigureFailed(Exception):
+    """A figure that failed as it was laid out (``error``): what its box says, and what is
+    said under the slide (``diagnostic``)."""
+
+    def __init__(self, block: object, error: BaseException, said: str, diagnostic: str) -> None:
+        super().__init__(said)
+        self.block, self.error, self.said, self.diagnostic = block, error, said, diagnostic
+
+
+def _swap_failed(slide: Slide, failure: _FigureFailed, kept: list) -> bool:
+    """The failed figure's place given to a box saying why, until the slide is drawn."""
+
+    for region in slide.regions.values():
+        for index, block in enumerate(region.blocks):
+            if block is failure.block:
+                kept.append((region, "blocks", list(region.blocks)))
+                region.blocks = [*region.blocks[:index], _Missing("figure", "", said=failure.said),
+                                 *region.blocks[index + 1:]]
+                return True
+    return False
 
 
 STAT_HINT = (TextRun("93%"),)
@@ -536,7 +591,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
     return RenderedSlide(
         slide, xml_document(canvas.root), canvas.lists, list(dict.fromkeys(canvas.diagnostics)), canvas.tables,
         canvas.notes,
-        canvas.steps, canvas.held, canvas.worded, canvas.settled,
+        canvas.steps, canvas.held, canvas.worded, canvas.settled, builds=canvas.built,
     )
 
 
@@ -1115,8 +1170,9 @@ def _plan_figures(
     style = canvas.deck.style
     worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
     pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
-    # Words take what they need; pictures share the height that is left.
+    # Words take what they need (a picture's caption too); pictures share the height left.
     needed = sum(_height(canvas, block, box.width) for block in worded)
+    needed += sum(_captioned(canvas, block, box.width) for block in pictures)
     gaps = style.block_gap * max(0, len(blocks) - 1)
     room = box.height - needed - gaps
     share = room / len(pictures) if pictures else 0.0
@@ -1214,11 +1270,16 @@ def _region(
         elif isinstance(block, _Words):
             size = block.size or style.body_size
             role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
-            align = "middle" if placing == "captioned" and block.align == "start" else block.align
+            # Words under a picture (its caption) are centred under it, unless set otherwise.
+            given = index < len(region.sources) and "align" in region.sources[index]
+            align = "middle" if placing == "captioned" and not given else block.align
             top += canvas.words(
                 identifier, block.runs, Box(box.x, top, box.width, 0.0), size=size,
                 align=align, role=role, fill=fill,
             )
+            if align != block.align and (drawn := _drawn(canvas, identifier)) is not None:
+                # What is drawn, for an editor to say so.
+                drawn.set("data-flexo-align", align)
         elif isinstance(block, _Gallery):
             top += _gallery(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Figure):
@@ -1244,8 +1305,74 @@ def _region(
             top += _callout(canvas, identifier, block, Box(box.x, top, box.width, 0.0), least=least)
         elif isinstance(block, _Math):
             top += _equation(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+        if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
+            top += _caption(canvas, identifier, block.caption, box, top)
+        built = index in region.builds and index not in aside and not getattr(block, "reveal", False)
+        if built and (drawn := _drawn(canvas, identifier)) is not None:
+            # It appears on a click of its own, after what is on the slide before it.
+            canvas.steps += 1
+            canvas.built.append((canvas.steps, identifier))
+            drawn.set("data-flexo-step", str(canvas.steps))
         top += style.block_gap
     return used if used is not None else max(top - box.y - style.block_gap, 0.0)
+
+
+def _drawn(canvas: _Canvas, identifier: str) -> ET.Element | None:
+    """What a block was drawn as (its group, or its words), if anything."""
+
+    found = [item for item in canvas.layer if item.get("id") == identifier]
+    return found[-1] if found else None
+
+
+CAPTION_GAP = 0.5
+"""The room between a picture or table and its caption, in the caption's ems."""
+
+
+def _captioned(canvas: _Canvas, block, width: float) -> float:
+    """The room a picture's or table's caption takes under it, set ``width`` wide."""
+
+    runs = getattr(block, "caption", ())
+    if not runs or not isinstance(block, _Figure | _Image | _Table | _Missing):
+        return 0.0
+    size = canvas.deck.style.small_size
+    return size * CAPTION_GAP + canvas.measure(runs, size, width).height
+
+
+def _caption(canvas: _Canvas, identifier: str, runs: tuple[TextRun, ...], box: Box, top: float) -> float:
+    """A picture's or table's caption, under it, centred under it and a size smaller -- as
+    the words under a gallery's pictures are -- and part of it: in its group, so it is
+    chosen, moved, grouped in the PowerPoint and tagged in the PDF with it. Returns the
+    height it took."""
+
+    size = canvas.deck.style.small_size
+    left, width = canvas.span
+    middle = left + width / 2.0
+    # As wide as it can be while centred under it, within the region.
+    reach = max(min(middle - box.x, box.x + box.width - middle), width / 2.0, 1.0)
+    holder = _drawn(canvas, identifier)
+    if holder is None:
+        return 0.0
+    if local_name(holder.tag) != "g":
+        # A picture by itself: it and its caption, one group of the picture's id.
+        inner = ET.Element(holder.tag, dict(holder.attrib))
+        inner[:] = list(holder)
+        inner.set("id", f"{identifier}.picture")
+        holder.clear()
+        holder.tag = svg_tag("g")
+        holder.set("id", identifier)
+        holder.set("data-flexo-talk", "picture")
+        if inner.get("data-flexo-width"):
+            holder.set("data-flexo-width", str(inner.get("data-flexo-width")))
+        holder.append(inner)
+    found = re.fullmatch(r"translate\(([-\d.e]+),([-\d.e]+)\) scale\(([-\d.e]+)\)", holder.get("transform") or "")
+    if found and float(found.group(3)):
+        # Within a drawing placed scaled: undone, so the caption is set in the slide's units.
+        x, y, scale = (float(value) for value in found.groups())
+        holder = element(holder, "g", transform=f"scale({number(1.0 / scale)}) translate({number(-x)},{number(-y)})")
+    return size * CAPTION_GAP + canvas.words(
+        f"{identifier}.caption", runs, Box(middle - reach, top + size * CAPTION_GAP, 2.0 * reach, 0.0),
+        size=size, align="middle", parent=holder,
+    )
 
 
 PICTURE_LEAST = 120.0
@@ -1489,6 +1616,7 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     if canvas.alone:
         left = box.x + (box.width - total) / 2.0
     plan.x, plan.y, plan.id, plan.room = left, box.y, identifier, (box.x, box.width)
+    canvas.span = (left, total)
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="table")
     ink = canvas.palette.get("ink")
     mirrored = {"start": "end", "end": "start", "middle": "middle"}
@@ -1675,10 +1803,11 @@ def _quote(canvas: _Canvas, identifier: str, block: _Quote, box: Box, *, draw: b
     rtl = _rtl(block.runs)
     mark = (TextRun("\u201d" if rtl else "\u201c"),)
     big = size * 3.6
-    metrics = canvas.measure(mark, big, None, title=True)
+    family = _mark_family(canvas, mark[0].text, big)
+    metrics = canvas.measure(mark, big, None, title=True, family=family)
     # The mark hangs in the margin beside the words, as wide as its ink (a
     # slanted hand's reaches past its advance) and a gap.
-    hang = max(metrics.width, _ink_right(canvas, mark[0].text, big)) + size * 0.3
+    hang = max(metrics.width, _ink_right(canvas, mark[0].text, big, family)) + size * 0.3
     inner = Box(box.x if rtl else box.x + hang, box.y, box.width - hang, 0.0)
     words = canvas.measure(block.runs, size, inner.width, title=True)
     by_size = max(size * 0.62, style.small_size)
@@ -1692,8 +1821,16 @@ def _quote(canvas: _Canvas, identifier: str, block: _Quote, box: Box, *, draw: b
     top = box.y + words.baseline - cap + big_cap - metrics.baseline
     canvas.words(
         f"{identifier}.mark", mark, Box(box.x + box.width if rtl else box.x, top, 0.0, 0.0), size=big,
-        role="tone-1-stroke", title=True, parent=group, align="end" if rtl else "start",
+        role="tone-1-stroke", title=True, parent=group, align="end" if rtl else "start", family=family,
     )
+    drawn = group.find(f".//*[@id='{identifier}.mark']")
+    if family and drawn is not None:
+        # Its face, which the slide's own faces are not, carried with it to a browser.
+        from flexo.svg_resources import embed_fonts
+
+        typography = canvas.deck.typography(big, title=True).with_family(family)
+        style = replace(canvas.deck.layout_style, typography=typography)
+        embed_fonts(element(group, "style", type="text/css"), drawn, style)
     canvas.words(f"{identifier}.words", block.runs, inner, size=size, title=True, parent=group)
     if by is not None:
         canvas.words(
@@ -1703,14 +1840,36 @@ def _quote(canvas: _Canvas, identifier: str, block: _Quote, box: Box, *, draw: b
     return height
 
 
-def _ink_right(canvas: _Canvas, character: str, size: float) -> float:
-    """How far right of its pen position a character of the title face draws."""
+MARK_FAMILY = "Liberation Sans"
+"""The face a quotation's mark is drawn in where the title face's is no quotation mark
+to the eye: as Helvetica draws it, two curled commas."""
+
+
+def _mark_family(canvas: _Canvas, character: str, size: float) -> str | None:
+    """The family a quotation's large mark is drawn in where the title face's own would not
+    read as one: a mark of straight strokes only (Figtree's two wedges) reads as "//" set
+    so large. None: in the title face, whose mark is curled."""
+
+    from flexo.fonts import hb_font
+    from flexo.outline import _outline
+    from flexo.text import FontStack
+
+    face = FontStack(canvas.deck.typography(size, title=True)).face(400, False)
+    gid = hb_font(face, 400).get_nominal_glyph(ord(character))
+    if gid is None or any(segment.kind == "C" for segment in _outline(face, 400, gid)):
+        return None
+    return MARK_FAMILY
+
+
+def _ink_right(canvas: _Canvas, character: str, size: float, family: str | None = None) -> float:
+    """How far right of its pen position a character of the title face (or ``family``) draws."""
 
     import uharfbuzz as hb
     from flexo.fonts import hb_font, load_face
     from flexo.text import FontStack
 
-    face = FontStack(canvas.deck.typography(size, title=True)).face(400, False)
+    typography = canvas.deck.typography(size, title=True)
+    face = FontStack(typography.with_family(family) if family else typography).face(400, False)
     font = hb_font(face, 400)
     buffer = hb.Buffer()
     buffer.add_str(character)
@@ -1992,7 +2151,10 @@ def _height(canvas: _Canvas, block, width: float) -> float:
     if isinstance(block, _Math):
         return _equation(canvas, "", block, Box(0.0, 0.0, width, 0.0), draw=False)
     if isinstance(block, _Table):
-        return sum(_table_plan(canvas, block, width).heights)
+        return sum(_table_plan(canvas, block, width).heights) + _captioned(canvas, block, width)
+    if isinstance(block, _Figure | _Image | _Missing):
+        # A picture takes the room left over; its caption, what it needs.
+        return _captioned(canvas, block, width)
     if isinstance(block, _Words):
         size = block.size or style.body_size
         metrics = canvas.measure(block.runs, size, width)
@@ -2235,6 +2397,8 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
         item = element(group, "g", data__flexo__step=step + 1) if block.reveal else group
         if block.reveal:
             canvas.steps = max(canvas.steps, step + 1)
+            if level == 0:
+                layout.stepped.append(step + 1)
         offset = layout.offset(level)
         metrics = canvas.measure(runs, size, box.width - offset, balance=False)
         layout.line_height = metrics.line_height
@@ -2262,10 +2426,12 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
                 item, "circle", id=f"{identifier}.{index}.mark", cx=cx, cy=cy, r=radius,
                 fill=canvas.palette.get(role), data__flexo__fill=role,
             )
+        # A formula displayed in an item sits after its bullet, as the item's words do: centred
+        # in the column, it would stand far from the bullet it belongs to.
         render_runs(
             item, f"{identifier}.{index}", metrics, x=across(offset), y=baseline,
             typography=canvas.deck.typography(size), palette=canvas.palette, fill_role=ink_role, fill=ink_fill,
-            anchor="end" if rtl else None, width=box.width - offset,
+            anchor="end" if rtl else None,
         )
         layout.items.append((level, runs, baseline))
         layout.steps.append(metrics.line_height)
@@ -2293,6 +2459,9 @@ class _Prepared:
     size: float
     """The size of its words, unscaled."""
     id: str
+    turned: Any = None
+    """For a figure kept as its person arranged it (not turned to fit): how many times larger
+    it would be drawn turned to fit its place, asked only when it is drawn small."""
 
 
 LEGIBLE = 7.0
@@ -2405,8 +2574,33 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
     that sets its words at the deck's figure size, as written or turned, spaced
     as the theme says or closer -- whichever lets its words be largest there,
     though never larger than ``largest`` (the body text, or the words of the
-    figures beside it)."""
+    figures beside it). One that fails so is said (``_FigureFailed``), not the slide's end."""
 
+    try:
+        return _prepared(canvas, block, box, largest)
+    except Exception as error:
+        from flexo.studio.plain import explain
+
+        from flexo_talk.document import DeckDocumentError
+
+        if isinstance(error, DeckDocumentError):
+            raise  # (the deck's own: Python not yet trusted, a file that is not there)
+        spec = getattr(block.figure, "spec", block.figure)
+        said = f"{FIGURE_FAILED}: {_named(spec, explain(error))}"
+        raise _FigureFailed(block, error, said, f"{canvas.slide.id} {getattr(spec, 'id', 'figure')}: {said}") from error
+
+
+def _named(spec: object, said: str) -> str:
+    """What is said of a figure, its shapes named by their words, not their ids."""
+
+    for node in getattr(spec, "nodes", ()):
+        words = "".join(run.text for run in node.label).strip() if node.label else ""
+        if words and re.search(rf"(?<![\w.-]){re.escape(node.id)}(?![\w-])", said):
+            said = re.sub(rf"(?<![\w.-]){re.escape(node.id)}(?![\w-])", f"\u201c{words}\u201d", said)
+    return said
+
+
+def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
     deck = canvas.deck
     figure = made(block.figure)
     spec = figure.spec if isinstance(figure, flexo.Figure) else figure
@@ -2513,7 +2707,21 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
     # its words are let be: never as large as the slide's own title.
     heading = _heading_size(laid["svg"], base)
     most = min(largest / base, deck.style.body_size / heading) if heading else largest / base
-    return _Prepared(laid["svg"], left, top, width, height, most, base, spec.id)
+
+    def larger_turned() -> float:
+        # Laid out as the switch "Turn to Fit the Slide" would have it, for the same place.
+        try:
+            fit = _fit_in_box(
+                spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest, turn=True,
+            )
+        except Exception:
+            return 1.0
+        _, _, wide, high = fit.ink
+        now = min(box.width / max(width, 1e-6), box.height / max(height, 1e-6))
+        return min(box.width / max(wide, 1e-6), box.height / max(high, 1e-6)) / max(now, 1e-6)
+
+    turnable = larger_turned if block.turn is None and not turn else None
+    return _Prepared(laid["svg"], left, top, width, height, most, base, spec.id, turnable)
 
 
 def _heading_size(svg: str, base: float) -> float:
@@ -2622,18 +2830,26 @@ def _store_fit(key: tuple, laid: dict) -> None:
         return
 
 
+TURNED_LARGER = "Turned to fit the slide, it would be larger."
+"""Said of a figure drawn small as its person arranged it, that turning would draw larger:
+the studio offers to turn it (``figure.small.turn``)."""
+
+
 def _check_legible(canvas: _Canvas, prepared: dict[int, _Prepared], scales: dict[int, float]) -> None:
     for index, item in prepared.items():
         drawn = item.size * scales[index]
+        # Kept as arranged, it may be one turn from larger: said so, for the studio to offer it.
+        turning = drawn < SMALL and item.turned is not None and item.turned() > 1.15
         if drawn < LEGIBLE:
             canvas.diagnostics.append(
                 f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.1f} pt, too small to read. "
-                "Try giving the figure its own slide, a wider layout, or fewer shapes."
+                + (TURNED_LARGER if turning
+                   else "Try giving the figure its own slide, a wider layout, or fewer shapes.")
             )
         elif drawn < SMALL:
             canvas.notes.append(
                 f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.0f} pt, small for a talk. "
-                "More room or fewer shapes would make it larger."
+                + (TURNED_LARGER if turning else "More room or fewer shapes would make it larger.")
             )
 
 
@@ -2642,6 +2858,7 @@ def _place_figure(canvas: _Canvas, identifier: str, item: _Prepared, box: Box, s
 
     x = _across(canvas, box, item.width * scale) - item.left * scale
     y = box.y + (box.height - item.height * scale) / 2.0 - item.top * scale
+    canvas.span = (_across(canvas, box, item.width * scale), item.width * scale)
     inks = _slide_inks(item.svg, canvas.deck.palette, canvas.palette, black=False)
     _place_svg(canvas, identifier, inks, x, y, scale, item.width * scale)
     return box.height
@@ -3460,6 +3677,7 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
 
     style = canvas.deck.style
     height = min(box.height, max(box.width * 0.6, 40.0))
+    canvas.span = (box.x, box.width)
     ink = canvas.palette.get("muted-ink")
     # A figure that can't be drawn is a quiet box where it would be, presented and exported:
     # why is said on the editing stage alone, not to the audience.
@@ -3497,6 +3715,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
     # A width asked for is the most it takes: never wider than its place.
     scale = min(min(block.width or box.width, box.width) / natural_w, box.height / natural_h)
     width, height = natural_w * scale, natural_h * scale
+    canvas.span = (_across(canvas, box, width), width)
     if art.format == "svg" and _drawable(art.markup):
         # Vectors the drawing reader draws exactly: placed as shapes and text.
         view = [float(v) for v in re.split(r"[ ,]+", ET.fromstring(art.markup).get("viewBox", "").strip()) if v]

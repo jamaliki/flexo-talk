@@ -1400,7 +1400,7 @@ def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None
         for position, (level, runs, _baseline) in enumerate(layout.items):
             offset = layout.offset(level)
             mark_at = layout.mark_at(level)
-            pieces = _runs_xml(runs, typography, stack, layout.size, palette, ink, native=native)
+            pieces = _runs_xml(runs, typography, stack, layout.size, palette, ink, native=native, listed=True)
             spacing, before = rows[position]
             if layout.numbered:
                 # A native numbered list: the program numbers it, in the words' face, each
@@ -1454,9 +1454,13 @@ def add_list(tree: etree._Element, deck, layout, *, formulas: list | None = None
     return shape_id
 
 
-def _runs_xml(runs, typography, stack, size: float, palette, ink: str, *, native: bool, bold: bool = False) -> str:
+def _runs_xml(
+    runs, typography, stack, size: float, palette, ink: str, *, native: bool, bold: bool = False,
+    listed: bool = False,
+) -> str:
     """Runs of words as DrawingML runs: maths as PowerPoint's equations (``native``), or
-    as room for a drawn formula."""
+    as room for a drawn formula. A formula displayed in a list's item (``listed``) sits at
+    the item's start, after its bullet, as it is drawn; elsewhere it is centred."""
 
     from flexo.text import drawn_weight
 
@@ -1473,7 +1477,8 @@ def _runs_xml(runs, typography, stack, size: float, palette, ink: str, *, native
         if run.math:
             if native:
                 pieces.append(omml(run.math, size=size, colour=_colour(_ink_of(run, palette, ink)),
-                                   resolve=_resolver(palette), bold=weight >= 600))
+                                   resolve=_resolver(palette), bold=weight >= 600,
+                                   align="start" if listed else "middle"))
             else:
                 pieces.append(_room_for(run, typography, stack.face(weight, False), size, weight))
             continue
@@ -1727,6 +1732,10 @@ _PARTS = {"mark": "Quotation Mark", "by": "Attribution", "panel": "Panel", "bar"
 _PIECES = {"shaft": "Line", "wellplate": "Well Plate"}
 """What a part of a drawing is called where its id's end does not say it plainly."""
 
+_OF_PIECES = {"stem": "Stem of", "head": "Arrowhead of", "leader": "Leader to"}
+"""What a piece of a drawing's part is called, before the part's own name: a promoter's
+"Arrowhead of Part Ptrc", a site's "Leader to Site S65T"."""
+
 _GENERIC = {
     "path": "Shape", "rect": "Rectangle", "ellipse": "Oval", "text": "Text", "run": "Text", "picture": "Picture",
     "group": "Group", "arrowhead": "Arrowhead", "line": "Line",
@@ -1759,6 +1768,25 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
         properties.get("name"): words(properties.getparent().getparent())
         for properties in tree.iter(f"{{{_P}}}cNvPr") if (properties.get("name") or "").endswith(".label")
     }
+
+    def piece(name: str) -> str:
+        """A part of a drawn thing, by its id's end: "Axis", "Tick 50", "Feature β-barrel"
+        (its label's words), "Site S65T"; a piece of a part by the part ("Stem of Part
+        Ptrc", "Leader to Feature P1"); a part drawn in several pieces (a chain between the
+        domains on it) by the part. Nothing where the id does not say."""
+
+        whole, _, last = name.rpartition(".")
+        if last.isdigit() and whole:
+            return piece(whole)
+        whole = whole.removesuffix(".label")  # a leader to a part's name leads to the part
+        found = re.fullmatch(r"([a-z]+)(\d*)", last)
+        if found is None:
+            return ""
+        kind, number = found.groups()
+        if kind in _OF_PIECES and not number and re.search(r"\.[a-z]+\d+$", whole) and (part := piece(whole)):
+            return f"{_OF_PIECES[kind]} {part}"
+        label = labels.get(f"{name}.label", "") or (number if kind == "tick" else "")
+        return f"{_PIECES.get(kind, kind.capitalize())} {label}".strip()
     for properties in tree.iter(f"{{{_P}}}cNvPr"):
         name = properties.get("name") or ""
         element = properties.getparent().getparent()
@@ -1784,6 +1812,8 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
                 said = f"{kind} “{text}”" if text else kind
             elif name.endswith((".label", ".taken", ".given", ".back-label")) and words(element):
                 said = f"Label “{words(element)}”"
+            elif name.endswith(".caption") and words(element):
+                said = f"Caption “{words(element)}”"
             elif block and (part := _PARTS.get(name.rsplit(".", 1)[-1])):
                 said = part
             elif name.endswith((".body", ".molecule")):
@@ -1792,12 +1822,8 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
                 said = "Code"
             elif tag == "sp" and words(element):
                 said = f"Text “{words(element)}”"
-            elif owner(element) and (piece := re.fullmatch(r"([a-z]+)(\d*)", name.rsplit(".", 1)[-1])):
-                # A part of a drawn thing, by its id's end: "Axis", "Tick 50", "Feature
-                # β-barrel" (its label's words), "Site S65T".
-                kind, number = piece.groups()
-                label = labels.get(f"{name}.label", "") or (number if kind == "tick" else "")
-                said = f"{_PIECES.get(kind, kind.capitalize())} {label}".strip()
+            elif owner(element) and (part := piece(name)):
+                said = part
             else:
                 said = {"pic": "Picture", "grpSp": "Group", "cxnSp": "Line", "graphicFrame": "Table"}.get(tag, "Shape")
         elif name in {"canvas.background", "layer.background"}:
@@ -1806,37 +1832,60 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
             properties.set("name", said)
 
 
-def add_reveals(slide_element: etree._Element, reveals: list[tuple[int, list[tuple[int, int]]]]) -> None:
-    """Click-by-click builds: each ``(shape id, [(first, last) paragraph, ...])`` shows
-    its paragraph ranges one click at a time, as PowerPoint's "Appear" by paragraph."""
+def add_reveals(slide_element: etree._Element, clicks: list[list[tuple[int, tuple[int, int] | None]]]) -> None:
+    """Click-by-click builds, in the order of the clicks, each showing its shapes together:
+    ``(shape id, (first, last))`` a range of a shape's paragraphs, as PowerPoint's "Appear"
+    by paragraph; ``(shape id, None)`` a whole shape (a figure, a picture, a table), as its
+    "Appear"."""
 
-    if not reveals:
+    clicks = [click for click in clicks if click]
+    if not clicks:
         return
     ids = iter(range(3, 10_000))
-    clicks = []
-    for shape_id, ranges in reveals:
-        for first, last in ranges:
-            outer, inner, effect, behaviour = next(ids), next(ids), next(ids), next(ids)
-            clicks.append(
-                f'<p:par><p:cTn id="{outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst>'
-                f'<p:childTnLst><p:par><p:cTn id="{inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst>'
-                f'<p:childTnLst><p:par><p:cTn id="{effect}" presetID="1" presetClass="entr" presetSubtype="0" '
-                f'fill="hold" grpId="0" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst>'
-                f'<p:childTnLst><p:set><p:cBhvr><p:cTn id="{behaviour}" dur="1" fill="hold">'
+    effects = []
+    for click in clicks:
+        outer, inner = next(ids), next(ids)
+        shown = []
+        for order, (shape_id, paragraphs) in enumerate(click):
+            effect, behaviour = next(ids), next(ids)
+            within = f'<p:txEl><p:pRg st="{paragraphs[0]}" end="{paragraphs[1]}"/></p:txEl>' if paragraphs else ""
+            shown.append(
+                f'<p:par><p:cTn id="{effect}" presetID="1" presetClass="entr" presetSubtype="0" fill="hold" '
+                f'grpId="0" nodeType="{"withEffect" if order else "clickEffect"}"><p:stCondLst><p:cond delay="0"/>'
+                f'</p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="{behaviour}" dur="1" fill="hold">'
                 f'<p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{shape_id}">'
-                f'<p:txEl><p:pRg st="{first}" end="{last}"/></p:txEl></p:spTgt></p:tgtEl>'
+                f"{within}</p:spTgt></p:tgtEl>"
                 f"<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr>"
                 f'<p:to><p:strVal val="visible"/></p:to></p:set></p:childTnLst></p:cTn></p:par>'
-                f"</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>"
             )
-    builds = "".join(f'<p:bldP spid="{shape_id}" grpId="0" build="p"/>' for shape_id, _ in reveals)
+        effects.append(
+            f'<p:par><p:cTn id="{outer}" fill="hold"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst>'
+            f'<p:childTnLst><p:par><p:cTn id="{inner}" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst>'
+            f"<p:childTnLst>{''.join(shown)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par>"
+        )
+    # How each shape builds, as PowerPoint lists it: a list by its paragraphs, words as one,
+    # a table as one; a group or a picture needs no entry.
+    kinds = {
+        int(properties.get("id")): etree.QName(properties.getparent().getparent()).localname
+        for properties in slide_element.iter(f"{{{_P}}}cNvPr")
+    }
+    targets = [target for click in clicks for target in click]
+    builds = []
+    for shape_id in dict.fromkeys(shape_id for shape_id, _ in targets):
+        if any(paragraphs and one == shape_id for one, paragraphs in targets):
+            builds.append(f'<p:bldP spid="{shape_id}" grpId="0" build="p"/>')
+        elif kinds.get(shape_id) == "sp":
+            builds.append(f'<p:bldP spid="{shape_id}" grpId="0" animBg="1"/>')
+        elif kinds.get(shape_id) == "graphicFrame":
+            builds.append(f'<p:bldGraphic spid="{shape_id}" grpId="0"><p:bldAsOne/></p:bldGraphic>')
+    listed = f"<p:bldLst>{''.join(builds)}</p:bldLst>" if builds else ""
     timing = etree.fromstring(
         f'<p:timing {_NS}><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot">'
         f'<p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq">'
-        f"<p:childTnLst>{''.join(clicks)}</p:childTnLst></p:cTn>"
+        f"<p:childTnLst>{''.join(effects)}</p:childTnLst></p:cTn>"
         f'<p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst>'
         f'<p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst>'
-        f"</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst>{builds}</p:bldLst></p:timing>"
+        f"</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>{listed}</p:timing>"
     )
     # <p:timing> follows <p:clrMapOvr> (and <p:transition>) in a slide.
     slide_element.append(timing)

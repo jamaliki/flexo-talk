@@ -85,10 +85,10 @@ SCHEMA_VERSION = 1
 BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain"),
     "text": ("size", "align", "muted", "colour"),
-    "figure": ("turn", "width", "description"),
-    "image": ("width", "description"),
+    "figure": ("turn", "width", "description", "caption"),
+    "image": ("width", "description", "caption"),
     "plot": ("aspect",),
-    "table": ("header", "align", "size"),
+    "table": ("header", "align", "size", "caption"),
     "gallery": ("columns", "height", "crop", "size", "align"),
     "code": ("size",),
     "quote": ("by", "size"),
@@ -142,7 +142,13 @@ class MissingFile(DeckDocumentError):
 class InvalidFigure(DeckDocumentError):
     """A figure written in the deck that cannot be drawn as it is written (a span that ends
     before it starts): said in plain words, in a box where it would be, the rest of its
-    slide drawn."""
+    slide drawn. Where only some of its shapes can't be (a protein with no length), the
+    rest of it is drawn all the same (``drawn``), each of those a plain box of its words;
+    ``where`` then ends in ``#shape:what`` (its id, and what of it is wrong: ``length``)."""
+
+    def __init__(self, where: str, message: str, drawn: object = None) -> None:
+        super().__init__(where, message)
+        self.drawn = drawn
 
 
 class UntrustedCode(DeckDocumentError):
@@ -559,13 +565,16 @@ def add_block(
             where, f"This block names more than one kind ({', '.join(kinds)}). Name only one of {', '.join(BLOCKS)}."
         )
     kind = kinds[0]
-    # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``.
-    _only(block, (kind, *BLOCKS[kind], "placeholder"), f"{where} ({kind})")
+    # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``;
+    # and any may build in, appearing on a click (``build: true``): see ``Region.builds``.
+    _only(block, (kind, *BLOCKS[kind], "placeholder", "build"), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
     if not isinstance(block.get("placeholder", False), bool):
         raise DeckDocumentError(here, "placeholder must be true or false.")
+    if not isinstance(block.get("build", False), bool):
+        raise DeckDocumentError(here, "build must be true or false.")
     try:
         if kind == "bullets":
             items = value if isinstance(value, list) else [value]
@@ -623,11 +632,15 @@ def add_block(
         missing.append(error)
         region.stand_in(_STAND_INS[kind], error.name)
     except InvalidFigure as error:
-        # One figure that cannot be drawn is a box saying why, not a slide that is not drawn.
+        # One figure that cannot be drawn is a box saying why, not a slide that is not drawn
+        # -- or, where only some of its shapes can't be, drawn with plain boxes for those.
         if missing is None:
             raise
         missing.append(error)
-        region.stand_in("figure", "", said=error.message)
+        if error.drawn is not None:
+            region.add(error.drawn, **options)
+        else:
+            region.stand_in("figure", "", said=error.message)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError, OSError) as error:
@@ -635,6 +648,8 @@ def add_block(
     region.sources[-1] = dict(block)
     if block.get("placeholder") or (kind == "figure" and _lone_shape(value)):
         region.placeholders.add(len(region.blocks) - 1)
+    if block.get("build"):
+        region.builds.add(len(region.blocks) - 1)
 
 
 def _figure_problem(value: dict, error: Exception) -> str:
@@ -674,6 +689,44 @@ def _strays(value: object) -> tuple[list[str], list] | None:
     copy = {"nodes": value.get("nodes"), "edges": list(value["edges"])}
     said = astray(copy)
     return (said, copy["edges"]) if said else None
+
+
+def _stood_in(base: Path, value: dict, error: Exception) -> tuple[object, str, str] | None:
+    """A figure only some of whose shapes can't be drawn as written (a protein with no
+    length), drawn with each of those a plain box of its words -- the rest as written --
+    what to say of them, and the first of them (``id:what``, what of it is wrong); None
+    should it not draw even so."""
+
+    from flexo.diagnostics import FlexoError
+    from flexo.serialization import parse_figure
+
+    if not isinstance(error, FlexoError):
+        return None
+    nodes = [node for node in value.get("nodes") or [] if isinstance(node, dict)]
+    ids = {str(node.get("id")) for node in nodes}
+    wrong = [item for item in error.diagnostics if str(item.entity_id or "") in ids]
+    if not wrong or len(wrong) != len(error.diagnostics):
+        return None
+    bad = {str(item.entity_id) for item in wrong}
+    plain = [
+        {key: node[key] for key in ("id", "label") if key in node} if str(node.get("id")) in bad else node
+        for node in nodes
+    ]
+    try:
+        drawn = parse_figure(_beside(base, {**value, "nodes": plain}))
+    except Exception:
+        return None
+    names = {str(node.get("id")): re.sub(r"[*`$]", "", str(node.get("label") or "")).strip() for node in nodes}
+    said = []
+    for item in wrong:
+        message = item.message.strip()
+        first = message.split(" ", 1)[0]
+        lower = message if len(first) > 1 and first.isupper() else message[:1].lower() + message[1:]
+        name = names.get(str(item.entity_id))
+        called = f"\u201c{name}\u201d" if name else "A shape"
+        said.append(f"{called} can\u2019t be drawn yet: {lower} Choose it to set this in its panel.")
+    first = wrong[0]
+    return drawn, " ".join(said), f"{first.entity_id}:{str(first.code or '').rsplit('.', 1)[-1]}"
 
 
 def _lone_shape(value: object) -> str | None:
@@ -773,6 +826,10 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
         try:
             figure = parse_figure(_beside(base, value))
         except Exception as error:
+            stood = _stood_in(base, value, error)
+            if stood is not None:
+                drawn, said, shape = stood
+                raise InvalidFigure(f"{where} #{shape}", said, drawn) from error
             raise InvalidFigure(where, f"This figure can\u2019t be drawn: {_figure_problem(value, error)}") from error
         with _FIGURES_LOCK:
             _FIGURES[key] = figure
@@ -1252,6 +1309,7 @@ def save_document(document: dict[str, Any], destination: str | Path, *, previous
     else:
         if previous is None and path.is_file():
             previous = path.read_text(encoding="utf-8")
-        text = rewrite(previous, _tidied(document), dump_document)
+        # (By its name: what was deleted from this file, and only this one, comes back as it was.)
+        text = rewrite(previous, _tidied(document), dump_document, name=str(path.resolve()))
     path.write_text(text, encoding="utf-8")
     return path

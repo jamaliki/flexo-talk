@@ -168,7 +168,7 @@ def write_pptx(
             _describe(tree, item.slide)
             if editable_maths:
                 editable_maths_of(tree, drawing, item.worded, deck, deck.palette)
-            reveals = []
+            clicks: list[tuple[int, int, tuple[int, int] | None]] = []
             for layout in item.lists:
                 shape_id = add_list(tree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths)
                 outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
@@ -177,12 +177,23 @@ def write_pptx(
                     # are there from the start, as in the PDF.
                     ends = [*outer[1:], len(layout.items)]
                     ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
-                    reveals.append((shape_id, ranges))
+                    steps = layout.stepped if len(layout.stepped) == len(ranges) else range(len(ranges))
+                    clicks += [(step, shape_id, one) for step, one in zip(steps, ranges, strict=True)]
             for layout in item.tables:
                 add_table(tree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths)
+            # A block that builds in appears whole, on its click: a table with its caption.
+            # Only a shape on the slide itself: one within a group is not animated by itself.
+            shapes: dict[str, int] = {}
+            for child in tree:
+                if (named := next(child.iter(f"{{{_PML}}}cNvPr"), None)) is not None:
+                    shapes.setdefault(named.get("name", ""), int(named.get("id", "0")))
+            clicks += [(step, shapes[shown], None) for step, name in item.builds
+                       for shown in (name, f"{name}.caption") if shown in shapes]
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
-            add_reveals(slide._element, reveals)
+            steps = sorted({step for step, _, _ in clicks})
+            add_reveals(slide._element, [[(shape_id, one) for at, shape_id, one in clicks if at == step]
+                                         for step in steps])
             _read_in_order(tree, item.slide)
             # Last, as nothing more finds a shape by its id: each named as a person would.
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
@@ -207,18 +218,19 @@ def _read_in_order(tree, slide: Slide) -> None:
     regions = {name: order for order, name in enumerate(slide.regions)}
     block = re.compile(rf"{re.escape(slide.id)}\.([^.]+)\.(\d+)(?:\..*)?")
 
-    def rank(child) -> tuple[int, int, int]:
+    def rank(child) -> tuple[int, int, int, bool]:
         named = next(child.iter(f"{{{_PML}}}cNvPr"), None)
         name = named.get("name", "") if named is not None else ""
         rest = name.removeprefix(f"{slide.id}.")
         if rest in {"number", "footer"}:
-            return 3, 0, 0
+            return 3, 0, 0, False
         if rest.startswith("footnote"):
-            return 2, 0, 0
+            return 2, 0, 0, False
         found = block.fullmatch(name)
         if found and found.group(1) in regions:
-            return 1, regions[found.group(1)], int(found.group(2))
-        return 0, 0, 0
+            # A table's caption after the table, as it is drawn under it.
+            return 1, regions[found.group(1)], int(found.group(2)), name.endswith(".caption")
+        return 0, 0, 0, False
 
     shapes = [child for child in tree if child.tag not in {f"{{{_PML}}}nvGrpSpPr", f"{{{_PML}}}grpSpPr"}]
     for child in sorted(shapes, key=rank):
@@ -453,7 +465,9 @@ def _describe(tree: etree._Element, slide: Slide) -> None:
 
     described = _descriptions(slide)
     for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
-        if text := described.get(properties.get("name", "")):
+        name = properties.get("name", "")
+        # A picture with a caption is grouped with it: the picture is described as well.
+        if text := described.get(name) or described.get(name.removesuffix(".picture")):
             properties.set("descr", text)
 
 
@@ -487,7 +501,8 @@ _BLOCK_NAMES = {
 """What PowerPoint's Selection Pane calls each kind of block on a slide."""
 
 _BLOCKS = {"figure": "Figure", "bullets": "L", "table": "Table", "code": "P", "quote": "BlockQuote",
-           "stats": "Div", "callout": "Div", "gallery": "Div", "missing": "Div", "invalid": "Div"}
+           "stats": "Div", "callout": "Div", "gallery": "Div", "missing": "Div", "invalid": "Div",
+           "picture": "Figure"}
 """The structure element each kind of block on a slide is, in a tagged PDF."""
 
 
@@ -537,11 +552,16 @@ def _tagger(rendered: list[RenderedSlide]) -> Tagger:
         ident = getattr(item, "id", None) or ""
         role = ident.split(".", 1)[1] if "." in ident else ""
         inside = within.path[-1][0] if within is not None and within.path else None
+        owner = holder(within, "Figure") or holder(within, "Table")
+        if owner is not None and ident == f"{owner[-1][1]}.caption":
+            # A picture's or table's caption: its own, read with it.
+            return Tag((*owner, ("Caption", ident)))
         if isinstance(item, Group):
             block = _BLOCKS.get(item.data.get("data-flexo-talk", ""))
             if block is not None and inside not in {"Figure", "Formula"}:
-                # A figure is described by its words, and by what each molecule in it shows.
-                alt = described.get(ident, "A figure")
+                # A figure is described by its words, and by what each molecule in it shows;
+                # a picture, by what it is said to show.
+                alt = described.get(ident, "A figure" if item.data.get("data-flexo-talk") != "picture" else "")
                 alt = " ".join([alt, *(text for key, text in described.items()
                                        if key.startswith(f"{ident}.") and text not in alt)])
                 return Tag((*(within.path if within else ()), (block, ident)), alt=alt if block == "Figure" else "")
@@ -578,7 +598,7 @@ def _tagger(rendered: list[RenderedSlide]) -> Tagger:
             return ARTIFACT
         # Words: a heading, a page's furniture, an item of a list, a cell of a table; the
         # words within words (a title's, with a formula in it) are theirs.
-        if inside in {"Figure", "Formula", "H1", "P", "Lbl", "LBody", "TH", "TD"}:
+        if inside in {"Figure", "Formula", "H1", "P", "Lbl", "LBody", "TH", "TD", "Caption"}:
             return None
         if role in {"number", "footer"} or (role.endswith(".mark") and holder(within, "L") is None):
             # A page's number and footer, a quotation's mark: furniture, not words to read.
@@ -713,6 +733,8 @@ def _drop_lists(group: Group, found: dict[str, list] | None = None) -> dict[str,
         if isinstance(item, Group) and item.data.get("data-flexo-talk") in {"bullets", "table"}:
             if item.id:
                 found[item.id] = _formulas(item)
+            # A table's caption stays, words after the table set natively.
+            kept += [child for child in item.items if item.id and getattr(child, "id", None) == f"{item.id}.caption"]
         else:
             kept.append(item)
     group.items = kept
