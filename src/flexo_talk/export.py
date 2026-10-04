@@ -183,6 +183,7 @@ def write_pptx(
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
             add_reveals(slide._element, reveals)
+            _read_in_order(tree, item.slide.id)
             # Last, as nothing more finds a shape by its id: each named as a person would.
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
                                for region in item.slide.regions.values() for index, block in enumerate(region.blocks)})
@@ -193,6 +194,21 @@ def write_pptx(
 
 
 _PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
+
+
+def _read_in_order(tree, slide_id: str) -> None:
+    """A slide's shapes in the order they are read (a slide program's Selection Pane, a
+    screen reader): its body's lists and tables where they are drawn, not after it all, and
+    its footnotes, then its number and footer, last -- as the PDF reads them."""
+
+    def rank(child) -> int:
+        named = next(child.iter(f"{{{_PML}}}cNvPr"), None)
+        rest = (named.get("name", "") if named is not None else "").removeprefix(f"{slide_id}.")
+        return 2 if rest in {"number", "footer"} else 1 if rest.startswith("footnote") else 0
+
+    shapes = [child for child in tree if child.tag not in {f"{{{_PML}}}nvGrpSpPr", f"{{{_PML}}}grpSpPr"}]
+    for child in sorted(shapes, key=rank):
+        tree.append(child)
 
 
 def _spec_of(block: _Figure):
@@ -440,8 +456,16 @@ def _tagger(rendered: list[RenderedSlide]) -> Tagger:
             # Words with a formula in them (a title's, a paragraph's, an item's) are tagged as
             # words are, the formula read in its place.
             kinds = {"data-flexo-talk", "data-flexo-entity", "data-flexo-math"}
-            worded = not kinds & set(item.data) and any(
-                isinstance(child, Group) and "data-flexo-math" in child.data for child in item.items)
+
+            def formula_among(group: Group) -> bool:
+                # In its words, or in one of their lines (``{id}.1``) set each on its own.
+                return any(isinstance(child, Group) and (
+                    "data-flexo-math" in child.data or (
+                        bool(group.id) and (child.id or "").startswith(f"{group.id}.")
+                        and not kinds & set(child.data) and formula_among(child)))
+                    for child in group.items)
+
+            worded = not kinds & set(item.data) and formula_among(item)
             if not (worded and role):
                 return None
         if isinstance(item, Shape):

@@ -380,6 +380,9 @@ function dress() {
 .ss-slide { width: min(100cqw, calc(100cqh * var(--ratio))); aspect-ratio: var(--ratio); background: #fff; line-height: 0; overflow: hidden; }
 .ss-slide svg { display: block; width: 100%; height: 100%; text-rendering: geometricPrecision; }
 .ss-slide [data-flexo-placeholder] { display: none; }
+/* A slide holding empty words drawn as presented too (the studio's _presentable): that one. */
+.ss-slide [data-flexo-editing] { display: none; }
+.ss-slide [data-flexo-presented] { display: inline; }
 .ss-end { position: absolute; inset: 0; display: grid; place-items: center; color: #8c8c8c; font-size: 17px; }
 /* A heads-up over the slide, as Keynote's: dark and solid enough to read on any slide. */
 .ss-hint { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); background: rgba(28,28,30,0.86);

@@ -462,6 +462,8 @@ class _Missing:
     """``picture``, ``figure`` or ``plot``."""
     name: str
     """The file, as the document names it."""
+    said: str | None = None
+    """What is wrong, when it is not a missing file (a figure that cannot be drawn)."""
 
 
 @dataclass(slots=True)
@@ -685,10 +687,13 @@ def _displayed_apart(runs: list[TextRun]) -> tuple[TextRun, ...]:
     laid: list[TextRun] = []
     for at, run in enumerate(runs):
         if run.math.startswith("\\displaystyle"):
-            if laid and laid[-1].text != "\n":
+            # Broken before and after, unless the words are broken there already (a new
+            # line typed before or after it): never a line left empty.
+            if laid and not laid[-1].text.rstrip(" ").endswith("\n"):
                 laid.append(TextRun("\n"))
             laid.append(run)
-            if any(later.text.strip() or later.math for later in runs[at + 1 :]):
+            after = runs[at + 1].text.lstrip(" ") if at + 1 < len(runs) else ""
+            if not after.startswith("\n") and any(later.text.strip() or later.math for later in runs[at + 1 :]):
                 laid.append(TextRun("\n"))
             continue
         if at and runs[at - 1].math.startswith("\\displaystyle"):
@@ -1070,11 +1075,12 @@ class Region:
         self._record("image", str(source), width=width, description=description or None)
         return self
 
-    def stand_in(self, what: str, name: str) -> Region:
+    def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
         """A box where the ``what`` (picture, figure, plot) in the file ``name`` would be,
-        saying it is missing: the rest of the slide is drawn while the file is not there."""
+        saying it is missing -- or what else is wrong (``said``): the rest of the slide is
+        drawn meanwhile."""
 
-        self.blocks.append(_Missing(what, name))
+        self.blocks.append(_Missing(what, name, said))
         self.sources.append({})
         return self
 
@@ -1918,6 +1924,10 @@ class WordsLayout:
     family: str = ""
     weight: int | None = None
     fill: str = "#000000"
+    downs: list[float] | None = None
+    """Each line's baseline below the first's, where the lines are not evenly spaced (a tall
+    formula opens only its own line); ``heights`` is then each line's own height."""
+    heights: list[float] | None = None
 
 
 @dataclass(slots=True)

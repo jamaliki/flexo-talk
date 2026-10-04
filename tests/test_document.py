@@ -235,6 +235,38 @@ def test_a_missing_picture_or_figure_file_stands_aside_and_its_slide_is_drawn(tm
         deck_from_document(document, tmp_path)
 
 
+def test_a_figure_that_cannot_be_drawn_says_why_in_its_box_and_its_slide_is_drawn(tmp_path: Path) -> None:
+    from flexo.confine import folder_root
+
+    from flexo_talk.document import InvalidFigure
+
+    timeline = {"id": "t", "kind": "timeline", "label": "Infection", "properties": {
+        "events": [{"at": 0}, {"at": 10}], "spans": [{"start": 5, "end": 5, "label": "Span"}]}}
+    kind = DeckKind()
+    document = {"deck": {}, "slides": [
+        {"title": "One infection", "body": [
+            {"bullets": ["A point"]}, {"figure": {"figure": {"id": "f"}, "nodes": [timeline]}},
+        ]},
+    ]}
+    root = folder_root.set(tmp_path)
+    try:
+        drawing = kind.draw(document, tmp_path, {})
+    finally:
+        folder_root.reset(root)
+    # The slide is drawn, its title and words with it; the figure's box says what is wrong,
+    # in words, naming the shape by its own.
+    (page,) = drawing.pages
+    assert not page.extra["error"]
+    said = "In “Infection”, span 1 ends where it starts (5): it needs a later end."
+    shown = page.svg.replace("&#8220;", "“").replace("&#8221;", "”")
+    assert "One infection" in shown and "A point" in shown and said in shown
+    (message,) = [message for message in drawing.messages if message.severity == "error"]
+    assert message.text == f"This figure can't be drawn: {said}"
+    # Built for real, it is an error still.
+    with pytest.raises(InvalidFigure):
+        deck_from_document(document, tmp_path)
+
+
 def test_a_message_says_where_as_a_person_would() -> None:
     from flexo_talk.studio import _place
 
@@ -317,6 +349,14 @@ def test_the_studio_names_what_a_change_did_slide_by_slide() -> None:
     resaid = {"slides": [{"layout": "statement", "words": "Go on", "by": "Ada L."}]}
     assert [note["text"] for note in kind.describe(said, resaid)] == [
         "edited the statement and the attribution on slide 1"]
+    # Its typing undone, an object still there is emptied, not deleted; a quote's attribution
+    # is the attribution.
+    typed = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"table": [["a", "b"]]}]}]}
+    emptied = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"table": [["", ""]]}]}]}
+    assert [note["text"] for note in kind.describe(typed, emptied)] == ["emptied the table on slide 1"]
+    quoted = {"slides": [{"title": "Q", "body": [{"quote": "Words", "by": "Ada"}]}]}
+    requoted = {"slides": [{"title": "Q", "body": [{"quote": "Words", "by": "Ada Lovelace"}]}]}
+    assert [note["text"] for note in kind.describe(quoted, requoted)] == ["edited the attribution on slide 1"]
 
 
 def test_an_agent_gets_a_guide_and_a_quick_check() -> None:
@@ -1010,6 +1050,60 @@ def test_a_part_dragged_on_a_slide_swaps_goes_between_or_goes_home() -> None:
     ]
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_several_parts_dragged_together_land_together_in_their_order() -> None:
+    script = Path(__file__).parents[1] / "src/flexo_talk/studio/static/slidedrop.js"
+
+    def box(left, top, right, bottom):
+        return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+    # Four parts down a body, the first and the third chosen; the first grabbed.
+    body = [
+        {
+            "key": "body",
+            "room": box(0, 0, 400, 400),
+            "blocks": [{"index": n, "box": box(0, n * 100, 300, n * 100 + 60)} for n in range(4)],
+        }
+    ]
+    chosen = [{"region": "body", "index": 0}, {"region": "body", "index": 2}]
+    grabbed = chosen[0]
+    drops = [
+        {"x": 100, "y": 135},  # the middle of the second, a little low: after it, never swapped
+        {"x": 100, "y": 225},  # over the third, one of them: home
+        {"x": 100, "y": 395},  # below them all
+    ]
+    code = (
+        f"import {{ groupDrop, gatherPlan }} from {json.dumps(script.as_uri())};\n"
+        f"const body = {json.dumps(body)}, chosen = {json.dumps(chosen)}, grabbed = {json.dumps(grabbed)};\n"
+        f"const out = {json.dumps(drops)}.map((point) => groupDrop(body, grabbed, chosen, point));\n"
+        "out.push(gatherPlan({ body: 4 }, chosen, { kind: 'between', region: 'body', index: 4 }));\n"
+        "const across = [{ region: 'left', index: 0 }, { region: 'right', index: 0 }];\n"
+        "out.push(gatherPlan({ left: 2, right: 1 }, across, { kind: 'between', region: 'left', index: 2 }));\n"
+        "console.log(JSON.stringify(out));\n"
+    )
+    done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
+    found = json.loads(done.stdout)
+    assert found[:3] == [
+        {"kind": "between", "region": "body", "index": 2},
+        {"kind": "home"},
+        {"kind": "between", "region": "body", "index": 4},
+    ]
+    place = lambda region, index: {"region": region, "index": index}  # noqa: E731
+    # Let go below them all: the two not chosen rise, the chosen two follow in their order.
+    assert found[3] == [
+        [place("body", 1), place("body", 0)],
+        [place("body", 3), place("body", 1)],
+        [place("body", 0), place("body", 2)],
+        [place("body", 2), place("body", 3)],
+    ]
+    # From two columns to the end of the left: the right's part follows the left's.
+    assert found[4] == [
+        [place("left", 1), place("left", 0)],
+        [place("left", 0), place("left", 1)],
+        [place("right", 0), place("left", 2)],
+    ]
+
+
 def test_each_region_of_a_slide_says_where_its_room_is_empty_or_not(tmp_path: Path) -> None:
     deck = deck_from_document(
         {
@@ -1068,9 +1162,14 @@ def test_an_empty_title_or_text_holds_its_place_and_shows_only_in_the_studio() -
     assert re.findall(r'data-flexo-placeholder="([^"]+)"', studio[1]) == ["Title", "Subtitle"]
     assert "data-flexo-placeholder" not in exported[0] + exported[1]
     assert "Title" not in exported[1] and ">Text<" not in exported[0]
-    # What follows the empty ones is where it is in the studio.
+    # Words left empty keep their place while edited (they are typed in there), and take
+    # none when presented or exported: what follows them is where it would be without them.
     kept = r'<text[^>]*y="([\d.]+)"[^>]*>(?:(?!</text>).)*Kept'
-    assert re.findall(kept, exported[0], re.S) == re.findall(kept, studio[0], re.S)
+    alone = deck_from_document(yaml.safe_load(
+        'deck: {id: holds}\nslides:\n  - title: ""\n    body: [{text: Kept}]\n'), Path("."))
+    shown = re.findall(kept, exported[0], re.S)
+    assert shown == re.findall(kept, render_slide(alone, alone.slides[0]).svg, re.S)
+    assert float(shown[0]) < float(re.findall(kept, studio[0], re.S)[0])
     assert not [layout for layout in render_slide(deck, deck.slides[0]).lists if layout.id == "slide1.body.0"]
 
 
@@ -1250,6 +1349,58 @@ def test_a_placeholder_takes_no_room_from_the_words_and_a_fit_note_names_what_is
     ]
 
 
+def test_an_empty_placeholder_takes_no_room_from_what_is_there_when_presented() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    nodes = [{"id": "a", "label": "Repressor"}, {"id": "b", "label": "Operator"}]
+    real = {"figure": {"figure": {"id": "r"}, "nodes": nodes, "edges": [{"from": "a", "to": "b"}]}}
+    empty = {"figure": {"figure": {"id": "e"}, "nodes": [{"id": "shape", "label": ""}]}}
+    document = {"deck": {"id": "room"}, "slides": [
+        {"layout": "figure", "title": "With", "body": [empty, real]},
+        {"layout": "figure", "title": "Alone", "body": [real]},
+    ]}
+    deck = deck_from_document(document, Path("."))
+
+    def placed(slide, editing: bool) -> list[tuple[str, str]]:
+        token = PLACEHOLDERS.set(editing)
+        try:
+            svg = render_slide(deck, slide).svg
+        finally:
+            PLACEHOLDERS.reset(token)
+        return re.findall(r'<g id="slide\d\.body\.(\d)" transform="([^"]+)"', svg)
+
+    alone = placed(deck.slides[1], False)
+    # Exported, the figure is as large as it is alone, with no empty band where the sample was.
+    assert placed(deck.slides[0], False) == [("1", alone[0][1])]
+    # While editing too (Present shows that drawing, the sample hidden): the sample is drawn
+    # after it, taking none of its room.
+    assert placed(deck.slides[0], True)[0] == ("1", alone[0][1])
+    assert [index for index, _ in placed(deck.slides[0], True)] == ["1", "0"]
+
+
+def test_a_slide_holding_empty_words_is_presented_as_it_is_exported(tmp_path: Path) -> None:
+    nodes = [{"id": "a", "label": "Repressor"}, {"id": "b", "label": "Operator"}]
+    figure = {"figure": {"figure": {"id": "r"}, "nodes": nodes, "edges": [{"from": "a", "to": "b"}]}}
+    document = {"deck": {"id": "shown"}, "slides": [
+        {"title": "Held", "body": [{"text": ""}, figure]},
+        {"title": "Plain", "body": [figure]},
+    ]}
+    held, plain = (page.svg for page in DeckKind().draw(document, tmp_path, {"settle": True}).pages)
+    deck = deck_from_document(document, tmp_path)
+    exported = render_slide(deck, deck.slides[0])
+
+    def placed(svg: str, prefix: str = "") -> list[str]:
+        return re.findall(rf'<g id="{prefix}slide\d\.body\.1" transform="([^"]+)"', svg)
+
+    # Edited, the empty text holds its place; presented, the slide as exported is shown
+    # (present.js shows the drawing marked presented), the figure where the PDF has it.
+    exported_at = re.findall(r'<g id="slide1\.body\.1" transform="([^"]+)"', exported.svg)
+    assert placed(held) != exported_at and placed(held, "presented-") == exported_at
+    assert 'data-flexo-editing=""' in held and 'display="none" data-flexo-presented=""' in held
+    # A slide that presents as it is edited is drawn once.
+    assert "data-flexo-presented" not in plain
+
+
 def test_a_new_table_equation_or_figure_starts_empty_and_shows_only_while_editing() -> None:
     from flexo_talk.compose import PLACEHOLDERS
 
@@ -1269,8 +1420,9 @@ def test_a_new_table_equation_or_figure_starts_empty_and_shows_only_while_editin
         PLACEHOLDERS.reset(token)
     placed = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', studio)
     # (And in a table typed in, its empty header cell hints its column, as it is typed in.)
-    assert placed == [("slide1.body.0", "Table"), ("slide1.body.1", "Equation"), ("slide1.body.2", "Placeholder"),
-                      ("slide1.body.3.0.1.hint", "Column")]
+    # A sample figure is drawn after what is really there, taking none of its room.
+    assert sorted(placed) == [("slide1.body.0", "Table"), ("slide1.body.1", "Equation"),
+                              ("slide1.body.2", "Placeholder"), ("slide1.body.3.0.1.hint", "Column")]
     # Hints while editing ("Column 1", the first step's "Start"); none of it presented.
     assert ">Column 1<" in studio and ">Start<" in studio
     assert ">Column 1<" not in exported.svg and ">Start<" not in exported.svg and ">Column 2<" not in exported.svg
@@ -1501,3 +1653,55 @@ def test_a_merged_slide_keeps_its_objects_in_places_its_layout_has() -> None:
     assert "body" not in slide
     assert slide["left"] == [{"text": "First."}, {"code": "x = 1"}]
     assert slide["right"] == [{"text": "Second paragraph. alice keeps"}]
+
+
+HAND_WRITTEN = (
+    "# Deck notes: three slides, short.\n"
+    "schema_version: 1\n"
+    "deck:\n  theme: paper\n  id: talk\n"
+    "slides:\n"
+    '- title: "The pipeline"\n  body:\n  - bullets:\n    - Generate   # agent: tighten this\n    - Design\n'
+    "\n# The question comes last.\n"
+    "- title: 'The question'\n  body:\n  - text: Why\n"
+)
+
+
+def test_a_deck_written_again_keeps_its_comments_quoting_and_order(tmp_path: Path) -> None:
+    from flexo_talk.document import load_document, save_document
+
+    path = tmp_path / "talk.yaml"
+    path.write_text(HAND_WRITTEN, encoding="utf-8")
+    document = load_document(path)
+    document["slides"][1]["body"][0]["text"] = "Why it matters"
+    save_document(document, path)
+    # Only the words changed are written otherwise: the comments (a line's own, one over a
+    # slide, one over the whole), the quotes and the deck's keys in their order stay.
+    assert path.read_text(encoding="utf-8") == HAND_WRITTEN.replace("text: Why\n", "text: Why it matters\n")
+    # A slide added is written as the studio writes one; a slide taken out takes its own
+    # lines, and the comment over the next one stays with it.
+    document["slides"].append({"title": "Last", "body": [{"text": "End"}]})
+    del document["slides"][0]
+    save_document(document, path)
+    written = path.read_text(encoding="utf-8")
+    assert written.startswith(HAND_WRITTEN.split("slides:")[0])
+    assert "# The question comes last.\n- title: 'The question'" in written
+    assert "The pipeline" not in written and written.endswith("- title: Last\n  body:\n  - text: End\n")
+    assert yaml.safe_load(written)["slides"] == document["slides"]
+
+
+def test_the_studio_writes_a_deck_over_the_words_it_read(tmp_path: Path) -> None:
+    from flexo.studio.workspace import Workspace
+
+    (tmp_path / "talk.yaml").write_text(HAND_WRITTEN, encoding="utf-8")
+    workspace = Workspace(tmp_path)
+    try:
+        doc = workspace.open("talk.yaml")
+        changed = json.loads(json.dumps(doc.document))
+        changed["slides"][0]["title"] = "The pipeline, in short"
+        doc.update(changed, doc.version, {"id": "ada", "kind": "person"})
+        workspace.flush()
+        written = (tmp_path / "talk.yaml").read_text(encoding="utf-8")
+        # Its words changed in the quotes they were written in; the rest as it was.
+        assert written == HAND_WRITTEN.replace('"The pipeline"', '"The pipeline, in short"')
+    finally:
+        workspace.close()

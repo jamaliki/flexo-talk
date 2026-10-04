@@ -72,3 +72,33 @@ export function blockPlan(counts, from, at) {
   rearrange(lists, from, at);
   return Object.entries(lists).flatMap(([region, list]) => list.map((old, index) => [old, { region, index }]));
 }
+
+// Several parts dragged together (`all`, in the slide's order, `from` the one grabbed among
+// them): where they would go, as blockDrop finds it for the one grabbed -- but over the
+// middle of a part not among them, before or after it, as the pointer is above or below its
+// middle (several are never swapped with one); over one of them, home.
+export function groupDrop(regions, from, all, point) {
+  const at = blockDrop(regions, from, point);
+  if (!at || at.kind !== "swap") return at;
+  if (all.some((part) => part.region === at.region && part.index === at.index)) return { kind: "home" };
+  const box = regions.find((region) => region.key === at.region)?.blocks.find((block) => block.index === at.index)?.box;
+  return { kind: "between", region: at.region, index: at.index + (box && point.y > (box.top + box.bottom) / 2 ? 1 : 0) };
+}
+
+// Letting them go at `at`: each taken out of its list, and all put in together where they
+// go, in their order (`at.index` counting them where they were, as for one).
+export function gather(lists, all, at) {
+  const parts = all.map((part) => lists[part.region][part.index]);
+  const before = all.filter((part) => part.region === at.region && part.index < at.index).length;
+  for (const part of [...all].sort((a, b) => b.index - a.index)) lists[part.region].splice(part.index, 1);
+  const target = lists[at.region];
+  target.splice(Math.min(at.index - before, target.length), 0, ...parts);
+}
+
+// Where every part goes when several are let go together, as blockPlan.
+export function gatherPlan(counts, all, at) {
+  const lists = Object.fromEntries(Object.entries(counts).map(([region, count]) =>
+    [region, Array.from({ length: count }, (_, index) => ({ region, index }))]));
+  gather(lists, all, at);
+  return Object.entries(lists).flatMap(([region, list]) => list.map((old, index) => [old, { region, index }]));
+}

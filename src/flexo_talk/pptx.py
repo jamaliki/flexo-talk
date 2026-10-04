@@ -1647,12 +1647,16 @@ def _passage(words, deck, palette, ids: _Ids, *, native: bool, joins: list[str] 
            if not native and line and line[-1].math else "")
         for line in words.lines
     ]
-    start = (
-        f'<a:p><a:pPr algn="{ {"start": "l", "middle": "ctr", "end": "r"}.get(words.align, "l") }">'
-        f'<a:lnSpc><a:spcPts val="{round(spacing * 100)}"/></a:lnSpc>'
-        f'<a:spcBef><a:spcPts val="0"/></a:spcBef><a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
-    )
-    end = f'<a:endParaRPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:p>'
+    def opening(each: float, before: float = 0.0) -> str:
+        return (
+            f'<a:p><a:pPr algn="{ {"start": "l", "middle": "ctr", "end": "r"}.get(words.align, "l") }">'
+            f'<a:lnSpc><a:spcPts val="{round(each * 100)}"/></a:lnSpc>'
+            f'<a:spcBef><a:spcPts val="{round(before * 100)}"/></a:spcBef>'
+            f'<a:spcAft><a:spcPts val="0"/></a:spcAft></a:pPr>'
+        )
+
+    start = opening(spacing)
+    end_of = f'<a:endParaRPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:p>'
     room = 0.0
     if joins is not None:
         br = f'<a:br><a:rPr lang="en-GB" sz="{round(words.size * 100)}" dirty="0"/></a:br>'
@@ -1662,15 +1666,30 @@ def _passage(words, deck, palette, ids: _Ids, *, native: bool, joins: list[str] 
         for join, line in zip(joins, lines[1:], strict=False):
             joined.append(br if join == "\n" else space if join == " " else "")
             joined.append(line)
-        paragraphs = start + "".join(joined) + end
+        paragraphs = start + "".join(joined) + end_of
         # As wide as the longest line, and a little more (see ``_text_box``).
         room = words.size * 0.5 if any(join != "\n" for join in joins) else 0.0
+    elif words.downs and words.heights:
+        # Lines spaced each as its own (a tall formula opens only its own): each a paragraph
+        # spaced as that line is, set where its baseline was by the room before it.
+        face, written, top, end = stack.face(400, False), [], 0.0, 0.0
+        for index, (line, down, own) in enumerate(zip(lines, words.downs, words.heights, strict=True)):
+            each = own if native or own <= plain + 0.01 else plain
+            below = baseline_down(face, each, plain)
+            if index == 0:
+                top = end = words.baseline - below
+            before = max(0.0, words.baseline + down - below - end)
+            end += before + each
+            written.append(opening(each, before) + line + end_of)
+        paragraphs = "".join(written)
     else:
-        paragraphs = "".join(start + line + end for line in lines)
+        paragraphs = "".join(start + line + end_of for line in lines)
     left = {"start": words.x, "middle": words.x - (words.width + room) / 2.0,
             "end": words.x - words.width - room}.get(words.align, words.x)
-    top = words.baseline - baseline_down(stack.face(400, False), spacing, plain)
-    height = spacing * len(words.lines)
+    if not (joins is None and words.downs and words.heights):
+        top = words.baseline - baseline_down(stack.face(400, False), spacing, plain)
+        end = top + spacing * len(words.lines)
+    height = end - top
     return etree.fromstring(
         f"<p:sp {_NS}><p:nvSpPr><p:cNvPr id=\"{ids()}\" name=\"{escape(words.id, {'"': '&quot;'})}\"/>"
         f"<p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr>"

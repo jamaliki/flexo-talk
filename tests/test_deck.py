@@ -223,7 +223,7 @@ def test_a_formula_displayed_in_a_list_or_words_is_centred_set_apart_and_tagged(
     assert pdf is not None
     found = re.findall(rb"/S /Formula /P (\d+) 0 R /Pg \d+ 0 R /Alt <FEFF([0-9A-F]+)>", pdf)
     alts = [bytes.fromhex(alt.decode()).decode("utf-16-be") for _, alt in found]
-    assert alts == ["dp/dt = k_B (1 \u2212 p)", "T = 2π/ω"]
+    assert alts == ["dp/dt = k_B(1 \u2212 p)", "T = 2π/ω"]
     parents = [re.search(rb"\b%s 0 obj\s*<< /Type /StructElem /S /(\w+)" % parent, pdf).group(1) for parent, _ in found]
     assert parents == [b"LBody", b"P"]
 
@@ -239,6 +239,70 @@ def test_maths_in_a_powerpoint_list_reads_with_single_spaces_and_breaks_round_a_
     # A formula displayed among an item's words is on a line of its own there too.
     item = re.search(r"<a:p>(?:(?!</a:p>).)*The rate (?:(?!</a:p>).)*</a:p>", xml, re.S).group(0)
     assert item.count("<a:br>") == 2
+
+
+def test_a_line_that_inhibits_or_catalyses_keeps_its_head_in_powerpoint(tmp_path: Path) -> None:
+    from flexo_talk.document import deck_from_document
+
+    heads = ["arrow", "inhibition", "catalysis", "stimulation", "necessary", "modulation"]
+    nodes = [{"id": "src", "label": "Source"}] + [{"id": head, "label": head.title()} for head in heads]
+    edges = [{"from": "src", "to": head, "head": head} for head in heads]
+    figure = {"figure": {"id": "f"}, "nodes": nodes, "edges": edges}
+    deck = deck_from_document({"deck": {"id": "heads"}, "slides": [{"title": "Heads", "body": [{"figure": figure}]}]},
+                              tmp_path)
+    xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
+    # Only the arrow is a slide program's own line end. A bar (represses), a circle (catalyses)
+    # or an open triangle has none: each is drawn as Flexo drew it, never turned into an arrow.
+    assert re.findall(r'<a:(?:head|tail)End type="(\w+)"', xml) == ["stealth"]
+    for head in heads[1:]:
+        line = re.search(rf'<p:grpSp><p:nvGrpSpPr><p:cNvPr id="\d+" name="Line from Source to {head.title()}"/>'
+                         r"(?:(?!</p:grpSp>).)*</p:grpSp>", xml, re.S)
+        assert line is not None and line.group(0).count("<a:custGeom>") >= 2, head
+
+
+def test_a_tall_formula_opens_only_its_own_line_and_its_words_read_as_one_paragraph(tmp_path: Path) -> None:
+    pdfium = pytest.importorskip("pypdfium2")
+    from flexo_talk import compose
+
+    deck = Deck("tall")
+    with deck.slide("Poisson", layout="two-columns") as slide:
+        slide.left.text(
+            "Infect at multiplicity $m$: the number of phages per cell, $k$, is Poisson,\n"
+            "$$P(k) = \\frac{m^k e^{-m}}{k!}$$\nso the share of cells with $k \\ge 2$ is $1 - e^{-m}(1+m)$."
+        )
+        slide.right.text("Words beside it")
+    rendered = compose.render_slide(deck, deck.slides[0])
+    (words,) = (words for words in rendered.worded if words.id == "slide1.left.0")
+    plain = deck.typography(words.size).line_height * words.size
+    # Each line of words is spaced as words are; only the formula's own line is opened, and
+    # set apart from them -- in the PowerPoint as on the slide.
+    assert words.heights is not None and words.downs is not None
+    assert [height == pytest.approx(plain) for height in words.heights] == [True, True, False, True, True]
+    assert words.downs[1] == pytest.approx(plain) and words.downs[4] - words.downs[3] == pytest.approx(plain)
+    pdf = deck.build(tmp_path, formats=("pdf",)).pdf.read_bytes()  # type: ignore[union-attr]
+    # One paragraph with its formula in it, every script in it read by one rule.
+    assert re.findall(rb"/Type /StructElem /S /(\w+)", pdf) == [b"Document", b"Sect", b"H1", b"P", b"Formula", b"P"]
+    said = pdfium.PdfDocument(pdf)[0].get_textpage().get_text_range()
+    assert "P(k) = (m^k e^(\u2212m))/k!" in said and "k \u2265 2 is 1 \u2212 e^(\u2212m)(1 + m)." in said
+
+
+def test_a_slide_is_read_title_body_footnote_then_its_number(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    deck = Deck("order")
+    with deck.slide("Why a phage decides") as slide:
+        slide.bullets("A temperate phage chooses", "The choice depends on dose")
+        slide.footnote("Zeng L. et al. (2010) Cell 141:682.")
+    result = deck.build(tmp_path, formats=("pdf", "pptx"))
+    pdf = result.pdf.read_bytes()  # type: ignore[union-attr]
+    # In the PDF: the heading, the list, then the footnote; the page number is decoration.
+    kinds = re.findall(rb"/Type /StructElem /S /(\w+)", pdf)
+    assert kinds == [b"Document", b"Sect", b"H1", b"L", b"LI", b"LBody", b"LI", b"LBody", b"P"]
+    # In the PowerPoint's order (its Selection Pane, a screen reader) the same.
+    slide_xml = Presentation(result.pptx).slides[0]._element  # type: ignore[arg-type]
+    names = [element.get("name") for element in slide_xml.iter()
+             if element.tag.endswith("}cNvPr") and element.get("name")]
+    assert [name.split(" ")[0] for name in names] == ["Title", "Rule", "List", "Footnote", "Slide"]
 
 
 def test_a_png_picture_is_embedded(tmp_path: Path) -> None:

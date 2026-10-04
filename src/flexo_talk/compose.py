@@ -284,27 +284,32 @@ class _Canvas:
         # A formula displayed on a line of its own ($$...$$) is centred in the room the words
         # are set in, as LaTeX centres one: in the PowerPoint, the box is that room too.
         room = box.width if wrap and any(displayed_alone(line.runs) for line in metrics.lines) else None
+        # A tall formula opens only its own line, not every line of its words (a heading's
+        # lines, which the slide program wraps as one paragraph, stay as they are).
+        spaced = None if title else self.spaced(metrics, size, weight)
         if any(run.math for run in runs):
             typography = self.deck.typography(size, title=title)
             colour = fill or self.palette.get(role)
             self.worded.append(WordsLayout(
                 identifier, x, box.y + metrics.baseline, room or metrics.width, metrics.line_height,
                 [line.runs for line in metrics.lines], size, align, typography.family, weight, colour,
+                downs=spaced[1] if spaced else None,
+                heights=[one.line_height for one in spaced[0]] if spaced else None,
             ))
-        drawn = render_runs(
-            parent if parent is not None else self.layer,
-            identifier,
-            metrics,
-            x=x,
-            y=box.y + metrics.baseline,
-            typography=self.deck.typography(size, title=title),
-            palette=self.palette,
-            fill_role=role,
-            fill=fill,
-            anchor=None if align == "start" else align,
-            weight=weight,
-            width=room,
+        options = dict(
+            typography=self.deck.typography(size, title=title), palette=self.palette, fill_role=role, fill=fill,
+            anchor=None if align == "start" else align, weight=weight, width=room,
         )
+        if spaced:
+            # Each line set on its own baseline, as one object still.
+            drawn = element(parent if parent is not None else self.layer, "g", id=identifier)
+            for number, (one, down) in enumerate(zip(spaced[0], spaced[1], strict=True), 1):
+                render_runs(drawn, f"{identifier}.{number}", one, x=x, y=box.y + metrics.baseline + down, **options)
+        else:
+            drawn = render_runs(
+                parent if parent is not None else self.layer, identifier, metrics, x=x,
+                y=box.y + metrics.baseline, **options,
+            )
         # How wide the words may run before they wrap, and whether their lines are evened
         # out: the studio's editor wraps them there too.
         if wrap and drawn is not None:
@@ -312,7 +317,35 @@ class _Canvas:
         # And the colour their own strong words are drawn in, for its bold to show so there too.
         if strong_colour and drawn is not None and PLACEHOLDERS.get():
             drawn.set("data-flexo-strong", strong_colour)
-        return metrics.height
+        return spaced[2] if spaced else metrics.height
+
+    def spaced(
+        self, metrics: TextMetrics, size: float, weight: int | None = None
+    ) -> tuple[list[TextMetrics], list[float], float] | None:
+        """Lines a tall formula opened (``metrics`` opens every line by its rise and fall)
+        each spaced as its own: each line's measure, its baseline below the first's, and
+        their height -- a formula displayed alone set apart by ``DISPLAY_GAP`` too. None
+        where the lines are evenly spaced as they are."""
+
+        if len(metrics.lines) < 2 or metrics.rise + metrics.fall <= 0.01:
+            return None
+        own = []
+        for line in metrics.lines:
+            # A line left empty on purpose (a blank line typed) is as tall as a line of words.
+            shown = line.runs if any(run.text.strip() or run.math for run in line.runs) else (TextRun(" "),)
+            alone = self.measure(shown, size, None, weight, balance=False)
+            own.append(TextMetrics(
+                line.width, alone.line_height, alone.ascent, alone.descent, alone.baseline, alone.line_height,
+                (line,), alone.cap_height, alone.rise, alone.fall,
+            ))
+        downs: list[float] = []
+        top = 0.0
+        for index, (line, one) in enumerate(zip(metrics.lines, own, strict=True)):
+            shown = displayed_alone(line.runs)
+            top += DISPLAY_GAP * size if shown and index else 0.0
+            downs.append(top + one.baseline - own[0].baseline)
+            top += one.line_height + (DISPLAY_GAP * size if shown and index < len(own) - 1 else 0.0)
+        return own, downs, top
 
 
 def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
@@ -369,17 +402,19 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                                                        for value, label in block.items):
                 stand_in(block, "items", [(STAT_HINT, LABEL_HINT)] * len(block.items),
                          f"{slide.id}.{name}.{index}", "Numbers")
-            # A number added beside others and not yet written: the same hint, faintly, only
-            # while editing (_stats draws it).
+            # A number added beside others and not yet written, or half written (its value
+            # and not its label, or its label alone): the same hint for what is missing,
+            # faintly, only while editing (_stats draws it).
             elif isinstance(block, _Stats) and PLACEHOLDERS.get() and any(
-                not _worded(value) and not _worded(label) for value, label in block.items
+                not _worded(value) or not _worded(label) for value, label in block.items
             ):
                 kept.append((block, "items", block.items))
                 for at, (value, label) in enumerate(block.items):
-                    if not _worded(value) and not _worded(label):
+                    if not _worded(value):
                         empty[f"{slide.id}.{name}.{index}.{at}"] = "Number"
+                    if not _worded(label):
                         empty[f"{slide.id}.{name}.{index}.{at}.label"] = "Label"
-                block.items = [(STAT_HINT, LABEL_HINT) if not _worded(value) and not _worded(label) else (value, label)
+                block.items = [(value if _worded(value) else STAT_HINT, label if _worded(label) else LABEL_HINT)
                                for value, label in block.items]
     try:
         return _render_slide(deck, slide, empty)
@@ -458,6 +493,12 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
             _agenda(canvas, slide, body)
         else:
             _regions(canvas, slide, body)
+    # Set first, for the body to end above them, footnotes are read after it: they follow it
+    # in the drawing (which the PDF's reading order and the PowerPoint's follow).
+    notes = [child for child in canvas.layer if child.get("id", "").startswith(f"{slide.id}.footnote")]
+    for note in notes:
+        canvas.layer.remove(note)
+        canvas.layer.append(note)
     _furniture(canvas, slide)
     if f"{slide.id}.title" in empty and (not slide.subtitle_runs or f"{slide.id}.subtitle" in empty):
         # With no heading shown, the band or rule a heading is set on is not shown either.
@@ -1096,13 +1137,33 @@ def _region(
 
     style = canvas.deck.style
     blocks = _fitted(canvas, region, box)
+    # A placeholder takes no room from what is really there: presented or exported it is
+    # not there at all, and a sample (a new figure, table or equation) is drawn for an
+    # editor after the rest, so they are set as they will be presented. (Empty words keep
+    # their place while edited: they are typed in where they are.)
+    ids = [f"{canvas.slide.id}.{region.name}.{index}" for index in range(len(blocks))]
+    aside = [index for index, identifier in enumerate(ids) if identifier in canvas.hinted and (
+        not PLACEHOLDERS.get() or canvas.hinted[identifier] == "Placeholder")]
+    if len(aside) == len(blocks) and PLACEHOLDERS.get():
+        aside = []
+    shown = [index for index in range(len(blocks)) if index not in aside]
     # A block with its place to itself is centred across it (a table narrower than the place).
-    canvas.alone = len(blocks) == 1
-    prepared, scales, share = _plan_figures(canvas, blocks, box, words)
+    canvas.alone = len(shown) == 1
+    planned, fits, share = _plan_figures(canvas, [blocks[index] for index in shown], box, words)
+    prepared = {shown[at]: item for at, item in planned.items()}
+    scales = {shown[at]: scale for at, scale in fits.items()}
     _check_legible(canvas, prepared, scales)
     top = box.y
-    for index, block in enumerate(blocks):
-        identifier = f"{canvas.slide.id}.{region.name}.{index}"
+    used = None
+    for index in [*shown, *(aside if PLACEHOLDERS.get() else [])]:
+        if used is None and index in aside:
+            # The rest is set: the placeholders go after it, in what room is left, taking none.
+            used = max(top - box.y - style.block_gap, 0.0)
+            room = Box(box.x, 0.0, box.width, max(box.y + box.height - top, 80.0))
+            planned, fits, share = _plan_figures(canvas, [blocks[at] for at in aside], room, words)
+            prepared |= {aside[at]: item for at, item in planned.items()}
+            scales |= {aside[at]: scale for at, scale in fits.items()}
+        block, identifier = blocks[index], ids[index]
         if isinstance(block, _Bullets):
             top += _bullets(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Words):
@@ -1138,7 +1199,7 @@ def _region(
         elif isinstance(block, _Math):
             top += _equation(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         top += style.block_gap
-    return max(top - box.y - style.block_gap, 0.0)
+    return used if used is not None else max(top - box.y - style.block_gap, 0.0)
 
 
 PICTURE_LEAST = 120.0
@@ -1887,7 +1948,10 @@ def _height(canvas: _Canvas, block, width: float) -> float:
     if isinstance(block, _Table):
         return sum(_table_plan(canvas, block, width).heights)
     if isinstance(block, _Words):
-        return canvas.measure(block.runs, block.size or style.body_size, width).height
+        size = block.size or style.body_size
+        metrics = canvas.measure(block.runs, size, width)
+        spaced = canvas.spaced(metrics, size)
+        return spaced[2] if spaced else metrics.height
     if isinstance(block, _Bullets):
         size = block.size or style.body_size
         layout = _list_layout(canvas, block, Box(0.0, 0.0, width, 0.0))
@@ -3335,7 +3399,7 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
         fill=ink, fill_opacity=0.06, stroke=ink, stroke_opacity=0.6, stroke_width=1.5, stroke_dasharray="6 4",
     )
     # The name as the document writes it, not read as markup.
-    runs = (TextRun(f"Missing {block.what}: {block.name}"),)
+    runs = (TextRun(block.said or f"Missing {block.what}: {block.name}"),)
     size, pad = style.small_size, style.small_size
     words = canvas.measure(runs, size, max(box.width - 2 * pad, 1.0))
     place = Box(box.x + pad, box.y + max((height - words.height) / 2.0, 0.0), max(box.width - 2 * pad, 1.0), 0.0)

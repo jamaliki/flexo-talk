@@ -27,6 +27,7 @@ from flexo_talk.document import (
     SCHEMA_VERSION,
     SLIDE_KEYS,
     DeckDocumentError,
+    InvalidFigure,
     MissingFile,
     UntrustedCode,
     deck_from_document,
@@ -239,8 +240,9 @@ class DeckKind:
     def load(self, path: Path) -> dict[str, Any]:
         return load_document(path)
 
-    def save(self, path: Path, document: dict[str, Any]) -> None:
-        save_document(document, path)
+    def save(self, path: Path, document: dict[str, Any], previous: str | None = None) -> None:
+        # Over the file's words as they were (``previous``): its comments and quoting kept.
+        save_document(document, path, previous=previous)
 
     def dump(self, document: dict[str, Any]) -> str:
         return dump_document(document)
@@ -425,9 +427,10 @@ class DeckKind:
             return Drawing([], _placed([Message(explain(error), "error", "deck")], document))
         slides = document.get("slides") or []
         # A picture or figure whose file is missing is said, and a box stands in for it:
-        # the rest of its slide is drawn.
-        absent = [error for error in errors if isinstance(error, MissingFile)]
-        failed = {_slide_of(error.where): error for error in errors if not isinstance(error, MissingFile)}
+        # the rest of its slide is drawn. So is a figure that cannot be drawn as written.
+        stood_in = MissingFile | InvalidFigure
+        absent = [error for error in errors if isinstance(error, stood_in)]
+        failed = {_slide_of(error.where): error for error in errors if not isinstance(error, stood_in)}
         deck_data = document.get("deck") or {}
         from flexo.studio import code_allowed
 
@@ -473,7 +476,7 @@ class DeckKind:
             editing, placeholders = EDITING.set(not settle), PLACEHOLDERS.set(True)
             try:
                 rendered = render_slide(deck, slide)
-                self._slides[keys[index]] = {"svg": rendered.svg, "steps": rendered.steps,
+                self._slides[keys[index]] = {"svg": _presentable(rendered.svg, deck, slide), "steps": rendered.steps,
                                              "diagnostics": rendered.diagnostics, "notes": rendered.notes,
                                              "held": rendered.held, "settled": rendered.settled}
             except UntrustedCode as error:
@@ -499,7 +502,8 @@ class DeckKind:
             done = self._slides.get(keys[index])
             for error in absent:
                 if _slide_of(error.where) == index:
-                    messages.append(Message(_plain_message(error), "error", error.where, identifier, "deck.missing"))
+                    code = "deck.missing" if isinstance(error, MissingFile) else "deck.figure"
+                    messages.append(Message(_plain_message(error), "error", error.where, identifier, code))
             if index in failed:
                 error = failed[index]
                 messages.append(Message(_plain_message(error), "error", error.where, identifier, "deck.document"))
@@ -990,11 +994,11 @@ def _object_name(block: Any) -> str:
 
 def _a(name: str) -> str:
     """An object as said aloud after "added" or "deleted", as "the list" is after "edited":
-    "a table", "an equation", "a flow chart" -- numbers and code with no article ("added
-    numbers", never "a numbers")."""
+    "a table", "an equation", "a flow chart" -- text, numbers and code with no article
+    ("added text", never "a numbers")."""
 
     word = name.lower()
-    if name in ("Numbers", "Code"):
+    if name in ("Text", "Numbers", "Code"):
         return word
     return f"{'an' if word[0] in 'aeiou' else 'a'} {word}"
 
@@ -1016,8 +1020,19 @@ def _objects(old: Any, new: Any) -> tuple[str, str]:
         kept = [json.dumps(block, sort_keys=True, default=str) for block in now]
         gone = [block for block in was if json.dumps(block, sort_keys=True, default=str) not in kept]
         return ("deleted", _a(name(gone[0]))) if gone else ("edited", "its content")
-    changed = list(dict.fromkeys(f"the {name(b).lower()}" for a, b in zip(was, now, strict=True) if a != b))
+    changed = list(dict.fromkeys(_part_edited(a, b) for a, b in zip(was, now, strict=True) if a != b))
     return "edited", " and ".join(changed[:2]) or "its content"
+
+
+def _part_edited(old: Any, new: Any) -> str:
+    """An object edited, as said aloud: "the quote" -- or the part of it edited, by the name
+    the inspector gives it ("the attribution")."""
+
+    if isinstance(old, dict) and isinstance(new, dict):
+        keys = {key for key in {*old, *new} if old.get(key) != new.get(key)}
+        if keys == {"by"}:
+            return "the attribution"
+    return f"the {_object_name(new).lower()}"
 
 
 _WORDY = ("text", "bullets")
@@ -1276,9 +1291,14 @@ def _what_changed(old: Any, new: Any) -> tuple[str, str]:
     if not isinstance(old, dict) or not isinstance(new, dict):
         return "edited", ""
     keys = [key for key in dict.fromkeys([*old, *new]) if old.get(key) != new.get(key)]
-    # An object added or deleted is what the change did; a placeholder typed in is added.
+    # An object added or deleted is what the change did; a placeholder typed in is added --
+    # and one made empty again (its typing undone) is emptied, not deleted: it is still there.
+    held = [len(slide.get("body") or []) if isinstance(slide.get("body"), list) else 0 for slide in (old, new)]
     old, new = _without_placeholders(old), _without_placeholders(new)
     if "body" in keys and (done := _objects(old.get("body"), new.get("body")))[0] != "edited":
+        if done[0] == "deleted" and held[0] == held[1]:
+            gone = re.sub(r"^an? ", "", done[1])
+            return "emptied", f"the {gone}"
         return done
     # A setting by the name the inspector gives it ("the statement", "the attribution"), never its key.
     names = {"left": "the left column", "right": "the right column", "columns": "its columns"}
@@ -1520,3 +1540,58 @@ def _plain_message(error: DeckDocumentError) -> str:
     """A deck document's error in words: its own message, rid of any of Python's."""
 
     return explain(ValueError(error.message))
+
+
+PRESENTED = "presented-"
+"""What the ids of a slide's drawing as presented start with, beside its drawing for editing."""
+
+
+def _presentable(svg: str, deck: Any, slide: Any) -> str:
+    """A slide's drawing for editing, with the slide as it is presented (and exported) inside
+    it, hidden, where empty words hold their place while edited (an empty Text above a figure):
+    Present shows that instead (present.js), so what is there sits where the PDF has it, the
+    placeholders taking no room. The slide is drawn again for it only then."""
+
+    import xml.etree.ElementTree as ET
+
+    from flexo.svg import xml_document
+
+    from flexo_talk.compose import PLACEHOLDERS, render_slide
+
+    held = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', svg)
+    block = re.compile(rf"{re.escape(slide.id)}\.[^.]+\.\d+")
+    if not any(words != "Placeholder" and block.fullmatch(ident) for ident, words in held):
+        return svg
+    token = PLACEHOLDERS.set(False)
+    try:
+        shown = render_slide(deck, slide).svg
+    finally:
+        PLACEHOLDERS.reset(token)
+    root, other = ET.fromstring(svg), ET.fromstring(shown)
+    content = f"{slide.id}.content"
+    parents = {child: parent for parent in root.iter() for child in parent}
+    editing = next((item for item in root.iter() if item.get("id") == content), None)
+    presented = next((item for item in other.iter() if item.get("id") == content), None)
+    if editing is None or presented is None:
+        return svg
+    # Its own ids, so the editor never finds it for the drawing it edits, and what in it
+    # points at them (a marker, a clip) pointed at them still.
+    named = {item.get("id") for item in presented.iter() if item.get("id")}
+    pointer = re.compile(r"(url\(#|^#)([^)]+)")
+
+    def renamed(value: str) -> str:
+        return pointer.sub(lambda found: found.group(1) + (PRESENTED + found.group(2) if found.group(2) in named
+                                                          else found.group(2)), value)
+
+    for item in presented.iter():
+        for key, value in list(item.attrib.items()):
+            if key == "id":
+                item.set(key, PRESENTED + value)
+            elif "#" in value:
+                item.set(key, renamed(value))
+    presented.set("display", "none")
+    presented.set("data-flexo-presented", "")
+    editing.set("data-flexo-editing", "")
+    parent = parents[editing]
+    parent.insert(list(parent).index(editing) + 1, presented)
+    return xml_document(root)

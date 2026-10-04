@@ -114,9 +114,10 @@ function emphasis(tokens) {
 
 // A line pasted into a list as an item: how deep it was indented (two spaces or a tab a
 // level) and its words without the bullet or number it came with.
+const LIST_MARK = /^(?:[-*+•◦▪‣·–]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s+/i;
 function listed(line) {
   const indent = /^[ \t]*/.exec(line)[0].replace(/\t/g, "  ").length;
-  return { depth: Math.floor(indent / 2), words: line.trim().replace(/^(?:[-*+•◦▪‣·–]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s+/i, "") };
+  return { depth: Math.floor(indent / 2), words: line.trim().replace(LIST_MARK, "") };
 }
 
 // Another app's formatted words (text/html) as items: each block -- a paragraph, a
@@ -223,7 +224,8 @@ function cellsOf(html, text) {
     }));
   } else if (text && text.includes("\t")) {
     const lines = text.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
-    if (lines.length > 1 && lines.every((line) => line.includes("\t"))) rows = lines.map((line) => line.split("\t").map((cell) => escaped(cell.trim())));
+    // (Tabs only at the lines' starts are an outline's indents, not cells.)
+    if (lines.length > 1 && lines.every((line) => line.includes("\t")) && lines.some((line) => /[^\t]\t/.test(line))) rows = lines.map((line) => line.split("\t").map((cell) => escaped(cell.trim())));
   }
   if (!rows?.length) return null;
   const columns = Math.max(...rows.map((row) => row.length));
@@ -468,10 +470,13 @@ function emphasised(lines, look) {
 // `plain` has no marks, its levels kept); `single` a line of its own
 // (Return is left to whoever holds it); else words in lines. `palette` gives the
 // theme's colours by name, for [words]{accent}. `onCells` takes a spreadsheet's cells
-// pasted in it; `docked` keeps its format bar under it (a panel's field); `onEnd` goes on
-// after a list ended by Return on its empty last item; `onListStart(style, unmark)` is
-// asked for a list ("numbered", "bulleted") by the marks typed at the words' start.
-export function richText({ value = "", list = false, single = false, numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, onCells = null, docked = false, onEnd = null, onListStart = null } = {}) {
+// pasted in it; `docked` keeps its format bar under it (a panel's field); `onEnd(kept)` goes on
+// after a list ended by Return on an empty item (`kept`: how many items stay before the
+// ones after it, if any); `onListStart(style, unmark)` is
+// asked for a list ("numbered", "bulleted") by the marks typed at the words' start;
+// `onList(items)` takes an outline or a list pasted in words (each item's depth, markup and
+// whether it was numbered).
+export function richText({ value = "", list = false, single = false, numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, onCells = null, docked = false, onEnd = null, onListStart = null, onList = null } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}${plain ? " rt-plain" : ""}`;
   area.contentEditable = "true";
@@ -875,6 +880,15 @@ export function richText({ value = "", list = false, single = false, numbered = 
     // On an empty last item, the list ends, as in Pages: the item goes, and whoever holds the
     // field goes on after it (`onEnd`: a paragraph after the list).
     if (!line.textContent.trim() && !line.nextElementSibling && line.previousElementSibling && onEnd) { line.remove(); changed(); onEnd(); return; }
+    // Amid others, it ends there too: the item goes, and the items after it are a list of
+    // their own after the paragraph that follows (`onEnd(kept)`: how many items stay).
+    if (!line.textContent.trim() && line.nextElementSibling && line.previousElementSibling && onEnd) {
+      const kept = lines().indexOf(line);
+      line.remove();
+      changed();
+      onEnd(kept);
+      return;
+    }
     const tail = document.createRange();
     tail.setStart(s.anchorNode, s.anchorOffset);
     tail.setEnd(line, line.childNodes.length);
@@ -1562,12 +1576,13 @@ export function richText({ value = "", list = false, single = false, numbered = 
           return;
         }
       }
-      // A space pasted at either end stays a word's space beside it, as other pastes keep
-      // theirs: not doubled with one by the caret, nor put at a line's edge or before a stop.
+      // A space pasted at either end stays a word's space beside it: not doubled with one by
+      // the caret, nor put at a line's start or before a stop -- but kept at its end, so the
+      // next word typed is not run into the address.
       const caret = area.caretAt(), letters = area.letters();
       const before = caret ? letters[caret[0] - 1] : undefined, after = caret ? letters[caret[1]] : undefined;
       const lead = /^\s/.test(text) && before !== undefined && !/\s/.test(before) ? " " : "";
-      const trail = /\s$/.test(text) && after !== undefined && !/[\s.,;:!?)\]}]/.test(after) ? " " : "";
+      const trail = /\s$/.test(text) && !(after !== undefined && /[\s.,;:!?)\]}]/.test(after)) ? " " : "";
       insertMarkup(`${lead}${linked}${trail}`);
       changed(true, "Paste Text");
       return;
@@ -1592,6 +1607,19 @@ export function richText({ value = "", list = false, single = false, numbered = 
       insertMarkup(words && `${/^\s/.test(lines[0]) ? " " : ""}${words}${/\s$/.test(lines[lines.length - 1]) ? " " : ""}`);
       changed(true, "Paste Text");
       return;
+    }
+    // An outline or a list pasted in words (a paragraph's) is a list, given to whoever holds
+    // them (`onList`, each item's depth and words): not lines with their levels lost.
+    if (!list && onList) {
+      const lines = plainParts.filter((part) => part.trim());
+      const fromHtml = formatted?.filter((item) => item.markup.trim()) || [];
+      const outline = !fromHtml.length && lines.length > 1 && (lines.some((line) => /^\t/.test(line)) || lines.every((line) => LIST_MARK.test(line.trim())));
+      if (outline || (fromHtml.length > 1 && fromHtml.every((item) => item.listed))) {
+        event.stopPropagation();
+        onList(outline ? lines.map((line) => ({ ...listed(line), ordered: /^\(?\d{1,3}[.)]\s/.test(line.trim()) })).map((item) => ({ depth: item.depth, markup: escaped(item.words), ordered: item.ordered }))
+          : fromHtml.map((item) => ({ depth: item.depth || 0, markup: item.markup.trim(), ordered: Boolean(item.ordered) })));
+        return;
+      }
     }
     if (!list) { insertMarkup(...items.map((item) => item.markup)); changed(true, "Paste Text"); return; }
     // In a list, items: their indents kept as levels under the item pasted into, and the

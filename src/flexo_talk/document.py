@@ -64,6 +64,7 @@ from typing import Any
 
 import yaml
 from flexo.diagnostics import described
+from flexo.roundtrip import rewrite
 
 from flexo_talk.deck import (
     LAYOUTS,
@@ -136,6 +137,12 @@ class MissingFile(DeckDocumentError):
     def __init__(self, where: str, message: str, name: str) -> None:
         super().__init__(where, message)
         self.name = name
+
+
+class InvalidFigure(DeckDocumentError):
+    """A figure written in the deck that cannot be drawn as it is written (a span that ends
+    before it starts): said in plain words, in a box where it would be, the rest of its
+    slide drawn."""
 
 
 class UntrustedCode(DeckDocumentError):
@@ -609,6 +616,12 @@ def add_block(
             raise
         missing.append(error)
         region.stand_in(_STAND_INS[kind], error.name)
+    except InvalidFigure as error:
+        # One figure that cannot be drawn is a box saying why, not a slide that is not drawn.
+        if missing is None:
+            raise
+        missing.append(error)
+        region.stand_in("figure", "", said=error.message)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError, OSError) as error:
@@ -616,6 +629,29 @@ def add_block(
     region.sources[-1] = dict(block)
     if block.get("placeholder") or (kind == "figure" and _lone_shape(value)):
         region.placeholders.add(len(region.blocks) - 1)
+
+
+def _figure_problem(value: dict, error: Exception) -> str:
+    """What is wrong with a figure written in the deck, in plain words: flexo's own, naming
+    the shape by its words rather than its id ("In “λ infection”, span 1 ends where it
+    starts (1)")."""
+
+    from flexo.diagnostics import FlexoError
+
+    if not isinstance(error, FlexoError):
+        return str(error)
+    names = {
+        str(node.get("id")): str(node.get("label") or "").strip()
+        for node in value.get("nodes") or []
+        if isinstance(node, dict)
+    }
+    said = []
+    for diagnostic in error.diagnostics:
+        message = diagnostic.message.strip()
+        name = names.get(str(diagnostic.entity_id or ""))
+        said.append(f"in “{name}”, {message}" if name else message)
+    text = " ".join(said)
+    return text[:1].upper() + text[1:]
 
 
 def _lone_shape(value: object) -> str | None:
@@ -715,7 +751,7 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
         try:
             figure = parse_figure(_beside(base, value))
         except Exception as error:
-            raise DeckDocumentError(where, f"The figure is not a valid flexo figure document: {error}") from error
+            raise InvalidFigure(where, f"This figure can't be drawn: {_figure_problem(value, error)}") from error
         with _FIGURES_LOCK:
             _FIGURES[key] = figure
             while len(_FIGURES) > 64:
@@ -1167,19 +1203,33 @@ def _tidy(value: Any, *, slide: bool = False) -> Any:
 def dump_document(document: dict[str, Any], *, format: str = "yaml") -> str:
     """A deck document as YAML (or JSON) text."""
 
-    if isinstance(document, dict) and isinstance(document.get("slides"), list):
-        document = {
-            key: [_tidy(slide, slide=True) for slide in item] if key == "slides" else _tidy(item)
-            for key, item in document.items()
-        }
+    document = _tidied(document)
     if format == "json":
         return json.dumps(document, indent=2, ensure_ascii=False, default=_json_value) + "\n"
     return yaml.dump(document, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=100)
 
 
-def save_document(document: dict[str, Any], destination: str | Path) -> Path:
+def _tidied(document: Any) -> Any:
+    if isinstance(document, dict) and isinstance(document.get("slides"), list):
+        return {
+            key: [_tidy(slide, slide=True) for slide in item] if key == "slides" else _tidy(item)
+            for key, item in document.items()
+        }
+    return document
+
+
+def save_document(document: dict[str, Any], destination: str | Path, *, previous: str | None = None) -> Path:
+    """Write a deck document. YAML is written over the file's text as it was (``previous``,
+    else the file there now): the comments, blank lines, quoting and order of keys its
+    person or an agent wrote are kept wherever the document did not change them."""
+
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dump_document(document, format="json" if path.suffix.lower() == ".json" else "yaml"),
-                    encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        text = dump_document(document, format="json")
+    else:
+        if previous is None and path.is_file():
+            previous = path.read_text(encoding="utf-8")
+        text = rewrite(previous, _tidied(document), dump_document)
+    path.write_text(text, encoding="utf-8")
     return path
