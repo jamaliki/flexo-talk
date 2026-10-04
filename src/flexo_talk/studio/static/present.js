@@ -403,9 +403,11 @@ function dress() {
 .ss-over { width: 100%; height: 100%; display: grid; place-items: center; background: #000; outline: 1px solid #2c2c2c; color: #8c8c8c; font-size: 16px; }
 .ss-notes { overflow: auto; font-size: clamp(18px, 1.55vw, 32px); line-height: 1.45; margin-top: 4px; white-space: pre-wrap; color: #f4f4f4; user-select: text; -webkit-user-select: text; }
 .ss-notes.none { color: #777; }
-/* In even columns, so a narrow screen wraps them into a table, not one key left alone. */
-.ss-keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 22px; font-size: 13px; color: #9a9a9a; }
-.ss-key { display: inline-flex; align-items: center; gap: 4px; }
+/* In even columns, so a narrow screen wraps them into a table, not one key left alone --
+   each as wide as the widest needs ("0–9 ↩ Go to a Slide"), so a laptop's screen (1280
+   points) has them all on one line. */
+.ss-keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 22px; font-size: 13px; color: #9a9a9a; }
+.ss-key { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .ss-key kbd { font: 12px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #ddd; padding: 3px 6px; border-radius: 5px; background: #2a2a2a; border: 1px solid #3a3a3a; }
 .ss-key span { margin-left: 3px; }
 .ss-key i { font-style: normal; color: #777; }

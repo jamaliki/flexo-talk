@@ -801,7 +801,15 @@ class Region:
                 words, size=size, align="middle" if align == "start" else align,
                 colour=colour or ("muted" if muted else None),
             )
-        self.blocks.append(_Words(inline(words), size, align, muted, colour))
+        runs = inline(words)
+        worded = [run for run in runs if run.text.strip() or run.math]
+        if len(worded) == 1 and worded[0].math and not worded[0].math.startswith("\\displaystyle"):
+            # A paragraph that is one formula ($\frac{a}{b}$) and nothing else is set as a
+            # formula on a line of its own is: in display style, not shrunk to sit among words.
+            runs = tuple(
+                replace(run, math=f"\\displaystyle {run.math}") if run is worded[0] else run for run in runs
+            )
+        self.blocks.append(_Words(runs, size, align, muted, colour))
         self._record(
             "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
         )
@@ -1861,6 +1869,9 @@ class TableLayout:
     """The slide's paints (light words on a dark slide); the deck's when unset."""
     room: tuple[float, float] | None = None
     """The left edge and the width of the place the table was set in: how wide it may grow."""
+    measured: list | None = None
+    """Each cell's words as they were set to size the table, for the drawing to set them so
+    (its rows as tall as their lines); let go once it is drawn."""
 
 
 @dataclass(slots=True)

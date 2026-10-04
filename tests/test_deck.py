@@ -136,6 +136,54 @@ def test_an_overfull_slide_is_set_smaller_and_reported(tmp_path: Path) -> None:
     assert any("to fit" in message for message in result.diagnostics)
 
 
+def test_a_table_cell_is_drawn_on_the_lines_its_row_was_sized_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    from flexo_talk import compose
+
+    # A line measured again in the width it was found to take can come out a hair wider
+    # (kerning across a space) and wrap: here, any width given falls half a point short.
+    measure = compose._Canvas.measure
+
+    def short(self, runs, size, width, *args, **kwargs):  # type: ignore[no-untyped-def]
+        return measure(self, runs, size, width - 0.5 if width else width, *args, **kwargs)
+
+    monkeypatch.setattr(compose._Canvas, "measure", short)
+    deck = Deck("tables")
+    with deck.slide("Half-times") as slide:
+        slide.table([["[O2] (µM)", "t1/2 EGFP (min)", "t1/2 sfGFP (min)"], ["250", "25.1", "13.6"]])
+    rendered = compose.render_slide(deck, deck.slides[0])
+    header = re.search(r'id="slide1\.body\.0\.0\.1"[^>]*>(.*?)</text>', rendered.svg, re.S).group(1)
+    # Set as the table was planned: one line, in a row one line tall, over nothing below it.
+    assert header.count("<tspan") == 1 and "t1/2 EGFP (min)" in header
+    (table,) = rendered.tables
+    assert table.heights[0] == pytest.approx(table.heights[1]) and table.measured is None
+
+
+def test_words_set_a_few_per_cent_smaller_to_fit_go_unsaid() -> None:
+    from flexo_talk import compose
+
+    deck = Deck("snug")
+    with deck.slide("Snug") as slide:
+        slide.bullets(*(["a sentence that goes on and on across the slide"] * 11))
+    rendered = compose.render_slide(deck, deck.slides[0])
+    # Set a little smaller, so it fits; too little to be seen, so nothing is said of it.
+    (words,) = rendered.lists
+    assert compose.QUIET_SHRINK * deck.style.body_size <= words.size < deck.style.body_size
+    assert rendered.diagnostics == []
+
+
+def test_a_text_that_is_one_formula_is_set_in_display_style() -> None:
+    deck = Deck("alone")
+    with deck.slide("Alone") as slide:
+        slide.text(r"$F = \frac{k_2}{k_2 - k_1}$")
+        slide.text(r"Words and $\frac{a}{b}$ among them")
+        slide.text(r"$x^2$")
+    alone, among, simple = (block.runs for block in deck.slides[0].regions["body"].blocks)
+    # Alone, its fraction is full size, as a displayed one is; among words, set to sit in them.
+    assert [run.math for run in alone] == [r"\displaystyle F = \frac{k_2}{k_2 - k_1}"]
+    assert [run.math for run in among if run.math] == [r"\frac{a}{b}"]
+    assert not any(run.math for run in simple)
+
+
 def test_a_png_picture_is_embedded(tmp_path: Path) -> None:
     import struct
     import zlib
@@ -171,6 +219,17 @@ def test_a_table_is_a_native_table_ruled_as_in_a_paper(tmp_path: Path) -> None:
     assert 'algn="r"' in slide and "\U0001d706" in slide
     # The drawn copy of the table is not also in the PowerPoint.
     assert slide.count(">Model<") == 1
+
+
+def test_bold_in_a_bold_statement_shows_in_the_accent(tmp_path: Path) -> None:
+    deck = Deck("strong")
+    deck.statement("A queue lets the customer **stop waiting** for us.")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    svg = result.svgs[0].read_text()
+    assert re.search(r'data-flexo-fill="tone-1-stroke"[^>]*>stop waiting<', svg)
+    accent = re.search(r'fill="#([0-9a-f]{6})"[^>]*>stop waiting<', svg).group(1).upper()
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert re.search(rf'<a:srgbClr val="{accent}"/>.{{0,200}}<a:t>stop waiting</a:t>', slide)
 
 
 def test_a_change_column_of_percentages_and_multiples_is_numbers() -> None:

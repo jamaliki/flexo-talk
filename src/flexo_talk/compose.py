@@ -21,6 +21,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NamedTuple
 
 import flexo
@@ -261,6 +262,14 @@ class _Canvas:
 
         if not runs:
             return 0.0
+        if (weight or 400) >= 600:
+            # Words strong in words already bold (a title, a statement) would look like the
+            # rest: they are drawn in the accent instead -- the same in the PowerPoint and PDF,
+            # which are made from what is drawn here.
+            def plain(run: TextRun) -> bool:
+                return not (run.color or run.math or run.code or run.maths)
+
+            runs = tuple(replace(run, color="accent") if run.weight >= 600 and plain(run) else run for run in runs)
         if align == "start" and _rtl(runs):
             # Right-to-left words start at the right.
             align = "end"
@@ -306,6 +315,13 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
         setattr(owner, attribute, value)
         empty[identifier] = words
 
+    # A footnote added and not yet written: "Footnote", faintly, in its place.
+    if any(not _worded(runs) for runs in slide.footnotes):
+        kept.append((slide, "footnotes", slide.footnotes))
+        slide.footnotes = [runs if _worded(runs) else (TextRun("Footnote"),) for runs in slide.footnotes]
+        for index, runs in enumerate(kept[-1][2]):
+            if not _worded(runs):
+                empty[f"{slide.id}.footnote{index}"] = "Footnote"
     for field, attribute in _PLACEHOLDER_RUNS.items():
         if field in slide.placeholders and not getattr(slide, attribute):
             words = PLACEHOLDER_WORDS[field]
@@ -332,19 +348,36 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
             elif isinstance(block, _Table) and block.rows and not any(
                 _worded(cell) for row in block.rows for cell in row
             ):
-                header = [(TextRun(f"Column {number}"),) for number in range(1, len(block.rows[0]) + 1)]
+                header = [_column_hint(column) for column in range(len(block.rows[0]))]
                 stand_in(block, "rows", [header, *block.rows[1:]], f"{slide.id}.{name}.{index}", "Table")
             elif isinstance(block, _Math) and not block.source.strip():
                 stand_in(block, "source", "E = mc^2", f"{slide.id}.{name}.{index}", "Equation")
             elif isinstance(block, _Stats) and not any(_worded(value) or _worded(label) 
                                                        for value, label in block.items):
-                stand_in(block, "items", [((TextRun("00"),), (TextRun("Label"),))] * len(block.items),
+                stand_in(block, "items", [(STAT_HINT, LABEL_HINT)] * len(block.items),
                          f"{slide.id}.{name}.{index}", "Numbers")
+            # A number added beside others and not yet written: the same hint, faintly, only
+            # while editing (_stats draws it).
+            elif isinstance(block, _Stats) and PLACEHOLDERS.get() and any(
+                not _worded(value) and not _worded(label) for value, label in block.items
+            ):
+                kept.append((block, "items", block.items))
+                for at, (value, label) in enumerate(block.items):
+                    if not _worded(value) and not _worded(label):
+                        empty[f"{slide.id}.{name}.{index}.{at}"] = "Number"
+                        empty[f"{slide.id}.{name}.{index}.{at}.label"] = "Label"
+                block.items = [(STAT_HINT, LABEL_HINT) if not _worded(value) and not _worded(label) else (value, label)
+                               for value, label in block.items]
     try:
         return _render_slide(deck, slide, empty)
     finally:
         for owner, attribute, value in kept:
             setattr(owner, attribute, value)
+
+
+STAT_HINT = (TextRun("93%"),)
+LABEL_HINT = (TextRun("Label"),)
+"""What a number not yet written shows while editing, as the inspector's fields hint it."""
 
 
 def _worded(runs: tuple[TextRun, ...]) -> bool:
@@ -412,11 +445,17 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         else:
             _regions(canvas, slide, body)
     _furniture(canvas, slide)
-    if f"{slide.id}.title" in empty and not PLACEHOLDERS.get() and (
-        not slide.subtitle_runs or f"{slide.id}.subtitle" in empty
-    ):
+    if f"{slide.id}.title" in empty and (not slide.subtitle_runs or f"{slide.id}.subtitle" in empty):
         # With no heading shown, the band or rule a heading is set on is not shown either.
-        empty |= {f"{slide.id}.{mark}": "Title" for mark in ("band", "rule")}
+        # While editing it stays, round the title's place, but marked as a placeholder is,
+        # so Present (which shows the editor's drawing) leaves it out as an export does.
+        marks = {f"{slide.id}.{mark}" for mark in ("band", "rule")}
+        if PLACEHOLDERS.get():
+            for node in canvas.root.iter():
+                if node.get("id") in marks:
+                    node.set("data-flexo-placeholder", "")
+        else:
+            empty |= dict.fromkeys(marks, "Title")
     if empty:
         _placeholders(canvas.root, empty)
         if not PLACEHOLDERS.get():
@@ -725,7 +764,13 @@ def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
 
     style = canvas.deck.style
     sections = [other for other in slide.deck.slides if other.layout == "section"]
-    if not sections:
+    hinted = not sections and PLACEHOLDERS.get()
+    if hinted:
+        # No sections yet while editing -- an agenda is often put in before them: the rows
+        # they will make, faintly, and a note of what fills them, not a warning.
+        canvas.notes.append(f"{slide.id}: The agenda lists the deck's section slides. Add a Section slide to fill it.")
+        sections = [AGENDA_HINT] * 3
+    elif not sections:
         canvas.diagnostics.append(f"{slide.id}: The agenda is empty because the deck has no section slides.")
         return
     size = style.body_size * 1.1
@@ -784,6 +829,15 @@ def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
                     opacity=0.35,
                 )
                 top += size * 0.9 + 0.75
+    if hinted:
+        for node in canvas.root.iter():
+            if node.get("id", "").startswith(f"{slide.id}.agenda"):
+                node.set("data-flexo-placeholder", "Section")
+                node.set("opacity", "0.38")
+
+
+AGENDA_HINT = SimpleNamespace(title_runs=(TextRun("Section"),), subtitle_runs=())
+"""What stands in an agenda's rows while the deck has no sections, faintly, as it is edited."""
 
 
 def _agenda_rows(canvas: _Canvas, sections: list[Slide], size: float, width: float):
@@ -1082,6 +1136,10 @@ PICTURE_SMALLEST = 70.0
 WORDS_KEPT = 0.85
 """How far a slide's words shrink, at most, to make room for a picture added to it."""
 
+QUIET_SHRINK = 0.9
+"""Words set this much of their size or more to fit go unsaid: a few per cent smaller is
+not seen, and is not worth a warning on a slide."""
+
 
 def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
     """The region's blocks, their words set smaller if that is what it takes to fit.
@@ -1133,6 +1191,8 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
             f"{canvas.slide.id}: Text does not fit, even at the smallest size. Try splitting the slide."
         )
         return [_sized(block, style.small_size / style.body_size, style) for block in blocks]
+    if scale >= QUIET_SHRINK:
+        return [_sized(block, scale, style) for block in blocks]
     # The advice names what is there: a figure is not a picture.
     kinds = list(dict.fromkeys(
         "figure" if isinstance(block, _Figure) else "plot" if isinstance(block, _Plot)
@@ -1218,6 +1278,15 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float, *, said: bool = Fa
         # A column with nothing in it yet (one just added) is as wide as a short word, so
         # there is somewhere to click and type.
         widths = [(max((row[c].width for row in measured), default=0.0) or size * 2.5) + slack for c in range(columns)]
+        # While editing, a column still being filled in (a cell of it empty) is at least as wide
+        # as the name an empty header shows there faintly ("Column 2"): typed into, it neither
+        # narrows nor moves the cells. A column filled in is as its words make it.
+        if PLACEHOLDERS.get() and block.header and block.rows:
+            widths = [
+                max(widths[c], canvas.measure(_column_hint(c), size, None, 700).width + slack)
+                if any(not _worded(row[c]) for row in block.rows) else widths[c]
+                for c in range(columns)
+            ]
         if sum(widths) <= width:
             break
         least = [
@@ -1244,8 +1313,14 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float, *, said: bool = Fa
     heights = [line * count + 2 * vertical for count in lines]
     return TableLayout(
         0.0, 0.0, widths, heights, block.rows, block.align, size, line, vertical + baseline,
-        pad, block.header, (1.1, 0.6, 1.1), palette=canvas.palette,
+        pad, block.header, (1.1, 0.6, 1.1), palette=canvas.palette, measured=measured,
     )
+
+
+def _column_hint(column: int) -> tuple[TextRun, ...]:
+    """What an empty header cell shows while editing: its column's name, "Column 2"."""
+
+    return (TextRun(f"Column {column + 1}"),)
 
 
 def _longest_word(canvas: _Canvas, cell: tuple[TextRun, ...], size: float, weight: int | None) -> float:
@@ -1301,14 +1376,33 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
         for c, cell in enumerate(row):
             x = left + total - sum(plan.widths[: c + 1]) if plan.rtl else left + sum(plan.widths[:c])
             if not cell and PLACEHOLDERS.get():
-                # An empty cell, for an editor: where it is, to click and type in. Drawn nothing.
+                # An empty cell, for an editor: where it is, to click and type in, framed faintly
+                # (a row with nothing in it yet keeps its place), an empty header cell naming its
+                # column -- as Keynote's empty cells show. Never presented (present.js hides
+                # placeholders) nor exported (drawn only for an editor).
                 element(
                     group, "rect", id=f"{identifier}.{r}.{c}", x=x, y=y, width=plan.widths[c],
-                    height=plan.heights[r], fill="none", data__flexo__placeholder="",
+                    height=plan.heights[r], fill="none", stroke=ink, stroke_opacity=0.22, stroke_width=0.6,
+                    stroke_dasharray="2 2", data__flexo__placeholder="",
                 )
+                if plan.header and r == 0:
+                    hint = canvas.measure(_column_hint(c), plan.size, None, 700, balance=False)
+                    align = mirrored[plan.align[c]] if plan.rtl else plan.align[c]
+                    start = x + plan.pad
+                    anchor = {"start": start, "middle": x + plan.widths[c] / 2.0, "end": x + plan.widths[c] - plan.pad}
+                    drawn = render_runs(
+                        group, f"{identifier}.{r}.{c}.hint", hint, x=anchor[align], y=y + plan.baseline,
+                        typography=canvas.deck.typography(plan.size), palette=canvas.palette,
+                        fill_role="ink", anchor=align, weight=700,
+                    )
+                    if drawn is not None:
+                        drawn.set("opacity", "0.38")
+                        drawn.set("data-flexo-placeholder", "Column")
             if cell:
                 inner = Box(x + plan.pad, y + plan.baseline, plan.widths[c] - 2 * plan.pad, 0.0)
-                metrics = canvas.measure(
+                # Set as the plan measured it: measured again at the width that gave, a line can
+                # come out a hair wider (kerning across a space) and wrap below a row one line tall.
+                metrics = plan.measured[r][c] if plan.measured else canvas.measure(
                     cell, plan.size, plan.widths[c] - 2 * plan.pad - plan.size * 0.2,
                     700 if plan.header and r == 0 else None, balance=False,
                 )
@@ -1331,6 +1425,7 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
             d=f"M {number(left)} {number(level)} H {number(left + total)}",
             stroke=ink, stroke_width=weight, fill="none", data__flexo__stroke="ink",
         )
+    plan.measured = None
     canvas.tables.append(plan)
     return y - box.y
 
@@ -2068,6 +2163,31 @@ _LAYOUTS: dict[tuple[str, str, str], str] = {}
 _SCALES: dict[tuple[str, str, str], float] = {}
 """The scale each figure was last drawn at, beside its layout."""
 
+_SHOWN: dict[tuple[str, str, str], str] = {}
+"""The way each figure's outermost group was last drawn, a row or a column, beside its
+layout: as written, or the other way when the figure was turned to fit."""
+
+
+def _root_kind(spec: object) -> str | None:
+    """Whether a figure's outermost group is written as a row or a column."""
+
+    root = next((group for group in spec.groups if group.id == spec.root), None)
+    kind = getattr(getattr(root, "layout", None), "kind", None)
+    return kind if kind in ("row", "column") else None
+
+
+def _kept_as_written(where: tuple[str, str, str], spec: object) -> None:
+    """A figure drawn turned, and since written the way it was drawn (as the studio writes
+    one before moving a part where it is seen, under or beside another), is kept as it is
+    now written: turned again, each of its rows would be drawn as a column, the part moved
+    under another beside it."""
+
+    layout = _LAYOUTS.get(where)
+    if not layout or not layout.startswith("turned") or layout.startswith("turned within"):
+        return
+    if _SHOWN.get(where) is not None and _SHOWN.get(where) == _root_kind(spec):
+        _LAYOUTS[where] = "as written" + layout.removeprefix("turned")
+
 SHRUNK = 0.9
 """How much smaller a figure kept in its layout while edited may be drawn before its best
 layout is found at once (see ``_prepare``)."""
@@ -2131,6 +2251,7 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
     )
     laid = _cached_fit(key)
     where = (deck.id, canvas.slide.id, spec.id)
+    _kept_as_written(where, spec)
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
@@ -2190,6 +2311,9 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         else:
             _store_fit(key, laid)
     _LAYOUTS[where] = laid["layout"]
+    written = _root_kind(spec)
+    turned_whole = laid["layout"].startswith("turned") and not laid["layout"].startswith("turned within")
+    _SHOWN[where] = {"row": "column", "column": "row"}.get(written) if turned_whole else written
     if laid.get("scale"):
         _SCALES[where] = laid["scale"]
     for said in dict.fromkeys(_figure_check(code) for code in laid["codes"]):

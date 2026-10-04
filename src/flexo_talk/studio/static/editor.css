@@ -142,6 +142,8 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .slide-messages .message.note { background: none; padding: 1px 2px; color: var(--ink-3); font-size: 11.5px; }
 .slide-messages .message.note svg { width: 13px; height: 13px; }
 .slide-messages .message.note .where { display: none; }
+/* What on the slide a message is of, in its words' face, after them. */
+.slide-messages .message .where { font: inherit; }
 .deck-error { position: absolute; top: 12px; left: 40px; right: 40px; z-index: 3; }
 .stage-empty { display: grid; gap: 16px; justify-items: center; text-align: center; color: var(--ink-2); max-width: 680px; }
 .stage-empty h2 { margin: 0; font-size: 20px; color: var(--ink); letter-spacing: -0.01em; }
@@ -197,10 +199,11 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich.rt-numbered .rt-line[data-level="2"] { counter-increment: rt2; counter-reset: rt3; }
 .rich.rt-numbered .rt-line[data-level="3"] { counter-increment: rt3; counter-reset: rt4; }
 .rich.rt-numbered .rt-line[data-level="4"] { counter-increment: rt4; }
-.rich-field .rich { min-height: 22px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--raised); outline: none; line-height: 1.4; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; caret-color: var(--accent); position: relative; }
+.rich-field .rich { min-height: 22px; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--raised); outline: none; line-height: 1.4; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; caret-color: var(--accent); position: relative; }
 .rich-field:not(.single) .rich { min-height: 52px; }
 .rich-field .rich:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.rich-field .rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: var(--ink-3); pointer-events: none; }
+/* The inspector's placeholders as its plain fields' are: one grey, one inset (.input's). */
+.rich-field .rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: var(--ink-3); opacity: 1; pointer-events: none; }
 .rich-field .rich.rt-list { padding-left: 4px; }
 .rich-field .rich .rt-line { --rt-text: 1.3em; --rt-mark-x: 0.55em; --rt-mark-y: 0.7em; --rt-gap: 2px; --rt-line: 1.4; --rt-r: 2.5px; --rt-r2: 2px; --rt-step: 1.2em; }
 /* The format bar looks as every text's does (.rt-bar, .markup-tools: studio.css). */
@@ -218,9 +221,11 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rt-bar .rt-unlink { width: auto; height: 22px; margin-left: 6px; padding: 0 8px; font-size: 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--raised); box-shadow: var(--shadow-1); color: var(--ink); }
 .rt-bar .rt-unlink:hover { background: var(--sunken); }
 .rt-swatch.rt-plain { background: var(--ink); }
-.rt-link { width: 180px; height: 24px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); font: 12px var(--mono); }
+/* Wide enough for an address's host and much of its path, read without scrolling. */
+.rt-link { width: 280px; max-width: 100%; height: 24px; margin-left: 4px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); font: 12px var(--mono); }
 .rt-link[hidden] { display: none; }
 .rt-link[aria-invalid="true"] { border-color: var(--error); box-shadow: 0 0 0 3px var(--error-soft); }
+.code-box { padding-right: 8px; }
 .rt-link-note { margin: 0 4px 0 6px; font-size: 11.5px; color: var(--error); white-space: nowrap; }
 .rt-link-note[hidden] { display: none; }
 .rich.rt-numbered .rt-line::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: var(--rt-num-x, auto); right: var(--rt-num-right, calc(100% - var(--rt-text, 1.4em) - var(--rt-at) * var(--rt-step, 1.3em) + 0.3em)); }
@@ -233,8 +238,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich.rt-numbered .rt-line[data-level="3"]::before { content: counter(rt3) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
 .rich.rt-numbered .rt-line[data-level="4"]::before { content: counter(rt4, lower-alpha) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
 /* An equation's LaTeX is typed under it, on a panel of its own. */
-.inline-editor.in-place.under { background: var(--raised); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-2); padding: 4px; }
-.inline-editor.in-place.under textarea { font-size: 13px; background: transparent; }
+.inline-editor.in-place.under { background: var(--under-paper, var(--raised)); color: var(--under-ink, var(--ink)); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 5px var(--accent-soft), var(--shadow-2); padding: 4px; }
+.inline-editor.in-place.under textarea { font-size: 13px; background: transparent; color: inherit; }
+.inline-editor.in-place.under textarea::placeholder { color: currentColor; opacity: 0.45; }
 /* A cell is small and its neighbours close: its words are made strong or emphatic by key. */
 .inline-editor.in-place.cell .markup-tools { display: none; }
 .inline-editor.in-place .markup-tools { position: absolute; bottom: calc(100% + 8px); left: -2px; right: auto; opacity: 1; padding: 3px; background: var(--raised); border-radius: 8px; box-shadow: var(--shadow-2), 0 0 0 1px var(--line); }
@@ -247,7 +253,7 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .notes.open .notes-head .caret { transform: rotate(90deg); }
 .notes-label { font-weight: 620; flex: none; }
 .notes-preview { min-width: 0; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.notes-preview.empty { font-style: italic; }
+.notes-preview.unwritten { font-style: italic; }
 .notes.open .notes-preview { display: none; }
 /* Opening the notes, the panel grows and the slide makes room for it together, briefly,
    rather than the slide jumping up. Closed, the notes can't be reached by Tab. */
@@ -340,13 +346,16 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 /* The table's cells, with room for their words: they wrap, a row growing to hold them, and
    read as the slide sets them -- strong, emphatic, code -- until typed in (ui.cell). */
 .table-edit { overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-s); max-height: 420px; }
+.table-frame { position: relative; min-width: 0; }
+.table-frame.more-right::after { content: ""; position: absolute; top: 1px; right: 1px; bottom: 1px; width: 32px; pointer-events: none; border-radius: 0 var(--radius-s) var(--radius-s) 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6 4l4 4-4 4' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") right 3px center / 12px no-repeat, linear-gradient(to right, transparent, var(--panel) 70%); }
 .table-edit table { border-collapse: collapse; width: 100%; }
 /* A column is at least as wide as its longest word (a cell's words set in .cell-view give it
    its width); the rest of the room goes to the columns with the most to say. */
 /* No column is held wider than its words and its pop-up need: the room goes to the columns
    with the most to say, so their words wrap no more than they must. */
 .table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 40px; vertical-align: top; }
-.table-edit .cell-area, .table-edit .cell-view { padding-inline: 6px; overflow-wrap: normal; }
+.table-edit .cell-area, .table-edit .cell-view { padding-inline: 4px; overflow-wrap: normal; }
 .table-edit td.short .cell-view { white-space: pre; }
 /* A long cell wraps, but in a column wide enough to read. */
 .table-edit td:not(.short):not(.corner) { min-width: 9em; }
@@ -484,4 +493,5 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 /* A placeholder's note: in the Objects row in grey, and at the top of its inspector. */
 .block-row .placeholder-words { color: var(--ink-3); font-style: italic; }
 .placeholder-note { display: flex; align-items: center; gap: 6px; }
+.placeholder-note[hidden] { display: none; }
 .placeholder-note svg { width: 13px; height: 13px; flex: none; }

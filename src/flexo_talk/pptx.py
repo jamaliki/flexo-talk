@@ -235,24 +235,40 @@ def _parts(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids) 
     return [] if element is None else [element]
 
 
+_DRAWN = {
+    "construct": "Construct", "plasmid": "Plasmid", "protein": "Protein", "tree": "Tree",
+    "wellplate": "Well Plate", "timeline": "Timeline", "structure": "Structure", "cells": "Cells",
+    "mechanism": "Mechanism",
+}
+"""What a figure's drawn things (a protein's domain map, a plasmid) are called, by kind."""
+
+
 def _shown_name(group: Group) -> str:
     """What PowerPoint's Selection Pane calls a group: a figure's shape by its words
-    ("Orders API"), a line as a line (named for what it joins once all is written); anything
-    else by its id, which other writers here find it by."""
+    ("Orders API"), a drawn thing by what it is and its name ("Protein sfGFP"), a line as a
+    line (named for what it joins once all is written); anything else by its id, which other
+    writers here find it by."""
 
     entity = group.data.get("data-flexo-entity")
     if entity == "component":
-        words: list[str] = []
+        texts: list[Text] = []
 
         def gather(item: object) -> None:
             if isinstance(item, Text):
-                words.append("".join(run.text for line in item.lines for run in line.runs))
+                texts.append(item)
             elif isinstance(item, Group):
                 for child in item.items:
                     gather(child)
 
         gather(group)
-        said = " ".join(" ".join(words).split())
+        # Its own name, where it has one: not the words of its parts (a protein's domains
+        # and the numbers along its axis) as well.
+        own = [text for text in texts if group.id and text.id == f"{group.id}.label"] or texts
+        drawn = _DRAWN.get(group.data.get("data-flexo-kind", ""))
+        if drawn and len(own) == len(texts) > 1:
+            own = []
+        words = ("".join(run.text for line in text.lines for run in line.runs) for text in own)
+        said = " ".join(filter(None, (drawn, " ".join(" ".join(words).split()))))
         if said:
             return said if len(said) <= 60 else f"{said[:59]}…"
     if entity in {"connector", "net"}:
@@ -1682,6 +1698,9 @@ _FURNITURE = {
 _PARTS = {"mark": "Quotation Mark", "by": "Attribution", "panel": "Panel", "bar": "Bar"}
 """What a block's own parts (a quote's, a callout's) are called, by their id's end."""
 
+_PIECES = {"shaft": "Line", "wellplate": "Well Plate"}
+"""What a part of a drawing is called where its id's end does not say it plainly."""
+
 _GENERIC = {
     "path": "Shape", "rect": "Rectangle", "ellipse": "Oval", "text": "Text", "run": "Text", "picture": "Picture",
     "group": "Group", "arrowhead": "Arrowhead", "line": "Line",
@@ -1709,6 +1728,11 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
                 return found.get("name")
         return ""
 
+    # Each part's label's words by the label's id, read before any of it is renamed.
+    labels = {
+        properties.get("name"): words(properties.getparent().getparent())
+        for properties in tree.iter(f"{{{_P}}}cNvPr") if (properties.get("name") or "").endswith(".label")
+    }
     for properties in tree.iter(f"{{{_P}}}cNvPr"):
         name = properties.get("name") or ""
         element = properties.getparent().getparent()
@@ -1742,6 +1766,12 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
                 said = "Code"
             elif tag == "sp" and words(element):
                 said = f"Text “{words(element)}”"
+            elif owner(element) and (piece := re.fullmatch(r"([a-z]+)(\d*)", name.rsplit(".", 1)[-1])):
+                # A part of a drawn thing, by its id's end: "Axis", "Tick 50", "Feature
+                # β-barrel" (its label's words), "Site S65T".
+                kind, number = piece.groups()
+                label = labels.get(f"{name}.label", "") or (number if kind == "tick" else "")
+                said = f"{_PIECES.get(kind, kind.capitalize())} {label}".strip()
             else:
                 said = {"pic": "Picture", "grpSp": "Group", "cxnSp": "Line", "graphicFrame": "Table"}.get(tag, "Shape")
         elif name in {"canvas.background", "layer.background"}:

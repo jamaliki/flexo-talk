@@ -176,6 +176,7 @@ class DeckKind:
         from flexo.studio.figure_edit import mend
 
         _converted(document, notes if notes is not None else [], base)
+        _one_kind(document, base)
 
         def walk(value: object) -> None:
             if isinstance(value, dict):
@@ -190,6 +191,38 @@ class DeckKind:
 
         walk(document)
         return document
+
+    def identity(self, document: object) -> str | None:
+        """What names a deck inside it, wherever it is kept: its id (made its file's name)."""
+
+        deck = document.get("deck") if isinstance(document, dict) else None
+        return str(deck["id"]) if isinstance(deck, dict) and deck.get("id") else None
+
+    def abandoned(self, document: object, where: dict[str, Any]) -> bool:
+        """An object left empty where someone was typing (``where``, as the editor says where
+        it is: its slide's ``page`` and its ``block``, "body[4]"), their window gone: taken
+        away, as their window takes away an object added and left empty when its typing ends.
+        Answers whether it was."""
+
+        found = re.fullmatch(r"([\w.]+)\[(\d+)\]", str(where.get("block") or ""))
+        slides = document.get("slides") if isinstance(document, dict) else None
+        page = where.get("page")
+        if not found or not isinstance(slides, list) or not isinstance(page, int) or not 1 <= page <= len(slides):
+            return False
+        slide, (region, index) = slides[page - 1], (found[1], int(found[2]))
+        if region.startswith("columns."):
+            columns = slide.get("columns") if isinstance(slide, dict) else None
+            column = int(region.split(".")[1])
+            blocks = columns[column] if isinstance(columns, list) and column < len(columns) else None
+        else:
+            blocks = slide.get(region) if isinstance(slide, dict) else None
+        if not isinstance(blocks, list) or not 0 <= index < len(blocks):
+            return False
+        block = blocks[index]
+        if not _placeholder(block) or (isinstance(block, dict) and block.get("placeholder")):
+            return False
+        del blocks[index]
+        return True
 
     def new(self, path: Path) -> dict[str, Any]:
         return {
@@ -516,6 +549,12 @@ class DeckKind:
             from flexo.studio.figure_kind import fetched
 
             return {"document": document, "id": fetched(str(action.get("id") or ""))}
+        if action.get("do") == "structure-name":
+            # What structure files say they hold, to name the parts made of them.
+            from flexo.structures import structure_caption
+
+            names = [structure_caption(base / str(source)) for source in action.get("sources") or []]
+            return {"document": document, "names": names}
         if action.get("do") == "mechanism":
             return _mechanism(document, action, base)
         if action.get("do") == "inline":
@@ -976,8 +1015,9 @@ def _lines(block: dict[str, Any]) -> list[str] | None:
     """An object's words a line each, as a paragraph and a list are made one of the other
     (each line an item, each item a line), if it is one of those."""
 
+    # (A space at a line's end, typed and waiting for the next word, stays: as the editor's.)
     if isinstance(block.get("text"), str):
-        return [line.strip() for line in block["text"].split("\n") if line.strip()]
+        return [line.lstrip() for line in block["text"].split("\n") if line.strip()]
     if "bullets" not in block:
         return None
     found: list[str] = []
@@ -987,7 +1027,7 @@ def _lines(block: dict[str, Any]) -> list[str] | None:
             for item in value:
                 walk(item)
         elif str(value or "").strip():
-            found.append(str(value).strip())
+            found.append(str(value).lstrip())
 
     walk(block["bullets"])
     return found
@@ -1057,6 +1097,66 @@ def _converted(document: object, notes: list, base: object) -> None:
                 notes.remove(note)
                 break
             break
+
+
+def _one_kind(document: object, base: object) -> None:
+    """Every object of one kind, as a slide draws it: one written with two kinds' words (a
+    paragraph's typed into it while it was made a list) is the kind it was made, the other's
+    words merged into it -- never written as a block the slide cannot draw."""
+
+    from flexo_talk.document import BLOCKS
+
+    olds = [block for blocks in _regions(base) for block in blocks if isinstance(block, dict)]
+    for blocks in _regions(document):
+        for block in blocks:
+            kinds = [key for key in block if key in BLOCKS] if isinstance(block, dict) else []
+            if len(kinds) > 1:
+                _made_one(block, kinds, olds)
+
+
+def _regions(deck: object) -> list[list]:
+    """The lists of objects of a deck's slides: their bodies, sides and columns."""
+
+    found: list[list] = []
+    for slide in (deck.get("slides") or []) if isinstance(deck, dict) else []:
+        if isinstance(slide, dict):
+            found += [slide[key] for key in ("body", "left", "right") if isinstance(slide.get(key), list)]
+            found += [column for column in slide.get("columns") or [] if isinstance(column, list)]
+    return found
+
+
+def _made_one(block: dict[str, Any], kinds: list[str], olds: list[dict[str, Any]]) -> None:
+    """``block``, written with several ``kinds``, made the one it was made since: the kind it
+    was is its old self's among ``olds`` (else, a list made of a paragraph, the paragraph's),
+    and its words are merged into the other's."""
+
+    from flexo.studio.merge import merge3
+
+    def alike(old: dict[str, Any], kind: str) -> float:
+        ours, theirs = _lines({kind: old[kind]}), _lines({kind: block[kind]})
+        if ours is None or theirs is None:
+            return 1.0 if old[kind] == block[kind] else 0.0
+        return _alike_lines(ours, theirs)
+
+    scored = [
+        (alike(old, kind), kind, old)
+        for old in olds
+        if sum(key in old for key in kinds) == 1
+        for kind in kinds
+        if kind in old
+    ]
+    best = max(scored, key=lambda found: found[0], default=None)
+    found = best is not None and best[0] >= 0.5
+    stale = best[1] if found else ("text" if "text" in kinds else kinds[-1])
+    kind = next(key for key in kinds if key != stale)
+    if stale in _WORDY and kind in _WORDY:
+        made, typed = _lines({kind: block[kind]}) or [], _lines({stale: block[stale]}) or []
+        lines = merge3(_lines({stale: best[2][stale]}) if found else made, made, typed)
+        if lines != made:
+            block[kind] = (lines or [""]) if kind == "bullets" else "\n".join(lines)
+    for other in kinds:
+        if other != kind:
+            del block[other]
 
 
 def _placeholder(block: Any) -> bool:

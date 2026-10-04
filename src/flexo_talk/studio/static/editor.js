@@ -8,7 +8,7 @@ import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus,
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
-import { richText, markupOfWords, itemsOfHtml, cellsOf } from "/static/kinds/deck/richtext.js";
+import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords } from "/static/kinds/deck/richtext.js";
 import { follows, merge3 } from "/static/studio/merge.js";
 
 const BLOCKS = {
@@ -114,19 +114,20 @@ const NEW_BLOCKS = {
 
 // A structure file, as a figure's part: named for its file or PDB ID, its id made from that.
 const STRUCTURE_FILE = /\.(pdb|cif|mmcif|ent)$/i;
-function structureNode(source, taken = new Set()) {
+function structureNode(source, taken = new Set(), name = null) {
   const stem = source.split("/").pop().replace(STRUCTURE_FILE, "");
   let slug = stem.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 24) || "structure";
   if (!/^[a-z]/.test(slug)) slug = `pdb-${slug}`;
   let id = slug;
   for (let number = 2; taken.has(id); number += 1) id = `${slug}-${number}`;
   taken.add(id);
-  return { id, kind: "structure", label: fileLabel(source), properties: { source } };
+  return { id, kind: "structure", label: name || fileLabel(source), properties: { source } };
 }
-// Structures on a slide: one after another, an arrow from each to the next.
-function structureFigure(sources) {
+// Structures on a slide: one after another, an arrow from each to the next -- each named
+// for what its file says it holds (`names`), where it says.
+function structureFigure(sources, names = []) {
   const taken = new Set();
-  const nodes = sources.map((source) => structureNode(source, taken));
+  const nodes = sources.map((source, index) => structureNode(source, taken, names[index]));
   const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index].id, to: node.id }));
   return { figure: { figure: { id: `structures-${Date.now().toString(36)}` }, nodes, ...(edges.length ? { edges } : {}) } };
 }
@@ -163,6 +164,10 @@ function setOption(target, key, value, fallback = undefined) {
   else target[key] = value;
 }
 
+// Code as it is kept: no spaces at its lines' ends, which show nothing and would make the
+// file write it as one escaped line rather than as it reads.
+const codeOf = (text) => String(text ?? "").replace(/[ \t]+$/gm, "");
+
 function plain(markup) {
   return readable(String(markup ?? "")).split("\n")[0];
 }
@@ -193,6 +198,18 @@ function summary(block) {
 }
 
 const count = (number, word) => `${number} ${word}${number === 1 ? "" : "s"}`;
+
+// An object as a notice names it: by its first words, where it has words ("“Second
+// paragraph…”"), as a figure's shape is by its label; else by its kind ("Picture").
+function named(block, { the = false } = {}) {
+  const kind = kindOf(block), label = BLOCKS[kind]?.label || "Object";
+  const said = ["text", "bullets", "quote", "callout"].includes(kind) ? summary(block).trim() : "";
+  const words = said && said !== "Empty list" ? said.split(/\s+/) : [];
+  if (words.length) return `“${words.slice(0, 4).join(" ")}${words.length > 4 ? "…" : ""}”`;
+  return the ? `the ${label.toLowerCase()}` : label;
+}
+// What someone deleted that is being edited here, as a notice says it.
+const editedHere = (what) => (what.startsWith("“") ? `${what}, which you're editing` : `${what} you're editing`);
 
 // Words as a title-style label, "line width" -> "Line Width" (words with capitals of
 // their own, "mmCIF", kept); and a key as one, "title_size" -> "Title Size".
@@ -238,10 +255,12 @@ function bulletsFrom(text, empty = false) {
 
 // An object's words a line each, as a paragraph and a list are made one of the other (each
 // line an item, each item a line), if it is one of those.
+// (A space at a line's end, typed and waiting for the next word, stays: as bulletsFrom.)
 function linesOf(block) {
-  if (typeof block?.text === "string") return block.text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const lines = (text) => text.split("\n").filter((line) => line.trim()).map((line) => line.replace(/^\s+/, ""));
+  if (typeof block?.text === "string") return lines(block.text);
   if (!block || !("bullets" in block)) return null;
-  return bulletsText(block.bullets).split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines(bulletsText(block.bullets));
 }
 // How alike two objects' words are, from 0 to 1 (by the letters they share at their ends).
 function alikeLines(first, second) {
@@ -401,7 +420,11 @@ export function mount(studio, container) {
   const opened = Number(remembered("opened", "0")) || 0;
   remember("opened", String(opened + 1));
   const learning = opened < 5;
-  const state = { slide: 0, picked: [], focus: null, field: null, tab: "slide", notes: remembered("notes", "0") === "1" };
+  // Where this document was left -- its slide, and the panel's tab -- is where it opens again.
+  const placeKey = `place-${studio.file}`;
+  const leftAt = (() => { try { return JSON.parse(remembered(placeKey, "{}")) || {}; } catch { return {}; } })();
+  const state = { slide: Math.max(0, Math.min(Number(leftAt.slide) || 0, (studio.doc?.slides?.length || 1) - 1)), picked: [], focus: null, field: null,
+    tab: leftAt.tab === "design" ? "design" : "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
   let mathNotes = null;
@@ -496,8 +519,20 @@ export function mount(studio, container) {
   const rail = h("aside.panel.rail", {}, railList);
   // Notes said in toasts stand over its foot, above the speaker notes (ui.js placeToasts).
   const stage = h("div.stage.deck-stage.scroll-thin", { "data-toast-area": true });
+  // (Each time it is typed in, from focusing it to leaving it, a step of its own: `notesRun`.)
+  let notesRun = 0;
   const notesArea = ui.textarea({ rows: 3, key: "notes", placeholder: "Click to add speaker notes", onInput: (text) =>
-    editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}`, hold: true }) });
+    editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}-${notesRun}`, hold: true }) });
+  notesArea.addEventListener("focusin", () => { notesRun += 1; });
+  // The notes being typed in, changed by another (or an undo): the caret stays among the words
+  // it was in, not sent to their end (an undo's words put back chosen, as TextEdit chooses them).
+  const notesChanged = (undone) => {
+    const was = notesArea.value, now = slideAt()?.notes || "";
+    if (was === now) return;
+    const chosen = [notesArea.selectionStart, notesArea.selectionEnd], [ahead, behind] = changeIn(was, now);
+    notesArea.value = now;
+    notesArea.setSelectionRange(...(undone ? [ahead, now.length - behind] : chosen.map((at) => caretThrough(was, now, at))));
+  };
   const notesPreview = h("span.notes-preview");
   const notes = h(`div.notes${state.notes ? ".open" : ""}`, {},
     h("button.notes-head", { type: "button", onclick: () => showNotes(!state.notes) },
@@ -559,10 +594,15 @@ export function mount(studio, container) {
       if (!target || event.detail?.tidy) return;
       const turn = turns.get(turnOf(target)) || {}, was = turn.before ?? words(target), now = words(target);
       const lines = (text) => text.split("\n").length, type = event.inputType || "";
+      // Letters typed over words chosen are typing, as in Keynote, not a deletion and then
+      // typing: one "Undo Typing" puts the words chosen back. They start a step of their own.
+      const [start, end] = changeIn(was, now), put = now.slice(start, now.length - end);
+      const over = Boolean(put) && !put.includes("\n") && start + end < was.length && !event.isComposing && !/^(delete|insert(Paragraph|LineBreak|Composition))/.test(type);
       const kind = event.detail?.step || /^format/.test(type) || was === now ? "look"
-        : lines(was) !== lines(now) || /^insert(Paragraph|LineBreak)$/.test(type) ? "lines"
-          : /^delete/.test(type) || now.length < was.length ? "delete" : "type";
-      if (kind !== turn.last) studio.step();
+        : over ? "type"
+          : lines(was) !== lines(now) || /^insert(Paragraph|LineBreak)$/.test(type) ? "lines"
+            : /^delete/.test(type) || now.length < was.length ? "delete" : "type";
+      if (kind !== turn.last || over) studio.step();
       if (turns.size > 200) turns.clear();
       turns.set(turnOf(target), { last: kind === "lines" || kind === "look" ? "edge" : kind });
     }, true);
@@ -572,6 +612,30 @@ export function mount(studio, container) {
   inspector.addEventListener("focusin", () => reportFocus());
   const root = h("div.deck", {}, rail, center, inspector);
   clear(container, root);
+
+  // What the drawings say, as shown. A warning that comes while words are typed (a formula
+  // half written does not read) waits until the typing pauses, or stops: it does not flash
+  // on and off at each key. (`messages` is what is shown; `drawnMessages`, all there is.)
+  let drawnMessages = [], typedAt = 0, heldBack = 0;
+  const messageKey = (m) => `${m.page}\n${m.severity}\n${m.text}`;
+  function sayMessages() {
+    clearTimeout(heldBack);
+    heldBack = 0;
+    const wait = typedAt + 800 - Date.now();
+    const shown = new Set(messages.map(messageKey));
+    const fresh = wait > 0 ? new Set(drawnMessages.filter((m) => m.severity !== "note" && !shown.has(messageKey(m)))) : new Set();
+    messages = drawnMessages.filter((m) => !fresh.has(m));
+    if (fresh.size) heldBack = setTimeout(sayHeld, wait);
+  }
+  function sayHeld() {
+    if (!heldBack && messages.length === drawnMessages.length) return;
+    sayMessages();
+    renderRail();
+    renderStage();
+    if (mathNotes && document.contains(inspectorBody.querySelector(".math-notes"))) mathNotes();
+    markBlockErrors();
+  }
+  root.addEventListener("input", () => { typedAt = Date.now(); }, true);
 
   // -- the bar --
   const insertButtons = MAIN_BLOCKS.map((kind) => ui.button(BLOCKS[kind].label, () => insertBlock(kind), { kind: "ghost", icon: BLOCKS[kind].icon, title: `Add ${BLOCKS[kind].label}: ${BLOCKS[kind].hint}` }));
@@ -597,6 +661,12 @@ export function mount(studio, container) {
   };
   studio.on("change", showable);
   showable();
+  // The chosen object's placeholder note, kept to what it holds as it is typed in.
+  studio.on("change", () => {
+    const note = inspectorBody.querySelector(".placeholder-note");
+    const block = note && state.focus && blocksAt(slideAt() || {}, state.focus.region)[state.focus.index];
+    if (note && block) note.hidden = !blank(block);
+  });
 
   const renderBar = () => {
     const slide = slideAt();
@@ -626,8 +696,44 @@ export function mount(studio, container) {
     studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, NEW_SLIDES[layout]()); });
     select(at);
     // Its first words are ready to type: the title (a blank slide has none).
-    if (layout !== "agenda" && layout !== "blank") setTimeout(() => openInline({ kind: "field", field: layout === "statement" ? "words" : "title" }, { selectAll: true }), 300);
+    if (layout !== "agenda" && layout !== "blank") openSoon({ kind: "field", field: layout === "statement" ? "words" : "title" });
   }
+
+  // What was just added opens to be typed in a moment later, once it is drawn: the keys
+  // typed meanwhile are kept and typed into it then, as Keynote keeps them -- none lost to
+  // the page, none taken for a command. (`wait`: when to open, else whoever made it says.)
+  let early = null;
+  function openSoon(target, wait = 300) {
+    const mine = early = { keys: [] };
+    const open = () => {
+      if (early !== mine) return;
+      early = null;
+      const where = typeof target === "function" ? target() : target;
+      if (!inline && where) openInline(where, { selectAll: true });
+      for (const key of mine.keys) {
+        if (!inline) return;
+        inline.area.focus();
+        if (key.text) { document.execCommand("insertText", false, key.text); continue; }
+        if (key.key === "Backspace") { document.execCommand("delete"); continue; }
+        const event = new KeyboardEvent("keydown", { key: key.key, code: key.key, shiftKey: key.shift, bubbles: true, cancelable: true });
+        inline.area.dispatchEvent(event);
+        if (!event.defaultPrevented && key.key === "Enter") document.execCommand("insertText", false, "\n");
+      }
+    };
+    if (wait !== null) setTimeout(open, wait);
+    return open;
+  }
+  document.addEventListener("keydown", (event) => {
+    if (!early || inline || !studio.active || event.metaKey || event.ctrlKey || event.isComposing || typingNow()) return;
+    const key = event.key;
+    if ([...key].length === 1) early.keys.push({ text: key });
+    else if (["Backspace", "Enter", "Tab", "Escape"].includes(key)) early.keys.push({ key, shift: event.shiftKey });
+    else return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  // A click elsewhere before it opens: it is not opened.
+  document.addEventListener("mousedown", () => { early = null; }, true);
 
   function moveSlide(from, to) {
     if (from === to || to < 0 || to >= slides().length) return;
@@ -903,7 +1009,8 @@ export function mount(studio, container) {
       requestAnimationFrame(() => { notesArea.style.height = "auto"; notesArea.style.height = `${Math.max(notesArea.scrollHeight + 2, 60)}px`; });
     }
     notesPreview.textContent = slide?.notes ? plain(slide.notes) : "Click to add speaker notes";
-    notesPreview.classList.toggle("empty", !slide?.notes);
+    // (Not .empty: that is the studio's "nothing here" panel, padded and centred.)
+    notesPreview.classList.toggle("unwritten", !slide?.notes);
     notes.hidden = !list.length;
     if (!list.length) {
       clear(stage, h("div.stage-empty", {}, h("h2", {}, "No slides"), h("div", {}, "Choose a layout for the first slide:"),
@@ -970,7 +1077,7 @@ export function mount(studio, container) {
       // With the studio away nothing is drawn: said so, not a spinner that never ends.
       pending ? (studio.state === "offline" ? h("span.stage-hint", {}, "Drawn again when the studio is back")
         : h("span.row.drawing", {}, h("span.spinner"), "Updating…")) : learning ? h("span.stage-hint", {}, "Click to select · Drag to move · Double-click to edit text") : null);
-    clear(stageMessages, own.map(messageView));
+    clear(stageMessages, own.map((message) => messageView(message, true)));
     stageMessages.hidden = !own.length;
     fitStage();
     placeChosen();
@@ -983,12 +1090,15 @@ export function mount(studio, container) {
     if (moved) landBlocks(moved);
   }
 
-  function messageView(message) {
+  // Under its slide a message need not name the slide: what on it, if anything, follows
+  // its words.
+  function messageView(message, onSlide = false) {
     const where = placeOf(message.where);
     const link = where && where.region !== null;
+    const place = onSlide ? String(message.place || "").replace(/^Slide \d+(?: · )?/, "") : message.where && (message.place || message.where);
     return h(`div.message.${message.severity}${link ? ".link" : ""}`, { onclick: () => { if (link) focusBlock(where.region, where.index); } },
       icon(message.severity === "error" ? "error" : message.severity === "note" ? "info" : "warning"),
-      h("div", {}, message.text, message.where ? h("div.where", {}, message.place || message.where) : null));
+      h("div", {}, message.text, place ? (onSlide ? h("span.where", {}, ` · ${place}`) : h("div.where", {}, place)) : null));
   }
 
   function fitStage() {
@@ -1010,7 +1120,8 @@ export function mount(studio, container) {
     for (const entry of here) {
       const at = /^(.+)\[(\d+)\]$/.exec(entry.where?.block || "");
       const field = entry.where?.field;
-      const box = at ? boxOf(blockId({ region: at[1], index: Number(at[2]) })) : field ? wordsFrame(fieldId(field)) : null;
+      const box = at ? frameOf({ kind: "block", region: at[1], index: Number(at[2]), id: blockId({ region: at[1], index: Number(at[2]) }) })
+        : field ? frameOf({ kind: "field", id: fieldId(field) }) : null;
       if (!box) continue;
       const frame = h(`div.hit.other${entry.where.editing ? ".editing" : ""}`, {}, h("span.hit-label", {}, nameOf(entry.who)));
       frame.style.setProperty("--other", colourOf(entry.who));
@@ -1038,9 +1149,14 @@ export function mount(studio, container) {
     const direct = partOf(event.target);
     if (direct || !pageNode) return direct;
     let best = null;
+    const outer = pageNode.getBoundingClientRect();
     for (const node of pageNode.querySelectorAll("[id]")) {
       if (!BLOCK_ID.test(node.id)) continue;
-      const box = node.getBoundingClientRect();
+      let box = node.getBoundingClientRect();
+      // Words are pressed anywhere in their frame, as wide as it is shown (wordsRoom).
+      const part = partOf(node), block = part && blocksAt(slideAt() || {}, part.region)[part.index];
+      const room = block && WIDE.has(kindOf(block)) ? frameOf(part) : null;
+      if (room) box = { left: outer.left + room.left, right: outer.left + room.left + room.width, top: box.top, bottom: box.bottom, width: room.width, height: box.height };
       if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) continue;
       const area = box.width * box.height;
       if (!best || area < best.area) best = { node, area };
@@ -1134,7 +1250,7 @@ export function mount(studio, container) {
     const chosenNow = part && (part.kind === "block" ? state.focus && state.focus.region === part.region && state.focus.index === part.index
       : state.field && state.field.field === fieldOf(part.field));
     if (chosenNow) { hover.hidden = true; return; }
-    place(hover, part && (part.kind === "field" ? wordsFrame(part.id) : boxOf(part.id)), part ? labelOf(part) : "");
+    place(hover, part && frameOf(part), part ? labelOf(part) : "");
   }
 
   // A part of the chosen figure, pressed and moved, is dragged to another place in it;
@@ -1717,8 +1833,8 @@ export function mount(studio, container) {
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
     if (items.length) items.push("-");
     items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, copyOf(block), at, `Duplicate ${blockLabel(block)}`) });
-    items.push({ icon: "up", label: "Move Up", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
-      { icon: "down", label: "Move Down", disabled: at.index >= count - 1, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
+    items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
+      { icon: "down", label: "Move Down", keys: "⌥↓", disabled: at.index >= count - 1, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
     for (const other of regionsOf(slide)) {
       if (other.key !== at.region) items.push({ icon: "right", label: `Move to ${other.name}`, run: () => moveBlock(at, { region: other.key, index: blocksAt(slide, other.key).length }) });
     }
@@ -1787,14 +1903,14 @@ export function mount(studio, container) {
     const focus = state.focus;
     if (sizing) return;  // its frame follows it as it is sized
     if (!focus && state.field && pageNode && !inline && !moving && !landing) {
-      place(chosen, wordsFrame(state.field.id), { title: "Title", subtitle: "Subtitle", author: "Byline", words: "Text", date: "Date", by: "Attribution" }[state.field.field] || "Text");
+      place(chosen, frameOf({ kind: "field", id: state.field.id }), { title: "Title", subtitle: "Subtitle", author: "Byline", words: "Text", date: "Date", by: "Attribution" }[state.field.field] || "Text");
       chosen.classList.remove("sizable", "holder");
       return;
     }
     if (!focus || !pageNode || moving || landing || carry?.started || inline) { chosen.hidden = true; return; }
     const region = regionsOf(slideAt()).find((r) => r.key === focus.region);
-    const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${focus.index}`);
     const block = blocksAt(slideAt() || {}, focus.region)[focus.index];
+    const box = region && frameOf({ kind: "block", ...focus, id: `slide${state.slide + 1}.${region.svg}.${focus.index}` });
     place(chosen, box, block ? BLOCKS[kindOf(block)].label : "");
     chosen.classList.toggle("sizable", Boolean(block && SIZED.has(kindOf(block))));
     holding();
@@ -1931,6 +2047,8 @@ export function mount(studio, container) {
       chooseFile: async (options) => relativeTo(figureFolder(), await chooseFile(options)),
       tones: () => studio.info?.tones,
       palette: () => studio.info?.palette,
+      // Edits held while the studio is away: the deck is not saved meanwhile.
+      waiting: (on) => { studio.waiting = on; studio.emit("status"); },
       addAnchor: () => figureBar.querySelector(".add") || figureBar,
       groupAnchor: () => figureBar.querySelector(".group") || figureBar,
       crumbs: () => h("button.crumb", { type: "button", onclick: () => { state.focus = null; renderInspector(); placeChosen(); reportFocus(); } }, `Slide ${state.slide + 1}`),
@@ -2001,6 +2119,22 @@ export function mount(studio, container) {
     toast(`${nameOf(lastWho)} deleted the shape you're editing. It stays, as you were still editing it.`, { icon: "info", seconds: 6 });
     return true;
   }
+  // A figure a shape of which is typed in here, deleted by another meanwhile: kept, as it was
+  // here, and said -- as an object typed in is (keepTyped); the one who deleted it is told it
+  // is back (followChange).
+  function figureKept(was, who) {
+    if (!figure?.parts.inline || !Array.isArray(was?.slides)) return false;
+    const old = blocksAt(was.slides[figure.slide], figure.region)[figure.index];
+    const to = follow(was.slides, slides())[figure.slide];
+    if (!old || kindOf(old) !== "figure" || to === undefined || to < 0) return false;
+    const now = blocksAt(slides()[to], figure.region);
+    if (follows([old], now)[0] >= 0) return false;
+    const index = Math.min(figure.index, now.length), region = figure.region;
+    studio.change((d) => { blocksAt(d.slides[to], region, true).splice(index, 0, structuredClone(old)); }, { quiet: true, merge: studio.lastMerge?.key ?? null, hold: true });
+    Object.assign(figure, { slide: to, index });
+    toast(`${nameOf(who)} deleted ${editedHere("the figure")}. It stays, as you were still editing it.`, { icon: "info", seconds: 6 });
+    return true;
+  }
   // Shapes deleted here lately, with the step that deleted them: back because another was still
   // typing in one, said so, and the deleting leaves the history (as an object's does).
   let shapesDeleted = [];
@@ -2026,7 +2160,8 @@ export function mount(studio, container) {
     // read from the figure alone could be either part's, so it is said as the parts say it.
     // A duplicate or a paste is said as such, not as the shapes it adds; a cut, as a cut; a
     // shape put into a line, as put between the two it joins.
-    let label = ["move", "step", "duplicate", "paste", "add"].includes(action.do) ? told : null;
+    // (So is a part moved in a figure drawn turned, its groups written as drawn first.)
+    let label = ["move", "step", "duplicate", "paste", "add"].includes(action.do) || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
@@ -2151,7 +2286,9 @@ export function mount(studio, container) {
       if (!catalog.slide_keys[layoutOf(slide)].includes(key)) return;
       read = (d) => slideNow(d)?.[key] ?? "";
       mirror = `slide.${key}`;
+      // What is typed in is the one thing chosen, and the panel shows it (Tab come from an object).
       state.field = { field: key, id: fieldId(key) };
+      if (state.focus) { state.focus = null; leaveFigure(false); renderInspector(); reportFocus(); }
       // A field the slide has none of (a title slide's subtitle) is put there empty as it
       // is opened, so the slide draws it, as its placeholder, where its words will go; its
       // words typed are the same step in the history. Left empty, it is taken back.
@@ -2175,7 +2312,9 @@ export function mount(studio, container) {
       read = (d) => { const now = blocksAt(slideNow(d) || {}, at.region)[at.index]; return now && kindOf(now) === "table" ? tableRows(now)[target.row]?.[target.col] : undefined; };
       // The format bar stands over the table, not over the rows above the cell.
       const table = () => pageNode?.querySelector(`[id="${CSS.escape(blockId(at))}"]`)?.getBoundingClientRect();
-      editor = rich(rows[target.row][target.col], { single: true, frame: table, onCells: (cells) => pasteCells(at, target.row, target.col, cells) },
+      // An empty header cell hints its column, as the slide does ("Column 1").
+      const hint = block.header !== false && target.row === 0 ? `Column ${target.col + 1}` : "";
+      editor = rich(rows[target.row][target.col], { single: true, frame: table, placeholder: hint, onCells: (cells) => pasteCells(at, target.row, target.col, cells) },
         (text) => editBlock(at, (b) => { const cells = tableRows(b); cells[target.row][target.col] = text; b.table = cells; },
           { merge: `${state.slide}-${at.region}-${at.index}-cell-${target.row}-${target.col}-${session}`, hold: true }));
       idOf = () => `${blockId(at)}.${target.row}.${target.col}`;
@@ -2201,10 +2340,14 @@ export function mount(studio, container) {
       const onCells = (cells) => { closeInline(); insertBlock("table", { table: cells }, at, "Paste Table"); };
       // Return on its empty last item ends the list: a paragraph after it, typed in at once.
       const onEnd = () => paragraphAfter(at);
-      if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered), plain: Boolean(block.plain), placeholder: "Text", onCells, onEnd }, (text) => editBlock(at, (b) => { b.bullets = bulletsFrom(text, true); }, { merge, hold: true }));
-      else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, indent: true, placeholder: "Code", onInput: (text) => editBlock(at, (b) => { b.code = text; }, { merge, hold: true }) });
-      else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, onInput: (text) => editBlock(at, (b) => { b.math = text; }, { merge, hold: true }) });
-      else editor = rich(block[kind] ?? "", { placeholder: { text: "Text", quote: "Quote", callout: "Text" }[kind] || "", onCells }, (text) => editBlock(at, (b) => { b[kind] = text; }, { merge, hold: true }));
+      // Written only as the kind it was opened as: an object made another kind meanwhile (a
+      // paragraph made a list) is never written its old kind's words beside the new's -- the
+      // editor follows it, as that kind, at once (refreshInline).
+      const write = (put) => (text) => editBlock(at, (b) => { if (kindOf(b) === kind) put(b, text); }, { merge, hold: true });
+      if (bullets) editor = rich(bulletsText(block.bullets), { list: true, numbered: Boolean(block.numbered), plain: Boolean(block.plain), placeholder: "Text", onCells, onEnd }, write((b, text) => { b.bullets = bulletsFrom(text, true); }));
+      else if (kind === "code") editor = ui.textarea({ value: block.code, rows: 4, mono: true, indent: true, placeholder: "Code", onInput: write((b, text) => { b.code = codeOf(text); }) });
+      else if (kind === "math") editor = ui.textarea({ value: block.math, rows: 2, mono: true, spelling: false, placeholder: "LaTeX, as E = mc^2", onInput: write((b, text) => { b.math = text; }) });
+      else editor = rich(block[kind] ?? "", { placeholder: { text: "Text", quote: "Quote", callout: "Text" }[kind] || "", onCells }, write((b, text) => { b[kind] = text; }));
       idOf = () => blockId(at);
       state.field = null;
       state.focus = at;
@@ -2216,10 +2359,16 @@ export function mount(studio, container) {
     const cell = target.kind === "cell";
     const node = h(`div.inline-editor.in-place${cell ? ".cell" : ""}`, { onmousedown: (event) => event.stopPropagation(),
       title: cell ? "Tab: next cell · Return: cell below · ⌘B: bold · ⌘I: italic · Esc: done"
-        : `${bullets ? "Tab: indent · Shift-Tab: outdent" : "Tab: next object"} · ⌘B: bold · ⌘I: italic · ⌘K: link · ⌃Tab: format bar · ${target.kind === "field" ? "Return or Esc: done" : "Esc: done"}` }, editor);
+        : `${bullets ? "Tab: indent · Shift-Tab: outdent" : "Tab: next object"} · ⌘B: bold · ⌘I: italic · ⌘K: link · ⌃Tab: format bar · ${target.kind === "field" && target.field !== "words" ? "Return or Esc: done" : "Esc: done"}` }, editor);
     area.addEventListener("keydown", (event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeInline(); }
-      if (event.key === "Enter" && !event.shiftKey && target.kind === "field") { event.preventDefault(); closeInline(); }
+      // Return ends a line of the slide's words (a statement's takes it as a line break, as
+      // Keynote's does); it stays chosen, the next keys going on at its end, not over it.
+      if (event.key === "Enter" && !event.shiftKey && target.kind === "field" && target.field !== "words") {
+        event.preventDefault();
+        closeInline();
+        if (state.field) state.field.ended = true;
+      }
       // Tab goes on to the slide's next line of words (title, subtitle, byline) or object, and
       // ⇧Tab back, not to the inspector; a list's Tab sets its levels (and ⌃Tab goes to the
       // format bar).
@@ -2481,18 +2630,22 @@ export function mount(studio, container) {
       if (found >= 0) { at.region = region.key; at.index = found; return true; }
     }
     const index = Math.min(at.index, now.length);
-    const label = BLOCKS[kindOf(typed)]?.label.toLowerCase() || "object";
     studio.change((d) => { blocksAt(d.slides[to], at.region, true).splice(index, 0, structuredClone(typed)); }, { quiet: true, merge: studio.lastMerge?.key ?? null, hold: true });
     at.index = index;
-    return label;
+    return named(typed, { the: true });
   }
 
   function followChange(was, who, remote = false) {
     const before = Array.isArray(was?.slides) ? was.slides : [], after = slides();
     if (before === after || !before.length) return;
+    // A deleting undone here is no longer one that someone else's typing could bring back.
+    if (!remote) {
+      deletedHere = deletedHere.filter((gone) => studio.past.includes(gone.entry));
+      objectsDeleted = objectsDeleted.filter((gone) => studio.past.includes(gone.entry));
+    }
     // A slide deleted here a moment ago, back because someone was still editing it: said,
     // so it does not seem to have come back of itself.
-    if (after.length > before.length && deletedHere.length) {
+    if (remote && after.length > before.length && deletedHere.length) {
       // Known by what it holds, as it was deleted -- changed since, by whoever kept typing in it.
       const come = after.filter((slide) => !before.some((other) => same(other, slide)));
       for (const gone of deletedHere.filter((item) => Date.now() - item.at < 60000)) {
@@ -2509,7 +2662,7 @@ export function mount(studio, container) {
     }
     // So too an object deleted here a moment ago, on whichever slide it comes back.
     objectsDeleted = objectsDeleted.filter((item) => Date.now() - item.at < 60000);
-    if (objectsDeleted.length) {
+    if (remote && objectsDeleted.length) {
       // The objects come that no object of the slide before became (not one edited).
       const slideFrom = follow(before, after);
       const come = after.flatMap((slide, index) => {
@@ -2531,12 +2684,12 @@ export function mount(studio, container) {
     const from = state.slide;
     const to = from < before.length ? follow(before, after)[from] : from;
     const gone = () => { closeInline(); toast(`${nameOf(who)} deleted the text you were editing`, { icon: "info", seconds: 5 }); };
-    const kept = (label) => toast(`${nameOf(who)} deleted the ${label} you're editing. It stays, as you were still editing it.`, { icon: "info", seconds: 6 });
+    const kept = (what) => toast(`${nameOf(who)} deleted ${editedHere(what)}. It stays, as you were still editing it.`, { icon: "info", seconds: 6 });
     if (to < 0 && inline && remote && before[from]) {
       // The slide typed in, deleted by another: kept, as it is here, and said.
       studio.change((d) => { (d.slides ||= []).splice(Math.min(from, d.slides.length), 0, structuredClone(before[from])); }, { quiet: true, merge: studio.lastMerge?.key ?? null, hold: true });
       state.slide = Math.min(from, slides().length - 1);
-      kept("slide");
+      kept("the slide");
       return;
     }
     if (to < 0) {
@@ -2632,7 +2785,11 @@ export function mount(studio, container) {
     const local = area.value;
     mark.remove();
     area.normalize();
-    const out = merge3(was[0], was[1], local), plain = out.replace(CARET, "");
+    // The caret, typing on where another's words came in at the same place, stays by the
+    // letters typed here, before theirs -- as merged with this page's words first there, when
+    // the words come out the same.
+    const first = merge3(was[0], local, was[1]), plainFirst = first.replace(CARET, "");
+    const out = plainFirst === value ? first : merge3(was[0], was[1], local), plain = out.replace(CARET, "");
     const putBack = plain !== value && plain.replace(/\s+/g, "") === value.replace(/\s+/g, "");
     if (out.split(CARET).length !== 2 || (plain !== value && !putBack)) return false;
     area.value = out;
@@ -2677,10 +2834,12 @@ export function mount(studio, container) {
     if (!rich) { area.style.height = "auto"; area.style.height = `${area.scrollHeight + 2}px`; }
     if (focused && caret) {
       // (A change of look alone -- bold undone -- leaves the letters and the words chosen as they were.)
-      let [start, end] = history && was !== now ? [changeEnd(was, now), changeEnd(was, now)] : caret.map((at) => caretThrough(was, now, at, !own));
+      // Undone or redone, words put back are chosen, as TextEdit chooses them; else the caret
+      // is where words were taken away.
+      const [ahead, behind] = changeIn(was, now), [from, to] = [ahead, was.length - behind];
+      let [start, end] = history && was !== now ? [ahead, now.length - behind] : caret.map((at) => caretThrough(was, now, at, !own));
       // Words chosen here that another replaced -- and typed on in, a letter at a time, as
       // they replace them -- are chosen as they now are, not a stale length of them.
-      const [ahead, behind] = changeIn(was, now), [from, to] = [ahead, was.length - behind];
       const following = inline.chose?.[0] === caret[0] && inline.chose?.[1] === caret[1];
       inline.chose = null;
       if (!history && caret[0] !== caret[1] && ((from === caret[0] && to === caret[1]) || (following && from >= caret[0] && to <= caret[1]))) {
@@ -2702,8 +2861,6 @@ export function mount(studio, container) {
     while (end < was.length - start && end < now.length - start && was[was.length - 1 - end] === now[now.length - 1 - end]) end++;
     return [start, end];
   }
-  // The end of the change in `now`: past words put back, or where words were taken away.
-  const changeEnd = (was, now) => now.length - changeIn(was, now)[1];
   // Where a caret at `at` goes when words change from `was` to `now`: before the change,
   // it stays; after it, it moves with the words; inside it, to the change's end. Letters put
   // in where they could be on either side of it (alike letters about it) go before a caret
@@ -2751,6 +2908,15 @@ export function mount(studio, container) {
     if (inline.under) {
       chosen.hidden = true;
       hover.hidden = true;
+      // On the slide's own paper and ink, as the slide's other in-place editors are (not the
+      // window's, a dark panel on a white slide in dark mode).
+      const paper = pageNode?.querySelector('[id="canvas.background"]')?.getAttribute("fill");
+      if (paper) inline.node.style.setProperty("--under-paper", paper);
+      if (studio.info?.palette?.ink) inline.node.style.setProperty("--under-ink", studio.info.palette.ink);
+      // An equation not yet written: its hint is in the field (its placeholder), not drawn
+      // faintly over it as well.
+      const hint = element?.hasAttribute("data-flexo-placeholder") ? element : null;
+      if (inline.hidden !== hint) { inline.hidden?.style.removeProperty("visibility"); if (hint) hint.style.visibility = "hidden"; inline.hidden = hint; }
       if (!box) return;
       const width = Math.min(Math.max(box.width + 40, 360), slide.width - 24);
       const left = slide.left - outer.left + Math.min(Math.max(12, box.left + box.width / 2 - width / 2), slide.width - width - 12);
@@ -2763,6 +2929,9 @@ export function mount(studio, container) {
     hover.hidden = true;
     const size = look?.size || 16;
     if (inline.cell) {
+      // The hint drawn in an empty header cell is the field's own placeholder while it is typed in.
+      const hint = element ? null : pageNode.querySelector(`[id="${CSS.escape(`${inline.id}.hint`)}"]`);
+      if (hint && inline.hidden !== hint) { inline.hidden?.style.removeProperty("visibility"); hint.style.visibility = "hidden"; inline.hidden = hint; }
       const box = cellBox(inline.id);
       if (!box) return;
       const right = look?.anchor === "end", width = Math.max(box.width + 16, 60);
@@ -2773,33 +2942,17 @@ export function mount(studio, container) {
       return;
     }
     const centred = look?.anchor === "middle";
-    // As wide as the room the words have on the slide: to its margin, both sides for centred
-    // words, and not past the column beside them.
-    const margin = box ? Math.max(12, centred ? Math.min(box.left, slide.width - box.left - box.width) : box.left) : 40;
-    let width = box ? (centred ? slide.width - 2 * margin : Math.max(box.width, slide.width - box.left - margin)) : 420;
-    const beside = box && !centred ? columnBeside(box) : null;
-    if (beside !== null) width = Math.max(box.width, Math.min(width, beside - box.left - 8));
-    let left = slide.left - outer.left + (box ? (centred ? margin : box.left) : 40);
+    const room = wordsRoom(element, box, look, Boolean(inline.area.rich));
+    const width = room.width, left = slide.left - outer.left + room.left;
     let top = slide.top - outer.top + (box ? box.top : 60);
     const rich = inline.area.rich;
     const indent = inline.bullets && look && box && !rich ? Math.max(0, look.left - slide.left - box.left - 5) : 0;
     // The rich editor's lines lie on the drawn lines: the same line spacing, the first
     // line's letters where the drawn ones are, and a list's bullets where they are drawn.
     const metrics = rich && element ? textMetrics(element, size) : null;
-    // Words wrap where the slide will wrap them: as wide as the slide lets them run (its
-    // data-flexo-wrap), give or take a little for letters set a hair wider, centred words
-    // about their middle -- and so a title being typed takes the lines it will be drawn in.
-    const wrapping = (box && element?.getAttribute("data-flexo-wrap")) || "";
-    const wraps = (parseFloat(wrapping) || 0) * (element?.getScreenCTM?.()?.a || 0);
     // Lines evened out on the slide are evened out here (CSS's balance is flexo's: the
     // narrowest width that takes no more lines).
-    inline.area.style.textWrap = wrapping.includes("balance") ? "balance" : "";
-    if (wraps) {
-      width = wraps + 10 + size * 0.3;
-      left = slide.left - outer.left + (centred ? box.left + box.width / 2 - width / 2 : look?.anchor === "end" ? box.left + box.width - width + 10 : box.left);
-    }
-    // Else words the slide wrapped wrap where it wrapped them: at their longest line, give or take a letter.
-    else if (metrics?.wrapped && box && !centred) width = Math.min(width, box.width + size * 0.6);
+    inline.area.style.textWrap = room.wrapping.includes("balance") ? "balance" : "";
     if (metrics) {
       top = metrics.top - outer.top - (metrics.line - metrics.height) / 2 - 5;
       inline.area.style.setProperty("--rt-line", `${metrics.line}px`);
@@ -2905,6 +3058,50 @@ export function mount(studio, container) {
     }
   }
 
+  // The room words have on the slide, left to right (in page pixels, as boxOf gives boxes):
+  // as wide as the slide lets them run before they wrap (their data-flexo-wrap), give or
+  // take a little for letters set a hair wider, centred words about their middle -- else to
+  // the slide's margin, both sides for centred words, and not past the column beside them.
+  // Words are framed this wide however they are shown -- pointed at, chosen, typed in, or
+  // chosen by another -- so their frame is not tight round them in one and wide in the next.
+  function wordsRoom(element, box, look = wordsLook(element), rich = true) {
+    const slide = pageNode.getBoundingClientRect();
+    const centred = look?.anchor === "middle", size = look?.size || 16;
+    const wrapping = (box && element?.getAttribute("data-flexo-wrap")) || "";
+    const wraps = (parseFloat(wrapping) || 0) * (element?.getScreenCTM?.()?.a || 0);
+    if (wraps) {
+      const width = wraps + 10 + size * 0.3;
+      return { width, wrapping, left: centred ? box.left + box.width / 2 - width / 2 : look?.anchor === "end" ? box.left + box.width - width + 10 : box.left };
+    }
+    const margin = box ? Math.max(12, centred ? Math.min(box.left, slide.width - box.left - box.width) : box.left) : 40;
+    let width = box ? (centred ? slide.width - 2 * margin : Math.max(box.width, slide.width - box.left - margin)) : 420;
+    const beside = box && !centred ? columnBeside(box) : null;
+    if (beside !== null) width = Math.max(box.width, Math.min(width, beside - box.left - 8));
+    // Words the slide wrapped wrap where it wrapped them: at their longest line, give or take a letter.
+    if (rich && box && !centred && element && textMetrics(element, size)?.wrapped) width = Math.min(width, box.width + size * 0.6);
+    return { width, wrapping, left: box ? (centred ? margin : box.left) : 40 };
+  }
+  // The frame round a part of the slide -- a line of its words, or an object -- pointed at,
+  // chosen, or chosen by another.
+  function frameOf(part) {
+    if (part.kind === "field") return roomy(part.id, wordsFrame(part.id));
+    const block = blocksAt(slideAt() || {}, part.region)[part.index];
+    const kind = block ? kindOf(block) : "", framed = roomy(part.id, boxOf(part.id), kind);
+    // Words, or drawn to its edges (an equation's glyphs, a table's rules), it has the room
+    // round it a line of the slide's words has (wordsFrame): its frame never touches them.
+    return framed && (INKED.has(kind) || WIDE.has(kind)) ? { left: framed.left - 3, top: framed.top - 3, width: framed.width + 6, height: framed.height + 6 } : framed;
+  }
+  const INKED = new Set(["math", "table", "stats"]);
+  // A frame round words (a line of the slide's, a text, a list, a quote) as wide as their
+  // room; round anything else, as it is.
+  const WIDE = new Set(["text", "bullets", "quote"]);
+  function roomy(id, frame, kind = "words") {
+    const element = pageNode?.querySelector(`[id="${CSS.escape(id)}"]`);
+    if (!frame || !element || !(kind === "words" || WIDE.has(kind))) return frame;
+    const room = wordsRoom(element, boxOf(id) || frame);
+    return { ...frame, left: room.left, width: room.width };
+  }
+
   // Where the next column's objects start, right of `box` (as boxOf gives boxes), if any.
   function columnBeside(box) {
     const slide = slideAt();
@@ -2999,9 +3196,18 @@ export function mount(studio, container) {
     leaveFigure(false);
     placeChosen(); renderInspector(); reportFocus();
   });
+  // A right-click there has the slide's menu, as Keynote's canvas has.
+  stage.addEventListener("contextmenu", (event) => {
+    if (pageNode && (event.target === stage || event.target.classList?.contains("slide-wrap"))) onContext(event);
+  });
 
+  // A press anywhere else ends the typing. On a control outside the slide (the inspector's
+  // Subtitle field, a Layout tile, a colour) the press still reaches it, as in Keynote: the
+  // inspector is drawn again only once the click is done, never under the pointer -- drawn
+  // at once, the control pressed would be gone, the keys left on the page and the title
+  // still chosen, to be typed over.
   function closeOnOutside(event) {
-    if (inline && !inline.node.contains(event.target) && !event.target.closest?.(".rt-bar, [data-keeps-typing]")) closeInline();
+    if (inline && !inline.node.contains(event.target) && !event.target.closest?.(".rt-bar, [data-keeps-typing]")) closeInline({ later: !stage.contains(event.target) });
   }
 
   // The spaces typed last, at the end of a line, waited for a word that never came: they go
@@ -3031,9 +3237,12 @@ export function mount(studio, container) {
   // The words a slide keeps empty, as placeholders holding their places: its title, a
   // statement's words, a title slide's subtitle (as a new one has them).
   const keptEmpty = (key) => key === "title" || key === "words" || (key === "subtitle" && layoutOf(slideAt()) === "title");
-  function closeInline() {
+  function closeInline({ later = false } = {}) {
     if (!inline) return;
     trimTyped();
+    // The typing done: what it left to say is said now.
+    typedAt = 0;
+    setTimeout(sayHeld);
     if (placed) {
       const { key, slide, entry } = placed;
       placed = null;
@@ -3053,6 +3262,7 @@ export function mount(studio, container) {
     inline.area.dispose?.();
     inline.node.remove();
     pageNode?.querySelector(`[id="${CSS.escape(inline.id)}"]`)?.style.removeProperty("visibility");
+    inline.hidden?.style.removeProperty("visibility");
     const left = inline.at && !inline.cell ? inline.at : null;
     inline = null;
     // Its run of typing ends with it: typed in again, however soon, another step.
@@ -3072,9 +3282,19 @@ export function mount(studio, container) {
       }
     }
     document.removeEventListener("mousedown", closeOnOutside, true);
-    // What was typed is shown in the panel too.
-    renderInspector();
+    // What was typed is shown in the panel too: after the click that ended the typing, when
+    // one did (closeOnOutside), the control it was on kept the while.
+    if (later) afterClick(renderInspector);
+    else renderInspector();
     placeChosen();
+  }
+  // Once the press under way has been let go and its click has run (or at once, should no
+  // click come of it).
+  function afterClick(run) {
+    let done = false;
+    const once = () => { if (!done) { done = true; run(); } };
+    document.addEventListener("pointerup", () => setTimeout(once, 0), { once: true, capture: true });
+    setTimeout(() => { if (!document.querySelector(":active")) once(); }, 1500);
   }
 
   // Files dropped on the slide are added to it: pictures as pictures, and structures
@@ -3120,7 +3340,7 @@ export function mount(studio, container) {
       for (const file of structures) sources.push(await studio.upload(file));
       const block = part?.kind === "block" && !pictures.length ? blocksAt(slideAt(), part.region)[part.index] : null;
       if (block && kindOf(block) === "figure" && editable(block)) addStructures(part.region, part.index, sources, at);
-      else await insertBlock("structure", structureFigure(sources));
+      else await insertBlock("structure", structureFigure(sources, await structureNames(sources)));
     }
     const said = [pictures.length ? `${pictures.length} picture${pictures.length > 1 ? "s" : ""}` : "", structures.length ? `${structures.length} structure${structures.length > 1 ? "s" : ""}` : ""].filter(Boolean);
     toast(`${said.join(" and ")} added`, { icon: structures.length ? "structure" : "image" });
@@ -3236,26 +3456,36 @@ export function mount(studio, container) {
     // A spreadsheet's cells are a table, its first row the header, as in Keynote.
     const cells = cellsOf(html, data?.getData("text/plain") || "");
     if (cells) { insertBlock("table", { table: cells }, null, "Paste Table"); return; }
+    // One address is a link, its words the address (unless it came as a link of its own).
+    const linked = !/<a[\s>]/i.test(html || "") && linkOfWords(text);
+    if (linked) { insertBlock("text", { text: linked }, null, "Paste Text"); return; }
     if (items.length === 1) { insertBlock("text", { text: items[0].markup.trim() }, null, "Paste Text"); return; }
-    if (items.length) { insertBlock("text", pastedBlocks(read), null, "Paste Text"); return; }
+    if (items.length) { const blocks = pastedBlocks(read); insertBlock("text", blocks, null, pasteLabel(blocks)); return; }
     // Words pasted are words: a * or $ in them is that mark, not markup. A line that starts
-    // with a bullet or a number ("- ", "3. ", "a) ") is a list's item, without them and its
-    // indent kept as its level; other lines are paragraphs, a blank line between two.
+    // with a bullet or a number ("- ", "3. ", "a) ") is a list's item, without them, its
+    // indent (a tab or two spaces) its level; so is a line indented under another (an outline
+    // from Notes or TextEdit), the line it is under the item over it. Other lines are
+    // paragraphs, a blank line between two.
     const lines = text.split("\n");
     if (lines.filter((line) => line.trim()).length < 2) { insertBlock("text", { text: markupOfWords(text) }, null, "Paste Text"); return; }
     const marker = /^(?:[-*+•◦▪‣·–]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s+/i;
     let paragraph = 0;
-    insertBlock("text", pastedBlocks(lines.map((line) => {
+    const plainItems = lines.map((line) => {
       if (!line.trim()) { paragraph += 1; return { markup: "" }; }
       const mark = marker.exec(line.trim());
-      const indent = /^[ \t]*/.exec(line)[0].replace(/\t/g, "  ").length;
-      return mark ? { depth: Math.floor(indent / 2), markup: markupOfWords(line.trim().slice(mark[0].length)), listed: true, ordered: /\d/.test(mark[0]) }
-        : { depth: 0, markup: markupOfWords(line.trim()), block: paragraph };
-    })), null, "Paste Text");
+      const depth = Math.floor(/^[ \t]*/.exec(line)[0].replace(/\t/g, "  ").length / 2);
+      return { depth, markup: markupOfWords(line.trim().slice(mark ? mark[0].length : 0)), listed: Boolean(mark) || depth > 0, ordered: Boolean(mark && /\d/.test(mark[0])), block: paragraph };
+    });
+    plainItems.forEach((item, n) => { if (item.listed && item.depth > 0 && plainItems[n - 1]?.markup && !plainItems[n - 1].listed) plainItems[n - 1].listed = true; });
+    const blocks = pastedBlocks(plainItems);
+    insertBlock("text", blocks, null, pasteLabel(blocks));
   });
+  // Words pasted named in the history by what they were made: a list, a text -- or, made
+  // into several objects, words.
+  const pasteLabel = (blocks) => (blocks.length === 1 ? `Paste ${blockLabel(blocks[0])}` : "Paste Text");
   // Pasted words as the slide's objects, as Keynote pastes them: each paragraph a text (its
   // lines kept), and a list's items -- only a list's (an <ol> or <ul>, Word's, lines with
-  // bullets or numbers) -- a list, numbered if its numbers were.
+  // bullets or numbers, an outline's indented lines) -- a list, numbered if its numbers were.
   function pastedBlocks(items) {
     const blocks = [];
     let last = null;
@@ -3355,7 +3585,7 @@ export function mount(studio, container) {
     } else if (!given && kind === "structure") {
       const path = await chooseFile({ title: "Choose a Structure", types: ["structure"] });
       if (!path) return;
-      block = structureFigure([path]);
+      block = structureFigure([path], await structureNames([path]));
     }
     // After what is chosen; else in the first empty column, as a new object fills the room there is.
     const anchor = where || state.focus;
@@ -3374,7 +3604,9 @@ export function mount(studio, container) {
     // A new text or list left empty goes again when it is left, as Keynote's does.
     fresh = !given && blank(block) ? { entry: studio.past[studio.past.length - 1], slide: state.slide, region, index } : null;
     focusBlock(region, index);
-    if (INLINE.has(kind) && !given) setTimeout(() => openInline({ kind: "block", region, index }, { selectAll: true }), 300);
+    if (INLINE.has(kind) && !given) openSoon({ kind: "block", region, index });
+    // A new table is typed into at once, from its first cell, as Keynote's is.
+    else if (kind === "table" && !given) openSoon({ kind: "cell", region, index, row: 0, col: 0 });
   }
   let fresh = null;
   // The slide's field put there empty to be typed into (openInline), and its step in the history.
@@ -3426,7 +3658,7 @@ export function mount(studio, container) {
     const label = block ? BLOCKS[kindOf(block)].label : "Object";
     editSlide((s) => { blocksAt(s, at.region).splice(at.index, 1); }, { label: done === "cut" ? `Cut ${label}` : null });
     if (block) {
-      const gone = { block: structuredClone(block), label, at: Date.now(), entry: studio.past[studio.past.length - 1] };
+      const gone = { block: structuredClone(block), label: named(block), at: Date.now(), entry: studio.past[studio.past.length - 1] };
       objectsDeleted = [...objectsDeleted.filter((item) => Date.now() - item.at < 60000), gone];
     }
     state.focus = null;
@@ -3442,6 +3674,7 @@ export function mount(studio, container) {
   // Who made the last change from elsewhere: who deleted what was being edited here.
   let lastWho = null;
   function renderInspector() {
+    remember(placeKey, JSON.stringify({ slide: state.slide, tab: state.tab }));
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
     if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
@@ -3491,8 +3724,9 @@ export function mount(studio, container) {
           ui.button("", () => { editSlide((s) => { const list = blocksAt(s, at.region); list.splice(at.index + 1, 0, structuredClone(list[at.index])); }); focusBlock(at.region, at.index + 1); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
           ui.button("", () => deleteBlock(at), { kind: "ghost", small: true, icon: "trash", title: "Delete (⌫)" }),
           INLINE.has(kind) ? ui.button(kind === "math" ? "Edit Equation" : kind === "code" ? "Edit Code" : "Edit Text", () => openInline({ kind: "block", ...at }), { small: true, icon: "pencil", title: "Edit on the slide (↩), or double-click it" }) : null),
-        // A placeholder says so, at the top: it looks like an object, but no one sees it yet.
-        blank(block) ? h("div.hint-line.placeholder-note", {}, icon("info"), placeholderWords(block, true)) : null,
+        // A placeholder says so, at the top: it looks like an object, but no one sees it yet --
+        // until something is typed in it, here or on the slide (the note goes as it is).
+        h("div.hint-line.placeholder-note", { hidden: !blank(block) }, icon("info"), placeholderWords(block, true)),
         regions.length > 1 ? ui.field("Column", ui.segmented({ value: at.region, options: regions.map((r) => ({ value: r.key, label: r.label })),
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
@@ -3697,14 +3931,25 @@ export function mount(studio, container) {
     return h("div", { style: { display: "grid", gap: "12px" } }, parts);
   }
 
+  // A slide's footnotes, as a list. Each change is made to them as they are when it is made,
+  // not as the panel was drawn: typed into since (quietly, the panel not drawn again), the
+  // list drawn would put back what was typed over.
+  const notesOf = (slide) => (Array.isArray(slide.footnotes) ? [...slide.footnotes] : slide.footnotes ? [slide.footnotes] : []);
   function footnotesControls(slide) {
-    const list = Array.isArray(slide.footnotes) ? slide.footnotes : slide.footnotes ? [slide.footnotes] : [];
+    const list = notesOf(slide);
+    // Each as the slide sets it (emphasis, links), as the inspector's other words are.
     const rows = list.map((note, i) => h("div.list-row", {},
-      ui.markup({ value: note, key: `footnote.${i}`, placeholder: "Reference or note", onInput: (value) => editSlide((s) => { s.footnotes = [...list]; s.footnotes[i] = value; }, { quiet: true, merge: `${state.slide}-fn-${i}` }) }),
-      ui.button("", () => { editSlide((s) => { const next = list.filter((_, j) => j !== i); if (next.length) s.footnotes = next; else delete s.footnotes; }); renderInspector(); }, { kind: "ghost", icon: "trash", small: true, title: "Delete" })));
+      richField({ value: note, key: `footnote.${i}`, placeholder: "Reference or note", single: true, onInput: (value) => editSlide((s) => { const notes = notesOf(s); notes[i] = value; s.footnotes = notes; }, { quiet: true, merge: `${state.slide}-fn-${i}`, hold: true }) }),
+      ui.button("", () => { editSlide((s) => { const next = notesOf(s).filter((_, j) => j !== i); if (next.length) s.footnotes = next; else delete s.footnotes; }); renderInspector(); }, { kind: "ghost", icon: "trash", small: true, title: "Delete" })));
     rows.forEach((row) => { row.firstChild.style.flex = "1"; });
     return h("div.list-rows", {}, rows,
-      h("div", {}, ui.button("Add Footnote", () => { editSlide((s) => { s.footnotes = [...list, "[1] Author et al., *Venue* (2026)"]; }); renderInspector(); }, { kind: "ghost", icon: "plus", small: true })));
+      // Added empty, to be typed in at once: "Footnote" shows faintly on the slide until it is.
+      h("div", {}, ui.button("Add Footnote", () => {
+        let added = 0;
+        editSlide((s) => { const notes = notesOf(s); added = notes.length; s.footnotes = [...notes, ""]; });
+        renderInspector();
+        requestAnimationFrame(() => inspectorBody.querySelector(`[data-key="footnote.${added}"]`)?.focus());
+      }, { kind: "ghost", icon: "plus", small: true })));
   }
 
   // -- the parts of a slide, listed --
@@ -3758,7 +4003,7 @@ export function mount(studio, container) {
         node.classList.remove("drop-before", "drop-after");
         moveBlock(dragBlock, { region: region.key, index: index + (after ? 1 : 0) });
       },
-      onmouseenter: () => place(hover, boxOf(`slide${state.slide + 1}.${region.svg}.${index}`), BLOCKS[kind].label),
+      onmouseenter: () => place(hover, frameOf({ kind: "block", region: region.key, index, id: `slide${state.slide + 1}.${region.svg}.${index}` }), BLOCKS[kind].label),
       onmouseleave: () => { hover.hidden = true; } },
     h("span.kind", {}, icon(BLOCKS[kind].icon)),
     h("span.summary", {}, h("span.what", {}, BLOCKS[kind].label), h(`span.words${blank(block) ? ".placeholder-words" : ""}`, {}, rowWords(block))),
@@ -3791,9 +4036,10 @@ export function mount(studio, container) {
       if (step) studio.step?.();
     });
   }
-  function richField({ value, key, placeholder = "", list = false, single = false, numbered = false, plain = false, onInput }) {
+  // (`onCells`: a spreadsheet's cells pasted in it, as on the slide.)
+  function richField({ value, key, placeholder = "", list = false, single = false, numbered = false, plain = false, onInput, onCells = null }) {
     // Its format bar under it: over it are the panel's own controls (Edit Text).
-    const area = richText({ value, list, single, numbered, plain, placeholder, palette: studio.info?.palette || {}, leaveOnTab: true, docked: true });
+    const area = richText({ value, list, single, numbered, plain, placeholder, palette: studio.info?.palette || {}, leaveOnTab: true, docked: true, onCells });
     area.dataset.key = key;
     // Esc leaves the field (a list's Tab sets its levels), and nothing else.
     area.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.stopPropagation(); area.blur(); } });
@@ -3834,18 +4080,20 @@ export function mount(studio, container) {
       return ui.swatches({ value: block[name] ?? fallback ?? null, colours, none, custom: true,
         onChange: (value) => editBlock(at, (b) => setOption(b, name, value, fallback), { merge: merge(name) }) });
     };
+    // A spreadsheet's cells pasted in its words are a table after it, as on the slide.
+    const onCells = (cells) => { document.activeElement?.blur(); insertBlock("table", { table: cells }, at, "Paste Table"); };
     switch (kind) {
       case "bullets":
         return [richField({ value: bulletsText(block.bullets), list: true, numbered: Boolean(block.numbered), plain: Boolean(block.plain), key: key("bullets"),
-          onInput: (text) => edit((b) => { b.bullets = bulletsFrom(text); }, "items") }),
-        h("div.hint-line", {}, "Return starts the next item; ", h("kbd", {}, "Tab"), " and ", h("kbd", {}, "⇧Tab"), " change its level."),
+          onInput: (text) => edit((b) => { b.bullets = bulletsFrom(text); }, "items"), onCells }),
+        h("div.hint-line", {}, "Return starts the next item; ", h("kbd", {}, "Tab"), " and ", h("kbd", {}, "⇧Tab"), " change its level; ", h("kbd", {}, "Esc"), " then ", h("kbd", {}, "Tab"), " goes on."),
         listField(at, block),
         ui.toggle({ value: block.reveal, label: "Reveal items one at a time", onChange: set("reveal", false) }),
         // Its words' colour, as a text's: the bullets and numbers keep the theme's.
         ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
         size()];
       case "text":
-        return [richField({ value: block.text ?? "", key: key("text"), placeholder: "Text", onInput: (text) => edit((b) => { b.text = text; }, "text") }),
+        return [richField({ value: block.text ?? "", key: key("text"), placeholder: "Text", onInput: (text) => edit((b) => { b.text = text; }, "text"), onCells }),
           listField(at, block),
           ui.field("Align", ui.segmented({ value: block.align || "start", options: [
             { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
@@ -3853,17 +4101,19 @@ export function mount(studio, container) {
           ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
           size()];
       case "quote":
-        return [richField({ value: block.quote ?? "", key: key("quote"), placeholder: "The quotation", onInput: (text) => edit((b) => { b.quote = text; }, "quote") }),
-          ui.field("Attribution", ui.input({ value: block.by, placeholder: "Name", key: key("by"), onInput: set("by") })), size()];
+        return [richField({ value: block.quote ?? "", key: key("quote"), placeholder: "The quotation", onInput: (text) => edit((b) => { b.quote = text; }, "quote"), onCells }),
+          ui.field("Attribution", ui.input({ value: block.by, placeholder: "Name", key: key("by"), onInput: (text) => edit((b) => setOption(b, "by", text), "by") })), size()];
       case "callout":
         return [ui.field("Heading", ui.input({ value: block.title, placeholder: "Optional", key: key("title"), onInput: (text) => edit((b) => setOption(b, "title", text), "title") })),
-          ui.field("Text", richField({ value: block.callout ?? "", key: key("callout"), placeholder: "The point to make", onInput: (text) => edit((b) => { b.callout = text; }, "words") })),
+          ui.field("Text", richField({ value: block.callout ?? "", key: key("callout"), placeholder: "The point to make", onInput: (text) => edit((b) => { b.callout = text; }, "words"), onCells })),
           ui.field("Colour", toneSwatches("colour", { none: false, fallback: "accent" })), size()];
       case "code": {
         // Its lines as typed, never wrapped back to the left edge: a long one scrolls sideways.
-        const code = ui.textarea({ value: block.code, rows: 5, mono: true, indent: true, key: key("code"), onInput: (text) => edit((b) => { b.code = text; }, "code") });
+        const code = ui.textarea({ value: block.code, rows: 5, mono: true, indent: true, key: key("code"), onInput: (text) => edit((b) => { b.code = codeOf(text); }, "code") });
         code.setAttribute("wrap", "off");
-        return [code, h("div.hint-line", {}, "Shown exactly as typed. Whole-line comments are dimmed."), size()];
+        // In a box with room at its right: a textarea's own padding is not kept at the end
+        // of a line scrolled to, which would run into its edge.
+        return [h("div.markup.code-box", {}, code), h("div.hint-line", {}, "Shown exactly as typed. Whole-line comments are dimmed."), size()];
       }
       case "stats": return statsForm(block, at, edit, toneSwatches, size);
       case "table": return tableForm(block, at, edit, size);
@@ -4306,7 +4556,9 @@ export function mount(studio, container) {
       ui.button("", () => { items.splice(i, 1); editBlock(at, (b) => { b.stats = items; }); renderInspector(); }, { kind: "ghost", icon: "trash", small: true, disabled: items.length <= 1 })));
     rows.forEach((row) => { row.firstChild.style.flex = "0 0 96px"; });
     return [h("div.list-rows", {}, rows),
-      h("div", {}, ui.button("Add Number", () => { editBlock(at, (b) => { b.stats = [...items, { value: "1", label: "more" }]; }); renderInspector(); }, { kind: "ghost", icon: "plus", small: true })),
+      // Added empty, its hint drawn faintly on the slide (as its fields here hint it) and never
+      // presented, rather than a sample number that would be.
+      h("div", {}, ui.button("Add Number", () => { editBlock(at, (b) => { b.stats = [...items, { value: "", label: "" }]; }); renderInspector(); }, { kind: "ghost", icon: "plus", small: true })),
       ui.field("Colour", toneSwatches("colour")), size()];
   }
 
@@ -4401,7 +4653,14 @@ export function mount(studio, container) {
       // A few words (a name, "2 Na+ and glucose") on one line, the grid scrolling sideways if
       // it must: words are never broken, nor a short cell stacked a word a line.
       row.map((cell, c) => h(`td${numeric(cell) ? ".number" : ""}${cell.length <= 24 && !cell.includes("\n") ? ".short" : ""}`, { style: { textAlign: { start: "left", middle: "center", end: "right" }[aligned[c]] || "left" } }, input(r, c))))));
-    return [h("div.table-edit.scroll-thin", {}, table),
+    // Wider than the panel, it scrolls sideways, and says so: its right edge fades while
+    // there is more beyond it, as a menu's foot does while there is more below.
+    const grid = h("div.table-edit.scroll-thin", {}, table);
+    const frame = h("div.table-frame", {}, grid);
+    const more = () => frame.classList.toggle("more-right", grid.scrollLeft + grid.clientWidth < grid.scrollWidth - 2);
+    grid.addEventListener("scroll", more, { passive: true });
+    new ResizeObserver(more).observe(grid);
+    return [frame,
       h("div.row", {},
         ui.button("Add Row", () => { restructure(() => rows.push(Array(columns).fill(""))); typeIn(rows.length - 1, 0); }, { kind: "ghost", icon: "plus", small: true }),
         ui.button("Add Column", () => { restructure(() => rows.forEach((row) => row.push(""))); typeIn(0, columns); }, { kind: "ghost", icon: "plus", small: true }),
@@ -4425,7 +4684,7 @@ export function mount(studio, container) {
       // As Keynote's Description: read out for whoever cannot see the picture, its lines
       // growing to hold it; Return is done, as it is one paragraph.
       ui.field("Description", described(ui.textarea({ value: block.description || "", rows: 1, placeholder: "What the picture shows", key: "block.description",
-        onInput: (text) => editBlock(at, (b) => setOption(b, "description", text.replace(/\n+/g, " ")), { merge: `${state.slide}-${at.region}-${at.index}-description` }) })),
+        onInput: (text) => editBlock(at, (b) => setOption(b, "description", text.replace(/\n+/g, " ")), { merge: `${state.slide}-${at.region}-${at.index}-description`, hold: true }) })),
       { hint: "Alt text for screen readers" })];
   }
 
@@ -4525,7 +4784,7 @@ export function mount(studio, container) {
   // up from its shapes' words.
   function figureDescription(block, at) {
     return ui.field("Description", described(ui.textarea({ value: block.description || "", rows: 1, placeholder: "What the figure shows", key: "block.description",
-      onInput: (text) => editBlock(at, (b) => setOption(b, "description", text.replace(/\n+/g, " ")), { merge: `${state.slide}-${at.region}-${at.index}-description` }) })),
+      onInput: (text) => editBlock(at, (b) => setOption(b, "description", text.replace(/\n+/g, " ")), { merge: `${state.slide}-${at.region}-${at.index}-description`, hold: true }) })),
     { hint: "Alt text for screen readers" });
   }
 
@@ -4620,7 +4879,9 @@ export function mount(studio, container) {
     return new Promise((resolve) => {
       let value = "";
       const input = functionInput("", (text) => { value = text; });
-      dialog({ title, body: [ui.field("file.py:function", input), h("div.hint-line", {}, "The file must be in the deck's folder. The function runs each time the slide is drawn.")],
+      // Named as any field is; its form is what the empty field shows.
+      input.placeholder = "file.py:function";
+      dialog({ title, body: [ui.field("Function", input), h("div.hint-line", {}, "The file must be in the deck's folder. The function runs each time the slide is drawn.")],
         actions: [{ label: "Cancel", run: () => resolve(null) }, { label: "Choose", kind: "primary", run: () => {
           if (!/\.py:\w+$/.test(value.trim())) { input.classList.add("invalid"); return false; }
           resolve(value.trim());
@@ -4629,6 +4890,11 @@ export function mount(studio, container) {
     });
   }
 
+  // What structure files say they hold, to name the parts made of them (none: named for
+  // their files).
+  const structureNames = (sources) => studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "structure-name", sources } })
+    .then((found) => found?.names || []).catch(() => []);
+
   // A PDB entry, downloaded before it is added: if it can't be, the dialog says why and
   // nothing is added (as in the figure editor).
   function askEntry() {
@@ -4636,11 +4902,15 @@ export function mount(studio, container) {
       let done = false;
       const input = ui.input({ placeholder: "1UBQ", mono: true });
       const note = h("div.field-problem", { hidden: true });
+      // While it downloads its button says so, and is not pressed twice.
+      const download = ui.button("Download", () => fetchIt(), { kind: "primary" });
+      const busy = (on) => { download.disabled = on; download.querySelector(".btn-label").textContent = on ? "Downloading…" : "Download"; };
       const fetchIt = async () => {
         const id = input.value.trim().toUpperCase();
-        if (!id) { input.focus(); return; }
+        if (!id || download.disabled) { input.focus(); return; }
         clear(note, h("span.spinner"), h("span", {}, `Downloading ${id}…`));
         note.hidden = false;
+        busy(true);
         try {
           const found = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "structure-fetch", id } });
           if (!done) { done = true; resolve(found.id); box.close(); }
@@ -4648,23 +4918,25 @@ export function mount(studio, container) {
           clear(note, icon("warning"), h("span", {}, error.message));
           input.focus();
         }
+        busy(false);
       };
       input.addEventListener("input", () => { note.hidden = true; });
       input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); fetchIt(); } });
       const box = dialog({ title: "Add a Structure from the PDB", body: [ui.field("PDB ID", input, { hint: "Four characters, like 1UBQ" }), note],
-        actions: [{ label: "Cancel", run: () => { done = true; resolve(null); } }, { label: "Download", kind: "primary", run: () => { fetchIt(); return false; } }],
+        actions: [{ label: "Cancel", run: () => { done = true; resolve(null); } }, download],
         onClose: () => { if (!done) { done = true; resolve(null); } } });
       setTimeout(() => input.focus(), 20);
     });
   }
 
   // A file's name asked for, as a Mac's save panel asks: its name chosen, not its folder or
-  // its extension, and the button saying what it does.
-  function ask(title, placeholder, action = "Save") {
+  // its extension, the button saying what it does -- and, with `about`, a line saying what
+  // the file will be for.
+  function ask(title, placeholder, action = "Save", about = "") {
     return new Promise((resolve) => {
       const input = ui.input({ value: placeholder });
       input.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); resolve(input.value.trim() || null); box.close(); } });
-      const box = dialog({ title, body: [input], actions: [{ label: "Cancel", run: () => resolve(null) }, { label: action, kind: "primary", run: () => resolve(input.value.trim() || null) }], onClose: () => resolve(null) });
+      const box = dialog({ title, body: [about ? h("p.export-hint", {}, about) : null, input], actions: [{ label: "Cancel", run: () => resolve(null) }, { label: action, kind: "primary", run: () => resolve(input.value.trim() || null) }], onClose: () => resolve(null) });
       setTimeout(() => {
         input.focus();
         const from = placeholder.lastIndexOf("/") + 1, dot = placeholder.indexOf(".", from);
@@ -4685,6 +4957,8 @@ export function mount(studio, container) {
     const deck = doc().deck || {};
     const editDeck = (mutate, options = {}) => studio.change((d) => { d.deck ||= {}; mutate(d.deck); }, options);
     const setDeck = (name, fallback) => (value) => editDeck((d) => setOption(d, name, value, fallback), { quiet: true, merge: `deck-${name}` });
+    // Words typed in a field: one run from focusing it to leaving it (leftField).
+    const typeDeck = (name) => (value) => editDeck((d) => setOption(d, name, value), { quiet: true, merge: `deck-${name}`, hold: true });
     const look = deck.look || "classic";
     const looks = tinted(h("div.looks", {}, catalog.looks.map((item) => h(`button.look${item.name === look ? ".on" : ""}`, { type: "button",
       onclick: () => { editDeck((d) => setOption(d, "look", item.name, "classic")); renderInspector(); } },
@@ -4738,8 +5012,8 @@ export function mount(studio, container) {
       h("div.section", {}, h("div.section-title", {}, "Fonts"),
         fonts("font", "Body", "Default"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
       h("div.section", {}, h("div.section-title", {}, "Deck"),
-        ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: "Group meeting · 2026", colours: false, key: "deck.footer", onInput: setDeck("footer") })),
-        ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", mono: true, key: "deck.id", onInput: setDeck("id") }), { hint: "name.pptx, name.pdf" })),
+        ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: "Group meeting · 2026", colours: false, key: "deck.footer", onInput: typeDeck("footer") })),
+        ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", mono: true, key: "deck.id", onInput: typeDeck("id") }), { hint: "name.pptx, name.pdf" })),
       h("div.section", {}, h("details.more", { open: changed > 0 }, h("summary", {}, icon("chevron"), `Proportions${changed ? ` (${changed} changed)` : ""}`),
         h("div.inner", {}, styleRows))),
     ];
@@ -4748,7 +5022,10 @@ export function mount(studio, container) {
   async function customiseTheme(deck) {
     const base = deck.theme && !/\.(ya?ml|json)$/i.test(deck.theme) ? deck.theme : "paper";
     // Asked for by its name alone, as a Mac app asks: the file's extension is the studio's.
-    const given = await ask("Save Theme As", deck.id || "talk");
+    // Named for the deck, and not as it is: two tabs of one name would not say which is which.
+    const deckName = String(studio.file || deck.id || "talk").split("/").pop().replace(/\.(ya?ml|json)$/i, "");
+    const given = await ask("Save Theme As", `${deckName} Theme`, "Save",
+      "Saves this deck's look as a theme file you can edit: its colours, fonts and lines. Other decks can use it too.");
     if (!given) return;
     const name = /\.(ya?ml|json)$/i.test(given) ? given : `${given.replace(/\.theme$/i, "")}.theme.yaml`;
     const stem = name.split("/").pop().replace(/\.(ya?ml|json)$/i, "").replace(/\.theme$/i, "");
@@ -4815,13 +5092,26 @@ export function mount(studio, container) {
     // ⌘A outside a text field selects nothing on the page's own words.
     else if (mod && key.toLowerCase() === "a") event.preventDefault();
     else if (mod) return;
-    // With a part of the slide chosen, arrows move it: up and down its column, across to
-    // the next; a figure's part chosen, they leave the slide alone. Else they turn slides.
+    // With a part of the slide chosen, ↑ and ↓ choose the one before or after it, ← and → the
+    // one in the column beside: nothing changes. With ⌥ they move it (Arrange › Move Up and
+    // Move Down): up and down its column, across to the next. A figure's part chosen, they
+    // leave the slide alone. Else they turn slides.
     else if (key.startsWith("Arrow") && state.focus) {
       event.preventDefault();
       if (figure && figureBlock() && figure.parts.selected.length) return;
       const at = state.focus, regions = regionsOf(slideAt()), count = blocksAt(slideAt(), at.region).length;
-      const side = regions.findIndex((region) => region.key === at.region) + (key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0);
+      const column = regions.findIndex((region) => region.key === at.region);
+      const side = column + (key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0);
+      if (!event.altKey) {
+        if (key === "ArrowUp" || key === "ArrowDown") {
+          const all = regions.flatMap((region) => blocksAt(slideAt(), region.key).map((_, index) => ({ region: region.key, index })));
+          const next = all[all.findIndex((stop) => stop.region === at.region && stop.index === at.index) + (key === "ArrowUp" ? -1 : 1)];
+          if (next) focusBlock(next.region, next.index);
+        } else if (regions[side] && side !== column && blocksAt(slideAt(), regions[side].key).length) {
+          focusBlock(regions[side].key, Math.min(at.index, blocksAt(slideAt(), regions[side].key).length - 1));
+        }
+        return;
+      }
       if (key === "ArrowUp" && at.index > 0) moveBlock(at, { region: at.region, index: at.index - 1 });
       else if (key === "ArrowDown" && at.index < count - 1) moveBlock(at, { region: at.region, index: at.index + 2 });
       else if ((key === "ArrowLeft" || key === "ArrowRight") && regions[side] && side !== regions.findIndex((region) => region.key === at.region)) {
@@ -4859,6 +5149,13 @@ export function mount(studio, container) {
     else if (state.field && key === "Escape") { state.field = null; placeChosen(); }
     // Return opens what is chosen with all its words chosen, as Keynote's does.
     else if (state.field && key === "Enter") { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { selectAll: true }); }
+    // Just ended with Return, its words go on from where they were left: typed on at their
+    // end, never over them.
+    else if (state.field?.ended && (key === "Backspace" || (key.length === 1 && !event.altKey))) {
+      event.preventDefault();
+      openInline({ kind: "field", field: state.field.field });
+      if (inline) { if (key === "Backspace") document.execCommand("delete"); else document.execCommand("insertText", false, key); }
+    }
     else if (state.field && (key === "Delete" || key === "Backspace")) { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { replaceWith: "" }); }
     else if (state.field && key.length === 1 && !event.altKey) {
       // Typing over a selected title replaces it, as in Keynote.
@@ -4981,8 +5278,8 @@ export function mount(studio, container) {
       ...(kind === "text" ? [{ icon: "list", label: "Convert to List", run: () => restyle(at, "bulleted") }] : []),
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "text") }] : []),
       // As the Mac app's Arrange menu names them; the hint says what they move.
-      ...(at.index > 0 ? [{ icon: "up", label: "Move Up", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
-      ...(at.index < count - 1 ? [{ icon: "down", label: "Move Down", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) }] : []),
+      ...(at.index > 0 ? [{ icon: "up", label: "Move Up", keys: "⌥↑", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
+      ...(at.index < count - 1 ? [{ icon: "down", label: "Move Down", keys: "⌥↓", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) }] : []),
       { icon: "trash", label: `Delete ${name}`, keys: "⌫", run: () => deleteBlock(at) },
     ];
   }
@@ -5100,7 +5397,9 @@ export function mount(studio, container) {
       // The same words in another look (bold, a colour, a link): their format changed.
       const words = (block) => readable(JSON.stringify(block[kind] ?? ""));
       if (["text", "bullets", "quote", "callout"].includes(kind) && words(a) === words(b)) return `Format ${name}`;
-      return `Edit ${name}`;
+      // Words typed: named by the words they are in, each a step of its own in the history.
+      const typed = ["text", "bullets", "quote", "callout"].includes(kind) ? quoted(summary(b) === "Empty list" ? "" : summary(b)) : "";
+      return typed ? `Typing in ${typed}` : `Edit ${name}`;
     }
     return `Change ${BLOCK_NAMES[keys[0]] || keyTitle(keys[0])}`;
   }
@@ -5205,10 +5504,12 @@ export function mount(studio, container) {
   if (studio.workspace?.justMade === studio.file) {
     studio.workspace.justMade = null;
     let started = false;
+    // (What is typed before it is drawn is kept for it.)
+    const open = openSoon(() => ({ kind: "field", field: layoutOf(slides()[0]) === "statement" ? "words" : "title" }), null);
     studio.on("drawn", () => {
       if (started || !slides().length) return;
       started = true;
-      setTimeout(() => openInline({ kind: "field", field: layoutOf(slides()[0]) === "statement" ? "words" : "title" }, { selectAll: true }), 60);
+      setTimeout(open, 60);
     });
   }
   // An undo waits for a figure's edits still on their way (shell.js).
@@ -5242,6 +5543,7 @@ export function mount(studio, container) {
     const was = lastDoc;
     lastDoc = doc();
     followSlides(was?.slides || [], slides());
+    if (source === "remote") figureKept(was, who);
     if (source === "history" || source === "remote") followChange(was, who, source === "remote");
     // Undone or redone, the deck goes to the slide the change was made on.
     if (source === "history" && Number.isInteger(entry?.where) && entry.where !== state.slide && entry.where < slides().length) {
@@ -5260,13 +5562,14 @@ export function mount(studio, container) {
     else if (!pages[state.slide]?.svg) { renderRail(); renderStage(); }
     if (source === "history" || source === "remote") {
       refreshInline(source === "history", { base, incoming, merged });
-      if (document.activeElement === notesArea) notesArea.value = slideAt()?.notes || "";
+      if (document.activeElement === notesArea) notesChanged(source === "history");
       if (source === "history") figure?.parts.closeInline(false);
     }
     if (source === "remote") { lastWho = who; shapesBack(was, who); }
     if (figure && source !== "edit") {
       if (source === "remote") shapeGone(was);
-      if (figureBlock() && editable(figureBlock())) figure.parts.act({ do: "read" }, { select: false });
+      // (Its words as they now are shown in the field being typed in, too.)
+      if (figureBlock() && editable(figureBlock())) figure.parts.act({ do: "read" }, { select: false, fresh: true });
       else leaveFigure();
     }
     pageNode?.classList.add("pending");
@@ -5281,14 +5584,16 @@ export function mount(studio, container) {
   };
   studio.on("merged", ({ notes }) => {
     const slide = slideAt();
-    const editing = inline || inspectorBody.contains(document.activeElement);
+    // (A figure's shape typed in on the slide is the figure being edited.)
+    const shaping = Boolean(figure?.parts.inline) && figure.slide === state.slide;
+    const editing = inline || shaping || inspectorBody.contains(document.activeElement);
     if (!slide || !editing) return;
-    const at = inline?.at || state.focus;
+    const at = inline?.at || state.focus || (shaping ? { region: figure.region, index: figure.index } : null);
     const block = at && partsOf(slide).find((item) => item.region === at.region && item.index === at.index)?.block;
     const typed = [inline?.area, document.activeElement].map((field) => (typeof field?.value === "string" ? field.value : "")).join("\n");
     for (const note of notes) {
       if (note.kept !== undefined && block && follows([note.kept], [block])[0] === 0) {
-        toast(`${nameOf(note.by)} deleted the ${BLOCKS[kindOf(block)].label.toLowerCase()} you're editing. It stays, as you were still editing it.`, { icon: "info", seconds: 6 });
+        toast(`${nameOf(note.by)} deleted ${editedHere(named(block, { the: true }))}. It stays, as you were still editing it.`, { icon: "info", seconds: 6 });
       } else if (note.kept !== undefined && follows([note.kept], [slide])[0] === 0) {
         toast(`${nameOf(note.by)} deleted the slide you're editing. It stays, as you were still editing it.`, { icon: "info", seconds: 6 });
       } else if (note.rewritten !== undefined && note.typed && typed.includes(note.typed)) {
@@ -5311,13 +5616,16 @@ export function mount(studio, container) {
       if (result.info?.unsettled) settleTimer = setTimeout(() => { settling = true; if (figureBlock()) figure.parts.settles(); studio.requestDraw(0); }, 1200);
     }
     pages = result.pages;
-    messages = result.messages || [];
+    drawnMessages = result.messages || [];
+    sayMessages();
     renderRail();
     renderStage();
     readSlideAhead();
     if (mathNotes && document.contains(inspectorBody.querySelector(".math-notes"))) mathNotes();
     if (figure && typeof figureBlock()?.figure === "string") figure.parts.act({ do: "read" }, { select: false });
-    const key = JSON.stringify(studio.info?.palette || {});
+    // The panel's colours drawn again when the theme's change (its palette edited in its own
+    // tab): the named colours, the tones and the palette's own order, as the swatches show them.
+    const key = JSON.stringify([studio.info?.palette || {}, studio.info?.tones, studio.info?.order, studio.info?.own]);
     if (key !== lastKey) { lastKey = key; renderInspector(); } else markBlockErrors();
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
     stage.querySelector(":scope > .deck-error")?.remove();

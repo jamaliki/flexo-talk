@@ -451,14 +451,14 @@ def test_a_figure_written_in_the_deck_is_edited_where_it_is_written(tmp_path: Pa
 
 
 def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
-    from flexo.studio.figure_kind import NEW_FIGURE
+    from flexo.studio.figure_kind import SAMPLE_FIGURE
 
-    (tmp_path / "model.yaml").write_text(NEW_FIGURE, encoding="utf-8")
+    (tmp_path / "model.yaml").write_text(SAMPLE_FIGURE, encoding="utf-8")
     kind = DeckKind()
     document = _deck_with_figures()
     at = {"slide": 1, "region": "body", "index": 0}
     kind.act(document, {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
-    assert (tmp_path / "model.yaml").read_text() == NEW_FIGURE  # reading writes nothing
+    assert (tmp_path / "model.yaml").read_text() == SAMPLE_FIGURE  # reading writes nothing
     rename = {"do": "rename", "id": "encoder", "to": "backbone"}
     result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
     assert result["file"] == "model.yaml" and result["document"] is document
@@ -468,10 +468,10 @@ def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
 
 def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: Path) -> None:
     from flexo.studio.figure_edit import EditError
-    from flexo.studio.figure_kind import NEW_FIGURE
+    from flexo.studio.figure_kind import SAMPLE_FIGURE
 
     path = tmp_path / "model.yaml"
-    path.write_text(NEW_FIGURE, encoding="utf-8")
+    path.write_text(SAMPLE_FIGURE, encoding="utf-8")
     kind = DeckKind()
     document = _deck_with_figures()
     at = {"slide": 1, "region": "body", "index": 0}
@@ -479,7 +479,7 @@ def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: P
     assert "was" not in read  # nothing changed, nothing to undo
     rename = {"do": "rename", "id": "encoder", "to": "backbone"}
     result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
-    assert result["was"] == NEW_FIGURE and result["now"] == path.read_text()
+    assert result["was"] == SAMPLE_FIGURE and result["now"] == path.read_text()
     was, now = result["change"]
     assert "encoder" in [node["id"] for node in was["nodes"]] and "backbone" in [node["id"] for node in now["nodes"]]
 
@@ -487,13 +487,13 @@ def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: P
         kind.act(document, {"do": "figure-file", "file": "model.yaml", "text": text, "expect": expect}, tmp_path)
 
     restore(result["was"], result["now"])  # undone
-    assert path.read_text() == NEW_FIGURE
+    assert path.read_text() == SAMPLE_FIGURE
     restore(result["now"], result["was"])  # done again
     assert path.read_text() == result["now"]
     # Changed since by hand, elsewhere in the file: undone and done again around it.
     path.write_text(result["now"] + "\n# mine\n", encoding="utf-8")
     restore(result["was"], result["now"])
-    assert path.read_text() == NEW_FIGURE + "\n# mine\n"
+    assert path.read_text() == SAMPLE_FIGURE + "\n# mine\n"
     restore(result["now"], result["was"])
     assert path.read_text() == result["now"] + "\n# mine\n"
     # Changed since in the same place: left as it is.
@@ -583,7 +583,7 @@ def test_one_theme_file_is_put_to_use_in_a_deck_and_a_figure_at_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from flexo.studio import theming
-    from flexo.studio.figure_kind import NEW_FIGURE
+    from flexo.studio.figure_kind import SAMPLE_FIGURE
     from flexo.studio.workspace import Workspace
 
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
@@ -591,7 +591,7 @@ def test_one_theme_file_is_put_to_use_in_a_deck_and_a_figure_at_once(
     (tmp_path / "themes" / "lab.theme.yaml").write_text(
         "theme: {name: lab-put-to-use, base: paper, palette: ['#8b1e3f']}\n", encoding="utf-8")
     (tmp_path / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [{"title": "A"}]}))
-    (tmp_path / "figure.yaml").write_text(NEW_FIGURE, encoding="utf-8")
+    (tmp_path / "figure.yaml").write_text(SAMPLE_FIGURE, encoding="utf-8")
     workspace = Workspace(tmp_path)
     try:
         after = theming.use(workspace, "themes/lab.theme.yaml", ["talk.yaml", "figure.yaml"],
@@ -841,6 +841,35 @@ def test_a_figure_keeps_its_layout_while_the_deck_is_changed_and_settles_after(t
     assert kind.draw(document, tmp_path).info["unsettled"] is False  # and stays settled
 
 
+def test_a_turned_figure_written_as_it_was_drawn_is_not_turned_back(tmp_path: Path, monkeypatch) -> None:
+    import itertools
+
+    from flexo_talk import compose
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    names = ["Purify CA", "Mix CA with IP6", "Negative-stain EM", "Tubes formed?", "Cryo-EM grids",
+             "Collect movies", "Motion correction", "3D refinement"]
+    ids = list("abcdefgh")
+    nodes = [{"id": id, "label": name} for id, name in zip(ids, names, strict=True)]
+    nodes[3]["kind"] = "decision"
+    root = {"id": "root", "layout": {"kind": "column"}, "children": list(ids)}
+    figure = {"figure": {"id": "assay"}, "nodes": nodes, "groups": [root],
+              "edges": [{"from": a, "to": b} for a, b in itertools.pairwise(ids)]}
+    document = {"deck": {"id": "turned"}, "slides": [{"title": "Assay", "body": [{"figure": figure}]}]}
+    kind = DeckKind()
+    kind.draw(document, tmp_path)
+    where = next(key for key in compose._LAYOUTS if key[0] == "turned")
+    assert compose._LAYOUTS[where].startswith("turned")  # a column, drawn as a row to fit
+    # The studio writes it as it is drawn, a row, to put the last part under the one before:
+    # kept as it is drawn while it is changed, it is not turned back into a column (the part
+    # put under the other drawn beside it).
+    root["layout"]["kind"] = "row"
+    root["children"] = [*ids[:-2], "pair"]
+    figure["groups"].append({"id": "pair", "layout": {"kind": "column"}, "children": ids[-2:]})
+    kind.draw(document, tmp_path)
+    assert compose._LAYOUTS[where].startswith("as written")
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 def test_a_part_dragged_on_a_slide_swaps_goes_between_or_goes_home() -> None:
     script = Path(__file__).parents[1] / "src/flexo_talk/studio/static/slidedrop.js"
@@ -975,6 +1004,24 @@ def test_an_empty_title_or_text_holds_its_place_and_shows_only_in_the_studio() -
     assert not [layout for layout in render_slide(deck, deck.slides[0]).lists if layout.id == "slide1.body.0"]
 
 
+def test_an_agenda_before_any_section_shows_its_rows_faintly_while_editing() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    document = yaml.safe_load("deck: {id: early}\nslides:\n  - {layout: agenda, title: Outline}\n")
+    deck = deck_from_document(document, Path("."))
+    exported = render_slide(deck, deck.slides[0])
+    token = PLACEHOLDERS.set(True)
+    try:
+        editing = render_slide(deck, deck.slides[0])
+    finally:
+        PLACEHOLDERS.reset(token)
+    # Put in before its sections, as often: faint rows and a note, not a warning at once.
+    assert not editing.diagnostics and editing.notes
+    assert re.findall(r'id="slide1\.agenda\d"[^>]*data-flexo-placeholder="Section"', editing.svg)
+    # Exported so, it is empty: that is said.
+    assert exported.diagnostics and "slide1.agenda" not in exported.svg
+
+
 def test_a_slide_with_no_title_has_no_band_when_presented(tmp_path: Path) -> None:
     from pptx import Presentation
 
@@ -992,11 +1039,14 @@ def test_a_slide_with_no_title_has_no_band_when_presented(tmp_path: Path) -> Non
 
     token = PLACEHOLDERS.set(True)
     try:
-        studio = [marks(render_slide(deck, slide).svg) for slide in deck.slides]
+        drawn = [render_slide(deck, slide).svg for slide in deck.slides]
     finally:
         PLACEHOLDERS.reset(token)
-    # While editing, the empty title's place is shown on its band; presented, neither is.
-    assert studio == [["band", "title"], ["band", "title"]]
+    # While editing, the empty title's place is shown on its band; presented, neither is:
+    # the band is marked as a placeholder is, so Present (which shows this drawing) hides it.
+    assert [marks(svg) for svg in drawn] == [["band", "title"], ["band", "title"]]
+    hidden = [re.findall(r'id="slide\d\.band"[^>]*data-flexo-placeholder', svg) != [] for svg in drawn]
+    assert hidden == [True, False]
     assert [marks(render_slide(deck, slide).svg) for slide in deck.slides] == [[], ["band", "title"]]
     slides = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides
     assert ["Band" in [shape.name for shape in slide.shapes] for slide in slides] == [False, True]
@@ -1148,10 +1198,12 @@ def test_a_new_table_equation_or_figure_starts_empty_and_shows_only_while_editin
     finally:
         PLACEHOLDERS.reset(token)
     placed = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', studio)
-    assert placed == [("slide1.body.0", "Table"), ("slide1.body.1", "Equation"), ("slide1.body.2", "Placeholder")]
+    # (And in a table typed in, its empty header cell hints its column, as it is typed in.)
+    assert placed == [("slide1.body.0", "Table"), ("slide1.body.1", "Equation"), ("slide1.body.2", "Placeholder"),
+                      ("slide1.body.3.0.1.hint", "Column")]
     # Hints while editing ("Column 1", the first step's "Start"); none of it presented.
     assert ">Column 1<" in studio and ">Start<" in studio
-    assert ">Column 1<" not in exported.svg and ">Start<" not in exported.svg
+    assert ">Column 1<" not in exported.svg and ">Start<" not in exported.svg and ">Column 2<" not in exported.svg
     # A table with one cell typed in is the person's own, its empty cells empty.
     assert ">Year<" in exported.svg and [table.id for table in exported.tables] == ["slide1.body.3"]
 
@@ -1208,6 +1260,32 @@ def test_a_powerpoint_slide_s_shapes_are_named_by_what_they_are(tmp_path: Path) 
     assert {"Title", "Quote “To be or not to be”", "Quotation Mark", "Attribution", "Callout “Mind the gap”",
             "Panel", "Bar", "Equation", "Equation Glyph", "Equation Line", "Slide Number"} <= set(names)
     assert not [name for name in names if "." in name or name in {"path", "rect", "Shape"}]
+
+
+def test_a_drawn_protein_is_named_by_its_name_and_its_parts_by_what_they_are(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    from flexo_talk.export import write_pptx
+
+    document = {"deck": {"id": "protein"}, "slides": [{"title": "Barrel", "body": [{"figure": {
+        "figure": {"id": "f"},
+        "nodes": [
+            {"id": "gas", "label": "Oxygen"},
+            {"id": "sfgfp", "kind": "protein", "label": "sfGFP", "properties": {"length": 238, "features": [
+                {"type": "domain", "label": "β-barrel", "start": 1, "end": 230},
+                {"type": "mutation", "label": "S65T", "at": 65},
+            ]}},
+        ],
+        "edges": [{"from": "gas", "to": "sfgfp"}],
+    }}]}]}
+    deck = deck_from_document(document, tmp_path)
+    slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
+    names = [element.get("name") for element in slide._element.iter()
+             if element.tag.endswith("}cNvPr") and element.get("name")]
+    # By its own name, not every word on it (its axis's numbers); its parts plainly.
+    assert {"Protein sfGFP", "Feature β-barrel", "Site S65T", "Axis", "Tick 50", "Label “S65T”",
+            "Line from Oxygen to Protein sfGFP"} <= set(names)
+    assert "Shape" not in names and not any("50 100" in name for name in names)
 
 
 def test_a_flow_chart_is_read_in_its_order_and_a_description_given_is_said_instead(tmp_path: Path) -> None:
@@ -1292,3 +1370,30 @@ def test_a_paragraph_made_a_list_while_typed_in_is_one_list_with_the_words_typed
     worded, typed = deck({"text": "One\nTwo"}), deck({"bullets": ["One", "Two, typed"]})
     merged = DeckKind().mended(merge3(base, worded, typed, notes), notes, base)
     assert merged["slides"][0]["body"] == [{"text": "First."}, {"text": "One\nTwo, typed"}]
+
+
+def test_an_object_written_with_two_kinds_is_made_the_one_it_became() -> None:
+    def deck(*body: dict) -> dict:
+        return {"slides": [{"title": "Q", "body": [{"text": "First."}, *body]}]}
+
+    # A paragraph's last words written into it as it became a list: one list, with them.
+    base = deck({"text": "Second paragraph."})
+    both = deck({"bullets": ["Second paragraph.", "agent item"], "text": "Second paragraph. alice"})
+    merged = DeckKind().mended(both, [], base)
+    assert merged["slides"][0]["body"][1] == {
+        "bullets": ["Second paragraph. alice", "agent item"]
+    }
+    # A list's words as they are, nested, where the paragraph's added nothing.
+    both = deck({"bullets": ["Second paragraph.", ["under it"]], "text": "Second paragraph."})
+    merged = DeckKind().mended(both, [], base)
+    assert merged["slides"][0]["body"][1] == {"bullets": ["Second paragraph.", ["under it"]]}
+
+
+def test_an_object_left_empty_by_someone_whose_window_went_is_taken_away() -> None:
+    deck = {"slides": [{"title": "A"}, {"title": "Q", "body": [{"text": "Written."}, {"text": ""}]}]}
+    kind = DeckKind()
+    # Where they were typing: not the written one, nor a slide not there.
+    assert not kind.abandoned(deck, {"page": 2, "block": "body[0]", "editing": True})
+    assert not kind.abandoned(deck, {"page": 5, "block": "body[1]", "editing": True})
+    assert kind.abandoned(deck, {"page": 2, "block": "body[1]", "editing": True})
+    assert deck["slides"][1]["body"] == [{"text": "Written."}]
