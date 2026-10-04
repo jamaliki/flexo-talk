@@ -29,7 +29,7 @@ from flexo.artwork import load_artwork, picture_href, picture_link
 from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
 from flexo.lint import lint_compilation
-from flexo.render_common import render_runs
+from flexo.render_common import displayed_alone, render_runs
 from flexo.structures import structure_problem
 from flexo.style import Palette, TypographyStyle
 from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, xml_document
@@ -134,6 +134,8 @@ class _Canvas:
         if slide.backdrop:
             _slide_background(self, slide)
         self.lists: list[ListLayout] = []
+        self.hinted: dict[str, str] = {}
+        """The placeholders standing in for what is empty, by id (render_slide)."""
         self.worded: list[WordsLayout] = []
         self.diagnostics: list[str] = []
         self.lost: set[str] = set()
@@ -262,24 +264,31 @@ class _Canvas:
 
         if not runs:
             return 0.0
+        strong_colour = None
         if (weight or 400) >= 600:
             # Words strong in words already bold (a title, a statement) would look like the
-            # rest: they are drawn in the accent instead -- the same in the PowerPoint and PDF,
-            # which are made from what is drawn here.
+            # rest: they are drawn in the accent instead (in the ink, words already in the
+            # accent) -- the same in the PowerPoint and PDF, made from what is drawn here.
             def plain(run: TextRun) -> bool:
                 return not (run.color or run.math or run.code or run.maths)
 
-            runs = tuple(replace(run, color="accent") if run.weight >= 600 and plain(run) else run for run in runs)
+            own = str(fill or self.palette.get(role) or "").lower()
+            strong = "ink" if own == str(self.palette.get("tone-1-stroke") or "").lower() else "accent"
+            runs = tuple(replace(run, color=strong) if run.weight >= 600 and plain(run) else run for run in runs)
+            strong_colour = self.palette.get("tone-1-stroke" if strong == "accent" else "ink")
         if align == "start" and _rtl(runs):
             # Right-to-left words start at the right.
             align = "end"
         metrics = self.measure(runs, size, box.width if wrap else None, weight, title=title, balance=balance)
         x = {"start": box.x, "middle": box.x + box.width / 2.0, "end": box.x + box.width}[align]
+        # A formula displayed on a line of its own ($$...$$) is centred in the room the words
+        # are set in, as LaTeX centres one: in the PowerPoint, the box is that room too.
+        room = box.width if wrap and any(displayed_alone(line.runs) for line in metrics.lines) else None
         if any(run.math for run in runs):
             typography = self.deck.typography(size, title=title)
             colour = fill or self.palette.get(role)
             self.worded.append(WordsLayout(
-                identifier, x, box.y + metrics.baseline, metrics.width, metrics.line_height,
+                identifier, x, box.y + metrics.baseline, room or metrics.width, metrics.line_height,
                 [line.runs for line in metrics.lines], size, align, typography.family, weight, colour,
             ))
         drawn = render_runs(
@@ -294,11 +303,15 @@ class _Canvas:
             fill=fill,
             anchor=None if align == "start" else align,
             weight=weight,
+            width=room,
         )
         # How wide the words may run before they wrap, and whether their lines are evened
         # out: the studio's editor wraps them there too.
         if wrap and drawn is not None:
             drawn.set("data-flexo-wrap", f"{box.width:g}{' balance' if balance else ''}")
+        # And the colour their own strong words are drawn in, for its bold to show so there too.
+        if strong_colour and drawn is not None and PLACEHOLDERS.get():
+            drawn.set("data-flexo-strong", strong_colour)
         return metrics.height
 
 
@@ -411,6 +424,7 @@ _PLACEHOLDER_RUNS = {"title": "title_runs", "subtitle": "subtitle_runs", "words"
 
 def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSlide:
     canvas = _Canvas(deck, slide)
+    canvas.hinted = empty
     _held_back(canvas, slide)
     style = deck.style
     width, height, margin = style.width, style.height, style.margin
@@ -1398,6 +1412,12 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
                     if drawn is not None:
                         drawn.set("opacity", "0.38")
                         drawn.set("data-flexo-placeholder", "Column")
+            if cell and PLACEHOLDERS.get():
+                # Where a cell is, for an editor: its words are typed in a frame just its size.
+                element(
+                    group, "rect", id=f"{identifier}.{r}.{c}.cell", x=x, y=y, width=plan.widths[c],
+                    height=plan.heights[r], fill="none",
+                )
             if cell:
                 inner = Box(x + plan.pad, y + plan.baseline, plan.widths[c] - 2 * plan.pad, 0.0)
                 # Set as the plan measured it: measured again at the width that gave, a line can
@@ -1451,6 +1471,10 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
         canvas.measure((TextRun(text, code=True),), size, None).width for text, _ in lines if text.strip()
     ]
     width = min(box.width, max(widths, default=0.0) + 2 * pad)
+    if identifier in canvas.hinted:
+        # Code not yet written: its panel as wide as its place, to be typed in (not a chip
+        # round its placeholder's word).
+        width = box.width
     panel, role, ink, muted = _code_paints(canvas.palette)
     element(
         group, "rect", id=f"{identifier}.panel", x=box.x, y=box.y, width=width, height=height,
@@ -1868,10 +1892,10 @@ def _height(canvas: _Canvas, block, width: float) -> float:
         size = block.size or style.body_size
         layout = _list_layout(canvas, block, Box(0.0, 0.0, width, 0.0))
         total = 0.0
-        for level, runs in block.items:
+        for index, (level, runs) in enumerate(block.items):
             offset = layout.offset(level)
             metrics = canvas.measure(runs, size, width - offset, balance=False)
-            total += metrics.height + style.paragraph_gap * size
+            total += metrics.height + style.paragraph_gap * size + sum(_apart(block.items, index, size))
         return total
     return 0.0
 
@@ -2057,6 +2081,20 @@ def _list_layout(canvas: _Canvas, block: _Bullets, box: Box) -> ListLayout:
     return layout
 
 
+DISPLAY_GAP = 0.4
+"""The room (in ems) a list's item that is one formula displayed has above and below it,
+beyond the gap between items: as LaTeX sets a displayed formula apart from its words."""
+
+
+def _apart(items: list, index: int, size: float) -> tuple[float, float]:
+    """The room set before and after a list's item that is a displayed formula alone: none
+    before the first item, nor after the last."""
+
+    if not displayed_alone(items[index][1]):
+        return 0.0, 0.0
+    return (DISPLAY_GAP * size if index else 0.0), (DISPLAY_GAP * size if index < len(items) - 1 else 0.0)
+
+
 def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> float:
     style = canvas.deck.style
     size = block.size or style.body_size
@@ -2080,6 +2118,9 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
             runs = (TextRun(mark), *runs)
         if level == 0:
             step += 1
+        # An item that is one formula displayed ($$...$$) is set apart from the items around it.
+        apart = _apart(block.items, index, size)
+        top += apart[0]
         # A revealed item (with the items under it) is its own group, tagged with its step.
         item = element(group, "g", data__flexo__step=step + 1) if block.reveal else group
         if block.reveal:
@@ -2114,13 +2155,13 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
         render_runs(
             item, f"{identifier}.{index}", metrics, x=across(offset), y=baseline,
             typography=canvas.deck.typography(size), palette=canvas.palette, fill_role=ink_role, fill=ink_fill,
-            anchor="end" if rtl else None,
+            anchor="end" if rtl else None, width=box.width - offset,
         )
         layout.items.append((level, runs, baseline))
         layout.steps.append(metrics.line_height)
         layout.opened.append((metrics.rise, metrics.fall, len(metrics.lines)))
         layout.id = identifier
-        top += metrics.height + style.paragraph_gap * size
+        top += metrics.height + style.paragraph_gap * size + apart[1]
     canvas.lists.append(layout)
     return top - box.y - style.paragraph_gap * size
 
@@ -2166,6 +2207,23 @@ _SCALES: dict[tuple[str, str, str], float] = {}
 _SHOWN: dict[tuple[str, str, str], str] = {}
 """The way each figure's outermost group was last drawn, a row or a column, beside its
 layout: as written, or the other way when the figure was turned to fit."""
+
+
+def _arranged(spec: object) -> bool:
+    """Whether a figure's parts were arranged by hand: a column of parts set in a row
+    beside others, or a row in a column (one part put under another, a line of its own) --
+    not one row or column holding them all."""
+
+    groups = {group.id: group for group in spec.groups}
+    for holder in spec.groups:
+        if holder.layout.kind not in ("row", "column") or len(holder.children) < 2:
+            continue
+        for child in holder.children:
+            inner = groups.get(child)
+            across = inner is not None and inner.layout.kind in ("row", "column")
+            if across and inner.layout.kind != holder.layout.kind and len(inner.children) > 1:
+                return True
+    return False
 
 
 def _root_kind(spec: object) -> str | None:
@@ -2244,10 +2302,14 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         )
     style = figure_style(spec)
     base = style.typography.size.points
+    # A figure its person arranged by hand -- a part put under another, or on a line of its
+    # own -- is drawn as arranged, made smaller to fit rather than turned round, unless they
+    # ask for it to be turned.
+    turn = block.turn if block.turn is not None else not _arranged(spec)
     # The palette is in the key too: a theme file's colours can change under the same name.
     key = (
         spec, style, repr(figure_palette(spec)), box.width, box.height, deck.style.figure_size,
-        largest, block.turn,
+        largest, turn,
     )
     laid = _cached_fit(key)
     where = (deck.id, canvas.slide.id, spec.id)
@@ -2258,7 +2320,7 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         keep = _LAYOUTS.get(where) if EDITING.get() else None
         fit = _fit_in_box(
             spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-            turn=block.turn, keep=keep,
+            turn=turn, keep=keep,
         )
         shown = _SCALES.get(where)
         # Kept folded, its lines might now cross (a loop added across the fold): a fold is
@@ -2274,7 +2336,7 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
             keep = None
             fit = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=block.turn,
+                turn=turn,
             )
         codes = [
             diagnostic.code
@@ -2282,13 +2344,15 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
             # The figure is laid out for its place and scaled to it: a grown width is moot.
             if diagnostic.code != "layout.width.grown"
         ]
-        previous = _LAYOUTS.get(where)
+        # (Only while it is changed: settled, a figure is drawn as its document says, the same
+        # way whatever came before -- after an undo, after a reload.)
+        previous = _LAYOUTS.get(where) if EDITING.get() else None
         if (keep is None or fit.layout != keep) and previous and fit.layout != previous:
             # A figure already shown one way stays that way unless another is clearly
             # larger: it doesn't turn under its person for a little more room.
             held = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=block.turn, keep=previous,
+                turn=turn, keep=previous,
             )
             kept = [
                 diagnostic.code

@@ -372,8 +372,10 @@ class _Words:
 @dataclass(slots=True)
 class _Figure:
     figure: flexo.Figure | FigureSpec
-    turn: bool = True
-    """Whether flexo may lay the figure out turned when that fits its place better."""
+    turn: bool | None = None
+    """Whether flexo may lay the figure out turned when that fits its place better: ``None``
+    lets it unless its parts were arranged by hand (one put under another beside others),
+    ``True`` lets it even so, ``False`` keeps it as written."""
     width: float | None = None
     """The width it is drawn at (points), as its place allows; ``None`` sizes it to its place."""
     said: tuple[str, ...] = ()
@@ -673,7 +675,26 @@ def inline(words: str) -> tuple[TextRun, ...]:
                     italic=run.italic or italic,
                 )
             )
-    return tuple(runs)
+    return _displayed_apart(runs)
+
+
+def _displayed_apart(runs: list[TextRun]) -> tuple[TextRun, ...]:
+    """``runs`` with each formula displayed among words (``$$...$$``) on a line of its own,
+    as a figure's label sets one (``flexo.markup``): there it is centred, as LaTeX sets it."""
+
+    laid: list[TextRun] = []
+    for at, run in enumerate(runs):
+        if run.math.startswith("\\displaystyle"):
+            if laid and laid[-1].text != "\n":
+                laid.append(TextRun("\n"))
+            laid.append(run)
+            if any(later.text.strip() or later.math for later in runs[at + 1 :]):
+                laid.append(TextRun("\n"))
+            continue
+        if at and runs[at - 1].math.startswith("\\displaystyle"):
+            run = replace(run, text=run.text.lstrip(" "))
+        laid.append(run)
+    return tuple(laid)
 
 
 _ASTERISK = "\ue000"
@@ -998,39 +1019,43 @@ class Region:
         return self
 
     def figure(
-        self, id: str | None = None, *, turn: bool = True, width: float | None = None, **options: object
+        self, id: str | None = None, *, turn: bool | None = None, width: float | None = None,
+        **options: object,
     ) -> flexo.Figure:
         """A flexo figure in the deck's theme, laid out for this place: use it as a
         ``with`` block. ``turn=False`` keeps it as written, and ``width`` draws it that
         wide (see ``add``)."""
 
         deck = self._slide.deck
-        turn = _flag(turn, "turn")
+        turn = None if turn is None else _flag(turn, "turn")
         width = _width(width)
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
         self.blocks.append(_Figure(figure, turn, width))
-        self._record("figure", None, turn=None if turn else False, width=width)
+        self._record("figure", None, turn=turn, width=width)
         return figure
 
     def add(
-        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None,
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
         description: str | None = None,
     ) -> Region:
         """An existing flexo figure, laid out again in the deck's theme for this place.
 
         Flexo lays it out for the place's width *and* height: as written, or turned
         (a tall stack read left to right) or spaced closer when that lets its words
-        be larger -- ``turn=False`` keeps it as written. It is drawn as large as its
-        place lets its words be the size of the words round it; ``width`` (points)
-        draws it that wide instead, smaller or larger, as far as its place allows.
+        be larger -- ``turn=False`` keeps it as written, and so does a figure whose parts
+        were arranged by hand (a part under another beside others) unless ``turn=True``.
+        It is drawn as large as its place lets its words be the size of the words round
+        it; ``width`` (points) draws it that wide instead, smaller or larger, as far as
+        its place allows.
         ``description`` says what it shows, as a picture's does.
         """
 
         width = _width(width)
         description = " ".join(str(description).split()) if description is not None else ""
-        self.blocks.append(_Figure(figure, _flag(turn, "turn"), width, description=description))
-        self._record("figure", None, turn=None if turn else False, width=width, description=description or None)
+        turn = None if turn is None else _flag(turn, "turn")
+        self.blocks.append(_Figure(figure, turn, width, description=description))
+        self._record("figure", None, turn=turn, width=width, description=description or None)
         return self
 
     def image(self, source: str | Path, *, width: float | None = None, description: str | None = None) -> Region:
@@ -1300,12 +1325,13 @@ class Slide:
         return self
 
     def figure(
-        self, id: str | None = None, *, turn: bool = True, width: float | None = None, **options: object
+        self, id: str | None = None, *, turn: bool | None = None, width: float | None = None,
+        **options: object,
     ) -> flexo.Figure:
         return next(iter(self.regions.values())).figure(id, turn=turn, width=width, **options)
 
     def add(
-        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None,
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
         description: str | None = None,
     ) -> Slide:
         next(iter(self.regions.values())).add(figure, turn=turn, width=width, description=description)

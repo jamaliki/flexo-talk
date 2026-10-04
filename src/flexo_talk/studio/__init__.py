@@ -177,6 +177,7 @@ class DeckKind:
 
         _converted(document, notes if notes is not None else [], base)
         _one_kind(document, base)
+        _laid_out(document)
 
         def walk(value: object) -> None:
             if isinstance(value, dict):
@@ -987,9 +988,20 @@ def _object_name(block: Any) -> str:
     return _OBJECTS.get(kind, "Object")
 
 
+def _a(name: str) -> str:
+    """An object as said aloud after "added" or "deleted", as "the list" is after "edited":
+    "a table", "an equation", "a flow chart" -- numbers and code with no article ("added
+    numbers", never "a numbers")."""
+
+    word = name.lower()
+    if name in ("Numbers", "Code"):
+        return word
+    return f"{'an' if word[0] in 'aeiou' else 'a'} {word}"
+
+
 def _objects(old: Any, new: Any) -> tuple[str, str]:
     """What changed among a slide's objects, as said aloud: ("edited", "the list"), ("added",
-    "Table") -- an object added or deleted by its name, as the studio names it -- ("edited",
+    "a table") -- an object added or deleted by its name, as the studio names it -- ("edited",
     "the list and the figure")."""
 
     name = _object_name
@@ -999,11 +1011,11 @@ def _objects(old: Any, new: Any) -> tuple[str, str]:
     if len(now) > len(was):
         kept = [json.dumps(block, sort_keys=True, default=str) for block in was]
         added = [block for block in now if json.dumps(block, sort_keys=True, default=str) not in kept]
-        return ("added", name(added[0])) if added else ("edited", "its content")
+        return ("added", _a(name(added[0]))) if added else ("edited", "its content")
     if len(now) < len(was):
         kept = [json.dumps(block, sort_keys=True, default=str) for block in now]
         gone = [block for block in was if json.dumps(block, sort_keys=True, default=str) not in kept]
-        return ("deleted", name(gone[0])) if gone else ("edited", "its content")
+        return ("deleted", _a(name(gone[0]))) if gone else ("edited", "its content")
     changed = list(dict.fromkeys(f"the {name(b).lower()}" for a, b in zip(was, now, strict=True) if a != b))
     return "edited", " and ".join(changed[:2]) or "its content"
 
@@ -1114,6 +1126,63 @@ def _one_kind(document: object, base: object) -> None:
                 _made_one(block, kinds, olds)
 
 
+def _laid_out(document: object) -> None:
+    """Every slide's objects in the places its layout has: one a merge left where the layout
+    has none (a body beside the two columns the slide was just set out in) is put in the
+    first place it has -- each object not there already, after those there -- never left for
+    the slide not to draw. (A layout with no place for objects is left as it is.)"""
+
+    from flexo_talk.document import SLIDE_KEYS
+
+    for slide in (document.get("slides") or []) if isinstance(document, dict) else []:
+        if not isinstance(slide, dict):
+            continue
+        keys = SLIDE_KEYS.get(str(slide.get("layout", "content")), ())
+        places = [key for key in _PLACES if key in keys]
+        stray = [key for key in _PLACES if key in slide and key not in keys]
+        if not places or not stray:
+            continue
+        there = [block for key in places for block in _blocks_in(slide.get(key), key)]
+        lost = [
+            block
+            for key in stray
+            for block in _blocks_in(slide.pop(key), key)
+            if not any(_alike_blocks(block, other) for other in there)
+        ]
+        if not lost:
+            continue
+        if places[0] == "columns":
+            columns = slide.get("columns") if isinstance(slide.get("columns"), list) else []
+            slide["columns"] = [*(columns or [[]])]
+            slide["columns"][0] = [*slide["columns"][0], *lost]
+        else:
+            slide[places[0]] = [*(slide.get(places[0]) or []), *lost]
+
+
+_PLACES = ("body", "left", "right", "columns")
+
+
+def _blocks_in(value: Any, key: str) -> list:
+    """The objects in one of a slide's places (a list of them, or, columns, of lists)."""
+
+    if not isinstance(value, list):
+        return []
+    if key == "columns":
+        return [block for column in value if isinstance(column, list) for block in column]
+    return list(value)
+
+
+def _alike_blocks(first: Any, second: Any) -> bool:
+    """Whether two objects are one, as kept twice: the same, or with words alike."""
+
+    if first == second:
+        return True
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        return False
+    ours, theirs = _lines(first), _lines(second)
+    return ours is not None and theirs is not None and _alike_lines(ours, theirs) >= 0.5
+
+
 def _regions(deck: object) -> list[list]:
     """The lists of objects of a deck's slides: their bodies, sides and columns."""
 
@@ -1211,12 +1280,10 @@ def _what_changed(old: Any, new: Any) -> tuple[str, str]:
     old, new = _without_placeholders(old), _without_placeholders(new)
     if "body" in keys and (done := _objects(old.get("body"), new.get("body")))[0] != "edited":
         return done
-    names = {"title": "the title", "words": "the words", "subtitle": "the subtitle", "notes": "the notes",
-             "layout": "the layout", "left": "the left column", "right": "the right column",
-             "columns": "its columns", "background": "the background", "footnotes": "the footnotes",
-             "author": "the author", "date": "the date", "shade": "the background", "dark": "the background"}
-    said = list(dict.fromkeys(_objects(old.get(key), new.get(key))[1] if key == "body" else names.get(key, f"the {key}")
-                              for key in keys))
+    # A setting by the name the inspector gives it ("the statement", "the attribution"), never its key.
+    names = {"left": "the left column", "right": "the right column", "columns": "its columns"}
+    said = list(dict.fromkeys(_objects(old.get(key), new.get(key))[1] if key == "body"
+                              else names.get(key) or f"the {FIELD_LABELS.get(key, key).lower()}" for key in keys))
     return "edited", " and ".join(said[:2])
 
 

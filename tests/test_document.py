@@ -300,18 +300,23 @@ def test_the_studio_names_what_a_change_did_slide_by_slide() -> None:
     grown = {"slides": [{"title": "Plan", "body": [{"bullets": ["Entirely", "different", "words", "pasted in"]}]}]}
     assert [note["text"] for note in kind.describe(pasted, grown)] == ["edited the list on slide 1"]
     added = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"table": [["a", "b"]]}], "date": "2026"}]}
-    assert [note["text"] for note in kind.describe(pasted, added)] == ["added Table to slide 1"]
-    # Added and deleted by the name the studio gives them, never "a numbers" or "a code".
+    assert [note["text"] for note in kind.describe(pasted, added)] == ["added a table to slide 1"]
+    # Added and deleted by the name the studio gives them, as said aloud: never "a numbers".
     numbers = {"slides": [{"title": "Plan",
                            "body": [{"bullets": ["One"]}, {"stats": [{"value": "93%", "label": "right"}]}]}]}
-    assert [note["text"] for note in kind.describe(pasted, numbers)] == ["added Numbers to slide 1"]
+    assert [note["text"] for note in kind.describe(pasted, numbers)] == ["added numbers to slide 1"]
     coded = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"code": "print()"}]}]}
-    assert [note["text"] for note in kind.describe(coded, pasted)] == ["deleted Code from slide 1"]
+    assert [note["text"] for note in kind.describe(coded, pasted)] == ["deleted code from slide 1"]
     flow = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}, {"figure": {"nodes": [
         {"id": "start", "kind": "terminal", "label": "Start"}, {"id": "end", "kind": "terminal", "label": "End"}]}}]}]}
-    assert [note["text"] for note in kind.describe(pasted, flow)] == ["added Flow Chart to slide 1"]
+    assert [note["text"] for note in kind.describe(pasted, flow)] == ["added a flow chart to slide 1"]
     dated = {"slides": [{"title": "Plan", "body": [{"bullets": ["One"]}], "date": "2026"}]}
     assert [note["text"] for note in kind.describe(pasted, dated)] == ["edited the date on slide 1"]
+    # A setting by its name in the inspector, never its key.
+    said = {"slides": [{"layout": "statement", "words": "Go", "by": "Ada"}]}
+    resaid = {"slides": [{"layout": "statement", "words": "Go on", "by": "Ada L."}]}
+    assert [note["text"] for note in kind.describe(said, resaid)] == [
+        "edited the statement and the attribution on slide 1"]
 
 
 def test_an_agent_gets_a_guide_and_a_quick_check() -> None:
@@ -870,6 +875,71 @@ def test_a_turned_figure_written_as_it_was_drawn_is_not_turned_back(tmp_path: Pa
     assert compose._LAYOUTS[where].startswith("as written")
 
 
+def test_a_figure_arranged_by_hand_is_drawn_as_arranged_and_the_same_whatever_came_before(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import copy
+
+    from flexo_talk import compose
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    names = {"u": "KaiC-U", "t": "KaiC-T", "st": "KaiC-ST", "s": "KaiC-S", "b": "KaiB binds"}
+    nodes = [{"id": id, "label": name} for id, name in names.items()]
+    groups = [
+        {"id": "root", "layout": {"kind": "column"}, "children": ["row", "b"]},
+        {"id": "row", "layout": {"kind": "row"}, "children": ["u", "t", "st", "s"]},
+    ]
+    edges = [{"from": "u", "to": "t"}, {"from": "t", "to": "st"}, {"from": "st", "to": "s"},
+             {"from": "s", "to": "b"}]
+    figure = {"figure": {"id": "kai"}, "nodes": nodes, "groups": groups, "edges": edges}
+    document = {"deck": {"id": "kai"}, "slides": [{"title": "The clock", "body": [{"figure": figure}]}]}
+    kind = DeckKind()
+    first = kind.draw(document, tmp_path, {"settle": True}).pages[0].svg
+    where = next(key for key in compose._LAYOUTS if key[0] == "kai")
+    # Its part put on a line of its own by hand: drawn so, not turned round to fit.
+    assert not compose._LAYOUTS[where].startswith("turned")
+    # A line given words, drawn, then taken back: drawn as it was, whatever came between.
+    labelled = copy.deepcopy(document)
+    labelled["slides"][0]["body"][0]["figure"]["edges"][3]["label"] = "KaiB slows it"
+    kind.draw(labelled, tmp_path)
+    kind.draw(labelled, tmp_path, {"settle": True})
+    assert kind.draw(document, tmp_path, {"settle": True}).pages[0].svg == first
+
+
+def test_a_figure_arranged_by_hand_is_turned_to_fit_when_its_person_asks(tmp_path: Path, monkeypatch) -> None:
+    from flexo_talk import compose
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    parts = {"customer": ("person", "Customer"), "form": ("io", "Order form"), "api": ("server", "Checkout API"),
+             "queue": ("queue", "Order queue"), "worker": ("server", "Email worker"),
+             "receipt": ("document", "Receipt email"), "feed": ("cloud", "Warehouse feed"),
+             "db": ("database", "Orders DB")}
+    nodes = [{"id": id, "kind": kind, "label": label} for id, (kind, label) in parts.items()]
+    # As the studio writes them: the parts' places, which may be turned, not groups of meaning.
+    groups = [
+        {"id": "root", "layout": {"kind": "column"}, "role": "canvas", "children": ["row", "feed", "db"]},
+        {"id": "row", "layout": {"kind": "row"}, "role": "layout",
+         "children": ["customer", "form", "api", "queue", "worker", "receipt"]},
+    ]
+    lines = [("customer", "form", "fills in"), ("form", "api", "POST /orders"), ("api", "queue", "publishes"),
+             ("queue", "worker", "consumes"), ("worker", "receipt", "sends"), ("queue", "feed", "streams"),
+             ("api", "db", "writes")]
+    edges = [{"from": a, "to": b, "label": label} for a, b, label in lines]
+
+    def layout(**options: object) -> str:
+        figure = {"figure": {"id": "orders"}, "nodes": nodes, "groups": groups, "edges": edges}
+        document = {"deck": {"id": "orders"}, "slides": [
+            {"layout": "figure", "title": "The new architecture", "body": [{"figure": figure, **options}]}]}
+        DeckKind().draw(document, tmp_path, {"settle": True})
+        return compose._LAYOUTS[next(key for key in compose._LAYOUTS if key[0] == "orders")]
+
+    # Arranged by hand (a row with parts under it), it is drawn as arranged...
+    assert not layout().startswith("turned")
+    # ...unless its person turns "Swap rows and columns to fit" on for it.
+    assert layout(turn=True).startswith("turned")
+    assert not layout(turn=False).startswith("turned")
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 def test_a_part_dragged_on_a_slide_swaps_goes_between_or_goes_home() -> None:
     script = Path(__file__).parents[1] / "src/flexo_talk/studio/static/slidedrop.js"
@@ -1214,7 +1284,7 @@ def test_a_placeholder_added_and_taken_away_is_not_activity() -> None:
     empty = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}, {"code": ""}]}]}
     typed = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}, {"code": "print()"}]}]}
     assert kind.describe(plain, empty) == [] and kind.describe(empty, plain) == []
-    assert [note["text"] for note in kind.describe(empty, typed)] == ["added Code to slide 1"]
+    assert [note["text"] for note in kind.describe(empty, typed)] == ["added code to slide 1"]
 
 
 def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tmp_path: Path) -> None:
@@ -1286,6 +1356,22 @@ def test_a_drawn_protein_is_named_by_its_name_and_its_parts_by_what_they_are(tmp
     assert {"Protein sfGFP", "Feature β-barrel", "Site S65T", "Axis", "Tick 50", "Label “S65T”",
             "Line from Oxygen to Protein sfGFP"} <= set(names)
     assert "Shape" not in names and not any("50 100" in name for name in names)
+
+
+def test_a_part_named_by_a_label_on_two_lines_is_named_with_a_space_where_it_wrapped() -> None:
+    from flexo.drawing import Group, read_drawing
+
+    from flexo_talk.pptx import _shown_name
+
+    drawing = read_drawing(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">'
+        '<g id="f.lcd" data-flexo-entity="component" data-flexo-kind="structure">'
+        '<text id="f.lcd.label" x="100" y="20" text-anchor="middle" font-family="Figtree" font-size="7.5">'
+        '<tspan x="100">Lac repressor headpiece</tspan><tspan x="100" dy="8.85">on its operator (1LCD)</tspan>'
+        "</text></g></svg>"
+    )
+    (part,) = (item for item in drawing.root.items if isinstance(item, Group))
+    assert _shown_name(part) == "Structure Lac repressor headpiece on its operator (1LCD)"
 
 
 def test_a_flow_chart_is_read_in_its_order_and_a_description_given_is_said_instead(tmp_path: Path) -> None:
@@ -1397,3 +1483,21 @@ def test_an_object_left_empty_by_someone_whose_window_went_is_taken_away() -> No
     assert not kind.abandoned(deck, {"page": 5, "block": "body[1]", "editing": True})
     assert kind.abandoned(deck, {"page": 2, "block": "body[1]", "editing": True})
     assert deck["slides"][1]["body"] == [{"text": "Written."}]
+
+
+def test_a_merged_slide_keeps_its_objects_in_places_its_layout_has() -> None:
+    def deck(slide: dict) -> dict:
+        return {"slides": [slide]}
+
+    # A body left beside the columns the slide was set out in: its stale copy goes, and an
+    # object only it had is put in the first column.
+    merged = deck({
+        "layout": "two-columns",
+        "left": [{"text": "First."}],
+        "right": [{"text": "Second paragraph. alice keeps"}],
+        "body": [{"text": "Second paragraph. ali"}, {"code": "x = 1"}],
+    })
+    slide = DeckKind().mended(merged, [], merged)["slides"][0]
+    assert "body" not in slide
+    assert slide["left"] == [{"text": "First."}, {"code": "x = 1"}]
+    assert slide["right"] == [{"text": "Second paragraph. alice keeps"}]

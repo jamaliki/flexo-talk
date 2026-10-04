@@ -267,7 +267,8 @@ def _shown_name(group: Group) -> str:
         drawn = _DRAWN.get(group.data.get("data-flexo-kind", ""))
         if drawn and len(own) == len(texts) > 1:
             own = []
-        words = ("".join(run.text for line in text.lines for run in line.runs) for text in own)
+        # A label wrapped onto two lines is still words apart where it wrapped.
+        words = (" ".join("".join(run.text for run in line.runs) for line in text.lines) for text in own)
         said = " ".join(filter(None, (drawn, " ".join(" ".join(words).split()))))
         if said:
             return said if len(said) <= 60 else f"{said[:59]}…"
@@ -1012,7 +1013,9 @@ def _run_xml(run, *, size: float | None = None, baseline: int | None = None, spa
         f'<a:r><a:rPr lang="{_lang(run.text)}" sz="{round(size * 100)}"{bold}{italic}{raise_} dirty="0">'
         f"{_fill(run.fill, 1.0)}"
         f'<a:latin typeface="{face}"{pitch}/><a:ea typeface="{face}"{pitch}/><a:cs typeface="{face}"{pitch}/>{link}'
-        f"</a:rPr><a:t>{escape(run.text)}</a:t></a:r>"
+        # A hair's room before a space (an italic letter's lean before a sign, T ≈ 24 h) is
+        # left out: read beside the space, it is two.
+        f"</a:rPr><a:t>{escape(run.text.replace(chr(0x200A) + ' ', ' '))}</a:t></a:r>"
     )
 
 
@@ -1463,6 +1466,10 @@ def _runs_xml(runs, typography, stack, size: float, palette, ink: str, *, native
     for run in runs:
         # Bold words' maths stays regular (TextRun.maths), as flexo draws it.
         weight = 700 if bold and run.weight == 400 and not run.maths else drawn_weight(run, None)
+        if run.text == "\n" and not run.math:
+            # A line broken where the words were (around a formula displayed among them).
+            pieces.append(f'<a:br><a:rPr lang="en-GB" sz="{round(size * 100)}" dirty="0"/></a:br>')
+            continue
         if run.math:
             if native:
                 pieces.append(omml(run.math, size=size, colour=_colour(_ink_of(run, palette, ink)),

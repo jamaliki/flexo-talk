@@ -184,6 +184,63 @@ def test_a_text_that_is_one_formula_is_set_in_display_style() -> None:
     assert not any(run.math for run in simple)
 
 
+def test_a_formula_displayed_in_a_list_or_words_is_centred_set_apart_and_tagged(tmp_path: Path) -> None:
+    from flexo.drawing import Drawing, Group, ink_bounds, read_drawing
+
+    from flexo_talk import compose
+
+    def build(gap: float) -> tuple[list[float], list[float], bytes | None]:
+        compose.DISPLAY_GAP, kept = gap, compose.DISPLAY_GAP
+        try:
+            deck = Deck("display")
+            with deck.slide("Model") as slide:
+                slide.bullets("Let p be the fraction phosphorylated:", r"$$\frac{dp}{dt} = k_B (1 - p)$$",
+                              "Delay makes a cycle.", plain=True)
+                slide.text(r"The period is $$T = \frac{2\pi}{\omega}$$ about a day.")
+            rendered = compose.render_slide(deck, deck.slides[0])
+            pdf = deck.build(tmp_path / str(gap), formats=("pdf",)).pdf.read_bytes() if gap else None  # type: ignore[union-attr]
+        finally:
+            compose.DISPLAY_GAP = kept
+
+        def formulas(group: Group) -> list[Group]:
+            found = [group] if "data-flexo-math" in group.data else []
+            return found + [inner for item in group.items if isinstance(item, Group) for inner in formulas(item)]
+
+        middles = []
+        for formula in formulas(read_drawing(rendered.svg).root):
+            left, _, right, _ = ink_bounds(Drawing(0.0, 0.0, Group(None, list(formula.items))))
+            middles.append((left + right) / 2.0)
+        return middles, [baseline for _, _, baseline in rendered.lists[0].items], pdf
+
+    middles, baselines, pdf = build(compose.DISPLAY_GAP)
+    # Centred in the room its words are set in (the region, 48 to 912), as LaTeX centres one.
+    assert middles == [pytest.approx(480.0, abs=1.0)] * 2
+    # Set apart from the items either side of it, by the same room above and below.
+    _, close, _ = build(0.0)
+    apart = [now - before for now, before in zip(baselines, close, strict=True)]
+    assert apart[0] == 0.0 and apart[1] == pytest.approx(8.0) and apart[2] == pytest.approx(16.0)
+    # A formula in the PDF, described by its words, within the item and the paragraph it is in.
+    assert pdf is not None
+    found = re.findall(rb"/S /Formula /P (\d+) 0 R /Pg \d+ 0 R /Alt <FEFF([0-9A-F]+)>", pdf)
+    alts = [bytes.fromhex(alt.decode()).decode("utf-16-be") for _, alt in found]
+    assert alts == ["dp/dt = k_B (1 \u2212 p)", "T = 2π/ω"]
+    parents = [re.search(rb"\b%s 0 obj\s*<< /Type /StructElem /S /(\w+)" % parent, pdf).group(1) for parent, _ in found]
+    assert parents == [b"LBody", b"P"]
+
+
+def test_maths_in_a_powerpoint_list_reads_with_single_spaces_and_breaks_round_a_display(tmp_path: Path) -> None:
+    deck = Deck("spaced")
+    with deck.slide("Period") as slide:
+        slide.bullets(r"A period $T \approx 24$ h", r"The rate $$\frac{dp}{dt} = k$$ falls")
+    xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
+    # An italic letter's lean before a sign is not a second space where the words are read.
+    first = re.search(r"<a:p>(?:(?!</a:p>).)*A period (?:(?!</a:p>).)*</a:p>", xml, re.S).group(0)
+    assert "".join(re.findall(r"<a:t>([^<]*)</a:t>", first)) == "A period T ≈ 24 h"
+    # A formula displayed among an item's words is on a line of its own there too.
+    item = re.search(r"<a:p>(?:(?!</a:p>).)*The rate (?:(?!</a:p>).)*</a:p>", xml, re.S).group(0)
+    assert item.count("<a:br>") == 2
+
+
 def test_a_png_picture_is_embedded(tmp_path: Path) -> None:
     import struct
     import zlib
@@ -230,6 +287,11 @@ def test_bold_in_a_bold_statement_shows_in_the_accent(tmp_path: Path) -> None:
     accent = re.search(r'fill="#([0-9a-f]{6})"[^>]*>stop waiting<', svg).group(1).upper()
     slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
     assert re.search(rf'<a:srgbClr val="{accent}"/>.{{0,200}}<a:t>stop waiting</a:t>', slide)
+    # A title already in the accent (the Margin look's) has its strong words in the ink.
+    margin = Deck("edge", look="margin")
+    margin.slide("Why **we** moved")
+    drawn = margin.render()[0].svg
+    assert re.search(r'data-flexo-fill="ink"[^>]*>we<', drawn)
 
 
 def test_a_change_column_of_percentages_and_multiples_is_numbers() -> None:

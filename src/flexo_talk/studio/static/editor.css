@@ -27,6 +27,8 @@
 .deck:has(.hit.selected:not([hidden])) .rail-list:not(:focus) .thumb.on .num { color: var(--ink-2); }
 .thumb .picture { width: 100%; height: 100%; }
 .thumb .frame { content-visibility: auto; contain-intrinsic-size: auto 90px; }
+/* A thumbnail shows the slide as it presents: no placeholders' hints (as present.js). */
+.thumb .frame [data-flexo-placeholder] { display: none; }
 .thumb .placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); font-size: 10.5px; padding: 6px; text-align: center; background: var(--raised); }
 .thumb .badge { position: absolute; right: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; background: var(--warn); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 .thumb .badge.error { background: var(--error); }
@@ -79,22 +81,24 @@
 /* A frame on the slide is where its part is, at once: it never glides, nor trails a resizing window. */
 .hit { position: absolute; pointer-events: none; border-radius: 5px; }
 /* Two-toned, so a frame shows on a dark band as on the page. */
-.hit.hover { border: 1.5px dashed var(--accent-line); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55); }
-.hit.selected { border: 2px solid var(--accent); background: rgba(61, 90, 254, 0.04); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.9); }
-.hit-label { position: absolute; top: -21px; left: -2px; background: var(--accent); color: var(--accent-ink); font: 600 10.5px/19px var(--font); padding: 0 7px; border-radius: 4px 4px 4px 0; white-space: nowrap; }
+/* One stroke width for every frame (--frame, studio.css): pointed at, dashed; chosen, solid;
+   typed in, solid with a halo; another's, in their colour, with a halo while they type. */
+.hit.hover { border: var(--frame) dashed var(--accent-line); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.55); }
+.hit.selected { border: var(--frame) solid var(--accent); background: rgba(61, 90, 254, 0.04); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.9); }
+.hit-label { position: absolute; top: -21px; left: calc(0px - var(--frame)); background: var(--accent); color: var(--accent-ink); font: 600 10.5px/19px var(--font); padding: 0 7px; border-radius: 4px 4px 4px 0; white-space: nowrap; }
 .hit.hover .hit-label { background: var(--raised); color: var(--accent); border: 1px solid var(--accent-line); line-height: 17px; }
 /* Off the words above it: under its frame, or inside its top right corner (clearOfWords). */
 .hit-label.below { top: auto; bottom: -21px; border-radius: 0 4px 4px 4px; }
 .hit-label.inside { top: 3px; left: auto; right: 3px; border-radius: 4px; }
-.hit.selected.holder { border: 1.5px dashed var(--accent-line); background: none; }
+.hit.selected.holder { border: var(--frame) dashed var(--accent-line); background: none; }
 /* The row or column a table's menu item acts on. */
-.hit.target { border: 2px solid var(--accent); background: rgba(61, 90, 254, 0.12); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9); }
+.hit.target { border: var(--frame) solid var(--accent); background: rgba(61, 90, 254, 0.12); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9); }
 .hit.target .hit-label { display: none; }
 /* What another person has chosen: framed in their colour, their name on its corner. */
 .others-frames { position: absolute; inset: 0; pointer-events: none; }
-.hit.other { border: 1.5px solid var(--other); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7); }
-.hit.other.editing { border-width: 2px; }
-.hit.other .hit-label { left: auto; right: -1.5px; background: var(--other); color: #fff; border-radius: 4px 4px 0 4px; }
+.hit.other { border: var(--frame) solid var(--other); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7); }
+.hit.other.editing { box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--other) 22%, transparent); }
+.hit.other .hit-label { left: auto; right: calc(0px - var(--frame)); background: var(--other); color: #fff; border-radius: 4px 4px 0 4px; }
 .hit.other .hit-label.below { border-radius: 4px 0 4px 4px; }
 .hit.other .hit-label.inside { right: 3px; border-radius: 4px; }
 .hit.selected.holder .hit-label { display: none; }
@@ -156,7 +160,7 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .inline-editor > .textarea { border: 0; box-shadow: none; }
 .inline-foot { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--ink-3); padding: 0 6px 2px; }
 /* Typed in place: over the words, as they look on the slide; the tools float above. */
-.inline-editor.in-place { background: transparent; padding: 0; border-radius: 4px; box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 5px var(--accent-soft); animation: none; }
+.inline-editor.in-place { background: transparent; padding: 0; border-radius: 4px; box-shadow: 0 0 0 var(--frame) var(--accent), 0 0 0 calc(var(--frame) + 3.5px) var(--accent-soft); animation: none; }
 .inline-editor.in-place .markup { background: transparent; }
 .inline-editor.in-place .textarea { background: transparent; border: 0; box-shadow: none; padding: 5px; line-height: 1.22; letter-spacing: normal; resize: none; overflow: hidden; caret-color: var(--accent); }
 .inline-editor.in-place .textarea:focus { box-shadow: none; outline: none; }
@@ -226,6 +230,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rt-link[hidden] { display: none; }
 .rt-link[aria-invalid="true"] { border-color: var(--error); box-shadow: 0 0 0 3px var(--error-soft); }
 .code-box { padding-right: 8px; }
+/* Bold in words already bold, as the slide draws it (positionInline): in its colour. */
+.rich.rt-heavy b, .rich.rt-heavy strong { color: var(--rt-strong); }
+.rich.rt-heavy b :is(code, .rt-maths), .rich.rt-heavy strong :is(code, .rt-maths) { color: var(--rt-plain); }
 .rt-link-note { margin: 0 4px 0 6px; font-size: 11.5px; color: var(--error); white-space: nowrap; }
 .rt-link-note[hidden] { display: none; }
 .rich.rt-numbered .rt-line::before { content: counter(rt) "."; background: none; border-radius: 0; width: auto; height: auto; top: 0; color: var(--rt-mark, currentColor); left: var(--rt-num-x, auto); right: var(--rt-num-right, calc(100% - var(--rt-text, 1.4em) - var(--rt-at) * var(--rt-step, 1.3em) + 0.3em)); }
@@ -238,7 +245,7 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich.rt-numbered .rt-line[data-level="3"]::before { content: counter(rt3) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
 .rich.rt-numbered .rt-line[data-level="4"]::before { content: counter(rt4, lower-alpha) "."; color: var(--rt-mark2, var(--rt-mark, currentColor)); }
 /* An equation's LaTeX is typed under it, on a panel of its own. */
-.inline-editor.in-place.under { background: var(--under-paper, var(--raised)); color: var(--under-ink, var(--ink)); border-radius: 8px; box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 5px var(--accent-soft), var(--shadow-2); padding: 4px; }
+.inline-editor.in-place.under { background: var(--under-paper, var(--raised)); color: var(--under-ink, var(--ink)); border-radius: 8px; box-shadow: 0 0 0 var(--frame) var(--accent), 0 0 0 calc(var(--frame) + 3.5px) var(--accent-soft), var(--shadow-2); padding: 4px; }
 .inline-editor.in-place.under textarea { font-size: 13px; background: transparent; color: inherit; }
 .inline-editor.in-place.under textarea::placeholder { color: currentColor; opacity: 0.45; }
 /* A cell is small and its neighbours close: its words are made strong or emphatic by key. */
@@ -337,6 +344,10 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 
 .deck .list-rows { display: grid; gap: 6px; }
 .list-row { display: flex; gap: 6px; align-items: center; }
+/* A rich field's row keeps its button on the field's line, its format bar coming under it. */
+.list-row:has(> .rich-field) { align-items: flex-start; }
+.list-row:has(> .rich-field) > button { margin-top: 3px; }
+.list-add { scroll-margin-bottom: 16px; }
 .list-row > .input { flex: 1; }
 .list-row .pic, .menu-item .pic { width: 34px; height: 34px; border-radius: 5px; background: var(--sunken); border: 1px solid var(--line); object-fit: cover; flex: none; }
 .list-row .pic.round { border-radius: 50%; }
@@ -356,9 +367,12 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
    with the most to say, so their words wrap no more than they must. */
 .table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 40px; vertical-align: top; }
 .table-edit .cell-area, .table-edit .cell-view { padding-inline: 4px; overflow-wrap: normal; }
-.table-edit td.short .cell-view { white-space: pre; }
-/* A long cell wraps, but in a column wide enough to read. */
-.table-edit td:not(.short):not(.corner) { min-width: 9em; }
+/* A short cell is kept whole while the panel has room, its words wrapping (at spaces) only
+   when the columns cannot all fit; numbers never wrap. */
+.table-edit td.short .cell-view { white-space: pre-wrap; }
+/* A long cell wraps, in a column no narrower than its longest word: a table of a few
+   columns fits the panel, scrolling (with its cue) only when its words cannot. */
+.table-edit td:not(.short):not(.corner) { min-width: 4.5em; }
 .table-edit tr.header .cell-area, .table-edit tr.header .cell-view { font-weight: 600; }
 /* The row numbers keep to their width: the room is the words'. */
 .table-edit tr > .corner:first-child { width: 24px; }

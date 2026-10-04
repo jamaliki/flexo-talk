@@ -429,6 +429,14 @@ def _tagger(rendered: list[RenderedSlide]) -> Tagger:
                 alt = " ".join([alt, *(text for key, text in described.items()
                                        if key.startswith(f"{ident}.") and text not in alt)])
                 return Tag((*(within.path if within else ()), (block, ident)), alt=alt if block == "Figure" else "")
+            source = item.data.get("data-flexo-math", "")
+            if source.startswith("\\displaystyle") and inside in {"P", "LBody"}:
+                # A formula displayed on a line of its own in words ($$...$$) is a formula
+                # within them, described by its words, as an equation on its own is.
+                from flexo.texmath import linear
+
+                key = ident or f"{within.path[-1][1]}.formula{id(item)}"
+                return Tag((*within.path, ("Formula", key)), alt=linear(source))
             # Words with a formula in them (a title's, a paragraph's, an item's) are tagged as
             # words are, the formula read in its place.
             kinds = {"data-flexo-talk", "data-flexo-entity", "data-flexo-math"}

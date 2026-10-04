@@ -77,7 +77,13 @@ def test_a_slides_settings_are_checked() -> None:
             Deck("v").slide("S", **options)
 
 
-def test_emoji_are_left_out_of_the_drawing_and_said_once_a_slide(tmp_path: Path) -> None:
+def test_emoji_are_left_out_of_the_drawing_and_said_once_a_slide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As on a machine with no font that has them: GNU Unifont, where installed, has
+    # outlines for every emoji.
+    monkeypatch.setattr("flexo.fonts.family_covering", lambda characters: None)
+    monkeypatch.setattr("flexo.text.family_covering", lambda characters: None)
     deck = Deck("e", footer="Footer \N{PARTY POPPER}")
     slide = deck.slide("Love ❤️ it")
     slide.text("a️ b \N{GRINNING FACE} c").bullets("x \N{PARTY POPPER}", ["nested \N{WAVING HAND SIGN}"])
