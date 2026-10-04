@@ -316,6 +316,29 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
       el("span", "ss-key", ...keys.split("|").flatMap((either, n) => [n ? el("i", "", "or") : null, ...either.split(" ").map((key) => el("kbd", "", key))]), el("span", "", what)))),
     blankWords ? el("div", "ss-status", blankWords) : null,
     goto].filter(Boolean));
+  fitPresenter(root);
+}
+
+// The slide being shown as large as the room lets it be: as tall as the view, short of the
+// room the next slide and the notes keep beside it (a 16:10 screen leaves no band of nothing
+// under it). Again as the window changes size.
+function fitPresenter(root) {
+  root.ssFit?.disconnect();
+  const main = root.querySelector(".ss-main");
+  if (!main || typeof ResizeObserver !== "function") return;
+  const fit = () => {
+    const room = main.getBoundingClientRect(), label = main.querySelector(".ss-label");
+    const ratio = (where) => Number(main.querySelector(`${where} .ss-slide`)?.style.getPropertyValue("--ratio")) || 16 / 9;
+    if (!room.width || !room.height) return;
+    const above = (label?.offsetHeight || 0) + 8, side = Math.max(280, room.width * 0.23);
+    const wide = Math.max(room.width * 0.5, Math.min((room.height - above) * ratio(".ss-current"), room.width - 28 - side));
+    main.style.gridTemplateColumns = `${Math.floor(wide)}px minmax(0, 1fr)`;
+    // The next slide as wide as its column, the notes straight under it, taking the rest.
+    const next = main.querySelector(".ss-side");
+    if (next) next.style.gridTemplateRows = `auto ${Math.floor(Math.min((room.width - 28 - wide) / ratio(".ss-side"), room.height * 0.45))}px auto minmax(0, 1fr)`;
+  };
+  root.ssFit = new ResizeObserver(fit);
+  root.ssFit.observe(main);
 }
 
 // The clocks, kept going between draws.

@@ -1317,6 +1317,35 @@ def test_a_new_quote_callout_code_or_numbers_is_a_placeholder_until_typed_in() -
     assert "data-flexo-placeholder" not in exported and ">Quote<" not in exported and ">Kept<" in exported
 
 
+def test_an_attribution_or_caption_put_there_empty_holds_its_place_while_it_is_typed() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    def drawn(by: str | None, caption: str | None) -> tuple[str, str]:
+        quote = {"quote": "Waiting is the cost.", **({} if by is None else {"by": by})}
+        table = {"table": [["Year", "Orders"], ["2024", "12"]], **({} if caption is None else {"caption": caption})}
+        slide = {"title": "Own lines", "body": [quote, table, {"text": "Under"}]}
+        deck = deck_from_document({"deck": {"id": "own"}, "slides": [slide]}, Path("."))
+        exported = render_slide(deck, deck.slides[0]).svg
+        token = PLACEHOLDERS.set(True)
+        try:
+            return render_slide(deck, deck.slides[0]).svg, exported
+        finally:
+            PLACEHOLDERS.reset(token)
+
+    held, held_exported = drawn("", "")
+    written, _ = drawn("Sam Rivera", "Table 1. Orders by year.")
+    none, none_exported = drawn(None, None)
+    # Emptied (or put there) while it is typed, each shows its placeholder where its words go...
+    placed = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', held)
+    assert placed == [("slide1.body.0.by", "Who said it"), ("slide1.body.1.caption", "Caption")]
+    assert "\u2014 Who said it<" in held
+    # ... taking the room its words will: what is under it stays where it is.
+    under = r'<text id="slide1\.body\.2"[^>]*\by="([^"]+)"'
+    assert re.findall(under, held) == re.findall(under, written) != re.findall(under, none)
+    # Presented or exported, it is not there at all.
+    assert held_exported == none_exported and "Who said it" not in held_exported
+
+
 def test_a_sample_table_figure_or_equation_is_a_placeholder_until_changed(tmp_path: Path) -> None:
     from flexo_talk.compose import PLACEHOLDERS
 
@@ -1488,6 +1517,60 @@ def test_a_placeholder_added_and_taken_away_is_not_activity() -> None:
     assert [note["text"] for note in kind.describe(texted, listed)] == ["made the text a list on slide 1"]
     columns = {"slides": [{"layout": "two-columns", "title": "A", "left": [{"bullets": ["x"]}]}]}
     assert [note["text"] for note in kind.describe(listed, columns)] == ["changed the layout on slide 1"]
+
+
+HAND = """schema_version: 1
+deck:
+  id: talk
+  theme: paper   # chosen by Kiarash
+slides:
+# --- opening ---
+- layout: title
+  title: "Making a web service fast"
+# --- the middle ---
+- title: The pipeline
+  body:
+  - bullets:
+    - Generate   # step one
+    - Design
+  - figure:
+      edges:
+      - {from: start, to: step}
+- title: Voices
+  body:
+  - quote: Simple things should be simple.
+# end of deck
+"""
+
+
+def test_a_deletion_or_a_copy_undone_through_the_studio_puts_the_file_back_word_for_word(tmp_path: Path) -> None:
+    import copy
+
+    from flexo.studio.workspace import Workspace
+
+    talk = tmp_path / "talk.yaml"
+    talk.write_text(HAND, encoding="utf-8")
+    me = {"id": "p", "kind": "person"}
+    workspace = Workspace(tmp_path)
+    try:
+        doc = workspace.open("talk.yaml")
+        whole = copy.deepcopy(doc.document)
+        # Each written as the studio writes it (beside the file, then over it), then undone.
+        for change in ("delete", "duplicate first", "duplicate middle"):
+            changed = copy.deepcopy(whole)
+            if change == "delete":
+                del changed["slides"][1]
+            else:
+                at = 0 if change == "duplicate first" else 1
+                changed["slides"].insert(at + 1, copy.deepcopy(changed["slides"][at]))
+            doc.update(changed, doc.version, me)
+            workspace.flush()
+            assert talk.read_text(encoding="utf-8") != HAND
+            doc.update(copy.deepcopy(whole), doc.version, me)
+            workspace.flush()
+            assert talk.read_text(encoding="utf-8") == HAND, change
+    finally:
+        workspace.close()
 
 
 def test_activity_says_a_slide_moved_and_follows_an_object_where_it_goes() -> None:
@@ -2004,6 +2087,10 @@ def test_a_picture_table_or_figure_has_a_caption_under_it_tagged_and_grouped_wit
     slides = Presentation(str(built.pptx)).slides
     picture = next(shape for shape in slides[0].shapes if shape.name == "Picture")
     assert [shape.name for shape in picture.shapes] == ["Picture", "Caption “Figure 1. Tracks”"]
+    # Described once, by the group: the picture in it is marked decorative, not read again.
+    inner = picture.shapes[0]._element.find(".//{*}cNvPr")
+    assert picture._element.find(".//{*}cNvPr").get("descr") == "Tracks" and inner.get("descr") is None
+    assert inner.find(".//{*}decorative").get("val") == "1"
     names = [shape.name for shape in slides[1].shapes]
     assert names[names.index("Table") + 1] == "Caption “Table 1. Cues”"
     figure = next(shape for shape in slides[2].shapes if shape.name == "Figure")
@@ -2087,3 +2174,44 @@ def test_a_figure_arranged_by_hand_drawn_small_says_turning_would_draw_it_larger
     # Coded for the studio to offer the switch in one click.
     assert note.code == "figure.small.turn" and note.text.endswith("Turned to fit the slide, it would be larger.")
     assert note.where == "slides[0] row"
+
+
+def test_a_slide_of_a_layout_there_is_none_of_is_content_with_every_object_in_its_body(tmp_path: Path) -> None:
+    from flexo_talk.document import UnknownLayout
+
+    errors: list[DeckDocumentError] = []
+    slide = {"layout": "two-column", "title": "Typed wrong", "left": [{"text": "Words"}],
+             "right": [{"bullets": ["One", "Two"]}]}
+    deck = deck_from_document({"deck": {}, "slides": [slide]}, tmp_path, errors=errors)
+    (drawn,) = deck.slides
+    # Drawn as Content -- its objects in its body, in order -- not stood aside as blank.
+    assert drawn.layout == "content" and [type(block).__name__ for block in drawn.regions["body"].blocks] == [
+        "_Words", "_Bullets"]
+    assert [(type(error), error.where) for error in errors] == [(UnknownLayout, "slides[0].layout")]
+    assert errors[0].message == "\u201ctwo-column\u201d isn\u2019t a layout: drawn as Content. Choose one from Layout."
+
+
+def test_a_figure_of_one_molecule_is_described_once_in_powerpoint(tmp_path: Path) -> None:
+    pytest.importorskip("molsketch")
+    import shutil
+
+    from pptx import Presentation
+
+    from flexo_talk.export import write_pptx
+
+    data = Path(__file__).resolve().parents[2] / "flexo" / "tests" / "unit" / "data" / "1a7g.cif"
+    if not data.is_file():
+        pytest.skip("no structure file beside flexo")
+    shutil.copy(data, tmp_path / "1a7g.cif")
+    figure = {"figure": {"id": "mol"}, "nodes": [{"id": "m", "kind": "structure", "label": "E2 domain",
+                                                   "properties": {"source": "1a7g.cif"}}]}
+    document = {"deck": {"id": "talk"}, "slides": [
+        {"title": "A molecule", "body": [{"figure": figure, "description": "A dimeric beta-barrel"}]}]}
+    deck = deck_from_document(document, tmp_path)
+    slide = Presentation(write_pptx(deck, deck.render(), tmp_path / "talk.pptx")).slides[0]
+    described = [(element.get("name"), element.get("descr"), element.find(".//{*}decorative") is not None)
+                 for element in slide._element.iter() if element.tag.endswith("}cNvPr")
+                 and (element.get("descr") or element.find(".//{*}decorative") is not None)]
+    # Its description on the figure; the molecule's picture in it says the same, so it is
+    # marked decorative -- a screen reader says it once.
+    assert described == [("Figure", "A dimeric beta-barrel", False), ("Structure E2 domain", None, True)]

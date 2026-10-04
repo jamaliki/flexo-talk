@@ -29,6 +29,7 @@ from flexo_talk.document import (
     DeckDocumentError,
     InvalidFigure,
     MissingFile,
+    UnknownLayout,
     UntrustedCode,
     deck_from_document,
     dump_document,
@@ -499,7 +500,7 @@ class DeckKind:
         slides = document.get("slides") or []
         # A picture or figure whose file is missing is said, and a box stands in for it:
         # the rest of its slide is drawn. So is a figure that cannot be drawn as written.
-        stood_in = MissingFile | InvalidFigure
+        stood_in = MissingFile | InvalidFigure | UnknownLayout
         absent = [error for error in errors if isinstance(error, stood_in)]
         failed = {_slide_of(error.where): error for error in errors if not isinstance(error, stood_in)}
         deck_data = document.get("deck") or {}
@@ -574,6 +575,10 @@ class DeckKind:
             for error in absent:
                 if _slide_of(error.where) == index:
                     code = "deck.missing" if isinstance(error, MissingFile) else "deck.figure"
+                    if isinstance(error, UnknownLayout):
+                        # Drawn all the same, as Content: a note to choose one, not a fault.
+                        messages.append(Message(error.message, "warning", error.where, identifier, "deck.layout"))
+                        continue
                     messages.append(Message(_plain_message(error), "error", error.where, identifier, code))
             if index in failed:
                 error = failed[index]
@@ -700,7 +705,7 @@ class DeckKind:
             deck = deck_from_document(document, base, errors=errors)
             # A figure that can't be drawn is left an empty box, and said (``export_notes``);
             # anything else wrong stops the export, said where it is.
-            wrong = next((error for error in errors if not isinstance(error, InvalidFigure)), None)
+            wrong = next((error for error in errors if not isinstance(error, InvalidFigure | UnknownLayout)), None)
             if wrong is not None:
                 raise wrong
         except DeckDocumentError as error:
@@ -708,7 +713,10 @@ class DeckKind:
             place = _place(error.where, document)
             raise ValueError(f"{place}: {error.message}" if place else error.message) from error
         self.export_notes = [
-            f"{_place(error.where, document) or 'A figure'}: {_drawn_plainly(error.message)}"
+            # A slide of a layout there is none of is exported as it is drawn: as Content.
+            f"{_place(found[0], document)}: {error.message.removesuffix(' Choose one from Layout.')}"
+            if isinstance(error, UnknownLayout) and (found := re.match(r"slides\[\d+\]", error.where))
+            else f"{_place(error.where, document) or 'A figure'}: {_drawn_plainly(error.message)}"
             if getattr(error, "drawn", None) is not None
             else f"{_place(error.where, document) or 'A figure'} is left empty: it can\u2019t be drawn as it is."
             for error in errors
@@ -722,6 +730,17 @@ class DeckKind:
             "it can\u2019t be drawn as it is."
             for text in dict.fromkeys(result.diagnostics)
             if (found := re.match(r"slide(\d+)\b.*" + re.escape(FIGURE_FAILED), text))
+        ]
+        # A shape it can't draw as written is a plain box of its words, and said so.
+        plain: dict[int, list[str]] = {}
+        for text in dict.fromkeys(result.diagnostics):
+            found = re.match(r"slide(\d+)\S* \S+#\S+: ((?:\u201c[^\u201d]*\u201d|A shape) can\u2019t be drawn yet.*)",
+                             text)
+            if found:
+                plain.setdefault(int(found[1]) - 1, []).append(found[2])
+        self.export_notes += [
+            f"{_place(f'slides[{index}].body[0] (figure)', document)}: {_drawn_plainly(' '.join(said))}"
+            for index, said in plain.items()
         ]
         # A line to a shape a figure has none of is left out of it, and said with its slide.
         self.export_notes += [
@@ -957,13 +976,22 @@ def _slide_figure(document: dict[str, Any], at: dict[str, Any], base: Path) -> A
     from flexo.studio.figure_edit import EditError
 
     from flexo_talk.deck import made
-    from flexo_talk.document import _figure, make_deck
+    from flexo_talk.document import InvalidFigure, _figure, _strays, make_deck
 
     block = _block_at(document, at)
     if not isinstance(block, dict) or "figure" not in block:
         raise EditError("This object is no longer a figure. Someone else may have changed it.")
     deck = make_deck(document.get("deck") or {}, base)
-    figure = made(_figure(base, block["figure"], "figure", None))
+    # (As the slide draws it: a line to a shape it has none of left out, a shape that can't be
+    # drawn as written a plain box -- what is asked of a structure in it the same.)
+    value = block["figure"]
+    strays = _strays(value)
+    try:
+        figure = made(_figure(base, {**value, "edges": strays[1]} if strays else value, "figure", None))
+    except InvalidFigure as error:
+        if error.drawn is None:
+            raise
+        figure = made(error.drawn)
     spec = getattr(figure, "spec", figure)
     return replace(spec, style=deck.theme, palette=deck.palette_name, font=deck.figure_font or deck.font or spec.font)
 
@@ -1631,7 +1659,7 @@ class SlideSamples:
                 document = load_document(path)
             except Exception:
                 # Why, and on which line, its own page says (as it does): here, only that.
-                said = f"“{Path(deck_file).stem}” can't be read. Open it to see why and put it right."
+                said = f"“{Path(deck_file).stem}” can\u2019t be read. Open it to see why and put it right."
                 raise Unreadable(said) from None
             folder = path.parent
         else:
@@ -1758,12 +1786,17 @@ def _extra(data: object, *, error: bool = False) -> dict[str, Any]:
 
 def _sized(message: Message) -> Message:
     """A figure drawn small, its message coded for the studio to offer what makes it larger:
-    turning it to fit (``figure.small.turn``), else room (``figure.small``)."""
+    turning it to fit (``figure.small.turn``), else a slide of its own (``figure.small.own``),
+    else nothing it can do (``figure.small``)."""
 
-    from flexo_talk.compose import TURNED_LARGER
+    from flexo_talk.compose import OWN_SLIDE, TURNED_LARGER
 
     if "small for a talk" in message.text or "too small to read" in message.text:
-        message.code = "figure.small.turn" if TURNED_LARGER in message.text else "figure.small"
+        message.code = (
+            "figure.small.turn" if TURNED_LARGER in message.text
+            else "figure.small.own" if OWN_SLIDE in message.text
+            else "figure.small"
+        )
     return message
 
 
@@ -1811,6 +1844,8 @@ def _place(where: str, document: Any) -> str:
             named = None
     elif field:
         named = FIELD_LABELS.get(field.group(1))
+    elif re.match(r"\s+[^\s.#]+#\S", rest):
+        named = BLOCK_LABELS.get("figure")  # a part of a figure, named by its id ("f#p:length")
     return f"Slide {index + 1} · {named}" if named else f"Slide {index + 1}"
 
 
@@ -1870,11 +1905,12 @@ kind = DeckKind
 
 def _drawn_plainly(message: str) -> str:
     """An export's note for a figure drawn with a shape it can't draw as a plain box: which,
-    from what is said of it (“Spike” can't be drawn yet: ...)."""
+    and why, from what is said of each (“Spike” can't be drawn yet: ...)."""
 
-    named = re.findall(r"\u201c[^\u201d]*\u201d(?= can\u2019t be drawn yet)", message)
-    shapes = " and ".join(dict.fromkeys(named)) or "A shape"
-    return f"{shapes} {'is' if len(set(named)) <= 1 else 'are'} drawn as a plain box: it can\u2019t be drawn as it is."
+    found = re.findall(r"(\u201c[^\u201d]*\u201d|A shape) can\u2019t be drawn yet: (.*?)"
+                       r"(?: Choose it to set this in its panel\.|$)", message)
+    said = [f"{name} is drawn as a plain box: {why}" for name, why in dict.fromkeys(found)]
+    return " ".join(said) or "A shape is drawn as a plain box: it can\u2019t be drawn as it is."
 
 
 def _plain_message(error: DeckDocumentError) -> str:

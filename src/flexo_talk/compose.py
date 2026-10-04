@@ -437,6 +437,19 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                         empty[f"{slide.id}.{name}.{index}.{at}.label"] = "Label"
                 block.items = [(value if _worded(value) else STAT_HINT, label if _worded(label) else LABEL_HINT)
                                for value, label in block.items]
+            # Who said a quote, or a caption, put there empty to be written (``by: ""``,
+            # ``caption: ""``): its placeholder, only while editing, where its words will go --
+            # what is under it moved down for it, as it will be.
+            own = f"{slide.id}.{name}.{index}"
+            held = [("by", BY_HINT, "Who said it")] if isinstance(block, _Quote) and block.held else []
+            if getattr(block, "caption_held", False):
+                held.append(("caption", CAPTION_HINT, "Caption"))
+            for attribute, hint, words in held if PLACEHOLDERS.get() else ():
+                if not _worded(getattr(block, attribute)):
+                    stand_in(block, attribute, hint, f"{own}.{attribute}", words)
+                    # (In an object faint as a whole already, as a new quote is: faint once.)
+                    if own in empty:
+                        del empty[f"{own}.{attribute}"]
     try:
         # A figure that fails as it is laid out for its place (what flexo did not foresee)
         # is a box where it would be, as one that can't be read is: the slide is drawn, and
@@ -491,6 +504,9 @@ LABEL_HINT = (TextRun("Label"),)
 """What a number not yet written shows while editing, as the inspector's fields hint it."""
 HEADING_HINT = (TextRun("Heading", weight=700),)
 """What a callout's heading put there empty shows while editing, bold as its heading is."""
+BY_HINT = (TextRun("\u2014 Who said it"),)
+CAPTION_HINT = (TextRun("Caption"),)
+"""What who said a quote, and a caption, put there empty show while editing."""
 
 
 def _worded(runs: tuple[TextRun, ...]) -> bool:
@@ -1024,7 +1040,10 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
         pictures = bool(shown) and (
             all(isinstance(block, _PICTURES) for block in shown) or _placing(shown) == "captioned"
         )
-        placed.append((group, used, pictures, bool(shown), lists, tables))
+        # What this region set natively (its lists, tables, words with maths): moved with it,
+        # and nothing a column after it sets.
+        owned = (canvas.lists[lists:], canvas.tables[tables[0]:], canvas.worded[tables[1]:])
+        placed.append((group, used, pictures, bool(shown), owned))
     align = slide.align or style.align
     filled = [item for item in placed if item[3]]
     if align == "top" or not filled:
@@ -1033,13 +1052,14 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     worded = [used for _, used, pictures, full, *_ in filled if not pictures]
     words = max(worded, default=0.0)
     lead = max(body.height - band, 0.0) / 2.0 if align == "middle" else 0.0
-    for group, used, pictures, full, lists, tables in placed:
+    for group, used, pictures, full, owned in placed:
         if not full:
             continue
         if not worded:
-            # Pictures alone: each a little above the middle of the body, where the eye
-            # takes the middle to be, so a short one stays with its title.
-            shift = max(body.height - used, 0.0) * (0.5 if align == "middle" else OPTICAL)
+            # Pictures alone: a little above the middle of the body, where the eye takes the
+            # middle to be, so a short one stays with its title -- columns of them sharing
+            # one top (the tallest's), so pictures or tables side by side line up, as Keynote's.
+            shift = max(body.height - band, 0.0) * (0.5 if align == "middle" else OPTICAL)
         elif pictures:
             shift = lead + (band - used) / 2.0
         elif align == "middle":
@@ -1050,7 +1070,7 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             # picture too: the eye finds them in the same place each time.
             shift = 0.0
         if shift > 0.01:
-            _shift(canvas, group, shift, lists, tables)
+            _shift(group, shift, *owned)
 
 
 OPTICAL = 0.4
@@ -1092,16 +1112,18 @@ def _aside(canvas: _Canvas, region: Region) -> list[int]:
     return [] if editing and len(aside) == len(ids) else aside
 
 
-def _shift(canvas: _Canvas, group: ET.Element, down: float, lists: int, tables: tuple[int, int]) -> None:
+def _shift(
+    group: ET.Element, down: float, lists: list[ListLayout], tables: list[TableLayout], worded: list[WordsLayout]
+) -> None:
     """Move a drawn region down, with the native lists, tables and words set in it."""
 
     group.set("transform", f"translate(0 {number(down)})")
-    for layout in canvas.lists[lists:]:
+    for layout in lists:
         layout.y += down
         layout.items = [(level, runs, baseline + down) for level, runs, baseline in layout.items]
-    for table in canvas.tables[tables[0]:]:
+    for table in tables:
         table.y += down
-    for words in canvas.worded[tables[1]:]:
+    for words in worded:
         words.baseline += down
 
 
@@ -1253,7 +1275,7 @@ def _region(
     planned, fits, share = _plan_figures(canvas, [blocks[index] for index in shown], box, words)
     prepared = {shown[at]: item for at, item in planned.items()}
     scales = {shown[at]: scale for at, scale in fits.items()}
-    _check_legible(canvas, prepared, scales)
+    _check_legible(canvas, prepared, scales, box)
     top = box.y
     used = None
     for index in [*shown, *(aside if PLACEHOLDERS.get() else [])]:
@@ -2462,6 +2484,9 @@ class _Prepared:
     turned: Any = None
     """For a figure kept as its person arranged it (not turned to fit): how many times larger
     it would be drawn turned to fit its place, asked only when it is drawn small."""
+    alone: Any = None
+    """The scale it would be drawn at with a place ``(width, height)`` to itself (a slide of
+    its own), laid out for it: asked only when it is drawn small."""
 
 
 LEGIBLE = 7.0
@@ -2486,6 +2511,10 @@ _SCALES: dict[tuple[str, str, str], float] = {}
 _SHOWN: dict[tuple[str, str, str], str] = {}
 """The way each figure's outermost group was last drawn, a row or a column, beside its
 layout: as written, or the other way when the figure was turned to fit."""
+
+_TURNS: dict[tuple[str, str, str], bool] = {}
+"""Whether each figure was last drawn free to turn, beside its layout: one just let turn
+("Turn to Fit the Slide") is laid out afresh, not kept as it was."""
 
 
 def _arranged(spec: object) -> bool:
@@ -2586,8 +2615,63 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
         if isinstance(error, DeckDocumentError):
             raise  # (the deck's own: Python not yet trusted, a file that is not there)
         spec = getattr(block.figure, "spec", block.figure)
+        # Only some of its shapes at fault (a plasmid of -5 bp, a tree whose Newick does not
+        # read): those drawn as plain boxes of their words, the rest as written -- each said,
+        # its place naming it ("#p:length"), to be chosen and put right.
+        # (Drawn, a shape may fail only once the one before it is a box: tried till none do.)
+        figure, failure, told = spec, error, []
+        for _ in getattr(spec, "nodes", ()):
+            stood = _stood_in(figure, failure)
+            if stood is None:
+                break
+            figure, said = stood
+            told += said
+            try:
+                prepared = _prepared(canvas, replace(block, figure=figure), box, largest)
+            except Exception as again:
+                failure = again
+                continue
+            canvas.diagnostics.extend(f"{canvas.slide.id} {spec.id}{text}" for text in told)
+            return prepared
         said = f"{FIGURE_FAILED}: {_named(spec, explain(error))}"
         raise _FigureFailed(block, error, said, f"{canvas.slide.id} {getattr(spec, 'id', 'figure')}: {said}") from error
+
+
+def _stood_in(spec: object, error: BaseException) -> tuple[object, list[str]] | None:
+    """``spec`` with each shape ``error`` blames drawn as a plain box of its words, and what
+    to say of each (``#id:what: “Name” can't be drawn yet: ...``); None should it name none,
+    or something else."""
+
+    from flexo.components import normalize_node
+    from flexo.diagnostics import FlexoError
+
+    nodes = {node.id: node for node in getattr(spec, "nodes", ())}
+    if not isinstance(error, FlexoError) or not error.diagnostics:
+        return None
+    wrong = [item for item in error.diagnostics if item.entity_id in nodes]
+    if len(wrong) != len(error.diagnostics):
+        return None
+    bad = {item.entity_id for item in wrong}
+    plain = tuple(
+        normalize_node(replace(node, kind="block", properties=(), ports=(), width=None, height=None))
+        if node.id in bad else node
+        for node in spec.nodes
+    )
+    said = []
+    for item in wrong:
+        words = "".join(run.text for run in nodes[item.entity_id].label).strip()
+        message = item.message.strip()
+        first = message.split(" ", 1)[0]
+        lower = message if len(first) > 1 and first.isupper() else message[:1].lower() + message[1:]
+        called = f"\u201c{words}\u201d" if words else "A shape"
+        what = str(item.code or "").rsplit(".", 1)[-1]
+        said.append(
+            f"#{item.entity_id}:{what}: {called} can\u2019t be drawn yet: {lower} Choose it to set this in its panel."
+        )
+    try:
+        return replace(spec, nodes=plain), said
+    except Exception:
+        return None
 
 
 def _named(spec: object, said: str) -> str:
@@ -2627,7 +2711,9 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
-        keep = _LAYOUTS.get(where) if EDITING.get() else None
+        # (Not one just let turn, or kept from turning: its person asked for the other way.)
+        asked = _TURNS.get(where, turn) != turn
+        keep = _LAYOUTS.get(where) if EDITING.get() and not asked else None
         fit = _fit_in_box(
             spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
             turn=turn, keep=keep,
@@ -2656,7 +2742,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         ]
         # (Only while it is changed: settled, a figure is drawn as its document says, the same
         # way whatever came before -- after an undo, after a reload.)
-        previous = _LAYOUTS.get(where) if EDITING.get() else None
+        previous = _LAYOUTS.get(where) if EDITING.get() and not asked else None
         if (keep is None or fit.layout != keep) and previous and fit.layout != previous:
             # A figure already shown one way stays that way unless another is clearly
             # larger: it doesn't turn under its person for a little more room.
@@ -2685,6 +2771,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         else:
             _store_fit(key, laid)
     _LAYOUTS[where] = laid["layout"]
+    _TURNS[where] = turn
     written = _root_kind(spec)
     turned_whole = laid["layout"].startswith("turned") and not laid["layout"].startswith("turned within")
     _SHOWN[where] = {"row": "column", "column": "row"}.get(written) if turned_whole else written
@@ -2693,12 +2780,14 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
     for said in dict.fromkeys(_figure_check(code) for code in laid["codes"]):
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {said}")
     for text in block.said:
-        canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {text}")
-    # A structure that can't be drawn as written is a panel saying why: said under the slide too.
+        # (One about a part of it -- a line -- names it: "#edge.2.b-to-nowhere: ...".)
+        canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}{text if text.startswith('#') else ': ' + text}")
+    # A structure that can't be drawn as written is a panel saying why: said under the slide too,
+    # naming it and its file, to be chosen and put right.
     for node in spec.nodes:
         problem = structure_problem(node, style) if node.kind == "structure" else None
         if problem is not None:
-            canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {problem.message}")
+            canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}#{node.id}:source: {problem.message}")
     # Spaced a little closer is no news; swapped or folded, the figure reads differently.
     if "turned" in laid["layout"] or "folded" in laid["layout"]:
         canvas.notes.append(f"{canvas.slide.id} {spec.id}: {_layout_said(laid['layout'], spec)}")
@@ -2720,8 +2809,20 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         now = min(box.width / max(width, 1e-6), box.height / max(height, 1e-6))
         return min(box.width / max(wide, 1e-6), box.height / max(high, 1e-6)) / max(now, 1e-6)
 
-    turnable = larger_turned if block.turn is None and not turn else None
-    return _Prepared(laid["svg"], left, top, width, height, most, base, spec.id, turnable)
+    def alone(wide: float, high: float) -> float:
+        # Laid out for a place of its own as it is for this one, its words no larger.
+        try:
+            fit = _fit_in_box(
+                spec, wide, high, words=min(deck.style.figure_size, largest), largest=largest, turn=turn,
+            )
+        except Exception:
+            return 0.0
+        _, _, ink_wide, ink_high = fit.ink
+        return min(wide / max(ink_wide, 1e-6), high / max(ink_high, 1e-6), most)
+
+    # (Turned off by its person, or arranged by hand: either way, said if turning would help.)
+    turnable = larger_turned if not turn else None
+    return _Prepared(laid["svg"], left, top, width, height, most, base, spec.id, turnable, alone)
 
 
 def _heading_size(svg: str, base: float) -> float:
@@ -2833,23 +2934,36 @@ def _store_fit(key: tuple, laid: dict) -> None:
 TURNED_LARGER = "Turned to fit the slide, it would be larger."
 """Said of a figure drawn small as its person arranged it, that turning would draw larger:
 the studio offers to turn it (``figure.small.turn``)."""
+OWN_SLIDE = "On a slide of its own, it would be larger."
+"""Said of a figure drawn small beside other objects on its slide, that the whole of a slide
+would draw larger: the studio offers to give it one (``figure.small.own``)."""
 
 
-def _check_legible(canvas: _Canvas, prepared: dict[int, _Prepared], scales: dict[int, float]) -> None:
+def _check_legible(
+    canvas: _Canvas, prepared: dict[int, _Prepared], scales: dict[int, float], box: Box
+) -> None:
+    # What would make a figure drawn small larger, as it is: turned (kept as arranged, it
+    # may be one turn from larger), else a slide of its own (it shares this one: the whole
+    # of ``box``, its region, as wide as the slide), else fewer shapes or words -- said so,
+    # for the studio to offer what it can do in one click.
+    style = canvas.deck.style
+    shared = sum(len(region.blocks) for region in canvas.slide.regions.values()) > 1
+    whole = (max(box.width, style.width - 2 * style.margin), box.height)
     for index, item in prepared.items():
         drawn = item.size * scales[index]
-        # Kept as arranged, it may be one turn from larger: said so, for the studio to offer it.
         turning = drawn < SMALL and item.turned is not None and item.turned() > 1.15
+        alone = item.alone(*whole) if drawn < SMALL and shared and not turning and item.alone else 0.0
+        larger = (
+            TURNED_LARGER if turning else OWN_SLIDE if alone > scales[index] * 1.15
+            else "Fewer shapes, or fewer words in them, would make it larger."
+        )
         if drawn < LEGIBLE:
             canvas.diagnostics.append(
-                f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.1f} pt, too small to read. "
-                + (TURNED_LARGER if turning
-                   else "Try giving the figure its own slide, a wider layout, or fewer shapes.")
+                f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.1f} pt, too small to read. {larger}"
             )
         elif drawn < SMALL:
             canvas.notes.append(
-                f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.0f} pt, small for a talk. "
-                + (TURNED_LARGER if turning else "More room or fewer shapes would make it larger.")
+                f"{canvas.slide.id} {item.id}: Text in this figure is {drawn:.0f} pt, small for a talk. {larger}"
             )
 
 
@@ -3679,19 +3793,18 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
     height = min(box.height, max(box.width * 0.6, 40.0))
     canvas.span = (box.x, box.width)
     ink = canvas.palette.get("muted-ink")
-    # A figure that can't be drawn is a quiet box where it would be, presented and exported:
-    # why is said on the editing stage alone, not to the audience.
+    # A figure that can't be drawn keeps its place, presented and exported, but shows nothing
+    # there -- not a box of nothing: why is said on the editing stage alone, not to the audience.
     quiet = block.said is not None and not PLACEHOLDERS.get()
     group = element(
         canvas.layer, "g", id=identifier, data__flexo__talk="invalid" if block.said is not None else "missing"
     )
-    element(
-        group, "rect", id=f"{identifier}.box", x=box.x, y=box.y, width=box.width, height=height, rx=6.0,
-        fill=ink, fill_opacity=0.06 if not quiet else 0.03, stroke=ink, stroke_opacity=0.6 if not quiet else 0.25,
-        stroke_width=1.5, stroke_dasharray="6 4",
-    )
     if quiet:
         return height
+    element(
+        group, "rect", id=f"{identifier}.box", x=box.x, y=box.y, width=box.width, height=height, rx=6.0,
+        fill=ink, fill_opacity=0.06, stroke=ink, stroke_opacity=0.6, stroke_width=1.5, stroke_dasharray="6 4",
+    )
     # The name as the document writes it, not read as markup.
     runs = (TextRun(block.said or f"Missing {block.what}: {block.name}"),)
     size, pad = style.small_size, style.small_size

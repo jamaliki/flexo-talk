@@ -151,6 +151,11 @@ class InvalidFigure(DeckDocumentError):
         self.drawn = drawn
 
 
+class UnknownLayout(DeckDocumentError):
+    """A slide of a layout there is none of (a typo, ``layout: quote``): drawn as Content
+    all the same, every object it has in its body, and said in plain words."""
+
+
 class UntrustedCode(DeckDocumentError):
     """Python a deck names, in a folder the studio has not been told to trust: not run."""
 
@@ -423,11 +428,17 @@ def add_slide(
 
     if not isinstance(data, dict):
         raise DeckDocumentError(where, "A slide must be a mapping (title, layout, body, \u2026).")
-    layout = data.get("layout", "content")
+    layout = data.get("layout") or "content"  # none written (an empty ``layout:``) is Content
     if layout not in LAYOUTS:
-        raise DeckDocumentError(
-            f"{where}.layout", f"Unknown layout \u201c{layout}\u201d. Available layouts: {', '.join(LAYOUTS)}."
-        )
+        if missing is None:
+            raise DeckDocumentError(
+                f"{where}.layout", f"Unknown layout \u201c{layout}\u201d. Available layouts: {', '.join(LAYOUTS)}."
+            )
+        # Drawn as Content rather than not at all, and said as the Layout menu names layouts.
+        missing.append(UnknownLayout(
+            f"{where}.layout", f"\u201c{layout}\u201d isn\u2019t a layout: drawn as Content. Choose one from Layout."
+        ))
+        data, layout = _as_content(data), "content"
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
     background = data.get("background")
     # A picture file, unless it names a colour (#1b2a41, or one of the theme's: accent).
@@ -463,6 +474,25 @@ def add_slide(
     if layout == "columns":
         slide.source.pop("columns", None)
     return slide
+
+
+def _as_content(data: dict[str, Any]) -> dict[str, Any]:
+    """A slide of a layout there is none of, as a Content slide: its title (or its words),
+    subtitle and the rest it shares with one kept, and every object it has -- in its body,
+    its columns -- in its body, in order."""
+
+    blocks: list[object] = []
+    for key in ("body", "left", "right"):
+        if isinstance(data.get(key), list):
+            blocks += data[key]
+    for column in data.get("columns") if isinstance(data.get("columns"), list) else []:
+        if isinstance(column, list):
+            blocks += column
+    kept = {key: value for key, value in data.items() if key in COMMON_KEYS + SLIDE_KEYS["content"]}
+    kept.pop("layout", None)
+    if "title" not in kept and _is_words(data.get("words")):
+        kept["title"] = data["words"]
+    return {**kept, "body": blocks}
 
 
 def _at(where: str, data: dict[str, Any], error: Exception) -> str:
@@ -687,8 +717,10 @@ def _strays(value: object) -> tuple[list[str], list] | None:
     if not isinstance(value, dict) or not isinstance(value.get("edges"), list):
         return None
     copy = {"nodes": value.get("nodes"), "edges": list(value["edges"])}
-    said = astray(copy)
-    return (said, copy["edges"]) if said else None
+    ids: list[str] = []
+    said = astray(copy, ids)
+    # (Each names the line it is about, to be chosen by: "#edge.2.b-to-nowhere: A line ...".)
+    return ([f"#{edge}: {text}" for text, edge in zip(said, ids, strict=True)], copy["edges"]) if said else None
 
 
 def _stood_in(base: Path, value: dict, error: Exception) -> tuple[object, str, str] | None:

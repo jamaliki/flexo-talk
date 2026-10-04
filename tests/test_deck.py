@@ -1615,3 +1615,56 @@ def test_a_caption_and_a_build_are_written_as_a_deck_document_writes_them() -> N
     (block,) = deck_document(deck)["slides"][0]["body"]
     assert block["caption"] == "Table 1. Cues" and block["build"] is True
     assert deck.slides[0].regions["body"].builds == {0}
+
+
+def test_columns_moved_to_their_places_move_only_their_own_native_lists_tables_and_words() -> None:
+    import xml.etree.ElementTree as ET
+
+    from flexo_talk import compose
+
+    deck = Deck("columns")
+    with deck.slide("Tables", layout="two-columns") as slide:
+        slide.regions["left"].table([["A", "B"], ["1", "2"]])
+        slide.regions["right"].table([["C", "D"], ["3", "4"], ["5", "6"], ["7", "8"]])
+    with deck.slide("Lists", layout="two-columns", align="middle") as slide:
+        slide.regions["left"].bullets("One")
+        slide.regions["left"].text(r"Rate $\frac{a}{b}$")
+        slide.regions["right"].bullets("Two", "Three", "Four")
+        slide.regions["right"].text(r"Rate $\frac{c}{d}$")
+    for slide in deck.slides:
+        rendered = compose.render_slide(deck, slide)
+        root = ET.fromstring(rendered.svg)
+        moved = {item.get("id"): float(re.search(r"translate\(0 ([-\d.]+)\)", item.get("transform"))[1])
+                 for item in root.iter() if item.get("data-flexo-talk") == "region" and item.get("transform")}
+        assert len(moved) == 2
+
+        def down(identifier: str, moved: dict[str, float] = moved) -> float:
+            return next((by for name, by in moved.items() if identifier.startswith(f"{name}.")), 0.0)
+
+        def drawn(identifier: str, root: ET.Element = root) -> ET.Element:
+            return next(item for item in root.iter() if item.get("id") == identifier)
+
+        # Each native table, list and line of words (for the PowerPoint) where its column's
+        # drawing is: moved by its own column alone, never by the one before it as well.
+        for table in rendered.tables:
+            top = float(re.search(r"M [-\d.]+ ([-\d.]+)", drawn(f"{table.id}.rule0").get("d"))[1])
+            assert table.y == pytest.approx(top + down(table.id), abs=0.01)
+        for layout in rendered.lists:
+            assert layout.items[0][2] == pytest.approx(float(drawn(f"{layout.id}.0").get("y")) + down(layout.id))
+        for words in rendered.worded:
+            baseline = float(next(item.get("y") for item in drawn(words.id).iter() if item.get("y")))
+            assert words.baseline == pytest.approx(baseline + down(words.id), abs=0.01)
+        assert len(rendered.tables) + len(rendered.lists) + len(rendered.worded) in {2, 4}
+
+
+def test_tables_side_by_side_share_one_top() -> None:
+    from flexo_talk import compose
+
+    deck = Deck("columns")
+    with deck.slide("Tables", layout="two-columns") as slide:
+        slide.regions["left"].table([["A", "B"], ["1", "2"]])
+        slide.regions["right"].table([["C", "D"], ["3", "4"], ["5", "6"], ["7", "8"]])
+    rendered = compose.render_slide(deck, deck.slides[0])
+    # Columns of pictures or tables line up at the top, as Keynote's do, however tall each is.
+    left, right = rendered.tables
+    assert left.y == pytest.approx(right.y)

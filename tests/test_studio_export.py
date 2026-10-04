@@ -60,9 +60,53 @@ def test_a_figure_that_cannot_be_drawn_is_an_empty_box_and_the_export_says_so(tm
     assert _pages(pdf) == 3
     # (Its other shapes drawn, the one it can't draw a plain box of its words.)
     assert kind.export_notes == [
-        "Slide 3 · Figure: \u201cSpike\u201d is drawn as a plain box: it can\u2019t be drawn as it is."
+        "Slide 3 · Figure: \u201cSpike\u201d is drawn as a plain box: a protein needs its length in residues."
     ]
     # Its slide as exported (and presented) shows no words of what is wrong.
     svgs = kind.export(deck, tmp_path, "talk", ["svg"], into=tmp_path / "svg")
     last = sorted(path for path in svgs if path.suffix == ".svg")[-1].read_text()
     assert "can\u2019t be drawn" not in last and "length" not in last and "The spike" in last
+
+
+def test_a_slide_of_a_layout_there_is_none_of_is_drawn_and_exported_as_content(tmp_path: Path) -> None:
+    quote = {"layout": "quote", "title": "Why it matters",
+             "body": [{"quote": "The queue lets the customer stop waiting."}]}
+    deck = {**DECK, "slides": [*DECK["slides"], quote]}
+    kind = DeckKind()
+    drawing = kind.draw(deck, tmp_path)
+    while drawing.unfinished:
+        drawing = kind.draw(deck, tmp_path)
+    page = drawing.pages[-1]
+    # Its objects drawn as on a Content slide, not a blank slide with a warning sign.
+    assert "The queue lets the customer" in page.svg and "Why it matters" in page.svg
+    said = [message for message in drawing.messages if message.where == f"slides[{len(deck['slides']) - 1}].layout"]
+    assert [(message.text, message.severity) for message in said] == [
+        ("\u201cquote\u201d isn\u2019t a layout: drawn as Content. Choose one from Layout.", "warning")]
+    # Exported the same, and said so.
+    (pdf,) = kind.export(deck, tmp_path, "talk", ["pdf"], into=tmp_path / "out")
+    assert _pages(pdf) == len(deck["slides"])
+    number = len(deck["slides"])
+    assert kind.export_notes == [f"Slide {number}: \u201cquote\u201d isn\u2019t a layout: drawn as Content."]
+
+
+def test_shapes_found_wanting_as_they_are_drawn_are_plain_boxes_each_said(tmp_path: Path) -> None:
+    nodes = [
+        {"id": "p", "kind": "plasmid", "label": "pUC19", "properties": {"length": -5}},
+        {"id": "t", "kind": "tree", "label": "Tree", "properties": {"newick": "((A,B"}},
+        {"id": "q", "label": "Next"},
+    ]
+    bad = {"title": "Bad", "body": [{"figure": {"figure": {"id": "f"}, "nodes": nodes}}]}
+    deck = {**DECK, "slides": [*DECK["slides"], bad]}
+    kind = DeckKind()
+    drawing = kind.draw(deck, tmp_path)
+    while drawing.unfinished:
+        drawing = kind.draw(deck, tmp_path)
+    # The rest of the figure is drawn; each shape that can't be is said where it is, to be chosen.
+    assert "Next" in drawing.pages[-1].svg and 'data-flexo-talk="invalid"' not in drawing.pages[-1].svg
+    assert {message.where for message in drawing.messages if "can\u2019t be drawn yet" in message.text} == {
+        "slides[2] f#p:length", "slides[2] f#t:newick"}
+    kind.export(deck, tmp_path, "talk", ["pdf"], into=tmp_path / "out")
+    assert kind.export_notes == [
+        "Slide 3 \u00b7 Figure: \u201cpUC19\u201d is drawn as a plain box: a plasmid of -5 bp is too short to draw."
+        " \u201cTree\u201d is drawn as a plain box: the tree's Newick does not read: a ( is never closed."
+    ]

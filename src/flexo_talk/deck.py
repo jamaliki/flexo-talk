@@ -390,6 +390,9 @@ class _Figure:
     """What it shows, for whoever cannot see it; else it is said from its shapes' words."""
     caption: tuple[TextRun, ...] = ()
     """Words set under it, centred, a size smaller: its caption, part of it (Keynote's)."""
+    caption_held: bool = False
+    """Its caption put there empty (``caption: ""``), to be written: its placeholder drawn
+    while editing."""
 
 
 @dataclass(slots=True)
@@ -400,6 +403,8 @@ class _Image:
     """What the picture shows, in words, for whoever cannot see it: its alt text."""
     caption: tuple[TextRun, ...] = ()
     """Words set under it, centred, a size smaller: its caption, part of it."""
+    caption_held: bool = False
+    """Its caption put there empty, to be written: its placeholder drawn while editing."""
 
 
 @dataclass(slots=True)
@@ -422,6 +427,8 @@ class _Table:
     """Whether its rows were written with different numbers of cells (the short filled)."""
     caption: tuple[TextRun, ...] = ()
     """Words set under it, centred, a size smaller: its caption, part of it."""
+    caption_held: bool = False
+    """Its caption put there empty, to be written: its placeholder drawn while editing."""
 
 
 @dataclass(slots=True)
@@ -447,6 +454,9 @@ class _Quote:
     runs: tuple[TextRun, ...]
     by: tuple[TextRun, ...] = ()
     size: float | None = None
+    held: bool = False
+    """Who said it put there empty (``by: ""``), to be written: its placeholder drawn while
+    editing, in its place."""
 
 
 @dataclass(slots=True)
@@ -991,12 +1001,14 @@ class Region:
         self._record("gallery", pictures, columns=columns, height=height, crop=crop, size=size, align=align)
         return self
 
-    def quote(self, words: str, *, by: str = "", size: float | None = None) -> Region:
+    def quote(self, words: str, *, by: str | None = None, size: float | None = None) -> Region:
         """A quotation set large in the title face, an accent quotation mark hung in
-        the margin beside it, and who said it (``by``) under it, muted."""
+        the margin beside it, and who said it (``by``) under it, muted (an empty one, ``""``,
+        holds its place while the deck is edited, as a placeholder)."""
 
-        words, by, size = _words(words, "quote"), _words(by, "by"), _size(size)
-        self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size))
+        held = by == ""
+        words, by, size = _words(words, "quote"), _words(by or "", "by"), _size(size)
+        self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size, held))
         self._record("quote", words, by=by or None, size=size)
         return self
 
@@ -1079,8 +1091,10 @@ class Region:
         width = _width(width)
         description = " ".join(str(description).split()) if description is not None else ""
         turn = None if turn is None else _flag(turn, "turn")
-        caption = _caption(caption)
-        self.blocks.append(_Figure(figure, turn, width, description=description, caption=inline(caption)))
+        held, caption = caption == "", _caption(caption)
+        self.blocks.append(
+            _Figure(figure, turn, width, description=description, caption=inline(caption), caption_held=held)
+        )
         self._record("figure", None, turn=turn, width=width, description=description or None, caption=caption or None)
         return self
 
@@ -1095,8 +1109,8 @@ class Region:
 
         width = _width(width)
         description = " ".join(str(description).split()) if description is not None else ""
-        caption = _caption(caption)
-        self.blocks.append(_Image(str(source), width, description, inline(caption)))
+        held, caption = caption == "", _caption(caption)
+        self.blocks.append(_Image(str(source), width, description, inline(caption), held))
         self._record("image", str(source), width=width, description=description or None, caption=caption or None)
         return self
 
@@ -1165,8 +1179,8 @@ class Region:
                 else "start"
                 for index in range(columns)
             )
-        caption = _caption(caption)
-        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption)))
+        held, caption = caption == "", _caption(caption)
+        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held))
         given = align if isinstance(align, str) else list(align)
         self._record(
             "table", _plain(rows), header=None if header else False, align=given or None, size=size,

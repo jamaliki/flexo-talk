@@ -466,9 +466,32 @@ def _describe(tree: etree._Element, slide: Slide) -> None:
     described = _descriptions(slide)
     for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
         name = properties.get("name", "")
-        # A picture with a caption is grouped with it: the picture is described as well.
-        if text := described.get(name) or described.get(name.removesuffix(".picture")):
+        # (A picture with a caption is grouped with it: described as its group is.)
+        text = described.get(name) or described.get(name.removesuffix(".picture"))
+        if not text:
+            continue
+        shape = properties.getparent().getparent()
+        above = [group.find(f"{{{_PML}}}nvGrpSpPr/{{{_PML}}}cNvPr")
+                 for group in shape.iterancestors(f"{{{_PML}}}grpSp")]
+        if any(text in (group.get("descr") or "") for group in above if group is not None):
+            # Said by the group it is in (a picture with its caption, a figure of one
+            # molecule): marked decorative, so a screen reader says it once.
+            _decorative(properties)
+        else:
             properties.set("descr", text)
+
+
+_DECORATIVE = "http://schemas.microsoft.com/office/drawing/2017/decorative"
+
+
+def _decorative(properties: etree._Element) -> None:
+    """A shape marked decorative, as PowerPoint's "Mark as Decorative" does: passed over by
+    a screen reader, and not asked for alt text."""
+
+    a = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    extensions = etree.SubElement(properties, f"{{{a}}}extLst")
+    extension = etree.SubElement(extensions, f"{{{a}}}ext", uri="{C183D7F6-B498-43B3-948B-1728B52AA6E4}")
+    etree.SubElement(extension, f"{{{_DECORATIVE}}}decorative", nsmap={"adec": _DECORATIVE}, val="1")
 
 
 def _descriptions(slide: Slide) -> dict[str, str]:
