@@ -134,10 +134,10 @@ a picture; words turn light), `dark=` (force light words), and `align=` (see
 | `bullets(*items, numbered=, reveal=, plain=, size=)` | A native list; a nested list is the level below; `reveal=True` builds one click at a time; `plain=True` has no bullets, its levels kept |
 | `text(words, size=, align="start"\|"middle"\|"end", muted=, colour=)` | A paragraph |
 | `with region.figure(**Figure options) as figure:` | A new flexo figure in the deck's theme |
-| `add(flexo_figure, turn=True)` | An existing flexo figure, redrawn in the deck's theme |
+| `add(flexo_figure, turn=True, caption=)` | An existing flexo figure, redrawn in the deck's theme |
 | `plot(matplotlib_figure)` | A plot laid out again at its place's size: vectors and live text |
-| `image(path, description=)` | An SVG as vectors when flexo can draw it exactly, else a picture; PNG/JPEG pictures. `description`: what it shows, read out by screen readers and PowerPoint's alt text |
-| `table(rows, header=True, align="lrr")` | A booktabs-ruled native table; numbers flush right by default |
+| `image(path, description=, caption=)` | An SVG as vectors when flexo can draw it exactly, else a picture; PNG/JPEG pictures. `description`: what it shows, read out by screen readers and PowerPoint's alt text |
+| `table(rows, header=True, align="lrr", caption=)` | A booktabs-ruled native table; numbers flush right by default |
 | `code(source)` | A monospace listing on a tinted panel |
 | `gallery(items, columns=, height=, crop="circle"\|"square", align=)` | Logos, or people as `(file, "**Name**\nRole")` |
 | `quote(words, by=)` | A quotation set large, an accent quotation mark hung in the margin |
@@ -146,6 +146,12 @@ a picture; words turn light), `dark=` (force light words), and `align=` (see
 
 Slide-level extras: `slide.notes(text)` (speaker notes), `slide.footnote(text)`
 (small and muted above the footer; several stack in order).
+
+A figure's, picture's or table's `caption=` is set under it, centred and a size
+smaller, as part of it (a Caption in the PDF's tags, grouped with a picture or
+figure in the PowerPoint). `region.build_in()` (`build: true` in a document) makes
+the block added last appear on a click of its own, in the slide's order: a click in
+PowerPoint, a page in the PDF, a step when presenting.
 
 **Markup in any slide text** (titles, bullets, cells, captions): `$...$` maths
 (flexo's LaTeX subset), `*italic*`, `**bold**`, `` `code` ``, `[words](https://url)`

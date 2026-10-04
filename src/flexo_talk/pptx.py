@@ -1555,8 +1555,11 @@ def _together(elements: list[etree._Element], ids: _Ids) -> etree._Element:
     top = min(box[1] for box in boxes)
     right = max(box[0] + box[2] for box in boxes)
     bottom = max(box[1] + box[3] for box in boxes)
+    # Named as the first of them (a list, with the formulas drawn over it): what it is.
+    first = next(elements[0].iter(f"{{{_P}}}cNvPr"), None)
+    name = escape((first.get("name") if first is not None else "") or "group", {'"': "&quot;"})
     group = etree.fromstring(
-        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"group\"/>"
+        f"<p:grpSp {_NS}><p:nvGrpSpPr><p:cNvPr id=\"{ids()}\" name=\"{name}\"/>"
         f"<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm>"
         f'<a:off x="{left}" y="{top}"/><a:ext cx="{right - left}" cy="{bottom - top}"/>'
         f'<a:chOff x="{left}" y="{top}"/><a:chExt cx="{right - left}" cy="{bottom - top}"/>'

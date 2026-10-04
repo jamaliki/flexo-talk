@@ -1108,7 +1108,8 @@ class Region:
         if not self.blocks:
             raise ValueError("Add a block before building it in.")
         self.builds.add(len(self.blocks) - 1)
-        self.sources[-1]["build"] = True
+        if self.sources[-1]:  # a stand-in for what is missing is written as nothing
+            self.sources[-1]["build"] = True
         return self
 
     def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
