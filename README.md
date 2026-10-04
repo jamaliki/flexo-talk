@@ -152,13 +152,15 @@ Any slide (title and section slides too) can take `background=`: a colour
 background the slide's words and accents are set light (`dark=` overrides).
 
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
-is the level below; `numbered=True` numbers the outer level, natively in PowerPoint;
+is the level below; `numbered=True` numbers every level in its tier (1., a., i.), natively in PowerPoint;
+`plain=True` draws no bullets or numbers, each item at its level's indent (Keynote's None);
 `reveal=True` shows the outer items one click at a time -- PowerPoint builds, and a
 PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=, muted=)`, `figure(**options)`
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
 `plot(matplotlib_figure)`, `table(rows)`, `gallery(pictures)` (logos or people in a
 grid, captions under them, `crop="circle"` for photographs), `code(source)` (a monospace listing
-on a tinted panel, comment lines muted), `image(path)`, `quote(words, by=)` (set large,
+on a tinted panel, comment lines muted), `image(path, description=)` (`description` says what it
+shows, for screen readers and PowerPoint's alt text), `quote(words, by=)` (set large,
 an accent quotation mark hung in the margin), `stats(("93%", "accuracy"), ("4x", "faster"))`
 (numbers to remember, very large in the accent, labels under them), and
 `callout(words, title=, colour="accent2")` (a key point on a panel tinted in a tone). Words take the
@@ -410,8 +412,13 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   being edited is drawn first; the others follow.
 - **Others, live**: slides an agent or another person changes flash in their
   colour, and their avatars show which slide they are on.
-- It presents full screen (reveals, notes, a clock) and exports PowerPoint, PDF,
-  SVG, and PNG. Saving is automatic; ⌘Z undoes your own last change, and the
+- **Present** (⌘↩, or ⌥⌘↩ from the first slide) plays the deck full screen, as
+  Keynote does: the audience sees the slides alone; the presenter view (the slide, the
+  next one, the notes, the time) opens on a second screen, and on one screen X shows it
+  in place of the slides. A click or → goes on; a slide's number then Return goes to
+  it; B and W blank the screen black or white; Esc ends. **Export** makes a PDF (a
+  page per slide, or per stage of its builds), a PowerPoint, or a PNG or SVG of each
+  slide, saved where you say (downloaded, in a browser). Saving is automatic; ⌘Z undoes your own last change, and the
   history beside it (⌥⌘Z) lists every change by name -- "Rename “Model” to
   “Encoder” · Slide 2" -- to go back, or forward, to any of them, the deck going
   to the slide each was made on. Saving writes the document back as YAML

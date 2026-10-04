@@ -270,6 +270,12 @@ def _words(value: object, what: str) -> str:
     return str(value)
 
 
+def _caption(value: object) -> str:
+    """A caption's words, on one line of markup ("" for none)."""
+
+    return "" if value is None else " ".join(_words(value, "caption").split())
+
+
 def _colour(value: object, what: str = "colour") -> str | None:
     """A colour: a palette role (accent, muted, ink...) or #rgb / #rrggbb."""
 
@@ -294,6 +300,29 @@ def paint_role(colour: str) -> str:
     if colour.startswith("accent"):
         return f"tone-{colour[6:] or 1}-stroke"
     return {"muted": "muted-ink"}.get(colour, colour)
+
+
+def named_colour(value: object) -> bool:
+    """Whether a slide's background names one of its theme's colours (``accent``,
+    ``accent2``..., ``ink``, ``muted``) -- painted as the theme paints it, so a change of
+    theme repaints the slide -- rather than a ``#rrggbb`` colour or a picture file."""
+
+    return isinstance(value, str) and bool(value) and not value.startswith("#") and paint_role(value) in _roles()
+
+
+def theme_colour(deck: Deck, name: str) -> str:
+    """A colour of a deck's theme by name, as it fills a slide: ``accent`` (``accent2``...)
+    the theme's own colour that tone takes -- not its stroke, which is that colour set to the
+    theme's outline lightness for lines and words on the page -- and ``ink`` or ``muted``
+    as the palette paints them."""
+
+    from flexo.themes import palette_order
+
+    if name.startswith("accent"):
+        order = palette_order(deck.theme, deck.palette_name)
+        if order:
+            return order[(int(name[6:] or 1) - 1) % len(order)]
+    return deck.palette.get(paint_role(name))
 
 
 _ROLES: set[str] = set()
@@ -331,6 +360,10 @@ class _Bullets:
     size: float | None = None
     numbered: bool = False
     reveal: bool = False
+    colour: str | None = None
+    """The words' paint, as a text's ``colour``; the bullets and numbers keep the theme's."""
+    plain: bool = False
+    """Whether its items have no bullets or numbers, their levels kept (Keynote's None)."""
 
 
 @dataclass(slots=True)
@@ -345,18 +378,33 @@ class _Words:
 @dataclass(slots=True)
 class _Figure:
     figure: flexo.Figure | FigureSpec
-    turn: bool = True
-    """Whether flexo may lay the figure out turned when that fits its place better."""
+    turn: bool | None = None
+    """Whether flexo may lay the figure out turned when that fits its place better: ``None``
+    lets it unless its parts were arranged by hand (one put under another beside others),
+    ``True`` lets it even so, ``False`` keeps it as written."""
     width: float | None = None
     """The width it is drawn at (points), as its place allows; ``None`` sizes it to its place."""
     said: tuple[str, ...] = ()
     """What is wrong with it that it is drawn despite: said when the slide is drawn."""
+    description: str = ""
+    """What it shows, for whoever cannot see it; else it is said from its shapes' words."""
+    caption: tuple[TextRun, ...] = ()
+    """Words set under it, centred, a size smaller: its caption, part of it (Keynote's)."""
+    caption_held: bool = False
+    """Its caption put there empty (``caption: ""``), to be written: its placeholder drawn
+    while editing."""
 
 
 @dataclass(slots=True)
 class _Image:
     source: str
     width: float | None = None
+    description: str = ""
+    """What the picture shows, in words, for whoever cannot see it: its alt text."""
+    caption: tuple[TextRun, ...] = ()
+    """Words set under it, centred, a size smaller: its caption, part of it."""
+    caption_held: bool = False
+    """Its caption put there empty, to be written: its placeholder drawn while editing."""
 
 
 @dataclass(slots=True)
@@ -377,6 +425,10 @@ class _Table:
     size: float | None = None
     ragged: bool = False
     """Whether its rows were written with different numbers of cells (the short filled)."""
+    caption: tuple[TextRun, ...] = ()
+    """Words set under it, centred, a size smaller: its caption, part of it."""
+    caption_held: bool = False
+    """Its caption put there empty, to be written: its placeholder drawn while editing."""
 
 
 @dataclass(slots=True)
@@ -402,6 +454,9 @@ class _Quote:
     runs: tuple[TextRun, ...]
     by: tuple[TextRun, ...] = ()
     size: float | None = None
+    held: bool = False
+    """Who said it put there empty (``by: ""``), to be written: its placeholder drawn while
+    editing, in its place."""
 
 
 @dataclass(slots=True)
@@ -418,6 +473,22 @@ class _Callout:
     title: tuple[TextRun, ...] = ()
     colour: str = "accent"
     size: float | None = None
+    held: bool = False
+    """Its heading put there empty (``title: ""``), to be written: its placeholder drawn while
+    editing."""
+
+
+@dataclass(slots=True)
+class _Missing:
+    """What stands for a picture or figure whose file is not there, as the slide is
+    edited: a box saying so, where it would be."""
+
+    what: str
+    """``picture``, ``figure`` or ``plot``."""
+    name: str
+    """The file, as the document names it."""
+    said: str | None = None
+    """What is wrong, when it is not a missing file (a figure that cannot be drawn)."""
 
 
 @dataclass(slots=True)
@@ -522,7 +593,7 @@ def made(value: object) -> object:
 
 type _Block = (
     _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery | _Quote | _Stats | _Callout
-    | _Math
+    | _Math | _Missing
 )
 
 
@@ -536,7 +607,18 @@ def accent_field(palette: Palette) -> str:
     return accent if is_dark(accent) else with_lightness(accent, 0.45)
 
 
-_INLINE = r"(\[[^\]\n]+\]\([^)\s]+\)|\[[^\]\n]+\]\{[^}\s]+\}|`[^`]*`|\*\*|\*)"
+_WORDS_IN = r"(?:[^\[\]\n]|\[[^\[\]\n]+\](?:\([^)\s]+\)|\{[^}\s]+\})|\[(?![^\[\]\n]+\](?:\([^)\s]+\)|\{[^}\s]+\})))+"
+"""A link's or a colour's words: no bracket in them but those of another link or colour
+(a link's words coloured, a colour's words linked), or one on its own that starts
+none."""
+
+_INLINE = rf"(\[{_WORDS_IN}\]\([^)\s]+\)|\[{_WORDS_IN}\]\{{[^}}\s]+\}}|`[^`]*`|\*\*|\*)"
+_LINK = re.compile(rf"\[({_WORDS_IN})\]\(([^)\s]+)\)")
+_COLOURED = re.compile(rf"\[({_WORDS_IN})\]\{{([^}}\s]+)\}}")
+_KEPT = re.compile(r"(\\`|`[^`]*`)|\\\\(?=[(\[])")
+"""Where a typed \\( or \\[ is written \\\\( or \\\\[ (outside code): a backslash
+before a bracket, which is no maths."""
+_MATHS = re.compile("\ue010(\\d+)\ue011")
 
 
 _DISPLAYED = re.compile(r"\s*(?:\$\$(?P<dollars>.+?)\$\$|\\\[(?P<brackets>.+?)\\\])\s*", re.DOTALL)
@@ -567,15 +649,30 @@ def inline(words: str) -> tuple[TextRun, ...]:
     """
 
     runs: list[TextRun] = []
-    # Split on maths (read as flexo reads it), then links, code, ** and *; each piece
-    # takes the styles open around it. \* is an asterisk, kept out of the split.
-    tokens: list[str] = []
+    # Split on links, colours, code, ** and *, maths (read as flexo reads it) standing
+    # aside meanwhile as a letter that is no mark, so maths in a link's or a colour's
+    # words stays in them; each piece takes the styles open around it. \* is an asterisk,
+    # \` a backtick, \] a bracket (as typed: "[1](2)") and \\( or \\[ a backslash and a
+    # bracket (as typed: "\(x\)"), kept out of the split.
+    masked = _KEPT.sub(lambda found: found.group(1) or "\ue003\ue003", words)
+    maths: list[str] = []
+    text = ""
     at = 0
-    for start, end in math_spans(words):
-        tokens += re.split(_INLINE, words[at:start].replace("\\*", _ASTERISK))
-        tokens.append(words[start:end])
+    for start, end in math_spans(masked):
+        text += f"{masked[at:start]}\ue010{len(maths)}\ue011"
+        maths.append(words[start:end])
         at = end
-    tokens += re.split(_INLINE, words[at:].replace("\\*", _ASTERISK))
+    text += masked[at:]
+
+    def back(part: str) -> str:
+        return _MATHS.sub(lambda found: maths[int(found.group(1))], part)
+
+    tokens: list[str] = []
+    for token in re.split(_INLINE, _held(text.replace("\ue003\ue003", "\ue003"))):
+        if _LINK.fullmatch(token) or _COLOURED.fullmatch(token):
+            tokens.append(back(token))
+        else:
+            tokens += [back(part) for part in re.split("(\ue010\\d+\ue011)", token)]
     tokens = [token for token in tokens if token]
     paired = _emphasis(tokens)
     bold = italic = False
@@ -586,8 +683,8 @@ def inline(words: str) -> tuple[TextRun, ...]:
         if token == "*" and index in paired:
             italic = not italic
             continue
-        link = re.fullmatch(r"\[([^\]\n]+)\]\(([^)\s]+)\)", token)
-        coloured = re.fullmatch(r"\[([^\]\n]+)\]\{([^}\s]+)\}", token)
+        link = _LINK.fullmatch(token)
+        coloured = None if link else _COLOURED.fullmatch(token)
         # A link's or a colour's words may carry emphasis of their own.
         if link:
             pieces = tuple(replace(run, link=link.group(2)) for run in inline(link.group(1)))
@@ -599,17 +696,54 @@ def inline(words: str) -> tuple[TextRun, ...]:
             runs.append(
                 replace(
                     run,
-                    text=run.text.replace(_ASTERISK, "*"),
+                    text=_freed(run.text),
                     # Strong words' maths stays regular, as LaTeX's \textbf leaves it.
                     weight=700 if bold and not run.maths else run.weight,
                     italic=run.italic or italic,
                 )
             )
-    return tuple(runs)
+    return _displayed_apart(runs)
+
+
+def _displayed_apart(runs: list[TextRun]) -> tuple[TextRun, ...]:
+    """``runs`` with each formula displayed among words (``$$...$$``) on a line of its own,
+    as a figure's label sets one (``flexo.markup``): there it is centred, as LaTeX sets it."""
+
+    laid: list[TextRun] = []
+    for at, run in enumerate(runs):
+        if run.math.startswith("\\displaystyle"):
+            # Broken before and after, unless the words are broken there already (a new
+            # line typed before or after it): never a line left empty.
+            if laid and not laid[-1].text.rstrip(" ").endswith("\n"):
+                laid.append(TextRun("\n"))
+            laid.append(run)
+            after = runs[at + 1].text.lstrip(" ") if at + 1 < len(runs) else ""
+            if not after.startswith("\n") and any(later.text.strip() or later.math for later in runs[at + 1 :]):
+                laid.append(TextRun("\n"))
+            continue
+        if at and runs[at - 1].math.startswith("\\displaystyle"):
+            run = replace(run, text=run.text.lstrip(" "))
+        laid.append(run)
+    return tuple(laid)
 
 
 _ASTERISK = "\ue000"
 """Where an escaped asterisk (\\*) waits while emphasis is read."""
+
+_HELD = {"\\*": _ASTERISK, "\\`": "\ue001", "\\]": "\ue002"}
+"""Escaped marks, and where each waits while the markup is read."""
+
+
+def _held(words: str) -> str:
+    for mark, held in _HELD.items():
+        words = words.replace(mark, held)
+    return words
+
+
+def _freed(text: str) -> str:
+    for mark, held in _HELD.items():
+        text = text.replace(held, mark[1])
+    return text.replace("\ue003", "\\")
 
 
 def _emphasis(tokens: list[str]) -> set[int]:
@@ -645,6 +779,13 @@ class Region:
         self.blocks: list[_Block] = []
         self.sources: list[dict[str, object]] = []
         """Each block as a deck document writes it (see ``flexo_talk.document``)."""
+        self.placeholders: set[int] = set()
+        self.builds: set[int] = set()
+        """The blocks (by index) that build in: each appears on a click of its own, in the
+        order they are on the slide (see ``build_in``)."""
+        """The blocks (by index) that are placeholders: put there to be made one's own (the
+        studio's sample table, figure or equation), drawn faintly while editing and never
+        presented or exported until changed."""
 
     def _record(self, kind: str, value: object, **options: object) -> None:
         self.sources.append({kind: value, **{key: item for key, item in options.items() if item is not None}})
@@ -655,13 +796,20 @@ class Region:
         size: float | None = None,
         numbered: bool = False,
         reveal: bool = False,
+        colour: str | None = None,
+        plain: bool = False,
     ) -> Region:
         """A bulleted list. A nested list of strings is the level below the item before it.
-        ``numbered=True`` numbers the outer level (1., 2., ...); levels below keep bullets.
+        ``numbered=True`` numbers every level, each in its tier (1., a., i.), as Keynote does.
         ``reveal=True`` shows the outer items one at a time: a click each in the
-        PowerPoint, a page each in the PDF (the SVG and PNG show them all)."""
+        PowerPoint, a page each in the PDF (the SVG and PNG show them all). ``colour``
+        paints its words, as a text's does. ``plain=True`` draws no bullets or numbers,
+        each item at its level's indent (Keynote's None)."""
 
         size, numbered, reveal = _size(size), _flag(numbered, "numbered"), _flag(reveal, "reveal")
+        plain = _flag(plain, "plain")
+        numbered = numbered and not plain
+        colour = _colour(colour)
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
 
         def add(entries: Iterable[str | Sequence[str]], level: int) -> None:
@@ -677,8 +825,11 @@ class Region:
                     flattened.append((level, inline(_words(entry, "A bullet"))))
 
         add(items, 0)
-        self.blocks.append(_Bullets(flattened, size, numbered, reveal))
-        self._record("bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None)
+        self.blocks.append(_Bullets(flattened, size, numbered, reveal, colour, plain))
+        self._record(
+            "bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None, colour=colour,
+            plain=plain or None,
+        )
         return self
 
     def text(
@@ -704,7 +855,15 @@ class Region:
                 words, size=size, align="middle" if align == "start" else align,
                 colour=colour or ("muted" if muted else None),
             )
-        self.blocks.append(_Words(inline(words), size, align, muted, colour))
+        runs = inline(words)
+        worded = [run for run in runs if run.text.strip() or run.math]
+        if len(worded) == 1 and worded[0].math and not worded[0].math.startswith("\\displaystyle"):
+            # A paragraph that is one formula ($\frac{a}{b}$) and nothing else is set as a
+            # formula on a line of its own is: in display style, not shrunk to sit among words.
+            runs = tuple(
+                replace(run, math=f"\\displaystyle {run.math}") if run is worded[0] else run for run in runs
+            )
+        self.blocks.append(_Words(runs, size, align, muted, colour))
         self._record(
             "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
         )
@@ -842,12 +1001,14 @@ class Region:
         self._record("gallery", pictures, columns=columns, height=height, crop=crop, size=size, align=align)
         return self
 
-    def quote(self, words: str, *, by: str = "", size: float | None = None) -> Region:
+    def quote(self, words: str, *, by: str | None = None, size: float | None = None) -> Region:
         """A quotation set large in the title face, an accent quotation mark hung in
-        the margin beside it, and who said it (``by``) under it, muted."""
+        the margin beside it, and who said it (``by``) under it, muted (an empty one, ``""``,
+        holds its place while the deck is edited, as a placeholder)."""
 
-        words, by, size = _words(words, "quote"), _words(by, "by"), _size(size)
-        self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size))
+        held = by == ""
+        words, by, size = _words(words, "quote"), _words(by or "", "by"), _size(size)
+        self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size, held))
         self._record("quote", words, by=by or None, size=size)
         return self
 
@@ -878,60 +1039,100 @@ class Region:
         return self
 
     def callout(
-        self, words: str, *, title: str = "", colour: str = "accent", size: float | None = None
+        self, words: str, *, title: str | None = None, colour: str = "accent", size: float | None = None
     ) -> Region:
         """A key point on a panel tinted in a tone, a bar of the tone along its edge:
-        ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words."""
+        ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words (an
+        empty one, ``""``, holds its place while the deck is edited, as a placeholder)."""
 
-        words, title, size = _words(words, "callout"), _words(title, "title"), _size(size)
+        held = title == ""
+        words, title, size = _words(words, "callout"), _words(title or "", "title"), _size(size)
         if not (isinstance(colour, str) and colour.startswith("accent") and paint_role(colour) in _roles()):
             raise ValueError(f"A callout's colour must be an accent (accent, accent2, \u2026), not {colour!r}.")
-        self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
+        self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size, held))
         self._record(
             "callout", words, title=title or None, colour=None if colour == "accent" else colour, size=size
         )
         return self
 
     def figure(
-        self, id: str | None = None, *, turn: bool = True, width: float | None = None, **options: object
+        self, id: str | None = None, *, turn: bool | None = None, width: float | None = None,
+        **options: object,
     ) -> flexo.Figure:
         """A flexo figure in the deck's theme, laid out for this place: use it as a
         ``with`` block. ``turn=False`` keeps it as written, and ``width`` draws it that
         wide (see ``add``)."""
 
         deck = self._slide.deck
-        turn = _flag(turn, "turn")
+        turn = None if turn is None else _flag(turn, "turn")
         width = _width(width)
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
         self.blocks.append(_Figure(figure, turn, width))
-        self._record("figure", None, turn=None if turn else False, width=width)
+        self._record("figure", None, turn=turn, width=width)
         return figure
 
     def add(
-        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
+        description: str | None = None, caption: str | None = None,
     ) -> Region:
         """An existing flexo figure, laid out again in the deck's theme for this place.
 
         Flexo lays it out for the place's width *and* height: as written, or turned
         (a tall stack read left to right) or spaced closer when that lets its words
-        be larger -- ``turn=False`` keeps it as written. It is drawn as large as its
-        place lets its words be the size of the words round it; ``width`` (points)
-        draws it that wide instead, smaller or larger, as far as its place allows.
+        be larger -- ``turn=False`` keeps it as written, and so does a figure whose parts
+        were arranged by hand (a part under another beside others) unless ``turn=True``.
+        It is drawn as large as its place lets its words be the size of the words round
+        it; ``width`` (points) draws it that wide instead, smaller or larger, as far as
+        its place allows.
+        ``description`` says what it shows, as a picture's does; ``caption`` is set under it.
         """
 
         width = _width(width)
-        self.blocks.append(_Figure(figure, _flag(turn, "turn"), width))
-        self._record("figure", None, turn=None if turn else False, width=width)
+        description = " ".join(str(description).split()) if description is not None else ""
+        turn = None if turn is None else _flag(turn, "turn")
+        held, caption = caption == "", _caption(caption)
+        self.blocks.append(
+            _Figure(figure, turn, width, description=description, caption=inline(caption), caption_held=held)
+        )
+        self._record("figure", None, turn=turn, width=width, description=description or None, caption=caption or None)
         return self
 
-    def image(self, source: str | Path, *, width: float | None = None) -> Region:
+    def image(
+        self, source: str | Path, *, width: float | None = None, description: str | None = None,
+        caption: str | None = None,
+    ) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
-        as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture."""
+        as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture.
+        ``description`` says what it shows, for whoever cannot see it (a screen reader,
+        PowerPoint's alt text); ``caption`` is set under it, centred, a size smaller."""
 
         width = _width(width)
-        self.blocks.append(_Image(str(source), width))
-        self._record("image", str(source), width=width)
+        description = " ".join(str(description).split()) if description is not None else ""
+        held, caption = caption == "", _caption(caption)
+        self.blocks.append(_Image(str(source), width, description, inline(caption), held))
+        self._record("image", str(source), width=width, description=description or None, caption=caption or None)
+        return self
+
+    def build_in(self) -> Region:
+        """The block added last appears on a click when presenting, after what is on the
+        slide before it (Keynote's Build In, Appear): a click in the PowerPoint, a page in
+        the PDF. A list's items revealed one at a time (``reveal``) appear by themselves."""
+
+        if not self.blocks:
+            raise ValueError("Add a block before building it in.")
+        self.builds.add(len(self.blocks) - 1)
+        if self.sources[-1]:  # a stand-in for what is missing is written as nothing
+            self.sources[-1]["build"] = True
+        return self
+
+    def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
+        """A box where the ``what`` (picture, figure, plot) in the file ``name`` would be,
+        saying it is missing -- or what else is wrong (``said``): the rest of the slide is
+        drawn meanwhile."""
+
+        self.blocks.append(_Missing(what, name, said))
+        self.sources.append({})
         return self
 
     def table(
@@ -941,6 +1142,7 @@ class Region:
         header: bool = True,
         align: str | Sequence[str] = "",
         size: float | None = None,
+        caption: str | None = None,
     ) -> Region:
         """A table, ruled as in a paper: a rule above, one under the header, one below.
 
@@ -948,6 +1150,7 @@ class Region:
         the first row is the header unless ``header=False``. ``align`` gives each
         column ``start``, ``middle``, or ``end`` (``"lrr"`` also works); by
         default a column of numbers is set flush right and any other flush left.
+        ``caption`` is set under it, centred, a size smaller.
         """
 
         if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
@@ -976,9 +1179,13 @@ class Region:
                 else "start"
                 for index in range(columns)
             )
-        self.blocks.append(_Table(cells, header, aligned, size, ragged))
+        held, caption = caption == "", _caption(caption)
+        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held))
         given = align if isinstance(align, str) else list(align)
-        self._record("table", _plain(rows), header=None if header else False, align=given or None, size=size)
+        self._record(
+            "table", _plain(rows), header=None if header else False, align=given or None, size=size,
+            caption=caption or None,
+        )
         return self
 
     def code(self, source: str, *, size: float | None = None) -> Region:
@@ -1024,11 +1231,22 @@ def _blank(cell: object) -> bool:
 
 
 def _numeric(cell: object) -> bool:
+    """A number, with what may go with one: a sign, ± a spread, a %, a multiple (k, M, x,
+    before it or after it: x7, 7x, as with the multiplication sign) or a unit (38 ms,
+    1.2 GB, 400 req/s)."""
+
     if isinstance(cell, int | float):
         return True
     text = str(cell).strip().replace("$", "").replace("*", "").replace(",", "")
     text = text.replace("\\pm", "±").rstrip("%").strip()
-    return bool(re.fullmatch(r"[-+\u2212]?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?\s*[kKMGTBx\u00d7]?", text))
+    return bool(re.fullmatch(_NUMBER, text))
+
+
+_NUMBER = (
+    r"[-+\u2212]?([x\u00d7]\s?)?\d+(\.\d+)?(\s*±\s*\d+(\.\d+)?)?"
+    r"\s*([kKMGTBx\u00d7]|[A-Za-z\u00b5\u03bc\u00b0\u03a9]{1,4}(/[A-Za-z\u00b5\u03bc]{1,3})?)?"
+)
+"""A number as a table's cell gives one (see ``_numeric``)."""
 
 
 class Slide:
@@ -1078,7 +1296,8 @@ class Slide:
         self.source: dict[str, object] = {}
         """The slide's settings as a deck document writes them (see ``flexo_talk.document``)."""
         self.background = str(background) if background is not None else None
-        """This slide's own background: a colour (``#1b2a41``) or a picture file."""
+        """This slide's own background: a colour of its theme's (``accent``), any colour
+        (``#1b2a41``) or a picture file."""
         self.shade = shade
         """How much a background picture is darkened (0 to 1), for words over it."""
         self.dark = dark
@@ -1089,6 +1308,8 @@ class Slide:
         """Where the content sits in the body; the deck style's ``align`` when unset."""
         self.byline_runs: tuple[TextRun, ...] = ()
         """Who and when, on a title slide."""
+        self.placeholders: frozenset[str] = frozenset()
+        """The fields written but left empty (title, subtitle, words): each holds its place."""
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:
@@ -1107,6 +1328,8 @@ class Slide:
         """What the slide is drawn on when not the deck's page: its own background,
         or the accent colour that fills a section slide in a look that fills them."""
 
+        if named_colour(self.background):
+            return theme_colour(self.deck, self.background)
         if self.background:
             return self.background
         if self.layout == "section" and self.deck.style.sections == "fill":
@@ -1152,8 +1375,12 @@ class Slide:
         size: float | None = None,
         numbered: bool = False,
         reveal: bool = False,
+        colour: str | None = None,
+        plain: bool = False,
     ) -> Slide:
-        next(iter(self.regions.values())).bullets(*items, size=size, numbered=numbered, reveal=reveal)
+        next(iter(self.regions.values())).bullets(
+            *items, size=size, numbered=numbered, reveal=reveal, colour=colour, plain=plain
+        )
         return self
 
     def text(self, words: str, **options: object) -> Slide:
@@ -1161,18 +1388,29 @@ class Slide:
         return self
 
     def figure(
-        self, id: str | None = None, *, turn: bool = True, width: float | None = None, **options: object
+        self, id: str | None = None, *, turn: bool | None = None, width: float | None = None,
+        **options: object,
     ) -> flexo.Figure:
         return next(iter(self.regions.values())).figure(id, turn=turn, width=width, **options)
 
     def add(
-        self, figure: flexo.Figure | FigureSpec, *, turn: bool = True, width: float | None = None
+        self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
+        description: str | None = None, caption: str | None = None,
     ) -> Slide:
-        next(iter(self.regions.values())).add(figure, turn=turn, width=width)
+        next(iter(self.regions.values())).add(figure, turn=turn, width=width, description=description, caption=caption)
         return self
 
-    def image(self, source: str | Path, *, width: float | None = None) -> Slide:
-        next(iter(self.regions.values())).image(source, width=width)
+    def image(
+        self, source: str | Path, *, width: float | None = None, description: str | None = None,
+        caption: str | None = None,
+    ) -> Slide:
+        next(iter(self.regions.values())).image(source, width=width, description=description, caption=caption)
+        return self
+
+    def build_in(self) -> Slide:
+        """The block added last appears on a click (see ``Region.build_in``)."""
+
+        next(iter(self.regions.values())).build_in()
         return self
 
     def gallery(self, items, **options: object) -> Slide:
@@ -1500,7 +1738,16 @@ class Deck:
 
     @property
     def palette(self) -> Palette:
-        return with_tone_roles(resolve_palette(self.theme, self.palette_name))
+        # Asked for scores of times a slide: derived once for the theme and palette as they
+        # are (a theme file read again is a theme of its own).
+        from flexo.themes import theme as named_theme
+
+        named = self.palette_name
+        key = (self.theme, named if isinstance(named, str | None) else tuple(named), id(named_theme(self.theme)))
+        painted = getattr(self, "_painted", None)
+        if painted is None or painted[0] != key:
+            painted = self._painted = (key, with_tone_roles(resolve_palette(self.theme, self.palette_name)))
+        return painted[1]
 
     def plot_style(self) -> dict[str, object]:
         """matplotlib settings for plots in the deck's look: its font and figure
@@ -1620,10 +1867,18 @@ class ListLayout:
     numbered: bool = False
     reveal: bool = False
     """Whether the outer items appear one click (one PDF page) at a time."""
+    stepped: list[int] = field(default_factory=list)
+    """The step each outer item appears at, when revealed: the slide's builds' order."""
+    plain: bool = False
+    """Whether the items have no bullets or numbers: each starts at its level's indent."""
     number_room: float = 0.0
+    sub_room: float = 0.0
+    """In a numbered list, the room an item's number takes below the top level ("a.", "iv.")."""
     """How far an outer item's words start from its number's left edge, when numbered."""
     palette: Palette | None = None
     """The slide's paints (light words on a dark slide); the deck's when unset."""
+    ink: str | None = None
+    """The words' colour, when the list has one of its own; else the palette's ink."""
     steps: list[float] = field(default_factory=list)
     """Each item's line height: a formula taller than the words opens its item's lines."""
     opened: list[tuple[float, float, int]] = field(default_factory=list)
@@ -1637,14 +1892,56 @@ class ListLayout:
     def offset(self, level: int) -> float:
         """Where an item's words start, from the list's left edge."""
 
-        if self.numbered and level == 0:
-            return self.number_room
+        if self.numbered:
+            return self.number_room if level == 0 else self.mark_at(level) + self.sub_room
+        if self.plain:
+            return self.indent * level
         return self.indent * level + self.size * 0.95
 
     def mark_at(self, level: int) -> float:
         """Where an item's bullet or number starts, from the list's left edge."""
 
-        return 0.0 if self.numbered and level == 0 else self.indent * level + self.size * 0.12
+        if self.numbered:
+            # Each level's number where the level above's words start, as Keynote's tiers are.
+            return 0.0 if level == 0 else self.number_room + self.indent * (level - 1)
+        if self.plain:
+            return self.indent * level
+        return self.indent * level + self.size * 0.12
+
+
+def list_number(count: int, level: int) -> str:
+    """An item's number at its level in a numbered list, as Keynote and PowerPoint tier
+    them: 1. at the top, a. under it, i. under that, and round again."""
+
+    if level % 3 == 1:
+        letters = ""
+        while count:
+            count, rest = divmod(count - 1, 26)
+            letters = chr(ord("a") + rest) + letters
+        return f"{letters}."
+    if level % 3 == 2:
+        numerals = [(10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+        roman = ""
+        for value, numeral in [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+                               (50, "l"), (40, "xl"), *numerals]:
+            while count >= value:
+                roman += numeral
+                count -= value
+        return f"{roman}."
+    return f"{count}."
+
+
+def list_numbers(levels: Sequence[int]) -> list[str]:
+    """The numbers of a numbered list's items, by their levels: each level counts on until
+    an item above it, then starts again."""
+
+    counts: list[int] = []
+    numbers = []
+    for level in levels:
+        counts = (counts + [0] * (level + 1))[: level + 1]
+        counts[level] += 1
+        numbers.append(list_number(counts[level], level))
+    return numbers
 
 
 @dataclass(slots=True)
@@ -1670,6 +1967,11 @@ class TableLayout:
     """Whether the table reads from the right (its header is in a right-to-left script)."""
     palette: Palette | None = None
     """The slide's paints (light words on a dark slide); the deck's when unset."""
+    room: tuple[float, float] | None = None
+    """The left edge and the width of the place the table was set in: how wide it may grow."""
+    measured: list | None = None
+    """Each cell's words as they were set to size the table, for the drawing to set them so
+    (its rows as tall as their lines); let go once it is drawn."""
 
 
 @dataclass(slots=True)
@@ -1690,6 +1992,10 @@ class WordsLayout:
     family: str = ""
     weight: int | None = None
     fill: str = "#000000"
+    downs: list[float] | None = None
+    """Each line's baseline below the first's, where the lines are not evenly spaced (a tall
+    formula opens only its own line); ``heights`` is then each line's own height."""
+    heights: list[float] | None = None
 
 
 @dataclass(slots=True)
@@ -1710,6 +2016,8 @@ class RenderedSlide:
     settled: bool = True
     """False when a figure on it kept the layout it had while it was being edited, rather
     than the best one being found (``compose.EDITING``): drawn again once edits stop."""
+    builds: list[tuple[int, str]] = field(default_factory=list)
+    """``(step, id)`` of each block that builds in: the step it appears at."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

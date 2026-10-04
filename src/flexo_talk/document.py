@@ -64,6 +64,7 @@ from typing import Any
 
 import yaml
 from flexo.diagnostics import described
+from flexo.roundtrip import rewrite
 
 from flexo_talk.deck import (
     LAYOUTS,
@@ -76,17 +77,18 @@ from flexo_talk.deck import (
     _Figure,
     _Plot,
     displayed,
+    named_colour,
 )
 
 SCHEMA_VERSION = 1
 
 BLOCKS: dict[str, tuple[str, ...]] = {
-    "bullets": ("size", "numbered", "reveal"),
+    "bullets": ("size", "numbered", "reveal", "colour", "plain"),
     "text": ("size", "align", "muted", "colour"),
-    "figure": ("turn", "width"),
-    "image": ("width",),
+    "figure": ("turn", "width", "description", "caption"),
+    "image": ("width", "description", "caption"),
     "plot": ("aspect",),
-    "table": ("header", "align", "size"),
+    "table": ("header", "align", "size", "caption"),
     "gallery": ("columns", "height", "crop", "size", "align"),
     "code": ("size",),
     "quote": ("by", "size"),
@@ -126,6 +128,32 @@ class DeckDocumentError(ValueError):
         super().__init__(f"{where}: {message}" if where else message)
         self.where = where
         self.message = message
+
+
+class MissingFile(DeckDocumentError):
+    """A file the document names (a picture, a figure file) that is not there: ``name``
+    as the document writes it."""
+
+    def __init__(self, where: str, message: str, name: str) -> None:
+        super().__init__(where, message)
+        self.name = name
+
+
+class InvalidFigure(DeckDocumentError):
+    """A figure written in the deck that cannot be drawn as it is written (a span that ends
+    before it starts): said in plain words, in a box where it would be, the rest of its
+    slide drawn. Where only some of its shapes can't be (a protein with no length), the
+    rest of it is drawn all the same (``drawn``), each of those a plain box of its words;
+    ``where`` then ends in ``#shape:what`` (its id, and what of it is wrong: ``length``)."""
+
+    def __init__(self, where: str, message: str, drawn: object = None) -> None:
+        super().__init__(where, message)
+        self.drawn = drawn
+
+
+class UnknownLayout(DeckDocumentError):
+    """A slide of a layout there is none of (a typo, ``layout: quote``): drawn as Content
+    all the same, every object it has in its body, and said in plain words."""
 
 
 class UntrustedCode(DeckDocumentError):
@@ -299,8 +327,10 @@ def deck_from_document(
     """A deck from its document. Files it names are found from ``base``.
 
     With ``errors`` given, a slide that cannot be made is reported there and
-    stands in the deck as a blank slide, so the others keep their places;
-    without it, the first such slide raises ``DeckDocumentError``.
+    stands in the deck as a blank slide, so the others keep their places, and a
+    picture or figure whose file is missing is reported there and stands in its
+    slide as a box saying so; without it, the first such slide raises
+    ``DeckDocumentError``.
     """
 
     base = Path(base).resolve()
@@ -321,7 +351,7 @@ def deck_from_document(
     for index, data in enumerate(slides):
         where = f"slides[{index}]"
         try:
-            add_slide(deck, data, base, where)
+            add_slide(deck, data, base, where, missing=errors)
         except DeckDocumentError as error:
             if errors is None:
                 raise
@@ -390,24 +420,40 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
     return deck
 
 
-def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
-    """Add the slide ``data`` describes to ``deck``."""
+def add_slide(
+    deck: Deck, data: object, base: Path, where: str, *, missing: list[DeckDocumentError] | None = None
+) -> Slide:
+    """Add the slide ``data`` describes to ``deck``. With ``missing`` given, a file it names
+    that is not there is said there, and the slide is made without it (see ``add_block``)."""
 
     if not isinstance(data, dict):
         raise DeckDocumentError(where, "A slide must be a mapping (title, layout, body, \u2026).")
-    layout = data.get("layout", "content")
+    layout = data.get("layout") or "content"  # none written (an empty ``layout:``) is Content
     if layout not in LAYOUTS:
-        raise DeckDocumentError(
-            f"{where}.layout", f"Unknown layout \u201c{layout}\u201d. Available layouts: {', '.join(LAYOUTS)}."
-        )
+        if missing is None:
+            raise DeckDocumentError(
+                f"{where}.layout", f"Unknown layout \u201c{layout}\u201d. Available layouts: {', '.join(LAYOUTS)}."
+            )
+        # Drawn as Content rather than not at all, and said as the Layout menu names layouts.
+        missing.append(UnknownLayout(
+            f"{where}.layout", f"\u201c{layout}\u201d isn\u2019t a layout: drawn as Content. Choose one from Layout."
+        ))
+        data, layout = _as_content(data), "content"
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
     background = data.get("background")
-    if isinstance(background, str) and not background.startswith("#"):
-        background = str(_file(base, background, f"{where}.background"))
+    # A picture file, unless it names a colour (#1b2a41, or one of the theme's: accent).
+    if isinstance(background, str) and not background.startswith("#") and not named_colour(background):
+        try:
+            background = str(_file(base, background, f"{where}.background"))
+        except MissingFile as error:
+            if missing is None:
+                raise
+            missing.append(error)
+            background = None
     shade = data.get("shade", 0.0)
     text = _text_of(data, where)
     try:
-        slide = _slide_of(deck, data, layout, background, shade, text, base, where)
+        slide = _slide_of(deck, data, layout, background, shade, text, base, where, missing)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError) as error:
@@ -421,10 +467,32 @@ def add_slide(deck: Deck, data: object, base: Path, where: str) -> Slide:
         raise DeckDocumentError(f"{where}.footnotes", "footnotes must be text or a list of text.")
     for note in footnotes:
         slide.footnote(str(note))
+    slide.placeholders = frozenset(
+        key for key in ("title", "subtitle", "words") if key in data and not str(data[key] or "").strip()
+    )
     slide.source = {key: value for key, value in data.items() if key not in {"body", "left", "right"}}
     if layout == "columns":
         slide.source.pop("columns", None)
     return slide
+
+
+def _as_content(data: dict[str, Any]) -> dict[str, Any]:
+    """A slide of a layout there is none of, as a Content slide: its title (or its words),
+    subtitle and the rest it shares with one kept, and every object it has -- in its body,
+    its columns -- in its body, in order."""
+
+    blocks: list[object] = []
+    for key in ("body", "left", "right"):
+        if isinstance(data.get(key), list):
+            blocks += data[key]
+    for column in data.get("columns") if isinstance(data.get("columns"), list) else []:
+        if isinstance(column, list):
+            blocks += column
+    kept = {key: value for key, value in data.items() if key in COMMON_KEYS + SLIDE_KEYS["content"]}
+    kept.pop("layout", None)
+    if "title" not in kept and _is_words(data.get("words")):
+        kept["title"] = data["words"]
+    return {**kept, "body": blocks}
 
 
 def _at(where: str, data: dict[str, Any], error: Exception) -> str:
@@ -441,7 +509,8 @@ def _is_words(value: object) -> bool:
 
 
 def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object, shade: object,
-              text: Callable[[str], str], base: Path, where: str) -> Slide:
+              text: Callable[[str], str], base: Path, where: str,
+              missing: list[DeckDocumentError] | None = None) -> Slide:
     if layout == "title":
         slide = deck.title(
             text("title"), subtitle=text("subtitle"), author=text("author"), date=text("date"),
@@ -486,7 +555,7 @@ def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object,
             if not isinstance(blocks, list):
                 raise DeckDocumentError(names[name], "A region must be a list of blocks.")
             for index, block in enumerate(blocks):
-                add_block(slide.regions[name], block, base, f"{names[name]}[{index}]")
+                add_block(slide.regions[name], block, base, f"{names[name]}[{index}]", missing=missing)
     return slide
 
 
@@ -504,23 +573,38 @@ def _text_of(data: dict[str, Any], where: str) -> Callable[[str], str]:
     return text
 
 
-def add_block(region: Region, block: object, base: Path, where: str) -> None:
-    """Add the block ``block`` describes to ``region``."""
+_STAND_INS = {"image": "picture", "gallery": "picture", "figure": "figure", "plot": "plot"}
+"""What a block stands for, said in the box standing in for it while its file is missing."""
+
+
+def add_block(
+    region: Region, block: object, base: Path, where: str, *, missing: list[DeckDocumentError] | None = None
+) -> None:
+    """Add the block ``block`` describes to ``region``. With ``missing`` given, a picture
+    or figure whose file is not there is said there, and a box saying so stands in for it."""
 
     if not isinstance(block, dict):
         raise DeckDocumentError(where, f"A block must be a mapping named by its kind ({', '.join(BLOCKS)}).")
     kinds = [key for key in block if key in BLOCKS]
     if not kinds:
-        raise DeckDocumentError(where, f"This block has no kind. Name one of {', '.join(BLOCKS)}.")
+        named = next(iter(block), None)
+        said = f"Unknown kind of block \u201c{named}\u201d" if named is not None else "This block is empty"
+        raise DeckDocumentError(where, f"{said}. Name one of {', '.join(BLOCKS)}.")
     if len(kinds) > 1:
         raise DeckDocumentError(
             where, f"This block names more than one kind ({', '.join(kinds)}). Name only one of {', '.join(BLOCKS)}."
         )
     kind = kinds[0]
-    _only(block, (kind, *BLOCKS[kind]), f"{where} ({kind})")
+    # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``;
+    # and any may build in, appearing on a click (``build: true``): see ``Region.builds``.
+    _only(block, (kind, *BLOCKS[kind], "placeholder", "build"), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
+    if not isinstance(block.get("placeholder", False), bool):
+        raise DeckDocumentError(here, "placeholder must be true or false.")
+    if not isinstance(block.get("build", False), bool):
+        raise DeckDocumentError(here, "build must be true or false.")
     try:
         if kind == "bullets":
             items = value if isinstance(value, list) else [value]
@@ -533,7 +617,8 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
                 options["colour"] = "muted"
             region.math(value, **{"align": "middle", **options})
         elif kind == "math":
-            if not _is_words(value) or not str(value).strip():
+            # Empty, it is a placeholder (as an empty text is): drawn faintly while editing.
+            if not _is_words(value):
                 raise DeckDocumentError(here, "math must be a LaTeX equation (for example, math: E = mc^2).")
             region.math(str(value), **options)
         elif kind in {"text", "code", "quote", "callout"}:
@@ -557,16 +642,136 @@ def add_block(region: Region, block: object, base: Path, where: str) -> None:
                 raise DeckDocumentError(here, "stats must be a list of {value, label} pairs.")
             region.stats(*(_stat(item, here) for item in value), **options)
         elif kind == "figure":
-            region.add(_figure(base, value, here, region), **options)
+            # A lone shape with no words shows its hint, faintly (see _lone_shape).
+            hint = _lone_shape(value)
+            shown = {**value, "nodes": [{**value["nodes"][0], "label": hint}]} if hint else value
+            # A line to a shape it has none of (``to: nowhere``) is left out, and said.
+            strays = _strays(shown)
+            if strays:
+                shown = {**shown, "edges": strays[1]}
+            region.add(_figure(base, shown, here, region), **options)
+            if strays and isinstance(region.blocks[-1], _Figure):
+                region.blocks[-1].said = (*region.blocks[-1].said, *strays[0])
         elif kind == "plot":
             region.plot(_plot(base, value, here, region), **options)
         elif kind == "mechanism":
             region.mechanism(_steps(value, here), **options)
+    except MissingFile as error:
+        if missing is None or kind not in _STAND_INS:
+            raise
+        missing.append(error)
+        region.stand_in(_STAND_INS[kind], error.name)
+    except InvalidFigure as error:
+        # One figure that cannot be drawn is a box saying why, not a slide that is not drawn
+        # -- or, where only some of its shapes can't be, drawn with plain boxes for those.
+        if missing is None:
+            raise
+        missing.append(error)
+        if error.drawn is not None:
+            region.add(error.drawn, **options)
+        else:
+            region.stand_in("figure", "", said=error.message)
     except DeckDocumentError:
         raise
     except (ValueError, TypeError, OSError) as error:
         raise DeckDocumentError(here, str(error)) from error
     region.sources[-1] = dict(block)
+    if block.get("placeholder") or (kind == "figure" and _lone_shape(value)):
+        region.placeholders.add(len(region.blocks) - 1)
+    if block.get("build"):
+        region.builds.add(len(region.blocks) - 1)
+
+
+def _figure_problem(value: dict, error: Exception) -> str:
+    """What is wrong with a figure written in the deck, in plain words: flexo's own, naming
+    the shape by its words rather than its id ("In “λ infection”, span 1 ends where it
+    starts (1)")."""
+
+    from flexo.diagnostics import FlexoError
+
+    if not isinstance(error, FlexoError):
+        return str(error)
+    names = {
+        str(node.get("id")): str(node.get("label") or "").strip()
+        for node in value.get("nodes") or []
+        if isinstance(node, dict)
+    }
+    said = []
+    for diagnostic in error.diagnostics:
+        message = diagnostic.message.strip()
+        name = names.get(str(diagnostic.entity_id or ""))
+        # (Its first word in lower case after the shape's name, unless it is a name itself:
+        # "In “Spike”, a protein needs…", "In “1A8O”, PDB…")
+        first = message.split(" ", 1)[0]
+        lower = message if len(first) > 1 and first.isupper() else message[:1].lower() + message[1:]
+        said.append(f"In “{name}”, {lower}" if name else message[:1].upper() + message[1:])
+    return " ".join(said)
+
+
+def _strays(value: object) -> tuple[list[str], list] | None:
+    """A figure's lines to (or from) shapes it has none of: what to say of them, and the
+    lines it has without them -- None with none."""
+
+    from flexo.studio.figure_edit import astray
+
+    if not isinstance(value, dict) or not isinstance(value.get("edges"), list):
+        return None
+    copy = {"nodes": value.get("nodes"), "edges": list(value["edges"])}
+    ids: list[str] = []
+    said = astray(copy, ids)
+    # (Each names the line it is about, to be chosen by: "#edge.2.b-to-nowhere: A line ...".)
+    return ([f"#{edge}: {text}" for text, edge in zip(said, ids, strict=True)], copy["edges"]) if said else None
+
+
+def _stood_in(base: Path, value: dict, error: Exception) -> tuple[object, str, str] | None:
+    """A figure only some of whose shapes can't be drawn as written (a protein with no
+    length), drawn with each of those a plain box of its words -- the rest as written --
+    what to say of them, and the first of them (``id:what``, what of it is wrong); None
+    should it not draw even so."""
+
+    from flexo.diagnostics import FlexoError
+    from flexo.serialization import parse_figure
+
+    if not isinstance(error, FlexoError):
+        return None
+    nodes = [node for node in value.get("nodes") or [] if isinstance(node, dict)]
+    ids = {str(node.get("id")) for node in nodes}
+    wrong = [item for item in error.diagnostics if str(item.entity_id or "") in ids]
+    if not wrong or len(wrong) != len(error.diagnostics):
+        return None
+    bad = {str(item.entity_id) for item in wrong}
+    plain = [
+        {key: node[key] for key in ("id", "label") if key in node} if str(node.get("id")) in bad else node
+        for node in nodes
+    ]
+    try:
+        drawn = parse_figure(_beside(base, {**value, "nodes": plain}))
+    except Exception:
+        return None
+    names = {str(node.get("id")): re.sub(r"[*`$]", "", str(node.get("label") or "")).strip() for node in nodes}
+    said = []
+    for item in wrong:
+        message = item.message.strip()
+        first = message.split(" ", 1)[0]
+        lower = message if len(first) > 1 and first.isupper() else message[:1].lower() + message[1:]
+        name = names.get(str(item.entity_id))
+        called = f"\u201c{name}\u201d" if name else "A shape"
+        said.append(f"{called} can\u2019t be drawn yet: {lower} Choose it to set this in its panel.")
+    first = wrong[0]
+    return drawn, " ".join(said), f"{first.entity_id}:{str(first.code or '').rsplit('.', 1)[-1]}"
+
+
+def _lone_shape(value: object) -> str | None:
+    """A figure written in the deck that is one shape with no words and nothing more (as the
+    studio starts one) is a placeholder, as an empty text is: the word it shows faintly while
+    it waits for its own ("Shape", or "Start" for a flow chart's first step); else None."""
+
+    if not isinstance(value, dict) or value.get("edges") or len(value.get("nodes") or []) != 1:
+        return None
+    node = value["nodes"][0]
+    if not isinstance(node, dict) or set(node) - {"id", "kind", "label"} or str(node.get("label") or "").strip():
+        return None
+    return {"terminal": "Start", None: "Shape", "block": "Shape", "decision": "Decision"}.get(node.get("kind"))
 
 
 def _steps(value: object, where: str) -> str | list[str | dict[str, object]]:
@@ -653,7 +858,11 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
         try:
             figure = parse_figure(_beside(base, value))
         except Exception as error:
-            raise DeckDocumentError(where, f"The figure is not a valid flexo figure document: {error}") from error
+            stood = _stood_in(base, value, error)
+            if stood is not None:
+                drawn, said, shape = stood
+                raise InvalidFigure(f"{where} #{shape}", said, drawn) from error
+            raise InvalidFigure(where, f"This figure can\u2019t be drawn: {_figure_problem(value, error)}") from error
         with _FIGURES_LOCK:
             _FIGURES[key] = figure
             while len(_FIGURES) > 64:
@@ -945,7 +1154,10 @@ def _file(base: Path, name: str, where: str = "") -> Path:
         # carry a file of yours into its slides.
         raise DeckDocumentError(where, f"{name} is outside the folder.")
     if not path.exists():
-        raise DeckDocumentError(where, f"Cannot find {name} (looked in {path.parent}).")
+        if root is not None:
+            # In the studio a file is named as the deck names it: from the deck's folder.
+            raise MissingFile(where, f"Can't find {name} in the deck's folder.", name)
+        raise MissingFile(where, f"Cannot find {name} (looked in {path.parent}).", name)
     return path
 
 
@@ -1075,17 +1287,61 @@ def _json_value(value: object) -> object:
     raise TypeError(f"A deck document cannot contain a {type(value).__name__} value ({value!r:.40}).")
 
 
+_SLIDE_ORDER = (
+    "layout", "title", "subtitle", "author", "date", "words", "by", "dark", "align", "split", "widths",
+    "background", "shade", "body", "left", "right", "columns", "notes", "footnotes",
+)
+"""A slide's keys in the order a person reads them: what it is, its words, its look, its
+content, then its notes."""
+
+
+def _tidy(value: Any, *, slide: bool = False) -> Any:
+    """``value`` as it is written: a slide's keys in ``_SLIDE_ORDER`` (the rest after, as
+    they were), and an id first wherever there is one. Only the order changes."""
+
+    if isinstance(value, list):
+        return [_tidy(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    keys = list(value)
+    if slide:
+        keys = [key for key in _SLIDE_ORDER if key in value] + [key for key in keys if key not in _SLIDE_ORDER]
+    elif "id" in value:
+        keys = ["id", *(key for key in keys if key != "id")]
+    return {key: _tidy(value[key]) for key in keys}
+
+
 def dump_document(document: dict[str, Any], *, format: str = "yaml") -> str:
     """A deck document as YAML (or JSON) text."""
 
+    document = _tidied(document)
     if format == "json":
         return json.dumps(document, indent=2, ensure_ascii=False, default=_json_value) + "\n"
     return yaml.dump(document, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=100)
 
 
-def save_document(document: dict[str, Any], destination: str | Path) -> Path:
+def _tidied(document: Any) -> Any:
+    if isinstance(document, dict) and isinstance(document.get("slides"), list):
+        return {
+            key: [_tidy(slide, slide=True) for slide in item] if key == "slides" else _tidy(item)
+            for key, item in document.items()
+        }
+    return document
+
+
+def save_document(document: dict[str, Any], destination: str | Path, *, previous: str | None = None) -> Path:
+    """Write a deck document. YAML is written over the file's text as it was (``previous``,
+    else the file there now): the comments, blank lines, quoting and order of keys its
+    person or an agent wrote are kept wherever the document did not change them."""
+
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dump_document(document, format="json" if path.suffix.lower() == ".json" else "yaml"),
-                    encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        text = dump_document(document, format="json")
+    else:
+        if previous is None and path.is_file():
+            previous = path.read_text(encoding="utf-8")
+        # (By its name: what was deleted from this file, and only this one, comes back as it was.)
+        text = rewrite(previous, _tidied(document), dump_document, name=str(path.resolve()))
+    path.write_text(text, encoding="utf-8")
     return path

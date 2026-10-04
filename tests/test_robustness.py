@@ -77,7 +77,13 @@ def test_a_slides_settings_are_checked() -> None:
             Deck("v").slide("S", **options)
 
 
-def test_emoji_are_left_out_of_the_drawing_and_said_once_a_slide(tmp_path: Path) -> None:
+def test_emoji_are_left_out_of_the_drawing_and_said_once_a_slide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # As on a machine with no font that has them: GNU Unifont, where installed, has
+    # outlines for every emoji.
+    monkeypatch.setattr("flexo.fonts.family_covering", lambda characters: None)
+    monkeypatch.setattr("flexo.text.family_covering", lambda characters: None)
     deck = Deck("e", footer="Footer \N{PARTY POPPER}")
     slide = deck.slide("Love ❤️ it")
     slide.text("a️ b \N{GRINNING FACE} c").bullets("x \N{PARTY POPPER}", ["nested \N{WAVING HAND SIGN}"])
@@ -424,7 +430,7 @@ def test_a_right_to_left_quote_is_written_to_powerpoint_as_it_reads(tmp_path: Pa
     slide = deck.slide("آمار")
     slide.quote("سخن بزرگان با **تأکید** در میانه", by="حافظ")
     xml = zipfile.ZipFile(deck.build(tmp_path, formats=("pptx",)).pptx).read("ppt/slides/slide1.xml").decode()
-    words = re.search(r'name="slide1\.body\.0\.words".*?</p:sp>', xml, re.S).group(0)
+    words = re.search(r'name="Text “سخن.*?</p:sp>', xml, re.S).group(0)
     assert 'rtl="1"' in words
     assert "".join(re.findall(r"<a:t>([^<]*)</a:t>", words)) == "سخن بزرگان با تأکید در میانه"
     date = "\u06f1\u06f5 مهر \u06f1\u06f4\u06f0\u06f5"
@@ -748,6 +754,21 @@ def test_a_link_is_told_from_the_words_in_every_theme(theme: str) -> None:
     (listed,) = rendered.lists
     link = next(run for _, runs, _ in listed.items for run in runs if run.link)
     assert _ink_of(link, palette, ink).lower() != ink.lower()  # the PowerPoint's list too
+
+
+@pytest.mark.parametrize("theme", ["print", "paper", "dark"])
+def test_a_link_on_a_band_reads_as_words_must(theme: str) -> None:
+    import re
+
+    from flexo.colour import contrast
+
+    from flexo_talk.deck import accent_field
+
+    deck = Deck("l", theme=theme, look="band")
+    deck.title("Thank you", subtitle="Questions welcome: [me](mailto:me@example.org)")
+    (rendered,) = deck.render()
+    fills = re.findall(r'<a href="mailto:me@example.org"><tspan[^>]*fill="(#[0-9a-fA-F]{6})"', rendered.svg)
+    assert fills and all(contrast(fill, accent_field(deck.palette)) >= 4.5 for fill in fills)
 
 
 def test_a_table_that_fits_breaks_none_of_its_words() -> None:

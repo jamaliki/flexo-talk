@@ -36,17 +36,26 @@ export function blockDrop(regions, from, point) {
       return between(region, block.index + (share >= 1 - EDGE ? 1 : 0));
     }
   }
-  // Elsewhere in a region: into it, if it is empty; a column holding one part swaps with
-  // it wherever it is let go; else between the parts either side of the pointer.
+  // Elsewhere in a region: into it, if it is empty; else between the parts either side of
+  // the pointer (a column holding one part too: only its middle swaps with it).
   for (const region of regions) {
     if (!within(region.room)) continue;
     const others = region.blocks.filter((block) => block.box && !isFrom(region, block));
     if (!others.length) return region.key === from.region ? { kind: "home" } : { kind: "into", region: region.key, index: 0 };
-    if (others.length === 1 && region.key !== from.region) return { kind: "swap", region: region.key, index: others[0].index };
     const above = region.blocks.filter((block) => block.box && (block.box.top + block.box.bottom) / 2 < point.y).length;
     return between(region, above);
   }
-  return null;
+  // Past a region's room, over or under it (under its last part, at the slide's foot): at its
+  // end, or its start.
+  const column = beside(regions, point);
+  if (!column) return null;
+  if (!column.blocks.some((block) => block.box && !isFrom(column, block))) return column.key === from.region ? { kind: "home" } : { kind: "into", region: column.key, index: 0 };
+  return between(column, point.y > column.room.bottom ? column.blocks.length : 0);
+}
+
+// The region whose room the pointer is over or under (across, within its edges), if any.
+function beside(regions, point) {
+  return regions.find((region) => region.room && point.x >= region.room.left && point.x <= region.room.right && (point.y > region.room.bottom || point.y < region.room.top)) || null;
 }
 
 // Letting it go at ``at``: the regions' lists (a key's list of parts, the slide's own
@@ -71,5 +80,57 @@ export function blockPlan(counts, from, at) {
   const lists = Object.fromEntries(Object.entries(counts).map(([region, count]) =>
     [region, Array.from({ length: count }, (_, index) => ({ region, index }))]));
   rearrange(lists, from, at);
+  return Object.entries(lists).flatMap(([region, list]) => list.map((old, index) => [old, { region, index }]));
+}
+
+// Several parts dragged together (`all`, every one of them, in the slide's order): where
+// they would go, among the parts not dragged (those dragged out of the way: their boxes as
+// the parts left behind now show, closed up), as `at` for gather -- over a part, before or
+// after it as the pointer is over its upper or lower half (several are never swapped with
+// one); elsewhere in a region, between the parts either side of the pointer, or into it
+// when no part is left there. (`at.index` counts the parts dragged where they were.)
+export function groupDrop(regions, all, point) {
+  const within = (box) => box && point.x >= box.left && point.x <= box.right && point.y >= box.top && point.y <= box.bottom;
+  const reach = (box) => {
+    const grow = Math.max(0, (REACH - (box.bottom - box.top)) / 2);
+    return { left: box.left, right: box.right, top: box.top - grow, bottom: box.bottom + grow };
+  };
+  const dragged = (region, block) => all.some((part) => part.region === region.key && part.index === block.index);
+  const left = regions.map((region) => ({ ...region, blocks: region.blocks.filter((block) => block.box && !dragged(region, block)) }));
+  for (const region of left) {
+    for (const block of region.blocks) {
+      const box = reach(block.box);
+      if (within(box)) return { kind: "between", region: region.key, index: block.index + (point.y > (box.top + box.bottom) / 2 ? 1 : 0) };
+    }
+  }
+  for (const region of left) {
+    if (!within(region.room)) continue;
+    if (!region.blocks.length) return { kind: "into", region: region.key, index: 0 };
+    const below = region.blocks.find((block) => (block.box.top + block.box.bottom) / 2 >= point.y);
+    return { kind: "between", region: region.key, index: below ? below.index : region.blocks[region.blocks.length - 1].index + 1 };
+  }
+  // Past a region's room, over or under it: at its end (counting every part it holds), or
+  // its start.
+  const column = beside(regions, point);
+  if (!column) return null;
+  if (!column.blocks.some((block) => block.box && !dragged(column, block))) return { kind: "into", region: column.key, index: 0 };
+  return { kind: "between", region: column.key, index: point.y > column.room.bottom ? column.blocks.length : 0 };
+}
+
+// Letting them go at `at`: each taken out of its list, and all put in together where they
+// go, in their order (`at.index` counting them where they were, as for one).
+export function gather(lists, all, at) {
+  const parts = all.map((part) => lists[part.region][part.index]);
+  const before = all.filter((part) => part.region === at.region && part.index < at.index).length;
+  for (const part of [...all].sort((a, b) => b.index - a.index)) lists[part.region].splice(part.index, 1);
+  const target = lists[at.region];
+  target.splice(Math.min(at.index - before, target.length), 0, ...parts);
+}
+
+// Where every part goes when several are let go together, as blockPlan.
+export function gatherPlan(counts, all, at) {
+  const lists = Object.fromEntries(Object.entries(counts).map(([region, count]) =>
+    [region, Array.from({ length: count }, (_, index) => ({ region, index }))]));
+  gather(lists, all, at);
   return Object.entries(lists).flatMap(([region, list]) => list.map((old, index) => [old, { region, index }]));
 }
