@@ -961,7 +961,11 @@ export function mount(studio, container) {
     readSlideAhead();
   }
 
+  // Where this person is, as last told the others (see reportFocus).
+  let reported = "";
+  const whereNow = () => `${state.slide}:${state.focus ? `${state.focus.region}[${state.focus.index}]` : ""}:${state.field?.field ?? ""}`;
   function reportFocus() {
+    reported = whereNow();
     const slide = slideAt();
     if (!slide) { studio.focus(null); return; }
     const block = state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
@@ -1058,7 +1062,7 @@ export function mount(studio, container) {
       page?.steps > 1 ? h("div.steps", { title: "Items appear one at a time" }, `${page.steps} steps`) : null,
       // Two at most, and how many more there are.
       here.length ? h("div.here", { title: here.map((entry) => nameOf(entry.who)).join(", ") }, here.slice(0, 2).map((entry) => avatar(entry.who, { size: 18 })),
-        here.length > 2 ? h("span.avatar.more", { style: { width: "18px", height: "18px", background: "var(--muted, #868e96)" } }, `+${here.length - 2}`) : null) : null,
+        here.length > 2 ? h("span.avatar.count", { style: { width: "18px", height: "18px", background: "var(--muted, #868e96)" } }, `+${here.length - 2}`) : null) : null,
       slideMoreButton(index)),
     h("button.insert-after", { type: "button", tabindex: -1, title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
     return node;
@@ -2484,6 +2488,15 @@ export function mount(studio, container) {
     if (!typing || typing.kind !== "node" || shapeIn(id) || !JSON.stringify(was ?? null).includes(`"id":${JSON.stringify(id)}`)) return false;
     const old = blocksAt((was?.slides || [])[figure.slide], figure.region)[figure.index]?.figure;
     const node = typeof old === "object" ? (old.nodes || []).find((item) => item.id === id) : null;
+    // Renamed meanwhile, not deleted (its id changed: an agent writing the file), the words
+    // typed here going with it, as merges know it: the typing ends, said -- no copy kept.
+    const nodes = figureBlock()?.figure?.nodes;
+    const renamed = node && Array.isArray(nodes) ? nodes[follows([node], nodes)[0]] : null;
+    if (renamed) {
+      figure.parts.closeInline(false);
+      toast(`${nameOf(lastWho)} renamed the shape you were editing to “${renamed.id}”.`, { icon: "info", seconds: 6 });
+      return true;
+    }
     if (!node || typeof figureBlock()?.figure !== "object") {
       figure.parts.closeInline(false);
       toast(`${nameOf(lastWho)} deleted the shape you were editing`, { icon: "info", seconds: 5 });
@@ -3203,7 +3216,8 @@ export function mount(studio, container) {
     if (to < 0) {
       if (inline) gone();
       // The slide shown, deleted by another: said, not left to seem a jump of its own.
-      else if (remote) toast(`${nameOf(who)} deleted slide ${from + 1}, which you were viewing.`, { icon: "info", seconds: 5 });
+      // (All of them: said so, not as the one that was shown.)
+      else if (remote) toast(after.length ? `${nameOf(who)} deleted slide ${from + 1}, which you were viewing.` : `${nameOf(who)} deleted all the slides.`, { icon: "info", seconds: 5 });
       state.focus = null; state.field = null;
       state.slide = Math.min(from, Math.max(0, after.length - 1));
       return;
@@ -3226,7 +3240,7 @@ export function mount(studio, container) {
       // back to the "- " that made it): typed on in, as that kind, from their end.
       const there = !remote && !inline.cell && blocksAt(before[from], inline.at.region).length === blocksAt(after[to], inline.at.region).length
         ? blocksAt(after[to], inline.at.region)[inline.at.index] : null;
-      if (went) { closeInline(); toast(`${nameOf(who)} moved ${editedHere(went.what)} to slide ${went.slide + 1}.`, { icon: "info", seconds: 6 }); }
+      if (went) { closeInline(); toast(`${nameOf(who)} moved ${went.what} to slide ${went.slide + 1} while you were editing it.`, { icon: "info", seconds: 6 }); }
       else if (typeof label === "string") { kept(label); typedTo = inline.at.index; }
       else if (!label && there && INLINE.has(kindOf(there))) { retype = { ...inline.at }; typedTo = inline.at.index; }
       else if (!label) gone();
@@ -6181,6 +6195,18 @@ export function mount(studio, container) {
     }
     return on(changed[0], slideChange(was[changed[0]], now[changed[0]]));
   };
+  // A step's slide followed to where it is now, another having moved it since: its place in
+  // the history ("Slide 1", not the "Slide 4" it was), and the slide its undo shows.
+  studio.follow = (entry, said) => {
+    const own = entry.parts ? entry.parts[entry.parts.length - 1] : entry, was = own.after?.slides;
+    said.made ??= { where: said.where, place: said.place };
+    const { where, place } = said.made;
+    if (!Number.isInteger(where) || !Array.isArray(was) || where >= was.length) return;
+    const kept = slides().indexOf(was[where]);
+    const to = kept >= 0 ? kept : follow(was, slides())[where];
+    said.where = to >= 0 ? to : where;
+    said.place = typeof place === "string" ? place.replace(/^Slide \d+/, `Slide ${said.where + 1}`) : place;
+  };
   // History names are macOS undo names: title-style, present tense ("Move List",
   // "Rename “Model” to “Encoder”"); a shape is named in quotes where it helps.
   const quoted = (text, most = 28) => {
@@ -6194,6 +6220,29 @@ export function mount(studio, container) {
     if (typeof now !== "string" && typeof was !== "string") return null;
     const first = plain(typeof now === "string" && now.trim() ? now : typeof was === "string" ? was : "").trim();
     return first ? `Typing in ${quoted(first)}` : "Typing";
+  };
+  // Words typed in one of several lines (speaker notes, a paragraph's lines): named by the line
+  // typed in, not always the first ("Typing in “second point”").
+  const typingLine = (now, was = "") => {
+    if (typeof now !== "string" || typeof was !== "string" || !`${now}${was}`.includes("\n")) return typing(now, was);
+    const after = now.split("\n"), before = was.split("\n");
+    const n = after.findIndex((line, k) => line !== before[k]);
+    return n < 0 ? typing(now, was) : typing(after[n] ?? "", before[n] ?? "");
+  };
+  // The first words typed in a value of many (a Numbers object's numbers and labels): [now, was].
+  const wordsTyped = (now, was) => {
+    if (typeof now === "string" || typeof was === "string") return now === was ? null : [typeof now === "string" ? now : "", typeof was === "string" ? was : ""];
+    // (Not where there are more or fewer of them: one added, or taken away.)
+    if (Array.isArray(now) && (!Array.isArray(was) || was.length !== now.length)) return null;
+    if (now && typeof now === "object") for (const key of Object.keys(now)) { const found = wordsTyped(now[key], was?.[key]); if (found) return found; }
+    return null;
+  };
+  // A change of look in the same words, named as the Format menu names it.
+  const lookChange = (was, now, otherwise) => {
+    const counted = (text, pattern) => (JSON.stringify(text ?? "").match(pattern) || []).length;
+    for (const [name, pattern] of [["Link", /\]\(/g], ["Code", /`/g], ["Maths", /\$/g], ["Bold", /\*\*/g]]) if (counted(was, pattern) !== counted(now, pattern)) return name;
+    const single = (text) => counted(JSON.stringify(text ?? "").replace(/\*\*/g, ""), /\*/g);
+    return single(was) !== single(now) ? "Italic" : otherwise;
   };
   // Of the fields an object is set by, those typed in (not chosen): their changes are typing.
   const TYPED_FIELDS = new Set(["description", "by", "title", "caption", "alt", "label", "footer"]);
@@ -6223,12 +6272,12 @@ export function mount(studio, container) {
     if (keys.length === 1 && TYPED_FIELDS.has(keys[0])) return typing(b[keys[0]], a[keys[0]]);
     return keys.length === 1 ? `Change ${DECK_NAMES[keys[0]] || keyTitle(keys[0])}` : "Change Design";
   }
-  const SLIDE_WORDS = [["title", "Title"], ["subtitle", "Subtitle"], ["words", "Text"], ["author", "Author"], ["date", "Date"]];
+  const SLIDE_WORDS = [["title", "Title"], ["subtitle", "Subtitle"], ["words", "Text"], ["by", "Attribution"], ["author", "Author"], ["date", "Date"]];
   const SLIDE_NAMES = { widths: "Column Widths", split: "Column Widths", align: styleName("align"), dark: "Text Colour", shade: "Background", background: "Background", by: "Attribution" };
   function slideChange(a, b) {
     if (layoutOf(a) !== layoutOf(b)) return "Change Layout";
     for (const [key, name] of SLIDE_WORDS) if (!same(a[key], b[key])) return typing(b[key], a[key]) || `Edit ${name}`;
-    if (!same(a.notes, b.notes)) return typing(b.notes, a.notes) || "Edit Notes";
+    if (!same(a.notes, b.notes)) return typingLine(b.notes, a.notes) || "Edit Notes";
     if (!same(a.footnotes, b.footnotes)) {
       const before = [a.footnotes ?? []].flat(), after = [b.footnotes ?? []].flat();
       if (before.length === after.length) { const n = after.findIndex((note, i) => !same(note, before[i])); return typing(after[n], before[n]) || "Edit Footnotes"; }
@@ -6274,11 +6323,13 @@ export function mount(studio, container) {
       }
       // The same words in another look (bold, a colour, a link): their format changed.
       const words = (block) => readable(JSON.stringify(block[kind] ?? ""));
-      if (["text", "bullets", "quote", "callout"].includes(kind) && words(a) === words(b)) return `Format ${name}`;
+      if (["text", "bullets", "quote", "callout"].includes(kind) && words(a) === words(b)) return lookChange(a[kind], b[kind], `Format ${name}`);
       // Words typed: named by the words they are in -- a list's, by the item typed in.
       if (kind === "bullets") { const n = items(b).findIndex((item, i) => !same(item, items(a)[i])); return typing(items(b)[n], items(a)[n]) || `Edit ${name}`; }
-      if (["text", "quote", "callout", "code", "math"].includes(kind)) return typing(b[kind], a[kind]) || `Edit ${name}`;
-      return `Edit ${name}`;
+      if (["text", "quote", "callout", "code", "math"].includes(kind)) return typingLine(b[kind], a[kind]) || `Edit ${name}`;
+      // Numbers and their labels typed in, as any words are.
+      const typed = wordsTyped(b[kind], a[kind]);
+      return (typed && typing(...typed)) || `Edit ${name}`;
     }
     if (keys.length === 1 && TYPED_FIELDS.has(keys[0]) && (typeof a[keys[0]] === "string" || typeof b[keys[0]] === "string")) return typing(b[keys[0]], a[keys[0]]);
     // A figure's swapping to fit, as its switch says.
@@ -6330,7 +6381,9 @@ export function mount(studio, container) {
       const id = changed[0], was = nodesA.get(id), now = nodesB.get(id);
       if (!same(was.label, now.label)) {
         // The same words in another look (a colour, code) are the label's format changed.
-        if (was.label && named(was, id) === named(now, id)) return `Format ${named(now, id)}`;
+        // (By all their words, not the few the name shows: typing on at the end of a long
+        // label is typing.)
+        if (was.label && plain(String(was.label)).trim() === plain(String(now.label ?? "")).trim()) return lookChange(was.label, now.label, `Format ${named(now, id)}`);
         return `Typing in ${named(now.label ? now : was, id)}`;
       }
       if (!same(was.kind, now.kind)) return "Change Shape Type";
@@ -6351,6 +6404,10 @@ export function mount(studio, container) {
       if (keys.length === 1 && keys[0] === "palette") return now.properties?.palette ? "Change Palette" : "Reset Palette";
       if (keys.length === 1 && keys[0] === "density") return now.properties?.density ? "Add Density Map" : "Remove Density Map";
       if (keys.length === 1) return `Change ${fieldLabel(now.kind, keys[0])}`;
+      // A setting of the shape's own (its shadow), by name.
+      const own = differing(was, now).filter((key) => !["label", "kind", "properties"].includes(key));
+      const field = (catalog.figure_editor?.parts?.[now.kind || "block"]?.fields || []).find((one) => one.key === own[0]);
+      if (own.length === 1 && !keys.length) return `Change ${field?.label ? titled(field.label) : keyTitle(own[0])}`;
       return `Edit ${call(id)}`;
     }
     if (changed.length > 1) return `Edit ${changed.length} Shapes`;
@@ -6360,6 +6417,12 @@ export function mount(studio, container) {
     const oldEdges = (a.edges || []).filter((edge) => !edgesB.includes(edgeKey(edge)));
     if (newEdges.length === 1 && !oldEdges.length) return `Connect ${call(ref(newEdges[0].from))} to ${call(ref(newEdges[0].to))}`;
     if (oldEdges.length === 1 && !newEdges.length) return "Delete Line";
+    // A line's words typed in, as any words are.
+    if (newEdges.length === 1 && oldEdges.length === 1 && same({ ...newEdges[0], label: null }, { ...oldEdges[0], label: null })) {
+      const [now, was] = [newEdges[0].label, oldEdges[0].label];
+      if (was && plain(String(was)).trim() === plain(String(now ?? "")).trim()) return lookChange(was, now, "Format Line");
+      return typing(now ?? "", was ?? "");
+    }
     if (newEdges.length || oldEdges.length) return newEdges.length === oldEdges.length && newEdges.length === 1 ? "Edit Line" : "Edit Lines";
     // Its shapes arranged: grouped, ungrouped, or one moved in its row or to another.
     const newGroups = [...groupsB.keys()].filter((id) => !groupsA.has(id)), oldGroups = [...groupsA.keys()].filter((id) => !groupsB.has(id));
@@ -6446,6 +6509,9 @@ export function mount(studio, container) {
     pending = true;
     if (source === "remote" && before) flash(before, who);
     if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
+    // What is chosen moved by the change (moved up with ⌥↑, or by another's change before it,
+    // its slide moved): the others are told where it now is, their frame for it with it.
+    if (whereNow() !== reported) reportFocus();
     // A slide not drawn yet (made with the studio away) shows its words as they are typed.
     else if (!pages[state.slide]?.svg) { renderRail(); renderStage(); }
     if (source === "history" || source === "remote") {
@@ -6470,7 +6536,17 @@ export function mount(studio, container) {
     const name = nameOf(who);
     return `${["Someone", "Another app", "An agent"].includes(name) ? name[0].toLowerCase() + name.slice(1) : name}'s`;
   };
-  studio.on("merged", ({ notes }) => {
+  studio.on("merged", ({ notes, away = false }) => {
+    // Edits made while the studio was away, kept though what they were made in went from the
+    // file meanwhile (an agent deleting the slide): said, the slide or object named.
+    if (away) {
+      const note = notes.find((one) => one.kept !== undefined);
+      if (!note) return;
+      const n = follows([note.kept], slides())[0];
+      const what = n >= 0 ? `slide ${n + 1}` : kindOf(note.kept) ? named(note.kept, { the: true }) : "what you changed";
+      toast(`${nameOf(note.by)} deleted ${what} while the studio was away. It stays, with your changes.`, { icon: "info", seconds: 8 });
+      return;
+    }
     const slide = slideAt();
     // (A figure's shape typed in on the slide is the figure being edited.)
     const shaping = Boolean(figure?.parts.inline) && figure.slide === state.slide;
@@ -6482,6 +6558,10 @@ export function mount(studio, container) {
     for (const note of notes) {
       if (note.kept !== undefined && block && follows([note.kept], [block])[0] === 0) {
         toast(`${nameOf(note.by)} deleted ${editedHere(named(block, { the: true }))}. It stays.`, { icon: "info", seconds: 6 });
+      } else if (note.kept !== undefined && shaping && note.kept?.id !== undefined && String(note.kept.id) === String(figure.parts.inline.id)) {
+        // A figure's shape typed in here, kept so: said here too, as an object's is.
+        const words = plain(String(note.kept.label ?? "")).trim();
+        toast(`${nameOf(note.by)} deleted ${editedHere(words ? `“${words}”` : "the shape")}. It stays.`, { icon: "info", seconds: 6 });
       } else if (note.kept !== undefined && follows([note.kept], [slide])[0] === 0) {
         toast(`${nameOf(note.by)} deleted the slide you're editing. It stays.`, { icon: "info", seconds: 6 });
       } else if (note.rewritten !== undefined && note.typed && typed.includes(note.typed)) {
