@@ -606,7 +606,13 @@ def add_block(
             # A lone shape with no words shows its hint, faintly (see _lone_shape).
             hint = _lone_shape(value)
             shown = {**value, "nodes": [{**value["nodes"][0], "label": hint}]} if hint else value
+            # A line to a shape it has none of (``to: nowhere``) is left out, and said.
+            strays = _strays(shown)
+            if strays:
+                shown = {**shown, "edges": strays[1]}
             region.add(_figure(base, shown, here, region), **options)
+            if strays and isinstance(region.blocks[-1], _Figure):
+                region.blocks[-1].said = (*region.blocks[-1].said, *strays[0])
         elif kind == "plot":
             region.plot(_plot(base, value, here, region), **options)
         elif kind == "mechanism":
@@ -649,9 +655,25 @@ def _figure_problem(value: dict, error: Exception) -> str:
     for diagnostic in error.diagnostics:
         message = diagnostic.message.strip()
         name = names.get(str(diagnostic.entity_id or ""))
-        said.append(f"in “{name}”, {message}" if name else message)
-    text = " ".join(said)
-    return text[:1].upper() + text[1:]
+        # (Its first word in lower case after the shape's name, unless it is a name itself:
+        # "In “Spike”, a protein needs…", "In “1A8O”, PDB…")
+        first = message.split(" ", 1)[0]
+        lower = message if len(first) > 1 and first.isupper() else message[:1].lower() + message[1:]
+        said.append(f"In “{name}”, {lower}" if name else message[:1].upper() + message[1:])
+    return " ".join(said)
+
+
+def _strays(value: object) -> tuple[list[str], list] | None:
+    """A figure's lines to (or from) shapes it has none of: what to say of them, and the
+    lines it has without them -- None with none."""
+
+    from flexo.studio.figure_edit import astray
+
+    if not isinstance(value, dict) or not isinstance(value.get("edges"), list):
+        return None
+    copy = {"nodes": value.get("nodes"), "edges": list(value["edges"])}
+    said = astray(copy)
+    return (said, copy["edges"]) if said else None
 
 
 def _lone_shape(value: object) -> str | None:
@@ -751,7 +773,7 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
         try:
             figure = parse_figure(_beside(base, value))
         except Exception as error:
-            raise InvalidFigure(where, f"This figure can't be drawn: {_figure_problem(value, error)}") from error
+            raise InvalidFigure(where, f"This figure can\u2019t be drawn: {_figure_problem(value, error)}") from error
         with _FIGURES_LOCK:
             _FIGURES[key] = figure
             while len(_FIGURES) > 64:

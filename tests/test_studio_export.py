@@ -48,3 +48,18 @@ def test_build_is_written_beside_the_deck_as_before(tmp_path: Path) -> None:
     assert sorted(path.relative_to(tmp_path).as_posix() for path in written) == [
         "build/My Talk-01.png", "build/My Talk-02.png", "build/My Talk.pdf",
     ]
+
+
+def test_a_figure_that_cannot_be_drawn_is_an_empty_box_and_the_export_says_so(tmp_path: Path) -> None:
+    protein = {"id": "p", "kind": "protein", "label": "Spike", "properties": {}}
+    deck = {**DECK, "slides": [
+        *DECK["slides"], {"title": "The spike", "body": [{"figure": {"figure": {"id": "f"}, "nodes": [protein]}}]},
+    ]}
+    kind = DeckKind()
+    (pdf,) = kind.export(deck, tmp_path, "talk", ["pdf"], into=tmp_path / "out")
+    assert _pages(pdf) == 3
+    assert kind.export_notes == ["Slide 3 · Figure is left empty: it can\u2019t be drawn as it is."]
+    # Its slide as exported (and presented) shows no words of what is wrong.
+    svgs = kind.export(deck, tmp_path, "talk", ["svg"], into=tmp_path / "svg")
+    last = sorted(path for path in svgs if path.suffix == ".svg")[-1].read_text()
+    assert "can\u2019t be drawn" not in last and "length" not in last and "The spike" in last

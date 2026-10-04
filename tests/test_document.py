@@ -261,7 +261,7 @@ def test_a_figure_that_cannot_be_drawn_says_why_in_its_box_and_its_slide_is_draw
     shown = page.svg.replace("&#8220;", "“").replace("&#8221;", "”")
     assert "One infection" in shown and "A point" in shown and said in shown
     (message,) = [message for message in drawing.messages if message.severity == "error"]
-    assert message.text == f"This figure can't be drawn: {said}"
+    assert message.text == f"This figure can\u2019t be drawn: {said}"
     # Built for real, it is an error still.
     with pytest.raises(InvalidFigure):
         deck_from_document(document, tmp_path)
@@ -1057,25 +1057,33 @@ def test_several_parts_dragged_together_land_together_in_their_order() -> None:
     def box(left, top, right, bottom):
         return {"left": left, "top": top, "right": right, "bottom": bottom}
 
-    # Four parts down a body, the first and the third chosen; the first grabbed.
+    # Four parts down a body, the first and the third dragged: the second and the fourth,
+    # left behind, closed up (their boxes where they show while the two are dragged).
     body = [
         {
             "key": "body",
             "room": box(0, 0, 400, 400),
-            "blocks": [{"index": n, "box": box(0, n * 100, 300, n * 100 + 60)} for n in range(4)],
+            "blocks": [
+                {"index": 0, "box": box(0, 0, 300, 60)},
+                {"index": 1, "box": box(0, 0, 300, 60)},
+                {"index": 2, "box": box(0, 200, 300, 260)},
+                {"index": 3, "box": box(0, 100, 300, 160)},
+            ],
         }
     ]
+    # A column holding only a part dragged out of it.
+    right = [{"key": "right", "room": box(500, 0, 700, 400), "blocks": [{"index": 0, "box": box(500, 0, 700, 60)}]}]
     chosen = [{"region": "body", "index": 0}, {"region": "body", "index": 2}]
-    grabbed = chosen[0]
     drops = [
-        {"x": 100, "y": 135},  # the middle of the second, a little low: after it, never swapped
-        {"x": 100, "y": 225},  # over the third, one of them: home
-        {"x": 100, "y": 395},  # below them all
+        [body, chosen, {"x": 100, "y": 35}],  # the second's lower half: after it, never swapped
+        [body, chosen, {"x": 100, "y": 105}],  # the fourth's upper half: before it
+        [body, chosen, {"x": 100, "y": 395}],  # below them all
+        [right, [{"region": "right", "index": 0}], {"x": 600, "y": 30}],  # its column, emptied
     ]
     code = (
         f"import {{ groupDrop, gatherPlan }} from {json.dumps(script.as_uri())};\n"
-        f"const body = {json.dumps(body)}, chosen = {json.dumps(chosen)}, grabbed = {json.dumps(grabbed)};\n"
-        f"const out = {json.dumps(drops)}.map((point) => groupDrop(body, grabbed, chosen, point));\n"
+        f"const out = {json.dumps(drops)}.map(([regions, all, point]) => groupDrop(regions, all, point));\n"
+        f"const chosen = {json.dumps(chosen)};\n"
         "out.push(gatherPlan({ body: 4 }, chosen, { kind: 'between', region: 'body', index: 4 }));\n"
         "const across = [{ region: 'left', index: 0 }, { region: 'right', index: 0 }];\n"
         "out.push(gatherPlan({ left: 2, right: 1 }, across, { kind: 'between', region: 'left', index: 2 }));\n"
@@ -1083,21 +1091,22 @@ def test_several_parts_dragged_together_land_together_in_their_order() -> None:
     )
     done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
     found = json.loads(done.stdout)
-    assert found[:3] == [
+    assert found[:4] == [
         {"kind": "between", "region": "body", "index": 2},
-        {"kind": "home"},
+        {"kind": "between", "region": "body", "index": 3},
         {"kind": "between", "region": "body", "index": 4},
+        {"kind": "into", "region": "right", "index": 0},
     ]
     place = lambda region, index: {"region": region, "index": index}  # noqa: E731
     # Let go below them all: the two not chosen rise, the chosen two follow in their order.
-    assert found[3] == [
+    assert found[4] == [
         [place("body", 1), place("body", 0)],
         [place("body", 3), place("body", 1)],
         [place("body", 0), place("body", 2)],
         [place("body", 2), place("body", 3)],
     ]
     # From two columns to the end of the left: the right's part follows the left's.
-    assert found[4] == [
+    assert found[5] == [
         [place("left", 1), place("left", 0)],
         [place("left", 0), place("left", 1)],
         [place("right", 0), place("left", 2)],
@@ -1401,6 +1410,32 @@ def test_a_slide_holding_empty_words_is_presented_as_it_is_exported(tmp_path: Pa
     assert "data-flexo-presented" not in plain
 
 
+def test_one_rule_places_a_body_s_things_and_an_emptied_object_changes_nothing(tmp_path: Path) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (64, 36), "#2b4c9b").save(tmp_path / "gel.png")
+    table = {"table": [["Variant", "Families"], ["R122H", "62"], ["N29I", "19"]]}
+    document = {"deck": {"id": "placed"}, "slides": [
+        {"title": "Lone", "body": [table]},
+        {"title": "Captioned", "body": [table, {"text": "Families in the registry, 2024"}]},
+        {"title": "Listed", "body": [{"image": "gel.png"}, {"bullets": ["Lag", "Burst"]}, {"text": "n = 3 gels"}]},
+        {"title": "Quote", "body": [{"quote": "Words", "by": "Ada"}, {"callout": ""}]},
+        {"title": "Quote", "body": [{"quote": "Words", "by": "Ada"}]},
+    ]}
+    deck = deck_from_document(document, tmp_path)
+    lone, captioned, listed, emptied, alone = (render_slide(deck, slide) for slide in deck.slides)
+    # A table keeps its place across the slide when a caption is added: the two are one
+    # group, centred, the caption centred under it.
+    assert captioned.tables[0].x == pytest.approx(lone.tables[0].x)
+    assert re.search(r'<text id="slide2\.body\.1" x="480"[^>]*text-anchor="middle"', captioned.svg)
+    # Beside a list, a picture starts where the list's words do.
+    assert re.search(r'<image id="slide3\.body\.0" x="48"', listed.svg)
+    # A slide holding an emptied callout is exported as the slide without it: the quote
+    # stands where it stands alone.
+    shift = r'<g id="slide\d\.body" [^>]*transform="([^"]+)"'
+    assert re.findall(shift, emptied.svg) == re.findall(shift, alone.svg) != []
+
+
 def test_a_new_table_equation_or_figure_starts_empty_and_shows_only_while_editing() -> None:
     from flexo_talk.compose import PLACEHOLDERS
 
@@ -1436,7 +1471,14 @@ def test_a_placeholder_added_and_taken_away_is_not_activity() -> None:
     empty = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}, {"code": ""}]}]}
     typed = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}, {"code": "print()"}]}]}
     assert kind.describe(plain, empty) == [] and kind.describe(empty, plain) == []
-    assert [note["text"] for note in kind.describe(empty, typed)] == ["added code to slide 1"]
+    # Typed in, the code that was there empty is filled in -- not added: it was there.
+    assert [note["text"] for note in kind.describe(empty, typed)] == ["filled in the code on slide 1"]
+    # An object made another kind, a layout changed: said so, not as objects added or deleted.
+    texted = {"slides": [{"title": "A", "body": [{"text": "-"}]}]}
+    listed = {"slides": [{"title": "A", "body": [{"bullets": ["x"]}]}]}
+    assert [note["text"] for note in kind.describe(texted, listed)] == ["made the text a list on slide 1"]
+    columns = {"slides": [{"layout": "two-columns", "title": "A", "left": [{"bullets": ["x"]}]}]}
+    assert [note["text"] for note in kind.describe(listed, columns)] == ["changed the layout on slide 1"]
 
 
 def test_a_powerpoint_figure_is_described_and_its_shapes_named_by_their_words(tmp_path: Path) -> None:
@@ -1526,6 +1568,36 @@ def test_a_part_named_by_a_label_on_two_lines_is_named_with_a_space_where_it_wra
     assert _shown_name(part) == "Structure Lac repressor headpiece on its operator (1LCD)"
 
 
+def test_a_figure_says_what_its_lines_do_and_a_drawn_thing_its_parts(tmp_path: Path) -> None:
+    from flexo_talk.export import _figure_said
+
+    nodes = [{"id": "ep", "label": "Enteropeptidase", "kind": "terminal"}, {"id": "tg", "label": "Trypsinogen"},
+             {"id": "t", "label": "Trypsin"}, {"id": "s", "label": "SPINK1"}, {"id": "ca", "label": "Ca²⁺"}]
+    edges = [{"from": "ep", "to": "tg", "head": "catalysis"}, {"from": "tg", "to": "t"},
+             {"from": "s", "to": "t", "head": "inhibition"}, {"from": "ca", "to": "t", "head": "modulation"}]
+    timeline = {"id": "assay", "kind": "timeline", "label": "Assay", "properties": {
+        "unit": "min", "events": [{"at": 14, "label": "EGTA added"}, {"at": 0, "label": "Start"}],
+        "spans": [{"start": 0, "end": 8, "label": "Lag"}]}}
+    protein = {"id": "p", "kind": "protein", "label": "PRSS1", "properties": {"length": 247, "features": [
+        {"type": "domain", "label": "Protease", "start": 24, "end": 247},
+        {"type": "mutation", "label": "R122H", "at": 122},
+        {"type": "domain", "label": "Signal peptide", "start": 1, "end": 15}]}}
+    document = {"deck": {"id": "said"}, "slides": [
+        {"title": "Brakes", "body": [{"figure": {"figure": {"id": "f"}, "nodes": nodes, "edges": edges}}]},
+        {"title": "Assay", "body": [{"figure": {"figure": {"id": "g"}, "nodes": [timeline]}}]},
+        {"title": "PRSS1", "body": [{"figure": {"figure": {"id": "h"}, "nodes": [protein]}}]},
+    ]}
+    deck = deck_from_document(document, tmp_path)
+    said = [_figure_said(slide.regions["body"].blocks[0]) for slide in deck.slides]
+    # A line that inhibits is not an arrow onward: what each regulating line does is said.
+    assert said[0] == ("A flow chart: Trypsinogen → Trypsin; Enteropeptidase catalyses Trypsinogen; "
+                       "SPINK1 inhibits Trypsin; Ca²⁺ modulates Trypsin")
+    # A timeline in time order, a protein from its first residue to its last.
+    assert said[1] == "A timeline, Assay, in min: 0 Start; 0\u20138 Lag; 14 EGTA added."
+    assert said[2] == ("A protein, PRSS1, 247 residues: Signal peptide 1\u201315; Protease 24\u2013247; "
+                       "R122H at 122.")
+
+
 def test_a_flow_chart_is_read_in_its_order_and_a_description_given_is_said_instead(tmp_path: Path) -> None:
     from pptx import Presentation
 
@@ -1582,6 +1654,25 @@ def test_a_merged_deck_keeps_no_line_to_a_shape_deleted() -> None:
     figure = merged["slides"][0]["body"][0]["figure"]
     assert figure["edges"] == [{"from": "a", "to": "b"}]
     assert figure["groups"][0]["children"] == ["a", "b"]
+    # A line written to a shape the figure never had is no merge's doing: it stays, for the
+    # slide to say (below).
+    stray = deck(["a", "b"], [("a", "b"), ("b", "nowhere")])
+    merged = DeckKind().mended(merge3(base, stray, base), [], base)
+    assert {"from": "b", "to": "nowhere"} in merged["slides"][0]["body"][0]["figure"]["edges"]
+
+
+def test_a_line_to_a_shape_there_is_none_of_is_left_out_of_the_slide_and_said(tmp_path: Path) -> None:
+    figure = {
+        "figure": {"id": "f"},
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "nowhere"}],
+    }
+    deck = deck_from_document({"slides": [{"title": "Lines", "body": [{"figure": figure}]}]}, tmp_path)
+    drawn = render_slide(deck, deck.slides[0])
+    assert any(
+        message.endswith("A line to \u201cnowhere\u201d has no shape to go to.") for message in drawn.diagnostics
+    )
+    assert 'data-flexo-talk="invalid"' not in drawn.svg
 
 
 def test_a_paragraph_made_a_list_while_typed_in_is_one_list_with_the_words_typed() -> None:

@@ -237,8 +237,10 @@ function cellsOf(html, text) {
 // words the address as it was, as Pages and Keynote make one; else null.
 function linkOfWords(text) {
   const words = String(text ?? "").trim();
-  if (!/^(?:https?:\/\/|ftp:\/\/|mailto:|www\.)[^\s<>"]+$/i.test(words)) return null;
-  const href = /^www\./i.test(words) ? `https://${words}` : words;
+  // A bare e-mail address too, as a mailto: link.
+  const mail = /^[^\s@<>()[\]:;,"]+@[^\s@<>()[\]:;,"]+\.[a-z]{2,}$/i.test(words);
+  if (!mail && !/^(?:https?:\/\/|ftp:\/\/|mailto:|www\.)[^\s<>"]+$/i.test(words)) return null;
+  const href = mail ? `mailto:${words}` : /^www\./i.test(words) ? `https://${words}` : words;
   return `[${escaped(words, true)}](${address(href)})`;
 }
 
@@ -474,8 +476,9 @@ function emphasised(lines, look) {
 // after a list ended by Return on an empty item (`kept`: how many items stay before the
 // ones after it, if any); `onListStart(style, unmark)` is
 // asked for a list ("numbered", "bulleted") by the marks typed at the words' start;
-// `onList(items)` takes an outline or a list pasted in words (each item's depth, markup and
-// whether it was numbered).
+// `onList(items, split)` takes an outline or a list pasted in words (each item's depth, markup
+// and whether it was numbered; `split`: the words before the caret and after it, as markup --
+// so too `onCells(cells, split)`, but for a list's or one line's).
 export function richText({ value = "", list = false, single = false, numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, onCells = null, docked = false, onEnd = null, onListStart = null, onList = null } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}${plain ? " rt-plain" : ""}`;
@@ -1316,7 +1319,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     return false;
   }
   // The words' own colour, as they are drawn here (light on a dark slide), not the ink's.
-  const plainTool = palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default colour", () => recolour(null), { words: true }) : "";
+  const plainTool = palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default", () => recolour(null), { words: true }) : "";
   const codeTool = tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code (⌘E)", asCode, { words: true });
   const mathsTool = tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX (⌥⌘E)", asMaths, { words: true });
   bar.append(
@@ -1548,6 +1551,23 @@ export function richText({ value = "", list = false, single = false, numbered = 
     caret.collapse(true);
     place(caret);
   };
+  // The words before the caret and after it (what is chosen gone), as markup: where words
+  // pasted that are not words (a list, a table) split them.
+  const splitAtCaret = () => {
+    const s = selection();
+    if (!s.rangeCount || !area.contains(s.anchorNode)) return { before: read(), after: "" };
+    const range = s.getRangeAt(0);
+    const part = (from, to) => {
+      const piece = document.createRange();
+      piece.selectNodeContents(area);
+      if (from) piece.setStart(from[0], from[1]);
+      if (to) piece.setEnd(to[0], to[1]);
+      const holder = document.createElement("div");
+      holder.append(piece.cloneContents());
+      return serialise(holder, undefined, names).replace(/\n$/, "");
+    };
+    return { before: part(null, [range.startContainer, range.startOffset]), after: part([range.endContainer, range.endOffset], null) };
+  };
   area.addEventListener("paste", (event) => {
     const text = event.clipboardData?.getData("text/plain");
     const html = matchStyle ? "" : event.clipboardData?.getData("text/html") || "";
@@ -1557,7 +1577,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     // A range of a spreadsheet's cells is given to whoever holds the field (`onCells`): a
     // table's cell fills the cells from it on, words have a table made after them.
     const cells = onCells ? cellsOf(html, text) : null;
-    if (cells) { event.stopPropagation(); onCells(cells); return; }
+    if (cells) { event.stopPropagation(); onCells(cells, list || single ? null : splitAtCaret()); return; }
     changed(true);
     // One address pasted is a link (unless it came as formatted words of their own).
     const linked = linkOfWords(text);
@@ -1566,7 +1586,8 @@ export function richText({ value = "", list = false, single = false, numbered = 
       const s = selection();
       if (!s.isCollapsed && s.toString().trim() && area.contains(s.anchorNode)) {
         const words = String(text).trim();
-        const made = wrapChosen((chosen) => { const a = linkNode(/^www\./i.test(words) ? `https://${words}` : words); a.append(chosen); return a; }, { strip: isLink, choose: false });
+        const href = /\]\(([^)]*)\)$/.exec(linked)?.[1] || words;
+        const made = wrapChosen((chosen) => { const a = linkNode(href); a.append(chosen); return a; }, { strip: isLink, choose: false });
         if (made) {
           const caret = document.createRange();
           caret.setStartAfter(outerLink(made.endContainer) || made.endContainer);
@@ -1598,7 +1619,8 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const caret = area.caretAt(), letters = area.letters();
     const before = caret ? letters[caret[0] - 1] : undefined, after = caret ? letters[caret[1]] : undefined;
     if (items.length && (before === undefined || /\s/.test(before))) items[0].markup = items[0].markup.replace(/^\s+/, "");
-    if (items.length && (after === undefined || /[\s.,;:!?)\]}]/.test(after))) items[items.length - 1].markup = items[items.length - 1].markup.replace(/\s+$/, "");
+    // (At a line's end it stays: the next word typed is not run into the last pasted.)
+    if (items.length && after !== undefined && /[\s.,;:!?)\]}]/.test(after)) items[items.length - 1].markup = items[items.length - 1].markup.replace(/\s+$/, "");
     // On one line, the lines pasted are words a space apart (a blank line, or a tab, is no
     // more); the spaces at their own two ends stay, as words go in among others.
     if (single) {
@@ -1617,7 +1639,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
       if (outline || (fromHtml.length > 1 && fromHtml.every((item) => item.listed))) {
         event.stopPropagation();
         onList(outline ? lines.map((line) => ({ ...listed(line), ordered: /^\(?\d{1,3}[.)]\s/.test(line.trim()) })).map((item) => ({ depth: item.depth, markup: escaped(item.words), ordered: item.ordered }))
-          : fromHtml.map((item) => ({ depth: item.depth || 0, markup: item.markup.trim(), ordered: Boolean(item.ordered) })));
+          : fromHtml.map((item) => ({ depth: item.depth || 0, markup: item.markup.trim(), ordered: Boolean(item.ordered) })), splitAtCaret());
         return;
       }
     }

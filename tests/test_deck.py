@@ -305,6 +305,37 @@ def test_a_slide_is_read_title_body_footnote_then_its_number(tmp_path: Path) -> 
     assert [name.split(" ")[0] for name in names] == ["Title", "Rule", "List", "Footnote", "Slide"]
 
 
+def test_a_slide_s_shapes_are_written_in_the_order_they_are_read(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    deck = Deck("order")
+    with deck.slide("Families", layout="two-columns") as slide:
+        slide.left.table([["Family", "Carriers"], ["A", "3"]])
+        slide.left.text("Families in the registry")
+        slide.right.bullets("Lag: enteropeptidase", "Burst: trypsin")
+        slide.right.text("n = 3 gels")
+    pptx = deck.build(tmp_path, formats=("pptx",)).pptx
+    shapes = Presentation(pptx).slides[0]._element.iter()  # type: ignore[arg-type]
+    names = [element.get("name") for element in shapes if element.tag.endswith("}cNvPr") and element.get("name")]
+    # The left column top to bottom, then the right: a table and a list where they are drawn,
+    # not written after the words below them.
+    assert [name.split(" ")[0] for name in names] == ["Title", "Rule", "Table", "Text", "List", "Text", "Slide"]
+
+
+def test_a_figure_s_heading_is_never_as_large_as_the_slide_title() -> None:
+    from flexo_talk import compose
+
+    deck = Deck("heading")
+    with deck.slide("Where the brakes sit", layout="figure") as slide, slide.figure() as figure:
+        figure.protein("prss1", 247, [{"type": "domain", "label": "Protease", "start": 24, "end": 247}],
+                       label="PRSS1 (cationic trypsinogen)")
+    svg = compose.render_slide(deck, deck.slides[0]).svg
+    scale = float(re.search(r'<g id="slide1\.body\.0" transform="[^"]*scale\(([\d.]+)\)"', svg).group(1))
+    size = float(re.search(r'<text id="[^"]*prss1\.label"[^>]*font-size="([\d.]+)"', svg).group(1))
+    # Its bold name no larger than the body's words, however large the figure is let be.
+    assert size * scale <= deck.style.body_size + 0.01 < deck.style.title_size
+
+
 def test_a_png_picture_is_embedded(tmp_path: Path) -> None:
     import struct
     import zlib
@@ -394,7 +425,8 @@ def test_a_tall_figure_is_laid_out_for_a_wide_slide(tmp_path: Path) -> None:
         for index in range(6):
             previous = layers.block(f"b{index}", label=f"Layer {index}", input=previous)
     result = deck.build(tmp_path, formats=("svg",))
-    assert any("To fit the slide," in note and "columns were swapped" in note for note in result.notes)
+    # Said as a person sees it: the chart turned to run across, not rows and columns swapped.
+    assert any(note.endswith("To fit the slide, the chart was turned to run across.") for note in result.notes)
     assert not any("too small" in message for message in result.diagnostics)
 
 

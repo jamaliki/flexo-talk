@@ -179,18 +179,26 @@ class DeckKind:
         _converted(document, notes if notes is not None else [], base)
         _one_kind(document, base)
         _laid_out(document)
+        # The shapes the deck's figures had before: a line kept to one of those is a line to
+        # a shape deleted; one to a shape there never was is the person's, said where it is.
+        before: set[str] | None = set() if base is not None else None
 
-        def walk(value: object) -> None:
+        def walk(value: object, found: set[str] | None = None) -> None:
             if isinstance(value, dict):
                 figure = value.get("figure")
                 if isinstance(figure, dict) and isinstance(figure.get("nodes"), list):
-                    mend(figure)
+                    if found is not None:
+                        found.update(str(node.get("id")) for node in figure["nodes"] if isinstance(node, dict))
+                    else:
+                        mend(figure, before)
                 for item in value.values():
-                    walk(item)
+                    walk(item, found)
             elif isinstance(value, list):
                 for item in value:
-                    walk(item)
+                    walk(item, found)
 
+        if before is not None:
+            walk(base, before)
         walk(document)
         return document
 
@@ -618,12 +626,22 @@ class DeckKind:
 
         from flexo_talk.export import build_deck, file_stem
 
+        errors: list[DeckDocumentError] = []
         try:
-            deck = deck_from_document(document, base)
+            deck = deck_from_document(document, base, errors=errors)
+            # A figure that can't be drawn is left an empty box, and said (``export_notes``);
+            # anything else wrong stops the export, said where it is.
+            wrong = next((error for error in errors if not isinstance(error, InvalidFigure)), None)
+            if wrong is not None:
+                raise wrong
         except DeckDocumentError as error:
             # Said where it is as a person says it (“Slide 4 · Picture”), not as the document does.
             place = _place(error.where, document)
             raise ValueError(f"{place}: {error.message}" if place else error.message) from error
+        self.export_notes = [
+            f"{_place(error.where, document) or 'A figure'} is left empty: it can\u2019t be drawn as it is."
+            for error in errors
+        ]
         folder = into or base / "build"
         images = folder / file_stem(deck.id) if into is not None else None
         result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images)
@@ -1291,20 +1309,36 @@ def _what_changed(old: Any, new: Any) -> tuple[str, str]:
     if not isinstance(old, dict) or not isinstance(new, dict):
         return "edited", ""
     keys = [key for key in dict.fromkeys([*old, *new]) if old.get(key) != new.get(key)]
-    # An object added or deleted is what the change did; a placeholder typed in is added --
-    # and one made empty again (its typing undone) is emptied, not deleted: it is still there.
-    held = [len(slide.get("body") or []) if isinstance(slide.get("body"), list) else 0 for slide in (old, new)]
+    # A slide's layout changed is what it is, whatever its objects did with it.
+    if "layout" in keys:
+        return "changed", "the layout"
+    # An object made another kind in its place ("- " typed in a text): "made the text a list".
+    bodies = [slide.get("body") if isinstance(slide.get("body"), list) else [] for slide in (old, new)]
+    if "body" in keys and len(bodies[0]) == len(bodies[1]):
+        for was, now in zip(*bodies, strict=True):
+            if isinstance(was, dict) and isinstance(now, dict) and _object_name(was) != _object_name(now):
+                return "made", f"the {_object_name(was).lower()} {_a(_object_name(now))}"
+    # An object added or deleted is what the change did. One that was there empty and is
+    # typed in is filled in, and one made empty again (its typing undone) is emptied: still
+    # there, neither added nor deleted.
+    held = [len(body) for body in bodies]
     old, new = _without_placeholders(old), _without_placeholders(new)
     if "body" in keys and (done := _objects(old.get("body"), new.get("body")))[0] != "edited":
-        if done[0] == "deleted" and held[0] == held[1]:
-            gone = re.sub(r"^an? ", "", done[1])
-            return "emptied", f"the {gone}"
+        if held[0] == held[1]:
+            name = re.sub(r"^an? ", "", done[1])
+            return ("emptied" if done[0] == "deleted" else "filled in"), f"the {name}"
         return done
     # A setting by the name the inspector gives it ("the statement", "the attribution"), never its key.
     names = {"left": "the left column", "right": "the right column", "columns": "its columns"}
     said = list(dict.fromkeys(_objects(old.get(key), new.get(key))[1] if key == "body"
                               else names.get(key) or f"the {FIELD_LABELS.get(key, key).lower()}" for key in keys))
     return "edited", " and ".join(said[:2])
+
+
+class Unreadable(ValueError):
+    """A deck to show a theme on that does not read: said as it is (``plain``), whole."""
+
+    plain = True
 
 
 class SlideSamples:
@@ -1318,7 +1352,12 @@ class SlideSamples:
         deck_file = hints.get("deck")
         if deck_file:
             path = (base / deck_file).resolve()
-            document = load_document(path)
+            try:
+                document = load_document(path)
+            except Exception:
+                # Why, and on which line, its own page says (as it does): here, only that.
+                said = f"“{Path(deck_file).stem}” can't be read. Open it to see why and put it right."
+                raise Unreadable(said) from None
             folder = path.parent
         else:
             document, folder = SAMPLE_DECK, base
@@ -1560,7 +1599,9 @@ def _presentable(svg: str, deck: Any, slide: Any) -> str:
 
     held = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', svg)
     block = re.compile(rf"{re.escape(slide.id)}\.[^.]+\.\d+")
-    if not any(words != "Placeholder" and block.fullmatch(ident) for ident, words in held):
+    # (A figure that can't be drawn says why on the stage, and is a quiet box presented.)
+    invalid = 'data-flexo-talk="invalid"' in svg
+    if not invalid and not any(words != "Placeholder" and block.fullmatch(ident) for ident, words in held):
         return svg
     token = PLACEHOLDERS.set(False)
     try:

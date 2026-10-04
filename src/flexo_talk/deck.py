@@ -451,6 +451,9 @@ class _Callout:
     title: tuple[TextRun, ...] = ()
     colour: str = "accent"
     size: float | None = None
+    held: bool = False
+    """Its heading put there empty (``title: ""``), to be written: its placeholder drawn while
+    editing."""
 
 
 @dataclass(slots=True)
@@ -1009,15 +1012,17 @@ class Region:
         return self
 
     def callout(
-        self, words: str, *, title: str = "", colour: str = "accent", size: float | None = None
+        self, words: str, *, title: str | None = None, colour: str = "accent", size: float | None = None
     ) -> Region:
         """A key point on a panel tinted in a tone, a bar of the tone along its edge:
-        ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words."""
+        ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words (an
+        empty one, ``""``, holds its place while the deck is edited, as a placeholder)."""
 
-        words, title, size = _words(words, "callout"), _words(title, "title"), _size(size)
+        held = title == ""
+        words, title, size = _words(words, "callout"), _words(title or "", "title"), _size(size)
         if not (isinstance(colour, str) and colour.startswith("accent") and paint_role(colour) in _roles()):
             raise ValueError(f"A callout's colour must be an accent (accent, accent2, \u2026), not {colour!r}.")
-        self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size))
+        self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size, held))
         self._record(
             "callout", words, title=title or None, colour=None if colour == "accent" else colour, size=size
         )

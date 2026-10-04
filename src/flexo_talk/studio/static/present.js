@@ -406,10 +406,10 @@ function dress() {
 .ss-over { width: 100%; height: 100%; display: grid; place-items: center; background: #000; outline: 1px solid #2c2c2c; color: #8c8c8c; font-size: 16px; }
 .ss-notes { overflow: auto; font-size: clamp(18px, 1.55vw, 32px); line-height: 1.45; margin-top: 4px; white-space: pre-wrap; color: #f4f4f4; user-select: text; -webkit-user-select: text; }
 .ss-notes.none { color: #777; }
-/* In even columns, so a narrow screen wraps them into a table, not one key left alone --
-   each as wide as the widest needs ("0–9 ↩ Go to a Slide"), so a laptop's screen (1280
-   points) has them all on one line. */
-.ss-keys { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 22px; font-size: 13px; color: #9a9a9a; }
+/* On one line across the whole width, the same room between each key and the next; a
+   screen too narrow for that has them in even columns, a table, not one key left alone. */
+.ss-keys { display: grid; grid-auto-flow: column; justify-content: space-between; gap: 6px 22px; font-size: 13px; color: #9a9a9a; }
+@media (max-width: 1100px) { .ss-keys { grid-auto-flow: row; justify-content: stretch; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); } }
 .ss-key { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .ss-key kbd { font: 12px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #ddd; padding: 3px 6px; border-radius: 5px; background: #2a2a2a; border: 1px solid #3a3a3a; }
 .ss-key span { margin-left: 3px; }

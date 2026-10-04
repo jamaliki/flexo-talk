@@ -73,16 +73,33 @@ export function blockPlan(counts, from, at) {
   return Object.entries(lists).flatMap(([region, list]) => list.map((old, index) => [old, { region, index }]));
 }
 
-// Several parts dragged together (`all`, in the slide's order, `from` the one grabbed among
-// them): where they would go, as blockDrop finds it for the one grabbed -- but over the
-// middle of a part not among them, before or after it, as the pointer is above or below its
-// middle (several are never swapped with one); over one of them, home.
-export function groupDrop(regions, from, all, point) {
-  const at = blockDrop(regions, from, point);
-  if (!at || at.kind !== "swap") return at;
-  if (all.some((part) => part.region === at.region && part.index === at.index)) return { kind: "home" };
-  const box = regions.find((region) => region.key === at.region)?.blocks.find((block) => block.index === at.index)?.box;
-  return { kind: "between", region: at.region, index: at.index + (box && point.y > (box.top + box.bottom) / 2 ? 1 : 0) };
+// Several parts dragged together (`all`, every one of them, in the slide's order): where
+// they would go, among the parts not dragged (those dragged out of the way: their boxes as
+// the parts left behind now show, closed up), as `at` for gather -- over a part, before or
+// after it as the pointer is over its upper or lower half (several are never swapped with
+// one); elsewhere in a region, between the parts either side of the pointer, or into it
+// when no part is left there. (`at.index` counts the parts dragged where they were.)
+export function groupDrop(regions, all, point) {
+  const within = (box) => box && point.x >= box.left && point.x <= box.right && point.y >= box.top && point.y <= box.bottom;
+  const reach = (box) => {
+    const grow = Math.max(0, (REACH - (box.bottom - box.top)) / 2);
+    return { left: box.left, right: box.right, top: box.top - grow, bottom: box.bottom + grow };
+  };
+  const dragged = (region, block) => all.some((part) => part.region === region.key && part.index === block.index);
+  const left = regions.map((region) => ({ ...region, blocks: region.blocks.filter((block) => block.box && !dragged(region, block)) }));
+  for (const region of left) {
+    for (const block of region.blocks) {
+      const box = reach(block.box);
+      if (within(box)) return { kind: "between", region: region.key, index: block.index + (point.y > (box.top + box.bottom) / 2 ? 1 : 0) };
+    }
+  }
+  for (const region of left) {
+    if (!within(region.room)) continue;
+    if (!region.blocks.length) return { kind: "into", region: region.key, index: 0 };
+    const below = region.blocks.find((block) => (block.box.top + block.box.bottom) / 2 >= point.y);
+    return { kind: "between", region: region.key, index: below ? below.index : region.blocks[region.blocks.length - 1].index + 1 };
+  }
+  return null;
 }
 
 // Letting them go at `at`: each taken out of its list, and all put in together where they

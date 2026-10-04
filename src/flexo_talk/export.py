@@ -183,7 +183,7 @@ def write_pptx(
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
             add_reveals(slide._element, reveals)
-            _read_in_order(tree, item.slide.id)
+            _read_in_order(tree, item.slide)
             # Last, as nothing more finds a shape by its id: each named as a person would.
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
                                for region in item.slide.regions.values() for index, block in enumerate(region.blocks)})
@@ -196,15 +196,29 @@ def write_pptx(
 _PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
-def _read_in_order(tree, slide_id: str) -> None:
+def _read_in_order(tree, slide: Slide) -> None:
     """A slide's shapes in the order they are read (a slide program's Selection Pane, a
-    screen reader): its body's lists and tables where they are drawn, not after it all, and
-    its footnotes, then its number and footer, last -- as the PDF reads them."""
+    screen reader), as the PDF reads them: its headings and what is drawn under them, then
+    its body top to bottom (a left column before a right) -- its lists and tables where they
+    are drawn, not after the rest -- then its footnotes, then its number and footer."""
 
-    def rank(child) -> int:
+    import re
+
+    regions = {name: order for order, name in enumerate(slide.regions)}
+    block = re.compile(rf"{re.escape(slide.id)}\.([^.]+)\.(\d+)(?:\..*)?")
+
+    def rank(child) -> tuple[int, int, int]:
         named = next(child.iter(f"{{{_PML}}}cNvPr"), None)
-        rest = (named.get("name", "") if named is not None else "").removeprefix(f"{slide_id}.")
-        return 2 if rest in {"number", "footer"} else 1 if rest.startswith("footnote") else 0
+        name = named.get("name", "") if named is not None else ""
+        rest = name.removeprefix(f"{slide.id}.")
+        if rest in {"number", "footer"}:
+            return 3, 0, 0
+        if rest.startswith("footnote"):
+            return 2, 0, 0
+        found = block.fullmatch(name)
+        if found and found.group(1) in regions:
+            return 1, regions[found.group(1)], int(found.group(2))
+        return 0, 0, 0
 
     shapes = [child for child in tree if child.tag not in {f"{{{_PML}}}nvGrpSpPr", f"{{{_PML}}}grpSpPr"}]
     for child in sorted(shapes, key=rank):
@@ -221,11 +235,21 @@ def _said_words(runs: object) -> str:
     return " ".join(text.split())
 
 
+_REGULATES = {
+    "inhibition": "inhibits", "catalysis": "catalyses", "stimulation": "stimulates",
+    "necessary": "is necessary for", "modulation": "modulates",
+}
+"""What a line with each of SBGN's heads says one thing does to another: not "→", which reads
+as "goes to" (or "activates") whatever the line's head means."""
+
+
 def _figure_said(block: _Figure) -> str:
     """A figure's alt text, from its shapes: a figure of lines read along them, in the
     order they flow, each branch said with its words ("A flow chart: Purify CA → Mix CA
-    with IP6 → Tubes formed? (yes: Cryo-EM grids; no: back to Mix CA with IP6)"); one of
-    shapes alone by their words, in order; one of molecules alone by what each shows."""
+    with IP6 → Tubes formed? (yes: Cryo-EM grids; no: back to Mix CA with IP6)"), and what
+    each regulating line does ("SPINK1 inhibits Trypsin"); one of shapes alone by their
+    words, in order, a drawn thing by its parts (a timeline's in time order); one of
+    molecules alone by what each shows."""
 
     spec = _spec_of(block)
     nodes = list(getattr(spec, "nodes", ()) or ())
@@ -237,16 +261,26 @@ def _figure_said(block: _Figure) -> str:
     for group in getattr(spec, "groups", ()) or ():
         names.setdefault(group.id, _said_words(getattr(group, "text", "")) or group.id)
     onward: dict[str, list[tuple[str, str]]] = {}
+    regulated: list[str] = []
     for edge in getattr(spec, "edges", ()) or ():
-        onward.setdefault(edge.source.node_id, []).append((edge.target.node_id, _said_words(edge.label)))
+        source, target, label = edge.source.node_id, edge.target.node_id, _said_words(edge.label)
+        if (verb := _REGULATES.get(getattr(edge, "head", "arrow"))) is not None:
+            # A line that regulates says what it does, in words, after the lines that flow.
+            said = f"{names.get(source, source)} {verb} {names.get(target, target)}"
+            regulated.append(f"{said} ({label})" if label else said)
+            continue
+        onward.setdefault(source, []).append((target, label))
     for net in getattr(spec, "nets", ()) or ():
         for source in net.sources:
             for index, target in enumerate(net.targets):
                 label = _said_words(net.label) if not index else ""
                 onward.setdefault(source.node_id, []).append((target.node_id, label))
-    if not onward:
-        words = [names[node.id] for node in nodes if _said_words(node.label)]
-        return f"A figure: {', '.join(words)}" if words else ""
+    # A drawn thing in it (a timeline, a protein) is read by its parts, a sentence of its own.
+    drawn = " ".join(f"{said[:1].upper()}{said[1:]}." for node in nodes if (said := _drawn_said(node)))
+    named = {*(target for branches in onward.values() for target, _ in branches), *onward}
+    if not onward and not regulated:
+        words = [names[node.id] for node in nodes if not _drawn_said(node) and _said_words(node.label)]
+        return " ".join(filter(None, [f"A figure: {', '.join(words)}." if words else "", drawn]))
     seen: set[str] = set()
 
     def along(node: str, path: tuple[str, ...]) -> str:
@@ -270,12 +304,78 @@ def _figure_said(block: _Figure) -> str:
         return said
 
     reached = {target for branches in onward.values() for target, _ in branches}
-    starts = [node.id for node in nodes if node.id in onward and node.id not in reached] or [nodes[0].id]
+    starts = [node.id for node in nodes if node.id in onward and node.id not in reached]
     walks = [along(start, ()) for start in starts]
     walks += [along(node.id, ()) for node in nodes if node.id not in seen and node.id in onward]
-    walks += [names[node.id] for node in nodes if node.id not in seen and _said_words(node.label)]
+    walks += regulated
+    mentioned = {*seen, *(node.id for node in nodes if any(names[node.id] in said for said in regulated))}
+    walks += [names[node.id] for node in nodes
+              if node.id not in mentioned and node.id not in named and _said_words(node.label)]
     kind = "flow chart" if any(node.kind in {"terminal", "decision"} for node in nodes) else "figure"
-    return f"A {kind}: {'; '.join(walks)}"
+    return " ".join(filter(None, [f"A {kind}: {'; '.join(walks)}", drawn]))
+
+
+_TO = "\u2013"
+"""The dash a range of numbers is said with (1 to 15, as 1\u201315)."""
+
+_PART_NAMES = {
+    "promoter": "promoter", "rbs": "ribosome binding site", "cds": "coding sequence", "gene": "gene",
+    "terminator": "terminator", "operator": "operator", "origin": "origin", "insulator": "insulator",
+}
+"""A construct's or plasmid's part, by its type, as said."""
+
+
+def _drawn_said(node) -> str:
+    """A drawn thing (a timeline, a protein, a construct, a plasmid, a well plate) in words:
+    what it is, its name, and its parts in their order -- a timeline's events and spans in
+    time order, a protein's domains and sites by residue. Empty for anything else."""
+
+    def records(name: str) -> list[dict]:
+        return [dict(getattr(item, "items", item)) for item in node.property(name) or ()]
+
+    def number(value: object) -> str:
+        return f"{value:g}" if isinstance(value, int | float) else str(value)
+
+    name = _said_words(node.label)
+    if node.kind == "timeline":
+        unit = str(node.property("unit") or "")
+        at = [(float(item.get("at", 0)), 0, f"{number(item.get('at', 0))} {_said_words(item.get('label', ''))}")
+              for item in records("events")]
+        spans = [(float(item.get("start", 0)), 1, f"{number(item.get('start', 0))}{_TO}{number(item.get('end', 0))} "
+                  f"{_said_words(item.get('label', ''))}") for item in records("spans")]
+        said = "; ".join(text.strip() for _, _, text in sorted(at + spans, key=lambda item: item[:2]))
+        head = f"a timeline{f', {name}' if name else ''}{f', in {unit}' if unit else ''}"
+        return f"{head}: {said}" if said else head
+    if node.kind == "protein":
+        parts = []
+        # From its first residue to its last, a site among the domains where it is.
+        for item in sorted(records("features"), key=lambda item: float(item.get("at", item.get("start", 0)))):
+            label = _said_words(item.get("label", "")) or str(item.get("type", "feature"))
+            if "at" in item:
+                parts.append(f"{label} at {number(item['at'])}")
+            elif "start" in item:
+                parts.append(f"{label} {number(item['start'])}{_TO}{number(item.get('end', item['start']))}")
+            else:
+                parts.append(label)
+        length = node.property("length")
+        head = f"a protein{f', {name}' if name else ''}{f', {number(length)} residues' if length else ''}"
+        return f"{head}: {'; '.join(parts)}" if parts else head
+    if node.kind in {"construct", "plasmid"}:
+        parts = []
+        for item in records("parts" if node.kind == "construct" else "features"):
+            kind = _PART_NAMES.get(str(item.get("type", "")), str(item.get("type", "")))
+            label = _said_words(item.get("label", ""))
+            parts.append(f"{label} ({kind})" if label and kind and kind.lower() != label.lower() else label or kind)
+        length = node.property("length") if node.kind == "plasmid" else None
+        head = f"a {node.kind}{f', {name}' if name else ''}{f', {number(length)} bp' if length else ''}"
+        return f"{head}: {' → '.join(parts) if node.kind == 'construct' else '; '.join(parts)}" if parts else head
+    if node.kind == "wellplate":
+        wells = node.property("wells") or 96
+        groups = [f"{_said_words(item.get('label', ''))} in {item.get('wells', '')}".strip()
+                  for item in records("groups")]
+        head = f"a {number(wells)}-well plate{f', {name}' if name else ''}"
+        return f"{head}: {'; '.join(groups)}" if groups else head
+    return ""
 
 
 def _structures_said(block: _Figure) -> dict[str, str]:
@@ -387,7 +487,7 @@ _BLOCK_NAMES = {
 """What PowerPoint's Selection Pane calls each kind of block on a slide."""
 
 _BLOCKS = {"figure": "Figure", "bullets": "L", "table": "Table", "code": "P", "quote": "BlockQuote",
-           "stats": "Div", "callout": "Div", "gallery": "Div", "missing": "Div"}
+           "stats": "Div", "callout": "Div", "gallery": "Div", "missing": "Div", "invalid": "Div"}
 """The structure element each kind of block on a slide is, in a tagged PDF."""
 
 

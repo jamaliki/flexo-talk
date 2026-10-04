@@ -150,6 +150,8 @@ class _Canvas:
         self.steps = 1
         self.alone = False
         """Whether the block being set has its region to itself."""
+        self.centred = True
+        """Whether a picture is centred across its region, or starts at its edge (beside a list)."""
         """What the build did that the author may want to know (a figure turned to fit)."""
         self._figures = 0
 
@@ -388,6 +390,12 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                 stand_in(block, "runs", (TextRun("Quote"),), f"{slide.id}.{name}.{index}", "Quote")
             elif isinstance(block, _Callout) and not _worded(block.runs) and not _worded(block.title):
                 stand_in(block, "runs", (TextRun("Text"),), f"{slide.id}.{name}.{index}", "Text")
+                # Its heading too, put there to be written (a new callout's), where it will be.
+                if block.held:
+                    stand_in(block, "title", HEADING_HINT, f"{slide.id}.{name}.{index}.title", "Heading")
+            # A heading put there empty, the words written: its placeholder, only while editing.
+            elif isinstance(block, _Callout) and block.held and not _worded(block.title) and PLACEHOLDERS.get():
+                stand_in(block, "title", HEADING_HINT, f"{slide.id}.{name}.{index}.title", "Heading")
             elif isinstance(block, _Code) and not any(line.strip() for line in block.lines):
                 stand_in(block, "lines", ["Code"], f"{slide.id}.{name}.{index}", "Code")
             # A table with nothing in it yet: its header names its columns, faintly.
@@ -426,6 +434,8 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
 STAT_HINT = (TextRun("93%"),)
 LABEL_HINT = (TextRun("Label"),)
 """What a number not yet written shows while editing, as the inspector's fields hint it."""
+HEADING_HINT = (TextRun("Heading", weight=700),)
+"""What a callout's heading put there empty shows while editing, bold as its heading is."""
 
 
 def _worded(runs: tuple[TextRun, ...]) -> bool:
@@ -953,8 +963,13 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             used = _region(canvas, region, box, words=shared, panel=panels.get(name, 0.0))
         finally:
             canvas.layer = outer
-        pictures = bool(region.blocks) and all(isinstance(block, _PICTURES) for block in region.blocks)
-        placed.append((group, used, pictures, bool(region.blocks), lists, tables))
+        # Placed as presented: an empty object, never shown, is no part of the decision.
+        hidden = _aside(canvas, region)
+        shown = [block for index, block in enumerate(region.blocks) if index not in hidden]
+        pictures = bool(shown) and (
+            all(isinstance(block, _PICTURES) for block in shown) or _placing(shown) == "captioned"
+        )
+        placed.append((group, used, pictures, bool(shown), lists, tables))
     align = slide.align or style.align
     filled = [item for item in placed if item[3]]
     if align == "top" or not filled:
@@ -990,6 +1005,36 @@ is above the middle, as a page's text block is set above its middle."""
 _PICTURES = (_Figure, _Image, _Plot, _Gallery, _Missing, _Quote, _Table, _Code, _Stats)
 """Blocks that stand on their own -- pictures, and the graphics made of words: a table,
 a listing, a row of numbers -- set in the room they have when nothing else shares it."""
+
+_CAPTIONED = (_Figure, _Image, _Plot, _Gallery, _Missing, _Table)
+"""What words of its own (a text, a caption) are set with as one group, centred."""
+
+
+def _placing(blocks: list) -> str:
+    """How a region's things are placed across it: ``"listed"`` beside a list or under
+    words, starting at their edge as the words do; ``"captioned"`` pictures or tables with
+    texts of their own after them, a group centred, the texts centred under them; else
+    ``"alone"``, each centred."""
+
+    if any(isinstance(block, _Bullets) for block in blocks):
+        return "listed"
+    graphics = [block for block in blocks if isinstance(block, _CAPTIONED)]
+    words = [block for block in blocks if isinstance(block, _Words)]
+    if graphics and words and len(graphics) + len(words) == len(blocks):
+        return "captioned" if isinstance(blocks[0], _CAPTIONED) else "listed"
+    return "alone"
+
+
+def _aside(canvas: _Canvas, region: Region) -> list[int]:
+    """A region's placeholders that take no room: presented or exported, every one (it is
+    not there at all); while edited, a sample (a new figure, table or equation), drawn after
+    the rest -- empty words keep their place there, to be typed in where they are."""
+
+    editing = PLACEHOLDERS.get()
+    ids = [f"{canvas.slide.id}.{region.name}.{index}" for index in range(len(region.blocks))]
+    aside = [index for index, identifier in enumerate(ids) if identifier in canvas.hinted and (
+        not editing or canvas.hinted[identifier] == "Placeholder")]
+    return [] if editing and len(aside) == len(ids) else aside
 
 
 def _shift(canvas: _Canvas, group: ET.Element, down: float, lists: int, tables: tuple[int, int]) -> None:
@@ -1142,13 +1187,13 @@ def _region(
     # editor after the rest, so they are set as they will be presented. (Empty words keep
     # their place while edited: they are typed in where they are.)
     ids = [f"{canvas.slide.id}.{region.name}.{index}" for index in range(len(blocks))]
-    aside = [index for index, identifier in enumerate(ids) if identifier in canvas.hinted and (
-        not PLACEHOLDERS.get() or canvas.hinted[identifier] == "Placeholder")]
-    if len(aside) == len(blocks) and PLACEHOLDERS.get():
-        aside = []
+    aside = _aside(canvas, region)
     shown = [index for index in range(len(blocks)) if index not in aside]
-    # A block with its place to itself is centred across it (a table narrower than the place).
-    canvas.alone = len(shown) == 1
+    # One rule for where a region's things go: pictures and tables alone, or with words of
+    # their own (a caption), are a group centred in the place (the words centred under
+    # them); beside a list they start at its edge, as its words do.
+    placing = _placing([blocks[index] for index in shown])
+    canvas.alone, canvas.centred = placing != "listed", placing != "listed"
     planned, fits, share = _plan_figures(canvas, [blocks[index] for index in shown], box, words)
     prepared = {shown[at]: item for at, item in planned.items()}
     scales = {shown[at]: scale for at, scale in fits.items()}
@@ -1169,9 +1214,10 @@ def _region(
         elif isinstance(block, _Words):
             size = block.size or style.body_size
             role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
+            align = "middle" if placing == "captioned" and block.align == "start" else block.align
             top += canvas.words(
                 identifier, block.runs, Box(box.x, top, box.width, 0.0), size=size,
-                align=block.align, role=role, fill=fill,
+                align=align, role=role, fill=fill,
             )
         elif isinstance(block, _Gallery):
             top += _gallery(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
@@ -2318,21 +2364,27 @@ STEADY = 1.3
 """How much larger another layout must set a figure for it to leave the one it is shown in."""
 
 
-def _layout_said(layout: str) -> str:
+def _layout_said(layout: str, spec: object = None) -> str:
     """The note for a figure drawn in a layout other than as written: ``flexo.fit_in_box``
-    names it (``turned``, ``turned within, tighter``, ``as written, folded``...)."""
+    names it (``turned``, ``turned within, tighter``, ``as written, folded``...). Said as a
+    person sees it: a chart turned to run across, wrapped onto two lines."""
 
+    # Steps joined by lines are a chart; anything else, a figure.
+    noun = "chart" if getattr(spec, "edges", None) or getattr(spec, "nets", None) else "figure"
+    # Turned whole, it runs the other way to the way it is written.
+    written = _root_kind(spec) if spec is not None else None
+    way = {"column": "across", "row": "down"}.get(written or "")
     done = []
     if layout.startswith("turned within"):
-        done.append("the figure's groups had their rows and columns swapped")
+        done.append(f"the {noun}'s groups were turned the other way")
     elif layout.startswith("turned"):
-        done.append("the figure's rows and columns were swapped")
+        done.append(f"the {noun} was turned to run {way}" if way else f"the {noun} was turned")
     if "tighter" in layout:
-        done.append("its spacing was tightened" if done else "the figure's spacing was tightened")
+        done.append("set a little closer together" if done else f"the {noun} was set a little closer together")
     if "folded" in layout:
-        done.append("it was wrapped onto two lines" if done else "the figure was wrapped onto two lines")
+        done.append("wrapped onto two lines" if done else f"the {noun} was wrapped onto two lines")
     if not done:
-        return "The figure was rearranged to fit the slide."
+        return f"The {noun} was rearranged to fit the slide."
     how = done[0] if len(done) == 1 else f"{', '.join(done[:-1])} and {done[-1]}"
     return f"To fit the slide, {how}."
 
@@ -2455,9 +2507,25 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
             canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {problem.message}")
     # Spaced a little closer is no news; swapped or folded, the figure reads differently.
     if "turned" in laid["layout"] or "folded" in laid["layout"]:
-        canvas.notes.append(f"{canvas.slide.id} {spec.id}: {_layout_said(laid['layout'])}")
+        canvas.notes.append(f"{canvas.slide.id} {spec.id}: {_layout_said(laid['layout'], spec)}")
     left, top, width, height = laid["ink"]
-    return _Prepared(laid["svg"], left, top, width, height, largest / base, base, spec.id)
+    # Its headings (a protein's name, in bold) no larger than the body's words, however large
+    # its words are let be: never as large as the slide's own title.
+    heading = _heading_size(laid["svg"], base)
+    most = min(largest / base, deck.style.body_size / heading) if heading else largest / base
+    return _Prepared(laid["svg"], left, top, width, height, most, base, spec.id)
+
+
+def _heading_size(svg: str, base: float) -> float:
+    """The size of a figure's headings, in its own units: its bold words, or words larger
+    than its own (``base``). None (0) where it has no heading."""
+
+    sizes = []
+    for tag in re.findall(r"<text [^>]*>", svg):
+        size = re.search(r'font-size="([\d.]+)"', tag)
+        if size and (float(size.group(1)) > base * 1.01 or re.search(r'font-weight="([6-9]00|bold)"', tag)):
+            sizes.append(float(size.group(1)))
+    return max(sizes, default=0.0)
 
 
 _FIGURE_CHECKS = {
@@ -2572,7 +2640,7 @@ def _check_legible(canvas: _Canvas, prepared: dict[int, _Prepared], scales: dict
 def _place_figure(canvas: _Canvas, identifier: str, item: _Prepared, box: Box, scale: float) -> float:
     """Put a prepared figure in ``box`` at ``scale``: centred across, and down if it has room."""
 
-    x = box.x + (box.width - item.width * scale) / 2.0 - item.left * scale
+    x = _across(canvas, box, item.width * scale) - item.left * scale
     y = box.y + (box.height - item.height * scale) / 2.0 - item.top * scale
     inks = _slide_inks(item.svg, canvas.deck.palette, canvas.palette, black=False)
     _place_svg(canvas, identifier, inks, x, y, scale, item.width * scale)
@@ -3393,11 +3461,19 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
     style = canvas.deck.style
     height = min(box.height, max(box.width * 0.6, 40.0))
     ink = canvas.palette.get("muted-ink")
-    group = element(canvas.layer, "g", id=identifier, data__flexo__talk="missing")
+    # A figure that can't be drawn is a quiet box where it would be, presented and exported:
+    # why is said on the editing stage alone, not to the audience.
+    quiet = block.said is not None and not PLACEHOLDERS.get()
+    group = element(
+        canvas.layer, "g", id=identifier, data__flexo__talk="invalid" if block.said is not None else "missing"
+    )
     element(
         group, "rect", id=f"{identifier}.box", x=box.x, y=box.y, width=box.width, height=height, rx=6.0,
-        fill=ink, fill_opacity=0.06, stroke=ink, stroke_opacity=0.6, stroke_width=1.5, stroke_dasharray="6 4",
+        fill=ink, fill_opacity=0.06 if not quiet else 0.03, stroke=ink, stroke_opacity=0.6 if not quiet else 0.25,
+        stroke_width=1.5, stroke_dasharray="6 4",
     )
+    if quiet:
+        return height
     # The name as the document writes it, not read as markup.
     runs = (TextRun(block.said or f"Missing {block.what}: {block.name}"),)
     size, pad = style.small_size, style.small_size
@@ -3405,6 +3481,13 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
     place = Box(box.x + pad, box.y + max((height - words.height) / 2.0, 0.0), max(box.width - 2 * pad, 1.0), 0.0)
     canvas.words(f"{identifier}.words", runs, place, size=size, align="middle", role="muted-ink", parent=group)
     return height
+
+
+def _across(canvas: _Canvas, box: Box, width: float) -> float:
+    """Where a picture ``width`` wide starts across ``box``: centred in it, or at its start
+    beside a list (``canvas.centred``), its left edge with the list's."""
+
+    return box.x + (box.width - width) / 2.0 if canvas.centred else box.x
 
 
 def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
@@ -3418,7 +3501,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         # Vectors the drawing reader draws exactly: placed as shapes and text.
         view = [float(v) for v in re.split(r"[ ,]+", ET.fromstring(art.markup).get("viewBox", "").strip()) if v]
         units = (natural_w / view[2]) if len(view) == 4 and view[2] else 1.0
-        _place_svg(canvas, identifier, art.markup, box.x + (box.width - width) / 2.0, box.y, scale * units, width)
+        _place_svg(canvas, identifier, art.markup, _across(canvas, box, width), box.y, scale * units, width)
         _described(canvas.layer[-1], block.description)
         return height
     if art.format == "svg":
@@ -3428,7 +3511,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
     else:
         href = picture_href(art)
     picture = element(
-        canvas.layer, "image", id=identifier, x=box.x + (box.width - width) / 2.0, y=box.y,
+        canvas.layer, "image", id=identifier, x=_across(canvas, box, width), y=box.y,
         width=width, height=height, href=href, data__flexo__width=number(width),
     )
     _described(picture, block.description)
