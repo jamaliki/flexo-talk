@@ -27,6 +27,7 @@ from typing import Any, NamedTuple
 
 import flexo
 from flexo.artwork import load_artwork, picture_href, picture_link
+from flexo.draft import GivenUp, give_up_if_newer
 from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
 from flexo.lint import lint_compilation
@@ -2765,10 +2766,17 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         # (Not one just let turn, or kept from turning: its person asked for the other way.)
         keep = seen if EDITING.get() and not asked else None
         started = time.perf_counter()
-        fit = _fit_in_box(
-            spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-            turn=free, fold=turn, keep=keep,
-        )
+        try:
+            fit = _fit_in_box(
+                spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
+                turn=free, fold=turn, keep=keep,
+            )
+        except GivenUp:
+            # Given up for a change: it takes at least this long to find, however long it took
+            # when the figure was smaller.
+            if keep is None:
+                _FINDING[where] = max(_FINDING.get(where, 0.0), time.perf_counter() - started)
+            raise
         if keep is None:
             _FINDING[where] = time.perf_counter() - started
         shown = _SCALES.get(where)
@@ -2792,6 +2800,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
                 turn=free, fold=turn,
             )
             _FINDING[where] = time.perf_counter() - started
+        give_up_if_newer()  # (a settling given up for a change: flexo.draft)
         codes = [
             diagnostic.code
             for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics

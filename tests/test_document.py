@@ -890,6 +890,50 @@ def test_a_figure_keeps_its_layout_while_the_deck_is_changed_and_settles_after(t
     assert kind.draw(document, tmp_path).info["unsettled"] is False  # and stays settled
 
 
+def test_a_figure_whose_settling_was_given_up_is_not_laid_out_afresh_while_it_is_changed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import itertools
+    import time
+
+    import flexo
+    from flexo.draft import GivenUp, given_up_when
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    ids = [f"s{index}" for index in range(6)]
+    nodes = [{"id": id, "label": f"Stage {index + 1}"} for index, id in enumerate(ids)]
+    root = {"id": "root", "layout": {"kind": "row"}, "children": list(ids)}
+    figure = {"figure": {"id": "chain"}, "nodes": nodes, "groups": [root],
+              "edges": [{"from": a, "to": b} for a, b in itertools.pairwise(ids)]}
+    document = {"deck": {"id": "given"}, "slides": [{"title": "Stages", "body": [{"figure": figure}]}]}
+    kind = DeckKind()
+    kind.draw(document, tmp_path, {"settle": True})  # laid out at its best, quickly
+    # Changed, and its settling given up a while into its layouts -- a large figure, say -- for a
+    # newer change.
+    nodes[0]["label"] = "Stage one"
+    real = flexo.fit_in_box
+    begun = []
+    monkeypatch.setattr(flexo, "fit_in_box", lambda *a, **k: begun.append(time.perf_counter()) or real(*a, **k))
+
+    def newer() -> bool:
+        if not begun:
+            return False
+        time.sleep(max(0.0, begun[0] + 1.2 - time.perf_counter()))
+        return True
+
+    with pytest.raises(GivenUp), given_up_when(newer):
+        kind.draw(document, tmp_path, {"settle": True})
+    # Changed again so that, kept as it is, it would be drawn much smaller (a shape added to a
+    # long row): it is drawn as a draft, kept, in one compile -- not laid out every way at once,
+    # which, for all its person knows, takes a while.
+    calls = []
+    monkeypatch.setattr(flexo, "fit_in_box", lambda *a, **k: calls.append(k.get("keep")) or real(*a, **k))
+    nodes.extend({"id": f"x{index}", "label": f"Extra step {index}"} for index in range(6))
+    root["children"] += [f"x{index}" for index in range(6)]
+    drawn = kind.draw(document, tmp_path)
+    assert len(calls) == 1 and calls[0] is not None and drawn.info["unsettled"] is True
+
+
 def test_a_figure_changed_on_a_slide_is_drawn_as_a_draft_and_tried_other_ways_once_settled(
     tmp_path: Path, monkeypatch
 ) -> None:

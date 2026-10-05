@@ -488,6 +488,8 @@ class DeckKind:
         """Draw what has changed, the slide in focus first and its neighbours next;
         slides not reached within ``BUDGET`` seconds are left pending for the next call."""
 
+        from flexo.draft import give_up_if_newer
+
         from flexo_talk.compose import EDITING, PLACEHOLDERS, render_slide
 
         errors: list[DeckDocumentError] = []
@@ -545,6 +547,7 @@ class DeckKind:
             if drawn_one and time.perf_counter() - started > BUDGET:
                 break
             slide = deck.slides[index]
+            give_up_if_newer()  # (a settling given up for a change: flexo.draft)
             editing, placeholders = EDITING.set(not settle), PLACEHOLDERS.set(True)
             try:
                 rendered = render_slide(deck, slide)
