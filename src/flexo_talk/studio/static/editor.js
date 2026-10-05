@@ -3236,7 +3236,7 @@ export function mount(studio, container) {
     // A duplicate or a paste is said as such, not as the shapes it adds; a cut, as a cut; a
     // shape put into a line, as put between the two it joins.
     // (So is a part moved in a figure drawn turned, its groups written as drawn first.)
-    let label = ["move", "step", "duplicate", "paste", "add"].includes(action.do) || merge?.startsWith("as-drawn:") ? told : null;
+    let label = ["move", "align", "step", "duplicate", "paste", "add"].includes(action.do) || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
