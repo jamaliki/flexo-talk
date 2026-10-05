@@ -505,10 +505,11 @@ export function mount(studio, container) {
   let swallowClick = false;
 
   // Figures on slides keep their layouts while the deck is changed, and are laid out at
-  // their best once it has been still a moment: the page asks the server to settle.
+  // their best once it has been still a moment: the page asks the server to settle. (That
+  // can take a while, for a large figure: the drawing yields to the next change's.)
   let settling = false;
   let settleTimer = 0;
-  studio.hints = () => ({ focus: state.slide, settle: settling });
+  studio.hints = () => ({ focus: state.slide, settle: settling, yields: settling });
   const doc = () => studio.doc;
   // Merged, every slide's objects are in places its layout has (as the studio's DeckKind
   // puts them: _laid_out) -- an object kept where the layout has none is put in the first
@@ -2855,8 +2856,10 @@ export function mount(studio, container) {
     placeChosen(); renderInspector(); reportFocus();
   }, true);
 
-  // A figure whose part is chosen is only outlined round it: the part is what is chosen.
-  const holding = () => chosen.classList.toggle("holder", Boolean(figureBlock() && figure.parts.selected.length));
+  // A figure whose part is chosen is only outlined round it: the part is what is chosen. So is
+  // one whose shape was just deleted, its shapes still being edited (none chosen): ⌫ deletes
+  // nothing more there, Esc chooses the figure.
+  const holding = () => chosen.classList.toggle("holder", Boolean(figureBlock() && (figure.parts.selected.length || figure.parts.inside)));
 
   // A figure chosen is edited at once: `then` (a click, a double-click on one of its
   // parts) is done to it as soon as its parts are known.
@@ -3236,7 +3239,10 @@ export function mount(studio, container) {
     // A duplicate or a paste is said as such, not as the shapes it adds; a cut, as a cut; a
     // shape put into a line, as put between the two it joins.
     // (So is a part moved in a figure drawn turned, its groups written as drawn first.)
-    let label = ["move", "align", "step", "duplicate", "paste", "add"].includes(action.do) || merge?.startsWith("as-drawn:") ? told : null;
+    // (Lines joined, or parted, or coloured or set on a side of their shapes: as the parts say it.)
+    const lineLook = action.do === "update" && [action.target, ...(action.targets || [])].filter(Boolean).every((part) => ["edge", "net"].includes(part.type))
+      && Object.keys(action.values || {}).every((key) => ["tone", "line", "depart", "arrive", "rail", "via"].includes(key));
+    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate"].includes(action.do) || lineLook || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
@@ -3327,7 +3333,8 @@ export function mount(studio, container) {
       group,
       ui.button("", (event) => menu(event.currentTarget, exportItems(figure)),
         { small: true, kind: "ghost", icon: "export", title: "Export figure (SVG, PDF, PNG, YAML)" }),
-      figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)" })
+      // (Its shapes being edited, none chosen -- one just deleted -- nothing to delete: ⌫ does nothing.)
+      figure.parts.selected.length || figure.parts.inside ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)", disabled: !figure.parts.selected.length })
         : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: "Delete Figure (⌫)" }),
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
@@ -6517,6 +6524,16 @@ export function mount(studio, container) {
       size()];
   }
 
+  // Whether the figure at `at` (on the slide shown) is drawn turned to fit it: its note says
+  // so ("the chart was turned to run across").
+  function drawnTurned(at) {
+    return drawnMessages.some((message) => {
+      if (message.severity !== "note" || !/was turned|groups were turned/.test(message.text)) return false;
+      const where = objectOf(message.where);
+      return where?.slide === state.slide && where.region === at.region && where.index === at.index;
+    });
+  }
+
   // Whether a figure's parts were arranged by hand -- a column of parts in a row beside
   // others, or a row in a column -- as the drawing judges it (compose.py's _arranged).
   function arranged(spec) {
@@ -6534,10 +6551,12 @@ export function mount(studio, container) {
     const shapes = mode === "inline" ? (value?.nodes || []).length : figure && figureBlock() === block ? figure.parts.model?.nodes?.length : undefined;
     // A figure arranged by hand is kept as arranged unless the switch is turned on for it.
     const byHand = arranged(mode === "inline" ? value : figure && figureBlock() === block ? figure.parts.model : null);
+    // Left to the deck, the switch says what the slide shows: a figure keeps the way it was
+    // first drawn, turned to fit or not, however it is changed, until its person says.
     const turn = shapes !== undefined && shapes < 2 ? null
-      : ui.toggle({ value: block.turn ?? !byHand, label: "Turn to Fit the Slide", onChange: (on) => {
+      : ui.toggle({ value: block.turn ?? drawnTurned(at), label: "Turn to Fit the Slide", onChange: (on) => {
         if (on && byHand) swapAsked = `slide${state.slide + 1}`;
-        editBlock(at, (b) => setOption(b, "turn", on && !byHand ? null : on));
+        editBlock(at, (b) => setOption(b, "turn", on));
       } });
     const parts = [ui.field("Source", ui.segmented({ value: mode, options: [
       { value: "inline", label: "In Deck" }, { value: "file", label: "File" }, { value: "python", label: "Python" }],
@@ -7788,7 +7807,9 @@ export function mount(studio, container) {
   // Words typed here that another typed too, at the same place (a space both typed to start
   // a word), taken as one by the merge: the editor puts its own back (caretMerged).
   studio.on("absorbed", ({ base, incoming }) => refreshInline(false, { base, incoming, merged: true }));
-  studio.on("drawing", () => { pending = true; });
+  // (Not while it settles: the slide is drawn, and is only being laid out at its best -- a
+  // while, for a large figure -- which the next change gives up.)
+  studio.on("drawing", () => { if (!settling) pending = true; });
   studio.on("drawn", (result) => {
     pending = !result.latest || Boolean(result.unfinished);
     if (result.latest && !result.unfinished) {

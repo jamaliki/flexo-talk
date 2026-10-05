@@ -1873,7 +1873,12 @@ def _tones(deck) -> dict[str, Any]:
                             "stroke": deck.palette.get(f"tone-{index}-stroke")})
         except (KeyError, ValueError):
             break
-    return {"colours": colours, "used": {}}
+    # The theme's grey, as a shape toned ``neutral`` is painted.
+    try:
+        neutral = {"fill": deck.palette.get("block-fill"), "stroke": deck.palette.get("block-stroke")}
+    except (KeyError, ValueError):
+        neutral = None
+    return {"colours": colours, "used": {}, **({"neutral": neutral} if neutral else {})}
 
 
 def _palette_order(deck, *, own: bool = False) -> list[str]:

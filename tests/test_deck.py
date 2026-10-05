@@ -1424,7 +1424,13 @@ def test_what_a_figure_check_found_is_said_in_words_under_the_slide() -> None:
     assert _figure_check("routing.connector.crossing") == "Lines cross in this figure."
     assert _figure_check("routing.net.target.arrow") == "A line or arrowhead is cramped in this figure."
     assert _figure_check("routing.source.direction").startswith("A line doesn't meet its shape")
-    assert "(svg.id.missing)" in _figure_check("svg.id.missing")
+    # Never a raw code: a check of the drawing's file (nothing to put right on the slide) is
+    # not said at all, and one with no words of its own is said in plain ones.
+    assert _figure_check("svg.id.missing") is None
+    assert _figure_check("svg.hierarchy.deep") is None
+    for code in ("layout.size.grown", "cells.something.new", "label.unheard.of"):
+        said = _figure_check(code)
+        assert said and code not in said and "(" not in said
 
 
 def test_a_code_listing_is_one_text_box_in_powerpoint(tmp_path: Path) -> None:

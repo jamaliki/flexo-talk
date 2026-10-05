@@ -890,6 +890,76 @@ def test_a_figure_keeps_its_layout_while_the_deck_is_changed_and_settles_after(t
     assert kind.draw(document, tmp_path).info["unsettled"] is False  # and stays settled
 
 
+def test_a_figure_changed_on_a_slide_is_drawn_as_a_draft_and_tried_other_ways_once_settled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import itertools
+
+    import flexo
+    from flexo.draft import DRAFT
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    # A long row arranged by hand -- its last step put under the one before -- drawn small:
+    # once settled, the slide says whether turning it would set its words larger.
+    ids = [f"s{index}" for index in range(12)]
+    nodes = [{"id": id, "label": f"Stage {index + 1}"} for index, id in enumerate(ids)]
+    groups = [{"id": "root", "layout": {"kind": "row"}, "children": [*ids[:-2], "pair"]},
+              {"id": "pair", "layout": {"kind": "column"}, "children": ids[-2:]}]
+    edges = [{"from": a, "to": b} for a, b in itertools.pairwise(ids)]
+    figure = {"figure": {"id": "long"}, "nodes": nodes, "groups": groups, "edges": edges}
+    document = {"deck": {"id": "drafts"}, "slides": [{"title": "Stages", "body": [{"figure": figure}]}]}
+    kind = DeckKind()
+    kind.draw(document, tmp_path)
+    seen = []
+    real = flexo.fit_in_box
+    monkeypatch.setattr(flexo, "fit_in_box", lambda *a, **k: seen.append((DRAFT.get(), k["turn"])) or real(*a, **k))
+    nodes[3]["label"] = "Stage four"
+    edited = kind.draw(document, tmp_path)
+    # Drawn as a draft, once, as arranged: not laid out turned as well at every change.
+    assert seen == [(True, False)] and edited.info["unsettled"] is True
+    seen.clear()
+    settled = kind.draw(document, tmp_path, {"settle": True})
+    assert settled.info["unsettled"] is False
+    assert (False, False) in seen and (False, True) in seen and not any(draft for draft, _ in seen)
+
+
+def test_a_folded_chart_keeps_its_fold_when_its_words_are_changed(tmp_path: Path, monkeypatch) -> None:
+    from flexo_talk import compose
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    names = {"start": ("terminal", "Message arrives"), "decision": ("decision", "Seen this ID?"),
+             "skip": ("terminal", "Skip it"), "step": (None, "Update the order"),
+             "check": ("decision", "Worked?"), "end": ("terminal", "Acknowledge")}
+    nodes = [{"id": id, "label": label, **({"kind": kind} if kind else {})} for id, (kind, label) in names.items()]
+    edges = [{"from": "start", "to": "decision"}, {"from": "decision", "to": "skip", "label": "yes"},
+             {"from": "decision", "to": "step", "label": "no"}, {"from": "step", "to": "check"},
+             {"from": "check", "to": "end", "label": "yes"}, {"from": "check", "to": "step", "label": "no"}]
+    root = {"id": "root", "role": "canvas", "layout": {"kind": "row"}, "children": list(names)}
+    figure = {"figure": {"id": "consumer"}, "nodes": nodes, "groups": [root], "edges": edges}
+    document = {"deck": {"id": "folds"}, "slides": [{"title": "How a consumer handles a message",
+                                                      "body": [{"figure": figure}]}]}
+    kind = DeckKind()
+    kind.draw(document, tmp_path, {"settle": True})
+    where = next(key for key in compose._LAYOUTS if key[0] == "folds")
+    assert compose._LAYOUTS[where] == "as written, folded"  # one long row, wrapped onto two
+    folded = compose._SCALES[where]
+    # Its words changed and settled: still folded, as large -- kept from turning (it was seen
+    # as written), it is not kept from folding, and laid out as one long row at half the size.
+    nodes[3]["label"] = "Update the order now"
+    kind.draw(document, tmp_path)
+    kind.draw(document, tmp_path, {"settle": True})
+    assert compose._LAYOUTS[where] == "as written, folded"
+    assert compose._SCALES[where] > folded * 0.8
+    # Written as it is seen, each line a row of its own (as the studio writes them before a
+    # part is put among them), it is drawn as written: not folded, nor turned, again.
+    lines = [["start", "decision", "skip"], ["step", "check", "end"]]
+    root.update(layout={"kind": "column"}, children=["line", "line-2"])
+    figure["groups"] += [{"id": name, "role": "layout", "layout": {"kind": "row"}, "children": line}
+                         for name, line in zip(("line", "line-2"), lines, strict=True)]
+    kind.draw(document, tmp_path)
+    assert compose._LAYOUTS[where] == "as written"
+
+
 def test_a_turned_figure_written_as_it_was_drawn_is_not_turned_back(tmp_path: Path, monkeypatch) -> None:
     import itertools
 
@@ -982,6 +1052,47 @@ def test_a_figure_arranged_by_hand_is_turned_to_fit_when_its_person_asks(tmp_pat
     # ...unless its person turns "Turn to Fit the Slide" on for it.
     assert layout(turn=True).startswith("turned")
     assert not layout(turn=False).startswith("turned")
+
+
+def test_a_figure_built_on_a_slide_keeps_the_way_it_is_drawn_until_its_person_asks(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import copy
+
+    from flexo_talk import compose
+
+    # (With the layouts kept between drawings, as the studio keeps them.)
+    monkeypatch.setenv("FLEXO_TALK_CACHE", str(tmp_path / "cache"))
+    nodes = [{"id": "one", "label": "One"}]
+    figure = {"figure": {"id": "chart"}, "nodes": nodes}
+    block = {"figure": figure}
+    document = {"deck": {"id": "growing"}, "slides": [{"layout": "blank", "body": [block]}]}
+    kind = DeckKind()
+    kind.draw(document, tmp_path, {"settle": True})
+    where = next(key for key in compose._LAYOUTS if key[0] == "growing")
+    # Shapes added one at a time under the last, each drawn as it is made and then settled:
+    # the column it is seen as stays a column, made smaller, never turned into a row.
+    for word in ["Two", "Three", "Four", "Five", "Six", "Seven"]:
+        nodes.append({"id": word.lower(), "label": word})
+        kind.draw(document, tmp_path)
+        assert not compose._LAYOUTS[where].startswith("turned"), word
+        kind.draw(document, tmp_path, {"settle": True})
+        assert not compose._LAYOUTS[where].startswith("turned"), word
+    # Opened again another day (nothing remembered but the layouts kept): drawn as it was.
+    for memory in (compose._LAYOUTS, compose._ASKED, compose._TURNS, compose._SCALES, compose._SHOWN, compose._PLACES):
+        memory.pop(where, None)
+    DeckKind().draw(copy.deepcopy(document), tmp_path, {"settle": True})
+    assert not compose._LAYOUTS[where].startswith("turned")
+    # Turned only when its person asks (Turn to Fit the Slide), and back when they ask again.
+    block["turn"] = True
+    kind.draw(document, tmp_path, {"settle": True})
+    assert compose._LAYOUTS[where].startswith("turned")
+    nodes.append({"id": "eight", "label": "Eight"})
+    kind.draw(document, tmp_path, {"settle": True})
+    assert compose._LAYOUTS[where].startswith("turned")
+    block["turn"] = False
+    kind.draw(document, tmp_path, {"settle": True})
+    assert not compose._LAYOUTS[where].startswith("turned")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
