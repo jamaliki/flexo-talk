@@ -1060,7 +1060,7 @@ class Region:
         **options: object,
     ) -> flexo.Figure:
         """A flexo figure in the deck's theme, laid out for this place: use it as a
-        ``with`` block. ``turn=False`` keeps it as written, and ``width`` draws it that
+        ``with`` block. ``turn=False`` keeps it from turning, and ``width`` draws it that
         wide (see ``add``)."""
 
         deck = self._slide.deck
@@ -1080,8 +1080,9 @@ class Region:
 
         Flexo lays it out for the place's width *and* height: as written, or turned
         (a tall stack read left to right) or spaced closer when that lets its words
-        be larger -- ``turn=False`` keeps it as written, and so does a figure whose parts
-        were arranged by hand (a part under another beside others) unless ``turn=True``.
+        be larger -- ``turn=False`` keeps it from turning (folded onto two lines it may
+        still be: that is no turn), and a figure whose parts were arranged by hand (a part
+        under another beside others) is kept as written unless ``turn=True``.
         It is drawn as large as its place lets its words be the size of the words round
         it; ``width`` (points) draws it that wide instead, smaller or larger, as far as
         its place allows.

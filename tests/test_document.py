@@ -1004,6 +1004,31 @@ def test_a_folded_chart_keeps_its_fold_when_its_words_are_changed(tmp_path: Path
     assert compose._LAYOUTS[where] == "as written"
 
 
+def test_a_chart_kept_from_turning_is_still_folded_to_fit(tmp_path: Path, monkeypatch) -> None:
+    # Turn to Fit the Slide off (`turn: false`) keeps a chart from turning, not from folding:
+    # the long row is wrapped onto two lines as it is left to the deck, never drawn unwrapped.
+    from flexo_talk import compose
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    names = {"start": ("terminal", "Message arrives"), "decision": ("decision", "Seen this ID?"),
+             "skip": ("terminal", "Skip it"), "step": (None, "Update the order"),
+             "check": ("decision", "Worked?"), "end": ("terminal", "Acknowledge")}
+    nodes = [{"id": id, "label": label, **({"kind": kind} if kind else {})} for id, (kind, label) in names.items()]
+    edges = [{"from": "start", "to": "decision"}, {"from": "decision", "to": "skip", "label": "yes"},
+             {"from": "decision", "to": "step", "label": "no"}, {"from": "step", "to": "check"},
+             {"from": "check", "to": "end", "label": "yes"}, {"from": "check", "to": "step", "label": "no"}]
+    root = {"id": "root", "role": "canvas", "layout": {"kind": "row"}, "children": list(names)}
+    layouts = {}
+    for turn in (None, False):
+        figure = {"figure": {"id": "kept"}, "nodes": nodes, "groups": [root], "edges": edges}
+        block = {"figure": figure, **({} if turn is None else {"turn": turn})}
+        document = {"deck": {"id": f"kept-{turn}"}, "slides": [{"title": "Steps", "body": [block]}]}
+        DeckKind().draw(document, tmp_path, {"settle": True})
+        layouts[turn] = compose._LAYOUTS[next(key for key in compose._LAYOUTS if key[0] == f"kept-{turn}")]
+    assert "folded" in layouts[None] and "turned" not in layouts[None]
+    assert layouts[False] == layouts[None]
+
+
 def test_a_turned_figure_written_as_it_was_drawn_is_not_turned_back(tmp_path: Path, monkeypatch) -> None:
     import itertools
 
@@ -1724,6 +1749,41 @@ def test_a_deletion_or_a_copy_undone_through_the_studio_puts_the_file_back_word_
             doc.update(copy.deepcopy(whole), doc.version, me)
             workspace.flush()
             assert talk.read_text(encoding="utf-8") == HAND, change
+    finally:
+        workspace.close()
+
+
+def test_a_deck_moved_into_a_new_folder_or_up_out_of_one_is_followed_never_copied(tmp_path: Path) -> None:
+    import copy
+    import time
+
+    from flexo.studio.workspace import Workspace
+
+    def waited(condition) -> None:
+        deadline = time.monotonic() + 5
+        while not condition():
+            assert time.monotonic() < deadline, "waited in vain"
+            time.sleep(0.05)
+
+    (tmp_path / "talk.yaml").write_text(HAND, encoding="utf-8")
+    me = {"id": "p", "kind": "person"}
+    workspace = Workspace(tmp_path)
+    try:
+        doc = workspace.open("talk.yaml")
+        # The Finder's New Folder with Selection (the folder and the move at once), then back up.
+        moves = [("talk.yaml", "Lab meeting/talk.yaml"), ("Lab meeting/talk.yaml", "talk.yaml")]
+        for at, (old, new) in enumerate(moves):
+            time.sleep(0.3)
+            (tmp_path / new).parent.mkdir(exist_ok=True)
+            (tmp_path / old).rename(tmp_path / new)
+            waited(lambda new=new: doc.name == new)
+            edited = copy.deepcopy(doc.document)
+            edited["slides"][2]["title"] = f"Voices {at}"
+            doc.update(edited, doc.version, me)
+            waited(lambda new=new, at=at: f"Voices {at}" in (tmp_path / new).read_text(encoding="utf-8"))
+            assert [found.relative_to(tmp_path).as_posix() for found in tmp_path.rglob("*.yaml")] == [new]
+            # Written over its words as they are: its comments kept where it went.
+            assert "# chosen by Kiarash" in (tmp_path / new).read_text(encoding="utf-8")
     finally:
         workspace.close()
 

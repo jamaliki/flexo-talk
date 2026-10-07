@@ -56,8 +56,8 @@ lets its words be largest there, never larger than the body text; a figure
 still smaller than that is **folded** when that sets its words clearly larger,
 its long rows set on two lines (the full transformer on one slide: encoder
 above, decoder folded, 7pt words instead of 4pt). The build summary notes a
-figure it turned or folded; `slide.add(figure, turn=False)` keeps one as
-written, and `width=` (points; `width:` in a deck file) draws one that wide,
+figure it turned or folded; `slide.add(figure, turn=False)` keeps one from
+turning (folded it may still be), and `width=` (points; `width:` in a deck file) draws one that wide,
 smaller or larger, as far as its place allows -- the studio writes it when a
 figure's or picture's corner is dragged. Figures on one slide -- in one region or side by side -- set their
 words at one size: the largest at which every one fits its place, each laid out

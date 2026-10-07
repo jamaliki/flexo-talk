@@ -310,6 +310,8 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 
 /* -- the inspector -- */
 .inspector { border-left: 1px solid var(--line); }
+/* Holding the keys itself, a field it showed gone (keysInPanel): no ring round the whole of it. */
+.inspector:focus { outline: none; }
 .insp-head { display: flex; align-items: center; height: 44px; padding: 0 10px; border-bottom: 1px solid var(--line); flex: none; }
 .insp-tabs { display: flex; gap: 2px; padding: 2px; background: var(--seg-track); border-radius: 8px; width: 100%; }
 .insp-tab { flex: 1; height: 28px; border: 0; background: transparent; border-radius: 6px; color: var(--ink-3); cursor: pointer; font: var(--text-title); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
