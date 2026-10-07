@@ -18,6 +18,7 @@ import contextvars
 import functools
 import math
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -26,6 +27,7 @@ from typing import Any, NamedTuple
 
 import flexo
 from flexo.artwork import load_artwork, picture_href, picture_link
+from flexo.draft import GivenUp, give_up_if_newer
 from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
 from flexo.lint import lint_compilation
@@ -2512,6 +2514,18 @@ _SHOWN: dict[tuple[str, str, str], str] = {}
 """The way each figure's outermost group was last drawn, a row or a column, beside its
 layout: as written, or the other way when the figure was turned to fit."""
 
+_PLACES: dict[tuple[str, str, str], tuple[float, float, float]] = {}
+"""The place each figure was last drawn in: its width and height, and how large its words
+could be there (a figure slide's, as large as its title's)."""
+
+SAME_PLACE = 0.15
+"""How much a figure's place may change (a line of words added over it) and still be the
+place it was seen in, kept the way it was drawn there."""
+
+_ASKED: dict[tuple[str, str, str], bool | None] = {}
+"""What each figure's own Turn to Fit the Slide said when it was last drawn (``None``: as
+the deck decides): only its person changing it turns a figure they have seen the other way."""
+
 _TURNS: dict[tuple[str, str, str], bool] = {}
 """Whether each figure was last drawn free to turn, beside its layout: one just let turn
 ("Turn to Fit the Slide") is laid out afresh, not kept as it was."""
@@ -2543,16 +2557,32 @@ def _root_kind(spec: object) -> str | None:
 
 
 def _kept_as_written(where: tuple[str, str, str], spec: object) -> None:
-    """A figure drawn turned, and since written the way it was drawn (as the studio writes
-    one before moving a part where it is seen, under or beside another), is kept as it is
-    now written: turned again, each of its rows would be drawn as a column, the part moved
-    under another beside it."""
+    """A figure drawn turned (or folded), and since written the way it was drawn (as the
+    studio writes one before moving a part where it is seen, under or beside another), is
+    kept as it is now written: turned again, each of its rows would be drawn as a column,
+    the part moved under another beside it."""
 
     layout = _LAYOUTS.get(where)
+    if layout and "folded" in layout and _arranged(spec):
+        # Drawn folded onto lines, and since written so -- each line a row (column) of its
+        # own, as the studio writes the lines it puts a part among -- it is drawn as written:
+        # turned and folded again, its lines would be turned and folded in their turn.
+        spacing = layout.removeprefix("turned within").removeprefix("turned").removeprefix("as written")
+        for suffix, _ in flexo.boxfit.FOLDS:
+            spacing = spacing.removesuffix(suffix)
+        _LAYOUTS[where] = "as written" + spacing
+        return
     if not layout or not layout.startswith("turned") or layout.startswith("turned within"):
         return
     if _SHOWN.get(where) is not None and _SHOWN.get(where) == _root_kind(spec):
         _LAYOUTS[where] = "as written" + layout.removeprefix("turned")
+
+REFIT = 1.0
+"""Seconds a figure's best layout may have taken to find, last time, for it to be found
+again while the figure is changed (``SHRUNK``): longer, and the changes would wait on it."""
+
+_FINDING: dict[tuple[str, str, str], float] = {}
+"""How long each figure's best layout took to find, the last time it was."""
 
 SHRUNK = 0.9
 """How much smaller a figure kept in its layout while edited may be drawn before its best
@@ -2587,14 +2617,18 @@ def _layout_said(layout: str, spec: object = None) -> str:
     return f"To fit the slide, {how}."
 
 
-def _fit_in_box(*args, **options) -> object:
+def _fit_in_box(*args, draft: bool = True, **options) -> object:
     """``flexo.fit_in_box`` for a slide: the figure's words are set in the slide's own fonts,
     embedded once for the slide, so the figure's own copies -- cut down for each layout
-    tried -- are not made only to be thrown away."""
+    tried -- are not made only to be thrown away. While the slide is changed (``EDITING``)
+    a figure kept in its layout is drawn as a draft (``flexo.draft``, unless not to be a
+    ``draft``): its lines as they were, but for those about what changed -- drawn in full
+    once the changes stop."""
 
+    from flexo.draft import drafting
     from flexo.svg_resources import fonts_linked
 
-    with fonts_linked():
+    with fonts_linked(), drafting(EDITING.get() and draft):
         return flexo.fit_in_box(*args, **options)
 
 
@@ -2700,24 +2734,51 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
     # own -- is drawn as arranged, made smaller to fit rather than turned round, unless they
     # ask for it to be turned.
     turn = block.turn if block.turn is not None else not _arranged(spec)
-    # The palette is in the key too: a theme file's colours can change under the same name.
-    key = (
-        spec, style, repr(figure_palette(spec)), box.width, box.height, deck.style.figure_size,
-        largest, turn,
-    )
-    laid = _cached_fit(key)
     where = (deck.id, canvas.slide.id, spec.id)
     _kept_as_written(where, spec)
+    # A figure its person has seen keeps the way it was drawn -- turned to fit the slide, or
+    # as written -- however it is changed (a shape added to a long column, a part put under
+    # another), until they ask for the other way with Turn to Fit the Slide: it never turns,
+    # or stops turning, under them. (Settled, it is kept so too, and so is found so again
+    # when the deck is opened next.) Given another place -- the slide's layout changed, the
+    # figure made wider -- it is laid out for it afresh. Kept from turning, it may still be
+    # folded onto two lines as ever (``fold``): that is no turn.
+    asked = where in _ASKED and _ASKED[where] != block.turn
+    seen = _LAYOUTS.get(where)
+    placed = _PLACES.get(where)
+    same = placed is not None and all(
+        abs(was - now) <= SAME_PLACE * max(now, 1.0)
+        for was, now in zip(placed, (box.width, box.height, largest), strict=True)
+    )
+    free = seen.startswith("turned") if seen is not None and same and not asked else turn
+    # The palette is in the key too: a theme file's colours can change under the same name.
+    # (So is whether its person asked it to turn, or left it to the deck; and, once it has
+    # been seen, whether it is free to turn. Opened again, it is found as it was last seen.)
+    opened = (
+        spec, style, repr(figure_palette(spec)), box.width, box.height, deck.style.figure_size,
+        largest, turn, block.turn,
+    )
+    key = opened if seen is None else (*opened, free)
+    laid = _cached_fit(key)
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
         # (Not one just let turn, or kept from turning: its person asked for the other way.)
-        asked = _TURNS.get(where, turn) != turn
-        keep = _LAYOUTS.get(where) if EDITING.get() and not asked else None
-        fit = _fit_in_box(
-            spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-            turn=turn, keep=keep,
-        )
+        keep = seen if EDITING.get() and not asked else None
+        started = time.perf_counter()
+        try:
+            fit = _fit_in_box(
+                spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
+                turn=free, fold=turn, keep=keep,
+            )
+        except GivenUp:
+            # Given up for a change: it takes at least this long to find, however long it took
+            # when the figure was smaller.
+            if keep is None:
+                _FINDING[where] = max(_FINDING.get(where, 0.0), time.perf_counter() - started)
+            raise
+        if keep is None:
+            _FINDING[where] = time.perf_counter() - started
         shown = _SCALES.get(where)
         # Kept folded, its lines might now cross (a loop added across the fold): a fold is
         # the layout's own doing, so a better way is looked for at once too.
@@ -2725,15 +2786,21 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
             item.code == "routing.connector.crossing"
             for item in lint_compilation(fit.compilation, style=fit.style).diagnostics
         )
-        if keep is not None and fit.layout == keep and ((shown and fit.scale < shown * SHRUNK) or crossed):
+        # (Unless finding it takes a while -- a large figure -- when the changes would wait on
+        # it: it is found once they stop. So too if how long is not known.)
+        quick = _FINDING.get(where, math.inf) <= REFIT
+        if keep is not None and fit.layout == keep and ((shown and fit.scale < shown * SHRUNK) or crossed) and quick:
             # Kept, the figure would shrink a good deal (a shape added to a long row): its
             # best layout is found now, in one drawing, rather than a moment later, when it
             # would jump under its person's eyes.
             keep = None
+            started = time.perf_counter()
             fit = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=turn,
+                turn=free, fold=turn,
             )
+            _FINDING[where] = time.perf_counter() - started
+        give_up_if_newer()  # (a settling given up for a change: flexo.draft)
         codes = [
             diagnostic.code
             for diagnostic in lint_compilation(fit.compilation, style=fit.style).diagnostics
@@ -2746,9 +2813,10 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         if (keep is None or fit.layout != keep) and previous and fit.layout != previous:
             # A figure already shown one way stays that way unless another is clearly
             # larger: it doesn't turn under its person for a little more room.
+            # (Drawn in full: kept, it is the figure as settled.)
             held = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=turn, keep=previous,
+                turn=free, fold=turn, keep=previous, draft=False,
             )
             kept = [
                 diagnostic.code
@@ -2764,20 +2832,28 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
                 codes = kept
         laid = {
             "svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes,
-            "scale": fit.scale,
+            "scale": fit.scale, "finding": _FINDING.get(where),
         }
         if keep is not None and fit.layout == keep:
             canvas.settled = False
         else:
-            _store_fit(key, laid)
+            # (Found again as it is seen -- by the next drawing, free to turn as this one is
+            # turned or not; and by the deck opened next, drawn as it was last seen.)
+            for also in dict.fromkeys((key, (*opened, fit.layout.startswith("turned")), opened)):
+                _store_fit(also, laid)
+    elif laid.get("finding") is not None:
+        # (Found before, in another session: how long it took then.)
+        _FINDING[where] = laid["finding"]
     _LAYOUTS[where] = laid["layout"]
     _TURNS[where] = turn
+    _ASKED[where] = block.turn
+    _PLACES[where] = (box.width, box.height, largest)
     written = _root_kind(spec)
     turned_whole = laid["layout"].startswith("turned") and not laid["layout"].startswith("turned within")
     _SHOWN[where] = {"row": "column", "column": "row"}.get(written) if turned_whole else written
     if laid.get("scale"):
         _SCALES[where] = laid["scale"]
-    for said in dict.fromkeys(_figure_check(code) for code in laid["codes"]):
+    for said in dict.fromkeys(filter(None, (_figure_check(code) for code in laid["codes"]))):
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {said}")
     for text in block.said:
         # (One about a part of it -- a line -- names it: "#edge.2.b-to-nowhere: ...".)
@@ -2821,8 +2897,32 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         return min(wide / max(ink_wide, 1e-6), high / max(ink_high, 1e-6), most)
 
     # (Turned off by its person, or arranged by hand: either way, said if turning would help.)
-    turnable = larger_turned if not turn else None
-    return _Prepared(laid["svg"], left, top, width, height, most, base, spec.id, turnable, alone)
+    turnable = _settled_only(where, "turned", larger_turned, 1.0) if not free else None
+    return _Prepared(
+        laid["svg"], left, top, width, height, most, base, spec.id, turnable, _settled_only(where, "alone", alone, 0.0)
+    )
+
+
+_ASIDE: dict[tuple, float] = {}
+"""What laying a figure out another way would give it (turned, or with a slide of its own),
+as last found once its changes stopped: kept for while it is changed again (``_settled_only``)."""
+
+
+def _settled_only(where: tuple, what: str, find, otherwise: float):
+    """``find``, which lays a figure out afresh another way, done only once its changes
+    stop: while it is changed (``EDITING``), what it found then -- or ``otherwise`` -- so a
+    figure being dragged is not laid out twice over at every move."""
+
+    def answer(*args) -> float:
+        key = (where, what, args)
+        if EDITING.get():
+            return _ASIDE.get(key, otherwise)
+        _ASIDE[key] = value = find(*args)
+        while len(_ASIDE) > 256:
+            _ASIDE.pop(next(iter(_ASIDE)))
+        return value
+
+    return answer
 
 
 def _heading_size(svg: str, base: float) -> float:
@@ -2852,18 +2952,38 @@ _FIGURE_CHECKS = {
     "routing.container.clipped": "A line is cut off by its group in this figure.",
     "routing.track.separation": "Lines run too close together in this figure.",
     "label.math": "Some maths in this figure can't be typeset.",
+    "layout.size.grown": "A shape is drawn larger than the size it was given, to fit its words.",
+    "layout.overflow": "A group in this figure is too small for what it holds.",
+    "layout.grid.overflow": "A grid in this figure is too small for what it holds.",
+    "publication.type.small": "Some words in this figure are very small.",
+    "routing.lane.unknown": "A line is asked to run beside a group this figure doesn't have.",
+    "routing.lane.syntax": "A line is asked to run along a side this figure can't read.",
+    "routing.waypoint.unknown": "A line is asked to pass a part this figure doesn't have.",
+    "routing.via.clamped": "A line can't run on the side it was asked to in this figure.",
+    "routing.net.rail-at.clamped": "Joined lines can't meet where they were asked to in this figure.",
 }
 """What a figure's checks found, said under its slide (flexo's codes, by their meaning)."""
 
+_UNSAID_CHECKS = ("svg.", "publication.stroke.", "publication.size.")
+"""Checks of the drawing's file (its layers, its ids, a print's hairlines): nothing a person
+can put right on the slide, so nothing said under it."""
 
-def _figure_check(code: str) -> str:
+
+def _figure_check(code: str) -> str | None:
+    """What a figure's check found, in plain words -- never its code -- or ``None`` when it
+    is about the drawing's file rather than anything a person can change."""
+
     if code in _FIGURE_CHECKS:
         return _FIGURE_CHECKS[code]
+    if code.startswith(_UNSAID_CHECKS):
+        return None
     if code.startswith("routing.") and code.endswith((".arrow", ".clearance", ".orientation")):
         return "A line or arrowhead is cramped in this figure."
     if code.startswith("routing."):
         return "A line doesn't meet its shape cleanly in this figure."
-    return f"This figure has a drawing problem ({code})."
+    if code.startswith("layout."):
+        return "Some shapes in this figure don't fit where they are."
+    return "Part of this figure isn't drawn quite as written."
 
 
 # -- the figure cache --------------------------------------------------------------------

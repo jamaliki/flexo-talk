@@ -505,10 +505,14 @@ export function mount(studio, container) {
   let swallowClick = false;
 
   // Figures on slides keep their layouts while the deck is changed, and are laid out at
-  // their best once it has been still a moment: the page asks the server to settle.
+  // their best once it has been still a moment: the page asks the server to settle. (That
+  // can take a while, for a large figure: the drawing yields to the next change's.)
   let settling = false;
   let settleTimer = 0;
-  studio.hints = () => ({ focus: state.slide, settle: settling });
+  // A figure's look changed at once (a colour, a dash, a layout) is settled as soon as its draft
+  // is drawn, not after the usual pause: see act.
+  let settleSoon = false;
+  studio.hints = () => ({ focus: state.slide, settle: settling, yields: settling });
   const doc = () => studio.doc;
   // Merged, every slide's objects are in places its layout has (as the studio's DeckKind
   // puts them: _laid_out) -- an object kept where the layout has none is put in the first
@@ -1550,6 +1554,103 @@ export function mount(studio, container) {
     stage.style.setProperty("--slide-max", `${width}px`);
   }
   new ResizeObserver(() => { fitStage(); placeChosen(); placeOthers(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline(); }).observe(stage);
+
+  // -- zoom, as Keynote's View › Zoom: the slide fitted to the stage (Fit Slide, as it
+  // opens), or at a size of its own -- Actual Size a point of the slide to a point of the
+  // screen -- scrolled about in the stage when larger than it. Pinched, or scrolled with ⌘,
+  // about the pointer. Every frame, handle and editor on it is placed by where things are
+  // on screen, so choosing, dragging, splicing and typing work at any size. --
+  const ZOOMS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  const ZOOM_LEAST = 0.1, ZOOM_MOST = 4;
+  let zoom = null;
+  let slideWidth = 960;
+  // The slide's own width, in points (its drawing's).
+  const slidePoints = () => { const width = pageNode?.querySelector("svg")?.viewBox?.baseVal?.width; if (width) slideWidth = width; return slideWidth; };
+  // The size the slide is shown at: its own, else the one fitting it to the stage.
+  const zoomNow = () => zoom ?? ((pageNode?.getBoundingClientRect().width || slidePoints()) / slidePoints());
+  const zoomSaid = () => `${Math.round(zoomNow() * 100)}%`;
+  function zoomTo(value, at = null) {
+    if (!pageNode || !slides().length) return;
+    const was = pageNode.getBoundingClientRect(), view = stage.getBoundingClientRect();
+    // The point kept where it is: the pointer's, for a pinch; else the middle of what is
+    // chosen, if it is in sight; else the middle of what is in sight of the slide.
+    const picked = !chosen.hidden && chosen.isConnected ? chosen.getBoundingClientRect() : null;
+    const middle = picked && { x: picked.left + picked.width / 2, y: picked.top + picked.height / 2 };
+    const seen = middle && middle.x > view.left && middle.x < view.right && middle.y > view.top && middle.y < view.bottom;
+    const point = at || (seen ? middle : { x: (Math.max(was.left, view.left) + Math.min(was.right, view.right)) / 2, y: (Math.max(was.top, view.top) + Math.min(was.bottom, view.bottom)) / 2 });
+    const fx = (point.x - was.left) / (was.width || 1), fy = (point.y - was.top) / (was.height || 1);
+    zoom = value === null ? null : Math.min(ZOOM_MOST, Math.max(ZOOM_LEAST, value));
+    stage.classList.toggle("zoomed", zoom !== null);
+    stage.style.setProperty("--slide-width", `${slidePoints() * (zoom ?? 1)}px`);
+    const now = pageNode.getBoundingClientRect();
+    if (zoom === null) { stage.scrollLeft = 0; stage.scrollTop = 0; }
+    else {
+      stage.scrollLeft += now.left + fx * now.width - point.x;
+      stage.scrollTop += now.top + fy * now.height - point.y;
+    }
+    placeChosen(); placeOthers(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline();
+    showZoom();
+  }
+  // In and out by Keynote's steps, from the size shown (a fitted slide's own, between two).
+  const zoomStep = (way) => {
+    const now = zoomNow();
+    const next = way > 0 ? ZOOMS.find((value) => value > now + 0.005) : [...ZOOMS].reverse().find((value) => value < now - 0.005);
+    zoomTo(next ?? (way > 0 ? ZOOM_MOST : ZOOMS[0]));
+  };
+  const zoomIn = () => zoomStep(1), zoomOut = () => zoomStep(-1);
+  const actualSize = () => zoomTo(1), fitSlide = () => zoomTo(null);
+  // The size shown, and the buttons that change it, in the stage's corner, as a figure
+  // file's are.
+  const zoomValue = h("span.value", {}, "");
+  const zoomBar = h("div.zoom.slide-zoom", { hidden: true },
+    ui.button("", () => zoomOut(), { kind: "ghost", icon: "minus", small: true, title: "Zoom Out (⌘−)" }),
+    zoomValue,
+    ui.button("", () => zoomIn(), { kind: "ghost", icon: "plus", small: true, title: "Zoom In (⌘+)" }),
+    ui.button("Fit", () => fitSlide(), { kind: "ghost", small: true, title: "Fit Slide (⇧⌘0)" }),
+    ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }));
+  // Clicked, a zoom button does not keep the keys (as a Mac window's toolbar buttons don't).
+  for (const button of zoomBar.querySelectorAll("button")) button.addEventListener("mousedown", (event) => event.preventDefault());
+  function showZoom() {
+    if (zoomBar.parentNode !== center) center.append(zoomBar);
+    zoomBar.hidden = !pageNode?.isConnected || !slides().length;
+    // In the stage's lower corner, over the notes: clear of the slide's top, where a figure
+    // being edited has its bar.
+    zoomBar.style.bottom = `${Math.max(0, center.clientHeight - stage.offsetTop - stage.clientHeight) + 10}px`;
+    zoomValue.textContent = zoomSaid();
+    zoomBar.classList.toggle("zoomed", zoom !== null);
+  }
+  // Fitted, the size changes with the window; and is said once the slide is drawn.
+  new ResizeObserver(() => showZoom()).observe(stage);
+  studio.on("drawn", () => requestAnimationFrame(showZoom));
+  // Pinched on a trackpad (a wheel with ctrl, in Chrome; a gesture, in Safari), or scrolled
+  // with ⌘ held: about the pointer.
+  stage.addEventListener("wheel", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || !pageNode || !slides().length) return;
+    event.preventDefault();
+    // (As a figure file's drawing zooms; a mouse's wheel turns by lines.)
+    const lines = event.deltaMode === 1 ? 16 : 1;
+    zoomTo(zoomNow() * Math.exp(-event.deltaY * lines / 200), { x: event.clientX, y: event.clientY });
+  }, { passive: false });
+  let pinchFrom = null;
+  stage.addEventListener("gesturestart", (event) => { event.preventDefault(); pinchFrom = zoomNow(); });
+  stage.addEventListener("gesturechange", (event) => {
+    if (pinchFrom === null) return;
+    event.preventDefault();
+    zoomTo(pinchFrom * event.scale, { x: event.clientX, y: event.clientY });
+  });
+  stage.addEventListener("gestureend", () => { pinchFrom = null; });
+  // A figure's words typed on a slide scrolled about stay over their shape.
+  stage.addEventListener("scroll", () => figure?.parts.placeInline(), { passive: true });
+  // ⌘+ (⌘=), ⌘−, ⌘0 and ⇧⌘0 -- the Mac app's View › Zoom has the same keys, and runs these.
+  document.addEventListener("keydown", (event) => {
+    if (!studio.active || event.defaultPrevented || !(event.metaKey || event.ctrlKey) || event.altKey) return;
+    if (document.querySelector(".present") || !pageNode?.isConnected) return;
+    const run = { "=": zoomIn, "+": zoomIn, "-": zoomOut, "_": zoomOut, "0": event.shiftKey ? fitSlide : actualSize, ")": fitSlide }[event.key]
+      || (event.code === "Digit0" ? (event.shiftKey ? fitSlide : actualSize) : null);
+    if (!run) return;
+    event.preventDefault();
+    run();
+  });
 
   // What the others on this slide have chosen -- an object, a line of the slide's words --
   // framed in their colour and named, as Keynote shows the people editing with you.
@@ -2855,8 +2956,10 @@ export function mount(studio, container) {
     placeChosen(); renderInspector(); reportFocus();
   }, true);
 
-  // A figure whose part is chosen is only outlined round it: the part is what is chosen.
-  const holding = () => chosen.classList.toggle("holder", Boolean(figureBlock() && figure.parts.selected.length));
+  // A figure whose part is chosen is only outlined round it: the part is what is chosen. So is
+  // one whose shape was just deleted, its shapes still being edited (none chosen): ⌫ deletes
+  // nothing more there, Esc chooses the figure.
+  const holding = () => chosen.classList.toggle("holder", Boolean(figureBlock() && (figure.parts.selected.length || figure.parts.inside)));
 
   // A figure chosen is edited at once: `then` (a click, a double-click on one of its
   // parts) is done to it as soon as its parts are known.
@@ -3236,7 +3339,14 @@ export function mount(studio, container) {
     // A duplicate or a paste is said as such, not as the shapes it adds; a cut, as a cut; a
     // shape put into a line, as put between the two it joins.
     // (So is a part moved in a figure drawn turned, its groups written as drawn first.)
-    let label = ["move", "step", "duplicate", "paste", "add"].includes(action.do) || merge?.startsWith("as-drawn:") ? told : null;
+    // (Lines joined, or parted, or coloured or set on a side of their shapes -- a joined
+    // line's ends too, and its trunk: as the parts say it.)
+    const lineLook = action.do === "update" && [action.target, ...(action.targets || [])].filter(Boolean).every((part) => ["edge", "net"].includes(part.type))
+      && Object.keys(action.values || {}).every((key) => ["tone", "line", "depart", "arrive", "rail", "via", "trunk"].includes(key) || key.startsWith("side:"));
+    // (A module made, or a group's title typed: "Make Module", "Rename “…”", as the parts say it.)
+    const groupWords = action.do === "update" && [action.target, ...(action.targets || [])].filter(Boolean).every((part) => part.type === "group")
+      && Object.keys(action.values || {}).every((key) => key === "label");
+    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather"].includes(action.do) || lineLook || groupWords || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
@@ -3254,13 +3364,14 @@ export function mount(studio, container) {
       if (!own.sending?.length && action.do !== "read") own.sending = (own.parts?.heldEdits?.() || []).map((edit) => own.madeAt.get(edit.key) ?? edit.at);
       const heldAt = action.do !== "read" ? own.sending?.shift() : undefined;
       // A figure's look changed at once (an arrowhead, a colour -- not words being typed) is
-      // drawn in the layout that suits it best straight away, not kept as it was a moment
-      // and then moved.
+      // drawn as a draft at once, as any change is, and laid out at its best as soon as that
+      // is drawn -- not after the pause typing gets: a large figure takes a while to lay out,
+      // and the draft does not wait on it.
       const settles = action.do === "update" && !hold;
       // (Its parts glide there, should it be drawn another way.)
       if (settles) own.parts?.settles?.();
       if (result.file) {
-        if (action.do !== "read") { if (settles) settling = true; studio.requestDraw(0); }
+        if (action.do !== "read") { if (settles) settleSoon = true; studio.requestDraw(0); }
         if (result.was !== undefined) recordFile(result, at, label, merge, hold);
       }
       else if (!same(result.document, sent)) {
@@ -3275,12 +3386,15 @@ export function mount(studio, container) {
           while (place > 0 && studio.past[place - 1].at > heldAt) place -= 1;
           if (place < studio.past.length - 1) { studio.past.splice(studio.past.length - 1, 1); studio.past.splice(place, 0, made); studio.lastMerge = null; studio.emit("status"); }
         }
-        if (settles) settling = true;
+        if (settles) settleSoon = true;
         if (action.do === "delete") {
           const name = action.ids?.length === 1 ? /“.*”/.exec(told || "")?.[0] || null : null;
           shapesDeleted.push({ ids: [...(action.ids || [])], name, at: Date.now(), entry: studio.past[studio.past.length - 1] });
         }
       }
+      // (A figure being settled gives way to any edit asked of it, as soon as it is asked: one
+      // that changed nothing, it is settled again.)
+      else if (settling && action.do !== "read") studio.requestDraw(0);
       return result;
     }
     return null;
@@ -3327,7 +3441,8 @@ export function mount(studio, container) {
       group,
       ui.button("", (event) => menu(event.currentTarget, exportItems(figure)),
         { small: true, kind: "ghost", icon: "export", title: "Export figure (SVG, PDF, PNG, YAML)" }),
-      figure.parts.selected.length ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)" })
+      // (Its shapes being edited, none chosen -- one just deleted -- nothing to delete: ⌫ does nothing.)
+      figure.parts.selected.length || figure.parts.inside ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)", disabled: !figure.parts.selected.length })
         : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: "Delete Figure (⌫)" }),
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
@@ -6517,6 +6632,16 @@ export function mount(studio, container) {
       size()];
   }
 
+  // Whether the figure at `at` (on the slide shown) is drawn turned to fit it: its note says
+  // so ("the chart was turned to run across").
+  function drawnTurned(at) {
+    return drawnMessages.some((message) => {
+      if (message.severity !== "note" || !/was turned|groups were turned/.test(message.text)) return false;
+      const where = objectOf(message.where);
+      return where?.slide === state.slide && where.region === at.region && where.index === at.index;
+    });
+  }
+
   // Whether a figure's parts were arranged by hand -- a column of parts in a row beside
   // others, or a row in a column -- as the drawing judges it (compose.py's _arranged).
   function arranged(spec) {
@@ -6534,11 +6659,16 @@ export function mount(studio, container) {
     const shapes = mode === "inline" ? (value?.nodes || []).length : figure && figureBlock() === block ? figure.parts.model?.nodes?.length : undefined;
     // A figure arranged by hand is kept as arranged unless the switch is turned on for it.
     const byHand = arranged(mode === "inline" ? value : figure && figureBlock() === block ? figure.parts.model : null);
+    // Left to the deck, the switch says what the slide shows: a figure keeps the way it was
+    // first drawn, turned to fit or not, however it is changed, until its person says.
     const turn = shapes !== undefined && shapes < 2 ? null
-      : ui.toggle({ value: block.turn ?? !byHand, label: "Turn to Fit the Slide", onChange: (on) => {
+      : ui.toggle({ value: block.turn ?? drawnTurned(at), label: "Turn to Fit the Slide", onChange: (on) => {
         if (on && byHand) swapAsked = `slide${state.slide + 1}`;
-        editBlock(at, (b) => setOption(b, "turn", on && !byHand ? null : on));
+        editBlock(at, (b) => setOption(b, "turn", on));
       } });
+    // (Kept up with each drawing as it lands: the panel is drawn at the change -- an undo, say
+    // -- and the slide a moment later.)
+    if (turn && block.turn == null) turn.drawn = () => drawnTurned(at);
     const parts = [ui.field("Source", ui.segmented({ value: mode, options: [
       { value: "inline", label: "In Deck" }, { value: "file", label: "File" }, { value: "python", label: "Python" }],
     onChange: async (next) => {
@@ -7212,6 +7342,13 @@ export function mount(studio, container) {
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
+    // View › Zoom, as Keynote's: by its steps, a point to a point, or fitted to the stage.
+    ...(slides().length ? [
+      { icon: "plus", label: "Zoom In", keys: "⌘+", hint: `Shown at ${zoomSaid()}`, run: () => zoomIn() },
+      { icon: "minus", label: "Zoom Out", keys: "⌘−", hint: `Shown at ${zoomSaid()}`, run: () => zoomOut() },
+      { icon: "eye", label: "Actual Size", keys: "⌘0", run: () => actualSize() },
+      { icon: "slide", label: "Fit Slide", keys: "⇧⌘0", run: () => fitSlide() },
+    ] : []),
     { icon: "play", label: "Present", keys: "⌘↩", hint: "Full screen; X for the presenter view, with notes", run: () => present() },
     // In the toolbar's Export menu's order.
     { icon: "export", label: `Export as PDF${asks(builds()) ? "…" : ""}`, hint: "One page per slide", run: () => studio.exportFiles(["pdf"]) },
@@ -7643,6 +7780,8 @@ export function mount(studio, container) {
         const one = [after[k], before[k]].find((child) => same(without(before, child), without(after, child)));
         return one ? `Move ${call(one)}` : `Rearrange ${call(id)}`;
       }
+      // Its title typed: renamed, not laid out anew.
+      if (differing(was, group).every((key) => key === "label")) return `Rename ${quoted(String(was.label || ""), 24) || call(id)}`;
       return id === b.groups?.[0]?.id ? "Change Figure Layout" : `Change Layout of ${call(id)}`;
     }
     return "Edit Figure";
@@ -7788,7 +7927,23 @@ export function mount(studio, container) {
   // Words typed here that another typed too, at the same place (a space both typed to start
   // a word), taken as one by the merge: the editor puts its own back (caretMerged).
   studio.on("absorbed", ({ base, incoming }) => refreshInline(false, { base, incoming, merged: true }));
-  studio.on("drawing", () => { pending = true; });
+  // A drawing asked for by a change is said to be under way (Updating…) unless it is back at
+  // once. (Not while it settles: the slide is drawn, and is only being laid out at its best --
+  // a while, for a large figure -- which the next change gives up.)
+  let drawingSince = 0;
+  studio.on("drawing", ({ version }) => {
+    if (settling) return;
+    pending = true;
+    drawingSince = version;
+    setTimeout(() => { if (pending && drawingSince === version) showPending(); }, 150);
+  });
+  function showPending() {
+    if (!pageNode || studio.state === "offline") return;
+    pageNode.classList.add("pending");
+    if (stageMeta.querySelector(".drawing")) return;
+    stageMeta.querySelector(".stage-hint")?.remove();
+    stageMeta.append(h("span.row.drawing", {}, h("span.spinner"), "Updating…"));
+  }
   studio.on("drawn", (result) => {
     pending = !result.latest || Boolean(result.unfinished);
     if (result.latest && !result.unfinished) {
@@ -7796,10 +7951,16 @@ export function mount(studio, container) {
       clearTimeout(settleTimer);
       // A figure being edited, drawn in the layout that suits it best once the edits stop,
       // lands there: its parts glide, never jump.
-      if (result.info?.unsettled) settleTimer = setTimeout(() => { settling = true; if (figureBlock()) figure.parts.settles(); studio.requestDraw(0); }, 1200);
+      if (result.info?.unsettled) settleTimer = setTimeout(() => { settling = true; if (figureBlock()) figure.parts.settles(); studio.requestDraw(0); }, settleSoon ? 0 : 1200);
+      settleSoon = false;
     }
     pages = result.pages;
     drawnMessages = result.messages || [];
+    // A switch left to the deck says what the slide now shows (Turn to Fit the Slide).
+    for (const node of inspectorBody.querySelectorAll("label.switch")) {
+      const box = node.drawn && node.querySelector("input");
+      if (box) box.checked = node.drawn();
+    }
     // Swapping asked for a figure arranged by hand, and nothing to gain by it: said, as the
     // drawing does not change.
     if (swapAsked && result.latest && !result.unfinished && !result.info?.unsettled) {
