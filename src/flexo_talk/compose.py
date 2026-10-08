@@ -156,6 +156,9 @@ class _Canvas:
         """Whether the block being set has its region to itself."""
         self.centred = True
         """Whether a picture is centred across its region, or starts at its edge (beside a list)."""
+        self.place: str | None = None
+        """Where the block being set was asked to stand across its place (``Region.places``):
+        ``start``, ``middle`` or ``end``; None, where the slide puts it."""
         self.span = (0.0, 0.0)
         """Where across the slide the picture or table set last is drawn: ``(left, width)``."""
         """What the build did that the author may want to know (a figure turned to fit)."""
@@ -1289,6 +1292,7 @@ def _region(
             prepared |= {aside[at]: item for at, item in planned.items()}
             scales |= {aside[at]: scale for at, scale in fits.items()}
         block, identifier = blocks[index], ids[index]
+        canvas.place = region.places.get(index)
         if isinstance(block, _Bullets):
             top += _bullets(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Words):
@@ -1337,6 +1341,7 @@ def _region(
             canvas.steps += 1
             canvas.built.append((canvas.steps, identifier))
             drawn.set("data-flexo-step", str(canvas.steps))
+        canvas.place = None
         top += style.block_gap
     return used if used is not None else max(top - box.y - style.block_gap, 0.0)
 
@@ -1638,7 +1643,9 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     # column on the right, the table against the right edge, cells set from the right.
     plan.rtl = bool(plan.cells) and _rtl(tuple(run for cell in plan.cells[0] for run in cell))
     left = box.x + box.width - total if plan.rtl else box.x
-    if canvas.alone:
+    if canvas.place:
+        left = _across(canvas, box, total)
+    elif canvas.alone:
         left = box.x + (box.width - total) / 2.0
     plan.x, plan.y, plan.id, plan.room = left, box.y, identifier, (box.x, box.width)
     canvas.span = (left, total)
@@ -3944,10 +3951,14 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
 
 
 def _across(canvas: _Canvas, box: Box, width: float) -> float:
-    """Where a picture ``width`` wide starts across ``box``: centred in it, or at its start
-    beside a list (``canvas.centred``), its left edge with the list's."""
+    """Where a picture ``width`` wide starts across ``box``: where it was asked to stand
+    (``canvas.place``), else centred in it, or at its start beside a list
+    (``canvas.centred``), its left edge with the list's."""
 
-    return box.x + (box.width - width) / 2.0 if canvas.centred else box.x
+    place = canvas.place or ("middle" if canvas.centred else "start")
+    if place == "end":
+        return box.x + box.width - width
+    return box.x + (box.width - width) / 2.0 if place == "middle" else box.x
 
 
 def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:

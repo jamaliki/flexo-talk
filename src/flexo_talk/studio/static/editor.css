@@ -161,6 +161,11 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .block-drop-zone.on, .block-drop-line.on { transition: opacity 0.12s, left 0.1s, top 0.1s, width 0.1s, height 0.1s; }
 .block-drop-zone { border: 1.5px dashed var(--accent-line); border-radius: 6px; background: var(--accent-soft); }
 .block-drop-line { background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 3px var(--accent-soft); }
+/* An object moved across in its place: the guide where it would stand (its place's left
+   edge, middle or right edge), named, as Keynote's alignment guides. */
+.block-guide { position: absolute; width: 0; pointer-events: none; opacity: 0; z-index: 6; border-left: 1px dashed var(--accent); transition: opacity 0.12s; }
+.block-guide.on { opacity: 1; transition: opacity 0.12s, left 0.1s; }
+.block-guide::after { content: attr(data-said); position: absolute; top: -20px; left: 0; transform: translateX(-50%); padding: 0 6px; border-radius: 99px; font: 600 10.5px/17px var(--font); color: var(--accent-ink); background: var(--accent); white-space: nowrap; }
 .block-drop-zone.on, .block-drop-line.on { opacity: 1; }
 .slide-meta { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--ink-3); font-size: 12px; min-height: 24px; }
 .slide-count { font-variant-numeric: tabular-nums; font-weight: 560; }
@@ -409,6 +414,13 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
    with the most to say, so their words wrap no more than they must. */
 .table-edit td, .table-edit th { border: 1px solid var(--line); padding: 0; min-width: 40px; vertical-align: top; }
 .table-edit .cell-area, .table-edit .cell-view { padding-inline: 4px; overflow-wrap: normal; }
+/* A cell typed in as any words are (richtext.js): its words as the slide sets them. */
+.table-edit .cell-rich { min-height: 100%; padding: 5px 4px; font: var(--text-body); line-height: 1.4; outline: none; white-space: pre-wrap; overflow-wrap: normal; cursor: text; caret-color: var(--accent); text-align: inherit; }
+.table-edit .cell-rich:focus { background: var(--accent-soft); }
+.table-edit td.short .cell-rich { white-space: pre-wrap; }
+.table-edit td.number .cell-rich { white-space: pre; }
+.table-edit tr.header .cell-rich { font-weight: 600; }
+.table-edit tr.header .cell-rich b, .table-edit tr.header .cell-rich strong { font-weight: 700; }
 /* A short cell is kept whole while the panel has room, its words wrapping (at spaces) only
    when the columns cannot all fit; numbers never wrap. */
 .table-edit td.short .cell-view { white-space: pre-wrap; }

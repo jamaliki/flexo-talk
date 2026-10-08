@@ -598,6 +598,11 @@ type _Block = (
     | _Math | _Missing
 )
 
+PLACED = (_Figure, _Image, _Table)
+"""What may be set at the left, middle or right of its place (``Region.place``): what is
+narrower than its place. (A plot, a listing, a gallery fill theirs.)"""
+PLACES = ("start", "middle", "end")
+
 
 def accent_field(palette: Palette) -> str:
     """The accent as a field to set words on: itself, or deepened when it is light
@@ -785,6 +790,9 @@ class Region:
         self.builds: set[int] = set()
         """The blocks (by index) that build in: each appears on a click of its own, in the
         order they are on the slide (see ``build_in``)."""
+        self.places: dict[int, str] = {}
+        """Where blocks (by index) asked to stand across their place stand: ``start``,
+        ``middle`` or ``end`` (see ``place``)."""
         """The blocks (by index) that are placeholders: put there to be made one's own (the
         studio's sample table, figure or equation), drawn faintly while editing and never
         presented or exported until changed."""
@@ -1129,6 +1137,19 @@ class Region:
             self.sources[-1]["build"] = True
         return self
 
+    def place(self, where: str) -> Region:
+        """The figure, picture or table added last set at the left (``start``), the middle
+        or the right (``end``) of its place, as Keynote's Align Left, Center and Right --
+        not where the slide puts it (centred, or beside a list at the list's edge)."""
+
+        if not self.blocks or not isinstance(self.blocks[-1], PLACED):
+            raise ValueError("Add a figure, picture or table before placing it.")
+        where = _choice({"left": "start", "right": "end"}.get(where, where), "place", PLACES)
+        self.places[len(self.blocks) - 1] = where
+        if self.sources[-1]:  # a stand-in for what is missing is written as nothing
+            self.sources[-1]["place"] = where
+        return self
+
     def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
         """A box where the ``what`` (picture, figure, plot) in the file ``name`` would be,
         saying it is missing -- or what else is wrong (``said``): the rest of the slide is
@@ -1417,6 +1438,13 @@ class Slide:
         """The block added last appears on a click (see ``Region.build_in``)."""
 
         next(iter(self.regions.values())).build_in()
+        return self
+
+    def place(self, where: str) -> Slide:
+        """The figure, picture or table added last set at the left, middle or right of its
+        place (see ``Region.place``)."""
+
+        next(iter(self.regions.values())).place(where)
         return self
 
     def gallery(self, items, **options: object) -> Slide:

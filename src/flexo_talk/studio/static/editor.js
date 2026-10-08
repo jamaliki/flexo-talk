@@ -53,6 +53,10 @@ const MATH_SNIPPETS = [
   ["Tt", "Text", "\\text{|}"],
 ];
 const INLINE = new Set(["text", "bullets", "quote", "callout", "code", "math"]);
+// What may stand at the left, middle or right of its place (`place`): what is narrower than it.
+const PLACEABLE = new Set(["figure", "image", "table"]);
+const PLACE_WORDS = { start: "Left", middle: "Centre", end: "Right" };
+const acrossOf = (value) => ({ left: "start", centre: "middle", center: "middle", right: "end" })[value] || value;
 // Parts that are drawn rather than read: they take the right of a slide with words.
 const VISUAL = new Set(["figure", "image", "plot", "table", "gallery", "mechanism"]);
 // A figure on a slide, exported by itself: what flexo builds of it, or its document.
@@ -2029,10 +2033,16 @@ export function mount(studio, container) {
     }
     const zone = h("div.block-drop-zone", {}, h("span.hit-label"));
     const line = h("div.block-drop-line");
-    pageNode.append(zone, line);
+    // A figure, picture or table moved across in its own place stands at the left, the middle
+    // or the right of it: the room it has, and the guide shown where it would stand.
+    const block = blocksAt(slideAt(), carry.from.region)[carry.from.index];
+    const room = !carry.all && block && PLACEABLE.has(kindOf(block)) ? regions.find((region) => region.key === carry.from.region)?.room : null;
+    const guide = h("div.block-guide");
+    pageNode.append(zone, line, guide);
     pageNode.classList.add("block-dragging");
     document.body.classList.add("block-grabbing");
-    Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, shifted: [] });
+    Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, guide, room, shifted: [],
+      placed: block ? acrossOf(block.place) || autoPlace(slideAt(), carry.from.region) : null });
   }
   // Where a part left behind shows while several are dragged (closed up), as a transform,
   // with `x`, `y` more.
@@ -2062,10 +2072,20 @@ export function mount(studio, container) {
   function carryFrame() {
     if (!carry?.started) return;
     carry.frame = 0;
-    const dx = carry.pointer.x - carry.start.x, dy = carry.pointer.y - carry.start.y;
+    let dx = carry.pointer.x - carry.start.x;
+    const dy = carry.pointer.y - carry.start.y;
+    let at = thumbAt(carry.pointer) || dropAt(carry.pointer);
+    // In its own place, moved across: it snaps to the left, middle or right of it, whichever
+    // it is nearest -- where it lands if let go, the guide showing it.
+    if (at?.kind === "home" && carry.room) {
+      const { room, home } = carry, width = home.right - home.left;
+      const spots = { start: room.left, middle: (room.left + room.right - width) / 2, end: room.right - width };
+      const place = Object.keys(spots).reduce((best, key) => (Math.abs(spots[key] - (home.left + dx)) < Math.abs(spots[best] - (home.left + dx)) ? key : best), carry.placed);
+      at = { kind: "home", place };
+      dx = spots[place] - home.left;
+    }
     carry.lifted.style.transform = `translate(${dx * carry.scale}px, ${dy * carry.scale}px)`;
     carry.group.forEach((wrap, k) => { wrap.style.transform = `translate(${(dx + carry.offsets[k].x) * scaleOf(wrap)}px, ${(dy + carry.offsets[k].y) * scaleOf(wrap)}px)`; });
-    const at = thumbAt(carry.pointer) || dropAt(carry.pointer);
     if (JSON.stringify(at) !== JSON.stringify(carry.at)) { carry.at = at; showDrop(at); }
     ghostAt(carry.pointer);
   }
@@ -2140,12 +2160,20 @@ export function mount(studio, container) {
     carry.shifted = [];
     carry.zone.classList.remove("on");
     carry.line.classList.remove("on");
+    carry.guide.classList.remove("on");
     carry.lifted.classList.toggle("block-astray", !at);
     for (const wrap of carry.group) wrap.classList.toggle("block-astray", !at);
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
     if (at?.kind === "slide") { railList.querySelector(`.thumb[data-index="${at.index}"]`)?.classList.add("drop-into"); return; }
-    if (!at || at.kind === "home") return;
     const origin = pageNode.getBoundingClientRect();
+    if (at?.place && carry.room) {
+      // The guide where it would stand: its place's left edge, middle or right edge.
+      const { room } = carry, x = at.place === "start" ? room.left : at.place === "end" ? room.right : (room.left + room.right) / 2;
+      Object.assign(carry.guide.style, { left: `${x - origin.left}px`, top: `${room.top - origin.top}px`, height: `${room.bottom - room.top}px` });
+      carry.guide.dataset.said = PLACE_WORDS[at.place];
+      carry.guide.classList.add("on");
+    }
+    if (!at || at.kind === "home") return;
     // A mark not shown yet appears where it goes; one shown glides there.
     const put = (node, box, pad = 0) => {
       Object.assign(node.style, { left: `${box.left - origin.left - pad}px`, top: `${box.top - origin.top - pad}px`,
@@ -2196,6 +2224,7 @@ export function mount(studio, container) {
     if (was.frame) cancelAnimationFrame(was.frame);
     was.zone.remove();
     was.line.remove();
+    was.guide?.remove();
     was.ghost?.remove();
     for (const wrap of [was.lifted, ...was.group]) wrap.style.visibility = "";
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
@@ -2257,6 +2286,15 @@ export function mount(studio, container) {
     const was = finishCarry();
     if (!was) return;
     const at = was.at;
+    if (at?.kind === "home" && at.place && at.place !== was.placed) {
+      // Moved across in its place: it stands there now, gliding the rest of the way.
+      moving = { slide: state.slide, at: Date.now(), plan: [[was.from, was.from]], wraps: [was.lifted] };
+      const mine = moving;
+      setTimeout(() => { if (moving === mine) { moving = null; was.lifted.style.transform = ""; placeChosen(); } }, 6000);
+      chosen.hidden = true;
+      placeBlock(was.from, at.place);
+      return;
+    }
     if (!at || at.kind === "home") { sendHome(was); return; }
     if (at.kind === "slide") { carryToSlide(was, at.index); return; }
     const { from } = was;
@@ -5621,6 +5659,26 @@ export function mount(studio, container) {
       block ? [icon("chevron"), h("span.crumb.here", {}, icon(blockIcon(block)), blockName(block))] : null);
   }
 
+  // Where the slide sets a figure, picture or table across its place when it is not asked:
+  // beside a list (or under words), at the words' left edge; else centred (compose._placing).
+  function autoPlace(slide, region) {
+    const kinds = blocksAt(slide, region).filter((block) => !block.placeholder).map(kindOf);
+    if (kinds.includes("bullets")) return "start";
+    const graphics = kinds.filter((kind) => ["figure", "image", "plot", "gallery", "table"].includes(kind)).length;
+    const words = kinds.filter((kind) => kind === "text").length;
+    return graphics && words && graphics + words === kinds.length && kinds[0] === "text" ? "start" : "middle";
+  }
+  // An object set at the left, middle or right of its place, one step: written only when it is
+  // not where the slide would set it anyway.
+  function placeBlock(at, value) {
+    const block = blocksAt(slideAt(), at.region)[at.index];
+    if (!block || (acrossOf(block.place) || autoPlace(slideAt(), at.region)) === value) return false;
+    editBlock(at, (b, slide) => { if (value === autoPlace(slide, at.region)) delete b.place; else b.place = value; },
+      { label: value === "middle" ? `Centre ${blockLabel(block)}` : `Align ${blockLabel(block)} ${PLACE_WORDS[value]}` });
+    renderInspector();
+    return true;
+  }
+
   function blockPanel(slide, block) {
     const kind = kindOf(block);
     const at = state.focus;
@@ -5639,7 +5697,10 @@ export function mount(studio, container) {
         // until something is typed in it, here or on the slide (the note goes as it is).
         h("div.hint-line.placeholder-note", { hidden: !blank(block) }, icon("info"), placeholderWords(block, true)),
         regions.length > 1 ? ui.field("Column", ui.segmented({ value: at.region, options: regions.map((r) => ({ value: r.key, label: r.label })),
-          onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null),
+          onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null,
+        // Across its place, as Keynote's Arrange › Align: where it stands, chosen.
+        PLACEABLE.has(kind) ? ui.field("Position", ui.segmented({ value: acrossOf(block.place) || autoPlace(slide, at.region),
+          options: Object.entries(PLACE_WORDS).map(([value, label]) => ({ value, label })), onChange: (value) => placeBlock(at, value) })) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
       buildSection(block, at),
     ];
@@ -6609,22 +6670,24 @@ export function mount(studio, container) {
     };
     // Each column's cells set as the slide sets them: as its alignment says, else as its words do.
     const aligned = given || auto;
+    // Each cell's words as the slide sets them -- strong, emphatic, in a colour -- and typed so,
+    // as any words are: ⌘B, ⌘I and the format bar (over the grid, as a cell's is over its table
+    // on the slide), never the markup behind them. Return goes down a row, Tab across, as in
+    // Numbers; a spreadsheet's cells pasted in fill the cells from there.
     const input = (r, c) => {
-      const cell = ui.cell({ value: rows[r][c], dataset: { key: `cell.${r}.${c}` }, "aria-label": `Row ${r + 1}, Column ${c + 1}`,
-        oninput: () => { rows[r][c] = cell.value; write(); },
-        onpaste: (event) => {
-          const text = event.clipboardData.getData("text/plain");
-          if (!text.includes("\t") && !text.includes("\n")) return;
-          event.preventDefault();
-          const grid = text.replace(/\r/g, "").replace(/\n$/, "").split("\n").map((line) => line.split("\t"));
-          restructure(() => grid.forEach((line, i) => line.forEach((value, j) => {
-            while (rows.length <= r + i) rows.push(Array(columns).fill(""));
-            rows.forEach((row) => { while (row.length <= c + j) row.push(""); });
-            rows[r + i][c + j] = value;
-          })));
-          toast(`${grid.length} × ${Math.max(...grid.map((line) => line.length))} cells pasted`, { icon: "table", seconds: 2 });
-        } });
-      cell.spellcheck = false;  // h() leaves out what is false
+      const cell = richText({ value: rows[r][c], single: true, palette: studio.info?.palette || {}, spelling: false, leaveOnTab: true,
+        frame: () => grid.getBoundingClientRect(), onCells: (cells) => pasteCells(at, r, c, cells) });
+      cell.classList.add("cell-rich");
+      cell.dataset.key = `cell.${r}.${c}`;
+      cell.setAttribute("aria-label", `Row ${r + 1}, Column ${c + 1}`);
+      onRich(cell, (value) => { rows[r][c] = value; write(); });
+      cell.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") { event.stopPropagation(); cell.blur(); return; }
+        if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+        event.preventDefault();
+        const below = inspectorBody.querySelector(`[data-key="cell.${r + 1}.${c}"]`);
+        if (below) { below.focus(); getSelection()?.selectAllChildren(below); } else cell.blur();
+      });
       return cell;
     };
     // Over each column, its pop-up as Numbers has one: the alignment it is set in, shown by
@@ -7756,7 +7819,7 @@ export function mount(studio, container) {
     return keys.length === 1 ? `Change ${SLIDE_NAMES[keys[0]] || keyTitle(keys[0])}` : "Edit Slide";
   }
   const BLOCK_NAMES = { description: "Description", align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering", plain: "Bullets",
-    reveal: "Build", header: "Header Row", outline: "Table Outline", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour",
+    reveal: "Build", header: "Header Row", outline: "Table Outline", place: "Position", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour",
     caption: "Caption", build: "Build In" };
   function blockChange(a, b) {
     const kind = kindOf(b), name = blockLabel(b), keys = differing(a, b).filter((key) => key !== "placeholder");

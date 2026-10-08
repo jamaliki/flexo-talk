@@ -68,6 +68,7 @@ from flexo.roundtrip import rewrite
 
 from flexo_talk.deck import (
     LAYOUTS,
+    PLACES,
     Deck,
     DeckStyle,
     Reference,
@@ -98,6 +99,8 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour"),
 }
 """Each block kind and the options it takes beside its value."""
+PLACED_KINDS = ("figure", "image", "table")
+"""The kinds that may be set at the left, middle or right of their place (``place``)."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
@@ -597,7 +600,10 @@ def add_block(
     kind = kinds[0]
     # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``;
     # and any may build in, appearing on a click (``build: true``): see ``Region.builds``.
-    _only(block, (kind, *BLOCKS[kind], "placeholder", "build"), f"{where} ({kind})")
+    # A figure, picture or table may stand at the left, middle or right of its place
+    # (``place: middle``): see ``Region.places``.
+    placed = ("place",) if kind in PLACED_KINDS else ()
+    _only(block, (kind, *BLOCKS[kind], "placeholder", "build", *placed), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
@@ -605,6 +611,11 @@ def add_block(
         raise DeckDocumentError(here, "placeholder must be true or false.")
     if not isinstance(block.get("build", False), bool):
         raise DeckDocumentError(here, "build must be true or false.")
+    place = block.get("place")
+    if place is not None:
+        place = {"left": "start", "centre": "middle", "center": "middle", "right": "end"}.get(place, place)
+        if place not in PLACES:
+            raise DeckDocumentError(here, f"place must be start (left), middle (centre) or end (right), not {place!r}.")
     try:
         if kind == "bullets":
             items = value if isinstance(value, list) else [value]
@@ -680,6 +691,8 @@ def add_block(
         region.placeholders.add(len(region.blocks) - 1)
     if block.get("build"):
         region.builds.add(len(region.blocks) - 1)
+    if place:
+        region.places[len(region.blocks) - 1] = place
 
 
 def _figure_problem(value: dict, error: Exception) -> str:

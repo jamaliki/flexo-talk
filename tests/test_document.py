@@ -466,6 +466,52 @@ def test_a_table_alone_on_its_slide_is_centred(tmp_path: Path) -> None:
     assert abs(tables[1].x - style.margin) < 1.0
 
 
+def test_a_table_or_picture_stands_at_the_left_middle_or_right_of_its_place_when_asked(tmp_path: Path) -> None:
+    """Beside a list a table starts at the list's edge; asked (``place``, as the studio's
+    Position and its drag write it) it is centred under the list, or set at the right --
+    in the slide and in the PowerPoint's native table alike -- and kept so in its file."""
+
+    rows = [["**mechazyme**", "Mechanisms to motifs"], ["**kaveh**", "Motifs to enzymes"]]
+
+    def table_at(place: str | None) -> tuple[float, float]:
+        block = {"table": rows, "header": False, **({"place": place} if place else {})}
+        document = {"deck": {}, "slides": [{"title": "T", "body": [{"bullets": ["Build the tools"]}, block]}]}
+        deck = deck_from_document(document, tmp_path)
+        (table,) = render_slide(deck, deck.slides[0]).tables
+        return table.x, table.x + sum(table.widths)
+
+    deck = deck_from_document({"deck": {}, "slides": []}, tmp_path)
+    margin, width = deck.style.margin, deck.style.width
+    assert table_at(None)[0] == pytest.approx(margin, abs=1.0)
+    left, right = table_at("middle")
+    assert (left + right) / 2.0 == pytest.approx(width / 2.0, abs=1.0)
+    assert table_at("centre") == (left, right)
+    assert table_at("end")[1] == pytest.approx(width - margin, abs=1.0)
+    assert table_at("left")[0] == pytest.approx(margin, abs=1.0)
+    # Written as asked, and read back so.
+    body = [{"bullets": ["A"]}, {"table": rows, "place": "middle"}]
+    again = deck_document(deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path))
+    assert again["slides"][0]["body"][1]["place"] == "middle"
+    # Only what is narrower than its place takes one; and only a side.
+    def slide(*body: dict) -> dict:
+        return {"deck": {}, "slides": [{"title": "T", "body": list(body)}]}
+
+    with pytest.raises(DeckDocumentError, match="place"):
+        deck_from_document(slide({"bullets": ["A"], "place": "middle"}), tmp_path)
+    with pytest.raises(DeckDocumentError, match="place must be"):
+        deck_from_document(slide({"table": rows, "place": "top"}), tmp_path)
+    # In Python, as Build In is: after the object it places.
+    made = Deck("placed")
+    with made.slide("T") as slide:
+        slide.bullets("Build the tools")
+        slide.table(rows, header=False)
+        slide.place("middle")
+    (table,) = render_slide(made, made.slides[0]).tables
+    assert table.x + sum(table.widths) / 2.0 == pytest.approx(width / 2.0, abs=1.0)
+    with pytest.raises(ValueError, match="figure, picture or table"):
+        Deck("words").slide("T").bullets("A").place("middle")
+
+
 def _deck_with_figures() -> dict:
     figure = {
         "figure": {"id": "inline"},
