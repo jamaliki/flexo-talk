@@ -211,7 +211,7 @@ with flexo's own measurer so every output wraps identically.
 - A figure is laid out for its place's width *and* height: as written, turned
   (a tall stack read left to right), spaced closer, or folded onto two lines --
   whichever sets its words largest, never above the body size.
-  `add(figure, turn=False)` keeps it as written.
+  `add(figure, turn=False)` keeps it from turning (it may still be folded).
 
 ## Plots
 

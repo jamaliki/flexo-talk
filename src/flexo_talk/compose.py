@@ -2734,6 +2734,11 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
     # own -- is drawn as arranged, made smaller to fit rather than turned round, unless they
     # ask for it to be turned.
     turn = block.turn if block.turn is not None else not _arranged(spec)
+    # Kept from turning by its person (Turn to Fit the Slide off), it is still folded onto two
+    # lines to fit as one left to the deck is: kept the way it runs is not kept from folding
+    # (flexo's fit_in_box), and the switch never unwraps it. (Arranged by hand, it is drawn
+    # as arranged.)
+    fold = turn or (block.turn is False and not _arranged(spec))
     where = (deck.id, canvas.slide.id, spec.id)
     _kept_as_written(where, spec)
     # A figure its person has seen keeps the way it was drawn -- turned to fit the slide, or
@@ -2769,7 +2774,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         try:
             fit = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=free, fold=turn, keep=keep,
+                turn=free, fold=fold, keep=keep,
             )
         except GivenUp:
             # Given up for a change: it takes at least this long to find, however long it took
@@ -2797,7 +2802,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
             started = time.perf_counter()
             fit = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=free, fold=turn,
+                turn=free, fold=fold,
             )
             _FINDING[where] = time.perf_counter() - started
         give_up_if_newer()  # (a settling given up for a change: flexo.draft)
@@ -2816,7 +2821,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
             # (Drawn in full: kept, it is the figure as settled.)
             held = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=free, fold=turn, keep=previous, draft=False,
+                turn=free, fold=fold, keep=previous, draft=False,
             )
             kept = [
                 diagnostic.code
@@ -2890,6 +2895,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         try:
             fit = _fit_in_box(
                 spec, wide, high, words=min(deck.style.figure_size, largest), largest=largest, turn=turn,
+                fold=fold,
             )
         except Exception:
             return 0.0
