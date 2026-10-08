@@ -53,7 +53,9 @@ const MATH_SNIPPETS = [
   ["Tt", "Text", "\\text{|}"],
 ];
 const INLINE = new Set(["text", "bullets", "quote", "callout", "code", "math"]);
-// What may stand at the left, middle or right of its place (`place`): what is narrower than it.
+// What stands at the left, middle or right of its place by moving in it (`place`); anything
+// else is set there as a box as wide as it is (compose._natural). An equation's place is its
+// own alignment.
 const PLACEABLE = new Set(["figure", "image", "table"]);
 const PLACE_WORDS = { start: "Left", middle: "Centre", end: "Right" };
 const acrossOf = (value) => ({ left: "start", centre: "middle", center: "middle", right: "end" })[value] || value;
@@ -2036,13 +2038,14 @@ export function mount(studio, container) {
     // A figure, picture or table moved across in its own place stands at the left, the middle
     // or the right of it: the room it has, and the guide shown where it would stand.
     const block = blocksAt(slideAt(), carry.from.region)[carry.from.index];
-    const room = !carry.all && block && PLACEABLE.has(kindOf(block)) ? regions.find((region) => region.key === carry.from.region)?.room : null;
+    const own = !carry.all && block ? regions.find((region) => region.key === carry.from.region)?.room : null;
+    const room = own && home.width < own.right - own.left - 2 ? own : null;
     const guide = h("div.block-guide");
     pageNode.append(zone, line, guide);
     pageNode.classList.add("block-dragging");
     document.body.classList.add("block-grabbing");
     Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, guide, room, shifted: [],
-      placed: block ? acrossOf(block.place) || autoPlace(slideAt(), carry.from.region) : null });
+      placed: block ? placedAt(slideAt(), carry.from.region, block) : null });
   }
   // Where a part left behind shows while several are dragged (closed up), as a transform,
   // with `x`, `y` more.
@@ -5659,22 +5662,39 @@ export function mount(studio, container) {
       block ? [icon("chevron"), h("span.crumb.here", {}, icon(blockIcon(block)), blockName(block))] : null);
   }
 
-  // Where the slide sets a figure, picture or table across its place when it is not asked:
-  // beside a list (or under words), at the words' left edge; else centred (compose._placing).
-  function autoPlace(slide, region) {
-    const kinds = blocksAt(slide, region).filter((block) => !block.placeholder).map(kindOf);
+  // Where the slide sets an object across its place when it is not asked: a figure, picture
+  // or table beside a list (or under words) at the words' left edge, else centred
+  // (compose._placing); words, a list, a listing, numbers from the left; an equation as it is
+  // aligned.
+  function autoPlace(slide, region, block) {
+    if (kindOf(block) === "math") return "middle";
+    if (!PLACEABLE.has(kindOf(block))) return "start";
+    const kinds = blocksAt(slide, region).filter((each) => !each.placeholder).map(kindOf);
     if (kinds.includes("bullets")) return "start";
     const graphics = kinds.filter((kind) => ["figure", "image", "plot", "gallery", "table"].includes(kind)).length;
     const words = kinds.filter((kind) => kind === "text").length;
     return graphics && words && graphics + words === kinds.length && kinds[0] === "text" ? "start" : "middle";
   }
+  // Where it stands: as asked, else where the slide sets it.
+  const placedAt = (slide, region, block) => acrossOf(kindOf(block) === "math" ? block.align : block.place) || autoPlace(slide, region, block);
+  // Whether it is drawn as wide as its place, with nowhere across it to go.
+  function fillsPlace(at) {
+    const box = drawnBox(blockElement(at.region, at.index));
+    const region = regionsOf(slideAt()).find((item) => item.key === at.region);
+    const room = region && roomOf(pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`));
+    return Boolean(box && room && box.width >= room.right - room.left - 2);
+  }
   // An object set at the left, middle or right of its place, one step: written only when it is
-  // not where the slide would set it anyway.
+  // not where the slide would set it anyway (an equation's, as its alignment).
   function placeBlock(at, value) {
     const block = blocksAt(slideAt(), at.region)[at.index];
-    if (!block || (acrossOf(block.place) || autoPlace(slideAt(), at.region)) === value) return false;
-    editBlock(at, (b, slide) => { if (value === autoPlace(slide, at.region)) delete b.place; else b.place = value; },
-      { label: value === "middle" ? `Centre ${blockLabel(block)}` : `Align ${blockLabel(block)} ${PLACE_WORDS[value]}` });
+    if (!block || placedAt(slideAt(), at.region, block) === value) return false;
+    const label = value === "middle" ? `Centre ${blockLabel(block)}` : `Align ${blockLabel(block)} ${PLACE_WORDS[value]}`;
+    editBlock(at, (b, slide) => {
+      if (kindOf(b) === "math") setOption(b, "align", value, "middle");
+      else if (value === autoPlace(slide, at.region, b)) delete b.place;
+      else b.place = value;
+    }, { label });
     renderInspector();
     return true;
   }
@@ -5698,9 +5718,11 @@ export function mount(studio, container) {
         h("div.hint-line.placeholder-note", { hidden: !blank(block) }, icon("info"), placeholderWords(block, true)),
         regions.length > 1 ? ui.field("Column", ui.segmented({ value: at.region, options: regions.map((r) => ({ value: r.key, label: r.label })),
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null,
-        // Across its place, as Keynote's Arrange › Align: where it stands, chosen.
-        PLACEABLE.has(kind) ? ui.field("Position", ui.segmented({ value: acrossOf(block.place) || autoPlace(slide, at.region),
-          options: Object.entries(PLACE_WORDS).map(([value, label]) => ({ value, label })), onChange: (value) => placeBlock(at, value) })) : null),
+        // Across its place, as Keynote's Arrange › Align: where it stands, chosen. (One as wide
+        // as its place -- a paragraph filling it -- has nowhere to go, and says so.)
+        kind !== "unknown" ? ui.field("Position", ui.segmented({ value: placedAt(slide, at.region, block),
+          options: Object.entries(PLACE_WORDS).map(([value, label]) => ({ value, label })), onChange: (value) => placeBlock(at, value) }),
+        fillsPlace(at) ? { hint: "Fills its place" } : {}) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
       buildSection(block, at),
     ];
@@ -6242,9 +6264,6 @@ export function mount(studio, container) {
     return [area, chipRow, notes,
       h("div.hint-line", {}, "Type LaTeX. ", h("code", {}, "\\\\"), " starts a new line and ", h("code", {}, "&"),
         " aligns lines. In text, put maths between ", h("code", {}, "$"), " signs, or ", h("code", {}, "$$"), " for maths on its own line."),
-      ui.field("Align", ui.segmented({ value: block.align || "middle", options: [
-        { value: "start", label: "Left" }, { value: "middle", label: "Centre" }, { value: "end", label: "Right" }],
-      onChange: (value) => editBlock(at, (b) => setOption(b, "align", value, "middle")) })),
       ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
       size()];
   }

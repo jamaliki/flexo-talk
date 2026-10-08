@@ -492,12 +492,10 @@ def test_a_table_or_picture_stands_at_the_left_middle_or_right_of_its_place_when
     body = [{"bullets": ["A"]}, {"table": rows, "place": "middle"}]
     again = deck_document(deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path))
     assert again["slides"][0]["body"][1]["place"] == "middle"
-    # Only what is narrower than its place takes one; and only a side.
+    # Only a side.
     def slide(*body: dict) -> dict:
         return {"deck": {}, "slides": [{"title": "T", "body": list(body)}]}
 
-    with pytest.raises(DeckDocumentError, match="place"):
-        deck_from_document(slide({"bullets": ["A"], "place": "middle"}), tmp_path)
     with pytest.raises(DeckDocumentError, match="place must be"):
         deck_from_document(slide({"table": rows, "place": "top"}), tmp_path)
     # In Python, as Build In is: after the object it places.
@@ -508,8 +506,51 @@ def test_a_table_or_picture_stands_at_the_left_middle_or_right_of_its_place_when
         slide.place("middle")
     (table,) = render_slide(made, made.slides[0]).tables
     assert table.x + sum(table.widths) / 2.0 == pytest.approx(width / 2.0, abs=1.0)
-    with pytest.raises(ValueError, match="figure, picture or table"):
-        Deck("words").slide("T").bullets("A").place("middle")
+    with pytest.raises(ValueError, match="Add a block"):
+        Deck("empty").slide("T").place("middle")
+
+
+def test_every_object_stands_at_the_left_middle_or_right_of_its_place_when_asked(tmp_path: Path) -> None:
+    """Words, a list, a listing, a quotation, a callout, numbers and an equation set at the
+    middle (or the right) of their place stand there as a box as wide as they are, their
+    lines as they were set; the PowerPoint's native list with them."""
+
+    blocks = [
+        {"text": "A short line of words."},
+        {"bullets": ["One point", "Another point", ["A sub point"]]},
+        {"code": "print('hello')"},
+        {"quote": "Simplicity is prerequisite for reliability.", "by": "Edsger Dijkstra"},
+        {"callout": "A short note.", "title": "Note"},
+        {"stats": [{"value": "93%", "label": "accuracy"}, {"value": "4x", "label": "faster"}]},
+        {"math": "E = mc^2", "align": "start"},
+    ]
+
+    def drawn(place: str | None) -> list[tuple[float, float]]:
+        body = [{**block, **({"place": place} if place else {})} for block in blocks]
+        deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)
+        rendered = render_slide(deck, deck.slides[0])
+        svg = rendered.svg
+        found = []
+        for index in range(len(blocks)):
+            xs = [float(x) for x in re.findall(rf'id="slide1\.body\.{index}(?:\.[^"]*)?"[^>]*?\bx="([-\d.]+)"', svg)]
+            # (An equation is drawn where its group is moved to.)
+            xs += [float(x) for x in re.findall(rf'translate\(([-\d.]+) [^)]*\)"[^>]*id="slide1\.body\.{index}"', svg)]
+            found.append((min(xs), max(xs)) if xs else (0.0, 0.0))
+        lists = [layout for layout in rendered.lists]
+        return found, lists
+
+    deck = deck_from_document({"deck": {}, "slides": []}, tmp_path)
+    margin = deck.style.margin
+    start, start_lists = drawn(None)
+    middle, middle_lists = drawn("middle")
+    end, _ = drawn("end")
+    for index, block in enumerate(blocks):
+        # Each moved right of where the slide sets it, further at the right than in the middle.
+        assert start[index][0] < middle[index][0] < end[index][0], block
+        assert start[index][0] < margin + 25, block
+    # The native list moved with its drawing, its lines as they were.
+    assert middle_lists[0].x > start_lists[0].x + 100
+    assert [level for level, _, _ in middle_lists[0].items] == [level for level, _, _ in start_lists[0].items]
 
 
 def _deck_with_figures() -> dict:

@@ -599,8 +599,8 @@ type _Block = (
 )
 
 PLACED = (_Figure, _Image, _Table)
-"""What may be set at the left, middle or right of its place (``Region.place``): what is
-narrower than its place. (A plot, a listing, a gallery fill theirs.)"""
+"""What stands at the left, middle or right of its place by moving in it (``Region.place``);
+anything else is set there in a box as wide as it is (words, a list, a listing, numbers)."""
 PLACES = ("start", "middle", "end")
 
 
@@ -1138,12 +1138,13 @@ class Region:
         return self
 
     def place(self, where: str) -> Region:
-        """The figure, picture or table added last set at the left (``start``), the middle
-        or the right (``end``) of its place, as Keynote's Align Left, Center and Right --
-        not where the slide puts it (centred, or beside a list at the list's edge)."""
+        """The block added last set at the left (``start``), the middle or the right
+        (``end``) of its place, as Keynote's Align Left, Center and Right -- not where the
+        slide puts it (centred, or beside a list at the list's edge). Words, a list, a
+        listing or numbers stand there as a box as wide as they are, their lines as set."""
 
-        if not self.blocks or not isinstance(self.blocks[-1], PLACED):
-            raise ValueError("Add a figure, picture or table before placing it.")
+        if not self.blocks:
+            raise ValueError("Add a block before placing it.")
         where = _choice({"left": "start", "right": "end"}.get(where, where), "place", PLACES)
         self.places[len(self.blocks) - 1] = where
         if self.sources[-1]:  # a stand-in for what is missing is written as nothing
@@ -1441,8 +1442,8 @@ class Slide:
         return self
 
     def place(self, where: str) -> Slide:
-        """The figure, picture or table added last set at the left, middle or right of its
-        place (see ``Region.place``)."""
+        """The block added last set at the left, middle or right of its place (see
+        ``Region.place``)."""
 
         next(iter(self.regions.values())).place(where)
         return self

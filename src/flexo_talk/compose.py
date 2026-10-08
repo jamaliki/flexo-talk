@@ -41,6 +41,7 @@ from flexo.themes import figure_palette, figure_style
 from flexo.units import MILLIMETRES_PER_INCH, POINTS_PER_INCH
 
 from flexo_talk.deck import (
+    PLACED,
     Deck,
     ListLayout,
     Reference,
@@ -1293,8 +1294,17 @@ def _region(
             scales |= {aside[at]: scale for at, scale in fits.items()}
         block, identifier = blocks[index], ids[index]
         canvas.place = region.places.get(index)
+        # Asked to stand at the left, middle or right of its place, an object narrower than
+        # it is set in a box as wide as it is, there (a figure, picture or table moves in its
+        # own place: _across).
+        left, wide = box.x, box.width
+        natural = _natural(canvas, block, box.width, share) if canvas.place and not isinstance(block, PLACED) else None
+        if natural is not None and natural < box.width - 0.5:
+            wide = natural + 0.01
+            spare = box.width - wide
+            left = box.x + {"start": 0.0, "middle": spare / 2.0, "end": spare}[canvas.place]
         if isinstance(block, _Bullets):
-            top += _bullets(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+            top += _bullets(canvas, identifier, block, Box(left, top, wide, 0.0))
         elif isinstance(block, _Words):
             size = block.size or style.body_size
             role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
@@ -1302,14 +1312,14 @@ def _region(
             given = index < len(region.sources) and "align" in region.sources[index]
             align = "middle" if placing == "captioned" and not given else block.align
             top += canvas.words(
-                identifier, block.runs, Box(box.x, top, box.width, 0.0), size=size,
+                identifier, block.runs, Box(left, top, wide, 0.0), size=size,
                 align=align, role=role, fill=fill,
             )
             if align != block.align and (drawn := _drawn(canvas, identifier)) is not None:
                 # What is drawn, for an editor to say so.
                 drawn.set("data-flexo-align", align)
         elif isinstance(block, _Gallery):
-            top += _gallery(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
+            top += _gallery(canvas, identifier, block, Box(left, top, wide, max(share, 40.0)))
         elif isinstance(block, _Figure):
             scale = scales[index]
             height = prepared[index].height * scale
@@ -1317,22 +1327,22 @@ def _region(
         elif isinstance(block, _Image):
             top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Plot):
-            top += _plot(canvas, identifier, block, Box(box.x, top, box.width, max(share, 60.0)))
+            top += _plot(canvas, identifier, block, Box(left, top, wide, max(share, 60.0)))
         elif isinstance(block, _Missing):
             top += _missing(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
         elif isinstance(block, _Table):
             top += _table(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
         elif isinstance(block, _Code):
-            top += _code(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+            top += _code(canvas, identifier, block, Box(left, top, wide, 0.0))
         elif isinstance(block, _Quote):
-            top += _quote(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+            top += _quote(canvas, identifier, block, Box(left, top, wide, 0.0))
         elif isinstance(block, _Stats):
-            top += _stats(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+            top += _stats(canvas, identifier, block, Box(left, top, wide, 0.0))
         elif isinstance(block, _Callout):
             least = panel if index == 0 else 0.0
-            top += _callout(canvas, identifier, block, Box(box.x, top, box.width, 0.0), least=least)
+            top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=least)
         elif isinstance(block, _Math):
-            top += _equation(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+            top += _equation(canvas, identifier, block, Box(left, top, wide, 0.0))
         if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
             top += _caption(canvas, identifier, block.caption, box, top)
         built = index in region.builds and index not in aside and not getattr(block, "reveal", False)
@@ -1835,13 +1845,7 @@ def _quote(canvas: _Canvas, identifier: str, block: _Quote, box: Box, *, draw: b
     style = canvas.deck.style
     size = _quote_size(block, style)
     rtl = _rtl(block.runs)
-    mark = (TextRun("\u201d" if rtl else "\u201c"),)
-    big = size * 3.6
-    family = _mark_family(canvas, mark[0].text, big)
-    metrics = canvas.measure(mark, big, None, title=True, family=family)
-    # The mark hangs in the margin beside the words, as wide as its ink (a
-    # slanted hand's reaches past its advance) and a gap.
-    hang = max(metrics.width, _ink_right(canvas, mark[0].text, big, family)) + size * 0.3
+    mark, big, family, metrics, hang = _quote_mark(canvas, block, size)
     inner = Box(box.x if rtl else box.x + hang, box.y, box.width - hang, 0.0)
     words = canvas.measure(block.runs, size, inner.width, title=True)
     by_size = max(size * 0.62, style.small_size)
@@ -1872,6 +1876,76 @@ def _quote(canvas: _Canvas, identifier: str, block: _Quote, box: Box, *, draw: b
             role="muted-ink", parent=group,
         )
     return height
+
+
+def _quote_mark(
+    canvas: _Canvas, block: _Quote, size: float
+) -> tuple[tuple[TextRun, ...], float, str | None, TextMetrics, float]:
+    """A quotation's opening mark: its runs, size, family, metrics, and how far it hangs
+    before the words -- as wide as its ink (a slanted hand's reaches past its advance) and a
+    gap."""
+
+    mark = (TextRun("\u201d" if _rtl(block.runs) else "\u201c"),)
+    big = size * 3.6
+    family = _mark_family(canvas, mark[0].text, big)
+    metrics = canvas.measure(mark, big, None, title=True, family=family)
+    hang = max(metrics.width, _ink_right(canvas, mark[0].text, big, family)) + size * 0.3
+    return mark, big, family, metrics, hang
+
+
+def _natural(canvas: _Canvas, block: object, width: float, share: float) -> float | None:
+    """How wide ``block`` is drawn in a place ``width`` wide, no wider than it must be: its
+    widest line and what stands before it (a bullet, a quotation's mark, a panel's edges and
+    bar), the numbers side by side, the equation -- for it to stand at the left, middle or
+    right of its place (``Region.places``). None where it fills its place (a gallery, a plot
+    of no aspect of its own, a stand-in)."""
+
+    style = canvas.deck.style
+    if isinstance(block, _Words):
+        return canvas.measure(block.runs, block.size or style.body_size, width).width
+    if isinstance(block, _Bullets):
+        size = block.size or style.body_size
+        layout = _list_layout(canvas, block, Box(0.0, 0.0, width, 0.0))
+        return max(
+            (layout.offset(level) + canvas.measure(runs, size, width - layout.offset(level), balance=False).width
+             for level, runs in block.items), default=0.0,
+        )
+    if isinstance(block, _Code):
+        if not any(text.strip() for text in block.lines):
+            return None
+        size, lines = _code_lines(canvas, block, width)
+        widths = [canvas.measure((TextRun(text, code=True),), size, None).width for text, _ in lines if text.strip()]
+        return min(width, max(widths, default=0.0) + 2 * size * 0.9)
+    if isinstance(block, _Quote):
+        size = _quote_size(block, style)
+        hang = _quote_mark(canvas, block, size)[4]
+        words = canvas.measure(block.runs, size, width - hang, title=True).width
+        by = canvas.measure(block.by, max(size * 0.62, style.small_size), width - hang).width if block.by else 0.0
+        return hang + max(words, by)
+    if isinstance(block, _Callout):
+        size = block.size or style.body_size
+        pad, bar = size * 0.8, 4.0
+        room = width - bar - 2 * pad
+        title = canvas.measure(block.title, size, room).width if block.title else 0.0
+        return bar + 2 * pad + max(title, canvas.measure(block.runs, size, room, balance=False).width)
+    if isinstance(block, _Stats):
+        count, gap = len(block.items), style.column_gap
+        cell = (width - gap * (count - 1)) / count
+        weight, size = canvas.deck.title_weight, _stats_size(block, style)
+        widest = max(canvas.measure(value, size, None, weight, title=True).width for value, _ in block.items)
+        if widest > cell:
+            size *= cell / widest
+        label_size = max(size * 0.3, style.small_size * 0.9)
+        labels = max(min(canvas.measure(label, label_size, None).width, cell) for _, label in block.items)
+        return count * max(min(widest, cell), labels) + gap * (count - 1)
+    if isinstance(block, _Math):
+        from flexo.texmath import typeset
+
+        size = block.size or style.body_size
+        return min(width, typeset(block.source, canvas.deck.typography(size), size, display=True).width)
+    if isinstance(block, _Plot) and block.aspect:
+        return min(width, max(share, 60.0) * block.aspect)
+    return None
 
 
 MARK_FAMILY = "Liberation Sans"
@@ -1940,6 +2014,9 @@ def _stats(canvas: _Canvas, identifier: str, block: _Stats, box: Box, *, draw: b
     if not draw:
         return height
     align = "middle" if style.title_align == "middle" else "start"
+    if canvas.place in {"middle", "end"}:
+        # Numbers set at the middle (the right) of their place stand so in their cells too.
+        align = canvas.place
     role, fill = _paint_of(block.colour, "tone-1-stroke")
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="stats")
     rtl = any(_rtl(label) for _, label in block.items)

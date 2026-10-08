@@ -128,9 +128,10 @@ as a whole (`DeckStyle.align`, or `deck.slide(..., align=)`):
   column of words beside it, and a taller one starts level with the words.
 - `top`: everything at the top. `middle`: the content centred in the body.
 
-A figure, picture or table can be set at the left, middle or right of its place instead
-(`place: middle` in a deck document, `region.place("middle")` after adding it in Python):
-a table centred under a list, say.
+Any object can be set at the left, middle or right of its place instead (`place: middle`
+in a deck document, `region.place("middle")` after adding it in Python): a table centred
+under a list, say. Words, a list, a listing, a quotation, a callout or numbers stand there
+as a box as wide as they are, their lines as they were set.
 
 A single-column gallery (a column of logos) stands flush with the words above
 it; a grid is centred. Native lists and tables move with their region, so the

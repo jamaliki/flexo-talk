@@ -99,8 +99,6 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour"),
 }
 """Each block kind and the options it takes beside its value."""
-PLACED_KINDS = ("figure", "image", "table")
-"""The kinds that may be set at the left, middle or right of their place (``place``)."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
@@ -600,10 +598,9 @@ def add_block(
     kind = kinds[0]
     # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``;
     # and any may build in, appearing on a click (``build: true``): see ``Region.builds``.
-    # A figure, picture or table may stand at the left, middle or right of its place
-    # (``place: middle``): see ``Region.places``.
-    placed = ("place",) if kind in PLACED_KINDS else ()
-    _only(block, (kind, *BLOCKS[kind], "placeholder", "build", *placed), f"{where} ({kind})")
+    # And any may stand at the left, middle or right of its place (``place: middle``): see
+    # ``Region.places``.
+    _only(block, (kind, *BLOCKS[kind], "placeholder", "build", "place"), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
