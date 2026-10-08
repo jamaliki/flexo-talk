@@ -6690,6 +6690,9 @@ export function mount(studio, container) {
         h("span.spacer", { style: { flex: 1 } })),
       h("div.hint-line", {}, "Paste cells from a spreadsheet into any cell."),
       ui.toggle({ value: header, label: "Header Row", onChange: (value) => editBlock(at, (b) => setOption(b, "header", value ? null : false)) }),
+      // The rules above and below it, as Keynote's Table Outline: off, with no header row,
+      // it is words in columns with no lines at all.
+      ui.toggle({ value: block.outline !== false, label: "Table Outline", onChange: (value) => editBlock(at, (b) => setOption(b, "outline", value ? null : false)) }),
       captionField(block, at),
       size()];
   }
@@ -7753,7 +7756,7 @@ export function mount(studio, container) {
     return keys.length === 1 ? `Change ${SLIDE_NAMES[keys[0]] || keyTitle(keys[0])}` : "Edit Slide";
   }
   const BLOCK_NAMES = { description: "Description", align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering", plain: "Bullets",
-    reveal: "Build", header: "Header Row", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour",
+    reveal: "Build", header: "Header Row", outline: "Table Outline", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour",
     caption: "Caption", build: "Build In" };
   function blockChange(a, b) {
     const kind = kindOf(b), name = blockLabel(b), keys = differing(a, b).filter((key) => key !== "placeholder");

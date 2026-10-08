@@ -1585,7 +1585,8 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float, *, said: bool = Fa
     heights = [line * count + 2 * vertical for count in lines]
     return TableLayout(
         0.0, 0.0, widths, heights, block.rows, block.align, size, line, vertical + baseline,
-        pad, block.header, (1.1, 0.6, 1.1), palette=canvas.palette, measured=measured,
+        pad, block.header, (1.1, 0.6, 1.1) if block.outline else (0.0, 0.6, 0.0), palette=canvas.palette,
+        measured=measured,
     )
 
 
@@ -1699,6 +1700,8 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     if plan.header and len(plan.heights) > 1:
         rules.insert(1, (box.y + plan.heights[0], mid_rule))
     for index, (level, weight) in enumerate(rules):
+        if not weight:
+            continue  # (no outline)
         element(
             group, "path", id=f"{identifier}.rule{index}",
             d=f"M {number(left)} {number(level)} H {number(left + total)}",

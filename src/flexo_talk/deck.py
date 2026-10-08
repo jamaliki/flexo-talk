@@ -429,6 +429,8 @@ class _Table:
     """Words set under it, centred, a size smaller: its caption, part of it."""
     caption_held: bool = False
     """Its caption put there empty, to be written: its placeholder drawn while editing."""
+    outline: bool = True
+    """Whether it has its rules above and below (Keynote's Table Outline)."""
 
 
 @dataclass(slots=True)
@@ -1144,6 +1146,7 @@ class Region:
         align: str | Sequence[str] = "",
         size: float | None = None,
         caption: str | None = None,
+        outline: bool = True,
     ) -> Region:
         """A table, ruled as in a paper: a rule above, one under the header, one below.
 
@@ -1151,12 +1154,14 @@ class Region:
         the first row is the header unless ``header=False``. ``align`` gives each
         column ``start``, ``middle``, or ``end`` (``"lrr"`` also works); by
         default a column of numbers is set flush right and any other flush left.
-        ``caption`` is set under it, centred, a size smaller.
+        ``caption`` is set under it, centred, a size smaller. ``outline=False`` leaves
+        out the rules above and below: with no header too, it is words in columns
+        (names and what each is), with no lines at all.
         """
 
         if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
             raise ValueError("A table must be a list of rows, each a list of cells.")
-        header, size = _flag(header, "header"), _size(size)
+        header, size, outline = _flag(header, "header"), _size(size), _flag(outline, "outline")
         cells = [[inline("" if cell is None else _words(cell, "A table cell")) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
         ragged = len({len(row) for row in cells}) > 1
@@ -1181,11 +1186,11 @@ class Region:
                 for index in range(columns)
             )
         held, caption = caption == "", _caption(caption)
-        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held))
+        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held, outline))
         given = align if isinstance(align, str) else list(align)
         self._record(
             "table", _plain(rows), header=None if header else False, align=given or None, size=size,
-            caption=caption or None,
+            caption=caption or None, outline=None if outline else False,
         )
         return self
 

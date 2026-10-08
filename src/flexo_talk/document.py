@@ -88,7 +88,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "figure": ("turn", "width", "description", "caption"),
     "image": ("width", "description", "caption"),
     "plot": ("aspect",),
-    "table": ("header", "align", "size", "caption"),
+    "table": ("header", "align", "size", "caption", "outline"),
     "gallery": ("columns", "height", "crop", "size", "align"),
     "code": ("size",),
     "quote": ("by", "size"),
