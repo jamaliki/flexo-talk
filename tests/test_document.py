@@ -587,6 +587,14 @@ def test_an_object_stands_down_its_place_what_follows_it_following_it(tmp_path: 
     _, quarter, _ = drawn(0.25)
     _, middle, _ = drawn("middle")
     assert middle - top == pytest.approx(2 * (quarter - top), rel=0.02)
+    # The drawing says the room to spare and how far each was moved down, for an editor to
+    # say where a drag down would put it.
+    body = [{"text": "Before"}, {"table": rows, "vertical": "middle"}, {"text": "After"}]
+    deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)
+    svg = render_slide(deck, deck.slides[0]).svg
+    spare = float(re.search(r'id="slide1\.body"[^>]*data-flexo-spare="([\d.]+)"', svg).group(1))
+    downs = [float(value) for value in re.findall(r'data-flexo-down="([\d.]+)"', svg)]
+    assert spare > 0 and downs == [pytest.approx(spare / 2, abs=0.01)] * 2
 
 
 def _deck_with_figures() -> dict:

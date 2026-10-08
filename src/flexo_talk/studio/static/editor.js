@@ -2062,12 +2062,28 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt(), carry.from.region)[carry.from.index];
     const own = !carry.all && block ? regions.find((region) => region.key === carry.from.region)?.room : null;
     const room = own && home.width < own.right - own.left - 2 ? own : null;
-    const guide = h("div.block-guide");
-    pageNode.append(zone, line, guide);
+    const guide = h("div.block-guide"), guideDown = h("div.block-guide.down");
+    pageNode.append(zone, line, guide, guideDown);
     pageNode.classList.add("block-dragging");
     document.body.classList.add("block-grabbing");
-    Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, guide, room, shifted: [],
-      placed: block ? placedAt(slideAt(), carry.from.region, block) : null });
+    Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, guide, guideDown, room, shifted: [],
+      placed: block ? placedAt(slideAt(), carry.from.region, block) : null, downs: own && block ? downsOf(carry.from, home) : null });
+  }
+  // Moved down in its own place, where an object would stand at each stop down it: the room
+  // its place has to spare (compose's `data-flexo-spare`), where it stands were it not moved
+  // down (`data-flexo-down`, nor its place moved, as the slide centres its content), and how
+  // far down what is before it stands -- it is never above that. In the window's pixels.
+  function downsOf(from, home) {
+    const region = regionsOf(slideAt()).find((item) => item.key === from.region);
+    const holder = region && pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`);
+    const ratio = holder?.getScreenCTM?.()?.d;
+    const spare = Number(holder?.getAttribute("data-flexo-spare"));
+    if (!ratio || !(spare * ratio > 2)) return null;
+    const downOf = (element) => Number(element?.closest("g[data-flexo-down]")?.getAttribute("data-flexo-down") || 0) * ratio;
+    const lowered = Number(/translate\(\s*[-\d.]+[ ,]+([-\d.]+)/.exec(holder.getAttribute("transform") || "")?.[1] || 0) * ratio;
+    const before = from.index > 0 ? blockElement(from.region, from.index - 1) : null;
+    const block = blocksAt(slideAt(), from.region)[from.index];
+    return { natural: home.top - downOf(carry.element) - lowered, before: downOf(before), spare: spare * ratio, current: shareOf(block?.vertical, DOWN_NAMES) };
   }
   // Where a part left behind shows while several are dragged (closed up), as a transform,
   // with `x`, `y` more.
@@ -2098,7 +2114,7 @@ export function mount(studio, container) {
     if (!carry?.started) return;
     carry.frame = 0;
     let dx = carry.pointer.x - carry.start.x;
-    const dy = carry.pointer.y - carry.start.y;
+    let dy = carry.pointer.y - carry.start.y;
     let at = thumbAt(carry.pointer) || dropAt(carry.pointer);
     // In its own place, moved across: it snaps to the left, middle or right of it, whichever
     // it is nearest -- where it lands if let go, the guide showing it.
@@ -2108,6 +2124,19 @@ export function mount(studio, container) {
       const place = ACROSS.map(([share]) => share).reduce((best, share) => (Math.abs(spot(share) - (home.left + dx)) < Math.abs(spot(best) - (home.left + dx)) ? share : best), carry.placed);
       at = { kind: "home", place };
       dx = spot(place) - home.left;
+    }
+    // And moved down it: to the stop down it it is nearest (never above what is before it),
+    // or where it is, nearer that.
+    if (at?.kind === "home" && carry.downs) {
+      const { natural, before, spare } = carry.downs, want = carry.home.top + dy;
+      let best = { share: undefined, top: carry.home.top };
+      for (const [share] of DOWN) {
+        const top = natural + Math.max(before, share * spare);
+        if (Math.abs(top - want) < Math.abs(best.top - want) - 0.5) best = { share, top };
+      }
+      if (best.share !== undefined && Math.abs(best.top - carry.home.top) < 1) best = { share: undefined, top: carry.home.top };
+      at = { ...at, ...(best.share !== undefined ? { down: best.share } : {}) };
+      dy = best.top - carry.home.top;
     }
     carry.lifted.style.transform = `translate(${dx * carry.scale}px, ${dy * carry.scale}px)`;
     carry.group.forEach((wrap, k) => { wrap.style.transform = `translate(${(dx + carry.offsets[k].x) * scaleOf(wrap)}px, ${(dy + carry.offsets[k].y) * scaleOf(wrap)}px)`; });
@@ -2186,6 +2215,7 @@ export function mount(studio, container) {
     carry.zone.classList.remove("on");
     carry.line.classList.remove("on");
     carry.guide.classList.remove("on");
+    carry.guideDown.classList.remove("on");
     carry.lifted.classList.toggle("block-astray", !at);
     for (const wrap of carry.group) wrap.classList.toggle("block-astray", !at);
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
@@ -2198,6 +2228,17 @@ export function mount(studio, container) {
       Object.assign(carry.guide.style, { left: `${x - origin.left}px`, top: `${room.top - origin.top}px`, height: `${room.bottom - room.top}px` });
       carry.guide.dataset.said = stopName(ACROSS, at.place);
       carry.guide.classList.add("on");
+    }
+    if (at?.down !== undefined && carry.downs) {
+      // Down: the line through where its middle would stand, across its place.
+      const span = carry.room || carry.regions.find((region) => region.key === carry.from.region)?.room;
+      const { natural, before, spare } = carry.downs, height = carry.home.bottom - carry.home.top;
+      const y = natural + Math.max(before, at.down * spare) + height / 2;
+      if (span) {
+        Object.assign(carry.guideDown.style, { left: `${span.left - origin.left}px`, top: `${y - origin.top}px`, width: `${span.right - span.left}px` });
+        carry.guideDown.dataset.said = stopName(DOWN, at.down);
+        carry.guideDown.classList.add("on");
+      }
     }
     if (!at || at.kind === "home") return;
     // A mark not shown yet appears where it goes; one shown glides there.
@@ -2251,6 +2292,7 @@ export function mount(studio, container) {
     was.zone.remove();
     was.line.remove();
     was.guide?.remove();
+    was.guideDown?.remove();
     was.ghost?.remove();
     for (const wrap of [was.lifted, ...was.group]) wrap.style.visibility = "";
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
@@ -2312,13 +2354,15 @@ export function mount(studio, container) {
     const was = finishCarry();
     if (!was) return;
     const at = was.at;
-    if (at?.kind === "home" && at.place !== undefined && at.place !== was.placed) {
-      // Moved across in its place: it stands there now, gliding the rest of the way.
+    const across = at?.place !== undefined && at.place !== was.placed ? at.place : undefined;
+    const down = at?.down !== undefined && at.down !== was.downs?.current ? at.down : undefined;
+    if (at?.kind === "home" && (across !== undefined || down !== undefined)) {
+      // Moved in its place: it stands there now, gliding the rest of the way.
       moving = { slide: state.slide, at: Date.now(), plan: [[was.from, was.from]], wraps: [was.lifted] };
       const mine = moving;
       setTimeout(() => { if (moving === mine) { moving = null; was.lifted.style.transform = ""; placeChosen(); } }, 6000);
       chosen.hidden = true;
-      placeBlock(was.from, { across: at.place });
+      placeBlock(was.from, { across, down });
       return;
     }
     if (!at || at.kind === "home") { sendHome(was); return; }
@@ -5717,7 +5761,7 @@ export function mount(studio, container) {
     if (down !== undefined && shareOf(block.vertical, DOWN_NAMES) === down) down = undefined;
     if (across === undefined && down === undefined) return false;
     const name = blockLabel(block);
-    const label = across !== undefined
+    const label = across !== undefined && down !== undefined ? `Move ${name}` : across !== undefined
       ? (across === 0.5 ? `Centre ${name}` : [0, 1].includes(across) ? `Align ${name} ${stopName(ACROSS, across)}` : `Move ${name} ${stopName(ACROSS, across)}`)
       : down === null ? `Put ${name} Back in Line` : [0, 0.5, 1].includes(down) ? `Align ${name} ${stopName(DOWN, down)}` : `Move ${name} ${stopName(DOWN, down)}`;
     editBlock(at, (b, slide) => {
