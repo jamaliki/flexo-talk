@@ -57,8 +57,30 @@ const INLINE = new Set(["text", "bullets", "quote", "callout", "code", "math"]);
 // else is set there as a box as wide as it is (compose._natural). An equation's place is its
 // own alignment.
 const PLACEABLE = new Set(["figure", "image", "table"]);
-const PLACE_WORDS = { start: "Left", middle: "Centre", end: "Right" };
-const acrossOf = (value) => ({ left: "start", centre: "middle", center: "middle", right: "end" })[value] || value;
+// Five stops across its place and five down it, each the share of the room it has to spare
+// before it (`horizontal`, `vertical`), named; a file names the ends and the middle by name.
+const ACROSS = [[0, "Left"], [0.25, "Left of Centre"], [0.5, "Centre"], [0.75, "Right of Centre"], [1, "Right"]];
+const DOWN = [[0, "Top"], [0.25, "Above Middle"], [0.5, "Middle"], [0.75, "Below Middle"], [1, "Bottom"]];
+const ACROSS_NAMES = { start: 0, left: 0, middle: 0.5, centre: 0.5, center: 0.5, end: 1, right: 1 };
+const DOWN_NAMES = { top: 0, middle: 0.5, centre: 0.5, center: 0.5, bottom: 1 };
+const shareOf = (value, names) => (typeof value === "number" && value >= 0 && value <= 1 ? value
+  : typeof value === "string" ? names[value.trim().toLowerCase()] ?? null : null);
+const shareWritten = (share, names) => Object.entries(names).find(([, value]) => value === share)?.[0] ?? share;
+const stopName = (stops, share) => stops.find(([value]) => value === share)?.[1] ?? "";
+// Each stop drawn: its place's frame, the object standing in it there.
+function stopGlyph(share, down) {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 28 18");
+  svg.setAttribute("class", "stop-glyph");
+  const frame = document.createElementNS(SVG_NS, "rect");
+  Object.entries({ x: 1, y: 1, width: 26, height: 16, rx: 2, fill: "none", stroke: "currentColor", "stroke-opacity": 0.6 }).forEach(([key, value]) => frame.setAttribute(key, value));
+  const item = document.createElementNS(SVG_NS, "rect");
+  const box = down ? { x: 7, y: 3 + share * 9, width: 14, height: 3 } : { x: 3 + share * 17, y: 5, width: 5, height: 8 };
+  Object.entries({ ...box, rx: 1, fill: "currentColor" }).forEach(([key, value]) => item.setAttribute(key, value));
+  svg.append(frame, item);
+  return svg;
+}
 // Parts that are drawn rather than read: they take the right of a slide with words.
 const VISUAL = new Set(["figure", "image", "plot", "table", "gallery", "mechanism"]);
 // A figure on a slide, exported by itself: what flexo builds of it, or its document.
@@ -2082,10 +2104,10 @@ export function mount(studio, container) {
     // it is nearest -- where it lands if let go, the guide showing it.
     if (at?.kind === "home" && carry.room) {
       const { room, home } = carry, width = home.right - home.left;
-      const spots = { start: room.left, middle: (room.left + room.right - width) / 2, end: room.right - width };
-      const place = Object.keys(spots).reduce((best, key) => (Math.abs(spots[key] - (home.left + dx)) < Math.abs(spots[best] - (home.left + dx)) ? key : best), carry.placed);
+      const spot = (share) => room.left + (room.right - room.left - width) * share;
+      const place = ACROSS.map(([share]) => share).reduce((best, share) => (Math.abs(spot(share) - (home.left + dx)) < Math.abs(spot(best) - (home.left + dx)) ? share : best), carry.placed);
       at = { kind: "home", place };
-      dx = spots[place] - home.left;
+      dx = spot(place) - home.left;
     }
     carry.lifted.style.transform = `translate(${dx * carry.scale}px, ${dy * carry.scale}px)`;
     carry.group.forEach((wrap, k) => { wrap.style.transform = `translate(${(dx + carry.offsets[k].x) * scaleOf(wrap)}px, ${(dy + carry.offsets[k].y) * scaleOf(wrap)}px)`; });
@@ -2169,11 +2191,12 @@ export function mount(studio, container) {
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
     if (at?.kind === "slide") { railList.querySelector(`.thumb[data-index="${at.index}"]`)?.classList.add("drop-into"); return; }
     const origin = pageNode.getBoundingClientRect();
-    if (at?.place && carry.room) {
-      // The guide where it would stand: its place's left edge, middle or right edge.
-      const { room } = carry, x = at.place === "start" ? room.left : at.place === "end" ? room.right : (room.left + room.right) / 2;
+    if (at?.place !== undefined && carry.room) {
+      // The guide where it would stand: its place's left edge, middle or right edge, or a
+      // quarter of the way across.
+      const { room } = carry, x = room.left + (room.right - room.left) * at.place;
       Object.assign(carry.guide.style, { left: `${x - origin.left}px`, top: `${room.top - origin.top}px`, height: `${room.bottom - room.top}px` });
-      carry.guide.dataset.said = PLACE_WORDS[at.place];
+      carry.guide.dataset.said = stopName(ACROSS, at.place);
       carry.guide.classList.add("on");
     }
     if (!at || at.kind === "home") return;
@@ -2289,13 +2312,13 @@ export function mount(studio, container) {
     const was = finishCarry();
     if (!was) return;
     const at = was.at;
-    if (at?.kind === "home" && at.place && at.place !== was.placed) {
+    if (at?.kind === "home" && at.place !== undefined && at.place !== was.placed) {
       // Moved across in its place: it stands there now, gliding the rest of the way.
       moving = { slide: state.slide, at: Date.now(), plan: [[was.from, was.from]], wraps: [was.lifted] };
       const mine = moving;
       setTimeout(() => { if (moving === mine) { moving = null; was.lifted.style.transform = ""; placeChosen(); } }, 6000);
       chosen.hidden = true;
-      placeBlock(was.from, at.place);
+      placeBlock(was.from, { across: at.place });
       return;
     }
     if (!at || at.kind === "home") { sendHome(was); return; }
@@ -5667,16 +5690,16 @@ export function mount(studio, container) {
   // (compose._placing); words, a list, a listing, numbers from the left; an equation as it is
   // aligned.
   function autoPlace(slide, region, block) {
-    if (kindOf(block) === "math") return "middle";
-    if (!PLACEABLE.has(kindOf(block))) return "start";
+    if (kindOf(block) === "math") return shareOf(block.align, ACROSS_NAMES) ?? 0.5;
+    if (!PLACEABLE.has(kindOf(block))) return 0;
     const kinds = blocksAt(slide, region).filter((each) => !each.placeholder).map(kindOf);
-    if (kinds.includes("bullets")) return "start";
+    if (kinds.includes("bullets")) return 0;
     const graphics = kinds.filter((kind) => ["figure", "image", "plot", "gallery", "table"].includes(kind)).length;
     const words = kinds.filter((kind) => kind === "text").length;
-    return graphics && words && graphics + words === kinds.length && kinds[0] === "text" ? "start" : "middle";
+    return graphics && words && graphics + words === kinds.length && kinds[0] === "text" ? 0 : 0.5;
   }
-  // Where it stands: as asked, else where the slide sets it.
-  const placedAt = (slide, region, block) => acrossOf(kindOf(block) === "math" ? block.align : block.place) || autoPlace(slide, region, block);
+  // Where it stands across its place: as asked, else where the slide sets it.
+  const placedAt = (slide, region, block) => shareOf(block.horizontal, ACROSS_NAMES) ?? autoPlace(slide, region, block);
   // Whether it is drawn as wide as its place, with nowhere across it to go.
   function fillsPlace(at) {
     const box = drawnBox(blockElement(at.region, at.index));
@@ -5684,19 +5707,41 @@ export function mount(studio, container) {
     const room = region && roomOf(pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`));
     return Boolean(box && room && box.width >= room.right - room.left - 2);
   }
-  // An object set at the left, middle or right of its place, one step: written only when it is
-  // not where the slide would set it anyway (an equation's, as its alignment).
-  function placeBlock(at, value) {
+  // An object set at a stop across its place (`across`) or down it (`down`; null, back where
+  // the slide sets it), one step: written only when it is not where the slide would set it
+  // anyway (an equation's at its ends and middle, as its alignment).
+  function placeBlock(at, { across, down }) {
     const block = blocksAt(slideAt(), at.region)[at.index];
-    if (!block || placedAt(slideAt(), at.region, block) === value) return false;
-    const label = value === "middle" ? `Centre ${blockLabel(block)}` : `Align ${blockLabel(block)} ${PLACE_WORDS[value]}`;
+    if (!block) return false;
+    if (across !== undefined && placedAt(slideAt(), at.region, block) === across) across = undefined;
+    if (down !== undefined && shareOf(block.vertical, DOWN_NAMES) === down) down = undefined;
+    if (across === undefined && down === undefined) return false;
+    const name = blockLabel(block);
+    const label = across !== undefined
+      ? (across === 0.5 ? `Centre ${name}` : [0, 1].includes(across) ? `Align ${name} ${stopName(ACROSS, across)}` : `Move ${name} ${stopName(ACROSS, across)}`)
+      : down === null ? `Put ${name} Back in Line` : [0, 0.5, 1].includes(down) ? `Align ${name} ${stopName(DOWN, down)}` : `Move ${name} ${stopName(DOWN, down)}`;
     editBlock(at, (b, slide) => {
-      if (kindOf(b) === "math") setOption(b, "align", value, "middle");
-      else if (value === autoPlace(slide, at.region, b)) delete b.place;
-      else b.place = value;
+      if (across !== undefined) {
+        if (kindOf(b) === "math" && [0, 0.5, 1].includes(across)) { setOption(b, "align", shareWritten(across, ACROSS_NAMES), "middle"); delete b.horizontal; }
+        else if (kindOf(b) !== "math" && across === autoPlace(slide, at.region, b)) delete b.horizontal;
+        else b.horizontal = shareWritten(across, ACROSS_NAMES);
+      }
+      if (down !== undefined) setOption(b, "vertical", down === null ? null : shareWritten(down, DOWN_NAMES));
     }, { label });
     renderInspector();
     return true;
+  }
+  // Where it stands, as Keynote's Arrange › Align: five stops across its place (where it
+  // stands now marked) and five down it -- Automatic, in line under what is before it.
+  function positionPad(slide, at, block) {
+    const stops = (list, down) => list.map(([value, title]) => ({ value, title, label: stopGlyph(value, down) }));
+    const across = ui.segmented({ value: placedAt(slide, at.region, block), key: "position.across", options: stops(ACROSS, false),
+      onChange: (value) => placeBlock(at, { across: value }) });
+    const down = ui.segmented({ value: shareOf(block.vertical, DOWN_NAMES) ?? "auto", key: "position.down",
+      options: [{ value: "auto", label: "Auto", title: "Automatic: in line under what is before it" }, ...stops(DOWN, true)],
+      onChange: (value) => placeBlock(at, { down: value === "auto" ? null : value }) });
+    return h("div.position-pad", {}, h("div.position-row", {}, h("span.position-label", {}, "Across"), across),
+      h("div.position-row", {}, h("span.position-label", {}, "Down"), down));
   }
 
   function blockPanel(slide, block) {
@@ -5720,9 +5765,7 @@ export function mount(studio, container) {
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null,
         // Across its place, as Keynote's Arrange › Align: where it stands, chosen. (One as wide
         // as its place -- a paragraph filling it -- has nowhere to go, and says so.)
-        kind !== "unknown" ? ui.field("Position", ui.segmented({ value: placedAt(slide, at.region, block),
-          options: Object.entries(PLACE_WORDS).map(([value, label]) => ({ value, label })), onChange: (value) => placeBlock(at, value) }),
-        fillsPlace(at) ? { hint: "Fills its place" } : {}) : null),
+        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block), fillsPlace(at) ? { hint: "Fills its width" } : {}) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
       buildSection(block, at),
     ];
@@ -7838,7 +7881,7 @@ export function mount(studio, container) {
     return keys.length === 1 ? `Change ${SLIDE_NAMES[keys[0]] || keyTitle(keys[0])}` : "Edit Slide";
   }
   const BLOCK_NAMES = { description: "Description", align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering", plain: "Bullets",
-    reveal: "Build", header: "Header Row", outline: "Table Outline", place: "Position", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour",
+    reveal: "Build", header: "Header Row", outline: "Table Outline", horizontal: "Position", vertical: "Position", by: "Attribution", title: "Heading", aspect: "Aspect Ratio", arrow_colour: "Arrow Colour",
     caption: "Caption", build: "Build In" };
   function blockChange(a, b) {
     const kind = kindOf(b), name = blockLabel(b), keys = differing(a, b).filter((key) => key !== "placeholder");

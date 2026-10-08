@@ -474,7 +474,7 @@ def test_a_table_or_picture_stands_at_the_left_middle_or_right_of_its_place_when
     rows = [["**mechazyme**", "Mechanisms to motifs"], ["**kaveh**", "Motifs to enzymes"]]
 
     def table_at(place: str | None) -> tuple[float, float]:
-        block = {"table": rows, "header": False, **({"place": place} if place else {})}
+        block = {"table": rows, "header": False, **({"horizontal": place} if place is not None else {})}
         document = {"deck": {}, "slides": [{"title": "T", "body": [{"bullets": ["Build the tools"]}, block]}]}
         deck = deck_from_document(document, tmp_path)
         (table,) = render_slide(deck, deck.slides[0]).tables
@@ -489,15 +489,22 @@ def test_a_table_or_picture_stands_at_the_left_middle_or_right_of_its_place_when
     assert table_at("end")[1] == pytest.approx(width - margin, abs=1.0)
     assert table_at("left")[0] == pytest.approx(margin, abs=1.0)
     # Written as asked, and read back so.
-    body = [{"bullets": ["A"]}, {"table": rows, "place": "middle"}]
+    body = [{"bullets": ["A"]}, {"table": rows, "horizontal": "middle", "vertical": 0.25}]
     again = deck_document(deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path))
-    assert again["slides"][0]["body"][1]["place"] == "middle"
+    assert again["slides"][0]["body"][1]["horizontal"] == "middle"
+    assert again["slides"][0]["body"][1]["vertical"] == 0.25
+    # Between: a quarter of the way from the left to the middle, and from the middle to the right.
+    quarter, three = table_at(0.25), table_at(0.75)
+    assert quarter[0] == pytest.approx(margin + (left - margin) / 2.0, abs=1.0)
+    assert three[0] == pytest.approx(left + (left - margin) / 2.0, abs=1.0)
     # Only a side.
     def slide(*body: dict) -> dict:
         return {"deck": {}, "slides": [{"title": "T", "body": list(body)}]}
 
-    with pytest.raises(DeckDocumentError, match="place must be"):
-        deck_from_document(slide({"table": rows, "place": "top"}), tmp_path)
+    with pytest.raises(DeckDocumentError, match="horizontal must be"):
+        deck_from_document(slide({"table": rows, "horizontal": "top"}), tmp_path)
+    with pytest.raises(DeckDocumentError, match="vertical must be"):
+        deck_from_document(slide({"table": rows, "vertical": 2}), tmp_path)
     # In Python, as Build In is: after the object it places.
     made = Deck("placed")
     with made.slide("T") as slide:
@@ -526,7 +533,7 @@ def test_every_object_stands_at_the_left_middle_or_right_of_its_place_when_asked
     ]
 
     def drawn(place: str | None) -> list[tuple[float, float]]:
-        body = [{**block, **({"place": place} if place else {})} for block in blocks]
+        body = [{**block, **({"horizontal": place} if place else {})} for block in blocks]
         deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)
         rendered = render_slide(deck, deck.slides[0])
         svg = rendered.svg
@@ -551,6 +558,35 @@ def test_every_object_stands_at_the_left_middle_or_right_of_its_place_when_asked
     # The native list moved with its drawing, its lines as they were.
     assert middle_lists[0].x > start_lists[0].x + 100
     assert [level for level, _, _ in middle_lists[0].items] == [level for level, _, _ in start_lists[0].items]
+
+
+def test_an_object_stands_down_its_place_what_follows_it_following_it(tmp_path: Path) -> None:
+    """Asked to stand at the bottom of its place, between the top and the middle, or in the
+    middle, an object takes that share of the room its place has to spare above it; what
+    comes after it follows it down, and what is before it stays where it was."""
+
+    rows = [["mechazyme", "Mechanisms to motifs"], ["kaveh", "Motifs to enzymes"]]
+
+    def drawn(vertical: object) -> tuple[float, float, float]:
+        table = {"table": rows, "header": False, **({"vertical": vertical} if vertical is not None else {})}
+        body = [{"text": "Before"}, table, {"text": "After"}]
+        deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)
+        rendered = render_slide(deck, deck.slides[0])
+        before = float(re.search(r'id="slide1\.body\.0"[^>]*\by="([-\d.]+)"', rendered.svg).group(1))
+        (table,) = rendered.tables
+        return before, table.y, sum(table.heights)
+
+    before, top, _ = drawn(None)
+    for vertical, share in (("top", 0.0), (0.25, 0.25), ("middle", 0.5), ("bottom", 1.0)):
+        now, y, _ = drawn(vertical)
+        assert now == pytest.approx(before)
+        assert y >= top - 0.01
+        if share:
+            assert y > top + 1.0
+    # Each a share of the same spare room: the middle twice as far down as a quarter.
+    _, quarter, _ = drawn(0.25)
+    _, middle, _ = drawn("middle")
+    assert middle - top == pytest.approx(2 * (quarter - top), rel=0.02)
 
 
 def _deck_with_figures() -> dict:

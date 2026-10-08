@@ -161,6 +161,14 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .block-drop-zone.on, .block-drop-line.on { transition: opacity 0.12s, left 0.1s, top 0.1s, width 0.1s, height 0.1s; }
 .block-drop-zone { border: 1.5px dashed var(--accent-line); border-radius: 6px; background: var(--accent-soft); }
 .block-drop-line { background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 3px var(--accent-soft); }
+/* Where an object stands (Position): five stops across its place, five down it, each drawn
+   as its place's frame with the object standing in it there. */
+.position-pad { display: grid; gap: 6px; }
+.position-row { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 6px; }
+.position-label { color: var(--ink-3); font: var(--text-hint); }
+.position-pad .segmented button { padding-inline: 0; min-width: 0; }
+.position-pad .segmented button { height: 28px; }
+.position-pad .stop-glyph { width: 28px; height: 18px; display: block; margin: auto; }
 /* An object moved across in its place: the guide where it would stand (its place's left
    edge, middle or right edge), named, as Keynote's alignment guides. */
 .block-guide { position: absolute; width: 0; pointer-events: none; opacity: 0; z-index: 6; border-left: 1px dashed var(--accent); transition: opacity 0.12s; }

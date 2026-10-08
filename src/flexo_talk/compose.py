@@ -157,9 +157,9 @@ class _Canvas:
         """Whether the block being set has its region to itself."""
         self.centred = True
         """Whether a picture is centred across its region, or starts at its edge (beside a list)."""
-        self.place: str | None = None
-        """Where the block being set was asked to stand across its place (``Region.places``):
-        ``start``, ``middle`` or ``end``; None, where the slide puts it."""
+        self.place: float | None = None
+        """Where the block being set was asked to stand across its place (``Region.across``):
+        the share of the room to spare on its left; None, where the slide puts it."""
         self.span = (0.0, 0.0)
         """Where across the slide the picture or table set last is drawn: ``(left, width)``."""
         """What the build did that the author may want to know (a figure turned to fit)."""
@@ -1284,6 +1284,7 @@ def _region(
     _check_legible(canvas, prepared, scales, box)
     top = box.y
     used = None
+    marks: list[tuple[int, int, int, int, int]] = []
     for index in [*shown, *(aside if PLACEHOLDERS.get() else [])]:
         if used is None and index in aside:
             # The rest is set: the placeholders go after it, in what room is left, taking none.
@@ -1293,16 +1294,17 @@ def _region(
             prepared |= {aside[at]: item for at, item in planned.items()}
             scales |= {aside[at]: scale for at, scale in fits.items()}
         block, identifier = blocks[index], ids[index]
-        canvas.place = region.places.get(index)
-        # Asked to stand at the left, middle or right of its place, an object narrower than
-        # it is set in a box as wide as it is, there (a figure, picture or table moves in its
-        # own place: _across).
+        canvas.place = region.across.get(index)
+        # (What it draws, for it to be moved down its place after: see _stand.)
+        marks.append((index, len(canvas.layer), len(canvas.lists), len(canvas.tables), len(canvas.worded)))
+        # Asked to stand across its place, an object narrower than it is set in a box as wide
+        # as it is, there (a figure, picture or table moves in its own place: _across).
         left, wide = box.x, box.width
-        natural = _natural(canvas, block, box.width, share) if canvas.place and not isinstance(block, PLACED) else None
+        asked = canvas.place is not None and not isinstance(block, PLACED)
+        natural = _natural(canvas, block, box.width, share) if asked else None
         if natural is not None and natural < box.width - 0.5:
             wide = natural + 0.01
-            spare = box.width - wide
-            left = box.x + {"start": 0.0, "middle": spare / 2.0, "end": spare}[canvas.place]
+            left = box.x + (box.width - wide) * canvas.place
         if isinstance(block, _Bullets):
             top += _bullets(canvas, identifier, block, Box(left, top, wide, 0.0))
         elif isinstance(block, _Words):
@@ -1353,7 +1355,38 @@ def _region(
             drawn.set("data-flexo-step", str(canvas.steps))
         canvas.place = None
         top += style.block_gap
-    return used if used is not None else max(top - box.y - style.block_gap, 0.0)
+    used = used if used is not None else max(top - box.y - style.block_gap, 0.0)
+    if any(index in region.down for index in shown):
+        _stand(canvas, region, marks, shown, max(box.height - used, 0.0))
+        # It fills its place: the slide sets it where it is, moving it no further.
+        return max(box.height, used)
+    return used
+
+
+def _stand(canvas: _Canvas, region: Region, marks: list, shown: list[int], spare: float) -> None:
+    """The region's blocks asked to stand down their place (``Region.down``) moved down it,
+    each with the share of the room it has to spare (``spare``) above it -- and what comes
+    after it with it, never above it -- the native lists, tables and words they set with
+    them."""
+
+    ends = [*marks[1:], (None, len(canvas.layer), len(canvas.lists), len(canvas.tables), len(canvas.worded))]
+    down = 0.0
+    for (index, first, lists, tables, worded), (_, *after) in zip(marks, ends, strict=True):
+        if index not in shown:
+            continue
+        down = max(down, region.down.get(index, 0.0) * spare)
+        if down < 0.01:
+            continue
+        children = list(canvas.layer)[first:after[0]]
+        if not children:
+            continue
+        group = ET.Element("g")
+        for child in children:
+            canvas.layer.remove(child)
+            group.append(child)
+        canvas.layer.insert(first, group)
+        owned = canvas.lists[lists:after[1]], canvas.tables[tables:after[2]], canvas.worded[worded:after[3]]
+        _shift(group, down, *owned)
 
 
 def _drawn(canvas: _Canvas, identifier: str) -> ET.Element | None:
@@ -1653,7 +1686,7 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
     # column on the right, the table against the right edge, cells set from the right.
     plan.rtl = bool(plan.cells) and _rtl(tuple(run for cell in plan.cells[0] for run in cell))
     left = box.x + box.width - total if plan.rtl else box.x
-    if canvas.place:
+    if canvas.place is not None:
         left = _across(canvas, box, total)
     elif canvas.alone:
         left = box.x + (box.width - total) / 2.0
@@ -2014,9 +2047,9 @@ def _stats(canvas: _Canvas, identifier: str, block: _Stats, box: Box, *, draw: b
     if not draw:
         return height
     align = "middle" if style.title_align == "middle" else "start"
-    if canvas.place in {"middle", "end"}:
+    if canvas.place in {0.5, 1.0}:
         # Numbers set at the middle (the right) of their place stand so in their cells too.
-        align = canvas.place
+        align = "middle" if canvas.place == 0.5 else "end"
     role, fill = _paint_of(block.colour, "tone-1-stroke")
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="stats")
     rtl = any(_rtl(label) for _, label in block.items)
@@ -4032,10 +4065,8 @@ def _across(canvas: _Canvas, box: Box, width: float) -> float:
     (``canvas.place``), else centred in it, or at its start beside a list
     (``canvas.centred``), its left edge with the list's."""
 
-    place = canvas.place or ("middle" if canvas.centred else "start")
-    if place == "end":
-        return box.x + box.width - width
-    return box.x + (box.width - width) / 2.0 if place == "middle" else box.x
+    share = canvas.place if canvas.place is not None else 0.5 if canvas.centred else 0.0
+    return box.x + (box.width - width) * share
 
 
 def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
