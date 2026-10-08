@@ -67,6 +67,8 @@ from flexo.diagnostics import described
 from flexo.roundtrip import rewrite
 
 from flexo_talk.deck import (
+    ACROSS,
+    DOWN,
     LAYOUTS,
     Deck,
     DeckStyle,
@@ -78,6 +80,7 @@ from flexo_talk.deck import (
     _Plot,
     displayed,
     named_colour,
+    share_of,
 )
 
 SCHEMA_VERSION = 1
@@ -88,7 +91,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "figure": ("turn", "width", "description", "caption"),
     "image": ("width", "description", "caption"),
     "plot": ("aspect",),
-    "table": ("header", "align", "size", "caption"),
+    "table": ("header", "align", "size", "caption", "outline"),
     "gallery": ("columns", "height", "crop", "size", "align"),
     "code": ("size",),
     "quote": ("by", "size"),
@@ -597,7 +600,9 @@ def add_block(
     kind = kinds[0]
     # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``;
     # and any may build in, appearing on a click (``build: true``): see ``Region.builds``.
-    _only(block, (kind, *BLOCKS[kind], "placeholder", "build"), f"{where} ({kind})")
+    # And any may stand across and down its place where it is asked to (``horizontal:
+    # middle``, ``vertical: 0.25``): see ``Region.place``.
+    _only(block, (kind, *BLOCKS[kind], "placeholder", "build", "horizontal", "vertical"), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
@@ -605,6 +610,16 @@ def add_block(
         raise DeckDocumentError(here, "placeholder must be true or false.")
     if not isinstance(block.get("build", False), bool):
         raise DeckDocumentError(here, "build must be true or false.")
+    shares = {}
+    for key, names, said in (("horizontal", ACROSS, "start (left), middle (centre) or end (right)"),
+                             ("vertical", DOWN, "top, middle or bottom")):
+        if block.get(key) is None:
+            continue
+        shares[key] = share_of(block[key], names)
+        if shares[key] is None:
+            raise DeckDocumentError(
+                here, f"{key} must be {said}, or a number from 0 to 1 between them, not {block[key]!r}."
+            )
     try:
         if kind == "bullets":
             items = value if isinstance(value, list) else [value]
@@ -680,6 +695,10 @@ def add_block(
         region.placeholders.add(len(region.blocks) - 1)
     if block.get("build"):
         region.builds.add(len(region.blocks) - 1)
+    if "horizontal" in shares:
+        region.across[len(region.blocks) - 1] = shares["horizontal"]
+    if "vertical" in shares:
+        region.down[len(region.blocks) - 1] = shares["vertical"]
 
 
 def _figure_problem(value: dict, error: Exception) -> str:

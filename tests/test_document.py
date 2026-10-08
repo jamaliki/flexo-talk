@@ -466,6 +466,129 @@ def test_a_table_alone_on_its_slide_is_centred(tmp_path: Path) -> None:
     assert abs(tables[1].x - style.margin) < 1.0
 
 
+def test_a_table_or_picture_stands_at_the_left_middle_or_right_of_its_place_when_asked(tmp_path: Path) -> None:
+    """Beside a list a table starts at the list's edge; asked (``place``, as the studio's
+    Position and its drag write it) it is centred under the list, or set at the right --
+    in the slide and in the PowerPoint's native table alike -- and kept so in its file."""
+
+    rows = [["**mechazyme**", "Mechanisms to motifs"], ["**kaveh**", "Motifs to enzymes"]]
+
+    def table_at(place: str | None) -> tuple[float, float]:
+        block = {"table": rows, "header": False, **({"horizontal": place} if place is not None else {})}
+        document = {"deck": {}, "slides": [{"title": "T", "body": [{"bullets": ["Build the tools"]}, block]}]}
+        deck = deck_from_document(document, tmp_path)
+        (table,) = render_slide(deck, deck.slides[0]).tables
+        return table.x, table.x + sum(table.widths)
+
+    deck = deck_from_document({"deck": {}, "slides": []}, tmp_path)
+    margin, width = deck.style.margin, deck.style.width
+    assert table_at(None)[0] == pytest.approx(margin, abs=1.0)
+    left, right = table_at("middle")
+    assert (left + right) / 2.0 == pytest.approx(width / 2.0, abs=1.0)
+    assert table_at("centre") == (left, right)
+    assert table_at("end")[1] == pytest.approx(width - margin, abs=1.0)
+    assert table_at("left")[0] == pytest.approx(margin, abs=1.0)
+    # Written as asked, and read back so.
+    body = [{"bullets": ["A"]}, {"table": rows, "horizontal": "middle", "vertical": 0.25}]
+    again = deck_document(deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path))
+    assert again["slides"][0]["body"][1]["horizontal"] == "middle"
+    assert again["slides"][0]["body"][1]["vertical"] == 0.25
+    # Between: a quarter of the way from the left to the middle, and from the middle to the right.
+    quarter, three = table_at(0.25), table_at(0.75)
+    assert quarter[0] == pytest.approx(margin + (left - margin) / 2.0, abs=1.0)
+    assert three[0] == pytest.approx(left + (left - margin) / 2.0, abs=1.0)
+    # Only a side.
+    def slide(*body: dict) -> dict:
+        return {"deck": {}, "slides": [{"title": "T", "body": list(body)}]}
+
+    with pytest.raises(DeckDocumentError, match="horizontal must be"):
+        deck_from_document(slide({"table": rows, "horizontal": "top"}), tmp_path)
+    with pytest.raises(DeckDocumentError, match="vertical must be"):
+        deck_from_document(slide({"table": rows, "vertical": 2}), tmp_path)
+    # In Python, as Build In is: after the object it places.
+    made = Deck("placed")
+    with made.slide("T") as slide:
+        slide.bullets("Build the tools")
+        slide.table(rows, header=False)
+        slide.place("middle")
+    (table,) = render_slide(made, made.slides[0]).tables
+    assert table.x + sum(table.widths) / 2.0 == pytest.approx(width / 2.0, abs=1.0)
+    with pytest.raises(ValueError, match="Add a block"):
+        Deck("empty").slide("T").place("middle")
+
+
+def test_every_object_stands_at_the_left_middle_or_right_of_its_place_when_asked(tmp_path: Path) -> None:
+    """Words, a list, a listing, a quotation, a callout, numbers and an equation set at the
+    middle (or the right) of their place stand there as a box as wide as they are, their
+    lines as they were set; the PowerPoint's native list with them."""
+
+    blocks = [
+        {"text": "A short line of words."},
+        {"bullets": ["One point", "Another point", ["A sub point"]]},
+        {"code": "print('hello')"},
+        {"quote": "Simplicity is prerequisite for reliability.", "by": "Edsger Dijkstra"},
+        {"callout": "A short note.", "title": "Note"},
+        {"stats": [{"value": "93%", "label": "accuracy"}, {"value": "4x", "label": "faster"}]},
+        {"math": "E = mc^2", "align": "start"},
+    ]
+
+    def drawn(place: str | None) -> list[tuple[float, float]]:
+        body = [{**block, **({"horizontal": place} if place else {})} for block in blocks]
+        deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)
+        rendered = render_slide(deck, deck.slides[0])
+        svg = rendered.svg
+        found = []
+        for index in range(len(blocks)):
+            xs = [float(x) for x in re.findall(rf'id="slide1\.body\.{index}(?:\.[^"]*)?"[^>]*?\bx="([-\d.]+)"', svg)]
+            # (An equation is drawn where its group is moved to.)
+            xs += [float(x) for x in re.findall(rf'translate\(([-\d.]+) [^)]*\)"[^>]*id="slide1\.body\.{index}"', svg)]
+            found.append((min(xs), max(xs)) if xs else (0.0, 0.0))
+        lists = [layout for layout in rendered.lists]
+        return found, lists
+
+    deck = deck_from_document({"deck": {}, "slides": []}, tmp_path)
+    margin = deck.style.margin
+    start, start_lists = drawn(None)
+    middle, middle_lists = drawn("middle")
+    end, _ = drawn("end")
+    for index, block in enumerate(blocks):
+        # Each moved right of where the slide sets it, further at the right than in the middle.
+        assert start[index][0] < middle[index][0] < end[index][0], block
+        assert start[index][0] < margin + 25, block
+    # The native list moved with its drawing, its lines as they were.
+    assert middle_lists[0].x > start_lists[0].x + 100
+    assert [level for level, _, _ in middle_lists[0].items] == [level for level, _, _ in start_lists[0].items]
+
+
+def test_an_object_stands_down_its_place_what_follows_it_following_it(tmp_path: Path) -> None:
+    """Asked to stand at the bottom of its place, between the top and the middle, or in the
+    middle, an object takes that share of the room its place has to spare above it; what
+    comes after it follows it down, and what is before it stays where it was."""
+
+    rows = [["mechazyme", "Mechanisms to motifs"], ["kaveh", "Motifs to enzymes"]]
+
+    def drawn(vertical: object) -> tuple[float, float, float]:
+        table = {"table": rows, "header": False, **({"vertical": vertical} if vertical is not None else {})}
+        body = [{"text": "Before"}, table, {"text": "After"}]
+        deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)
+        rendered = render_slide(deck, deck.slides[0])
+        before = float(re.search(r'id="slide1\.body\.0"[^>]*\by="([-\d.]+)"', rendered.svg).group(1))
+        (table,) = rendered.tables
+        return before, table.y, sum(table.heights)
+
+    before, top, _ = drawn(None)
+    for vertical, share in (("top", 0.0), (0.25, 0.25), ("middle", 0.5), ("bottom", 1.0)):
+        now, y, _ = drawn(vertical)
+        assert now == pytest.approx(before)
+        assert y >= top - 0.01
+        if share:
+            assert y > top + 1.0
+    # Each a share of the same spare room: the middle twice as far down as a quarter.
+    _, quarter, _ = drawn(0.25)
+    _, middle, _ = drawn("middle")
+    assert middle - top == pytest.approx(2 * (quarter - top), rel=0.02)
+
+
 def _deck_with_figures() -> dict:
     figure = {
         "figure": {"id": "inline"},

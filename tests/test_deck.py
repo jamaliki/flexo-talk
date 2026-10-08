@@ -382,6 +382,35 @@ def test_a_table_is_a_native_table_ruled_as_in_a_paper(tmp_path: Path) -> None:
     assert slide.count(">Model<") == 1
 
 
+def test_a_table_with_no_outline_is_words_in_columns(tmp_path: Path) -> None:
+    """Names and what each is, as Keynote's table with its outline off and no header row:
+    the descriptions lined up in a column, with no rules drawn, in the PowerPoint either;
+    with a header row, only the rule under it."""
+
+    from flexo_talk.document import deck_document, deck_from_document
+
+    rows = [["**mechazyme**", "Mechanisms to motifs"], ["**ModelAngelo2**", "Cryo-EM model building"]]
+    deck = Deck("methods")
+    with deck.slide("Methods") as slide:
+        slide.table(rows, header=False, outline=False)
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    svg = result.svgs[0].read_text()
+    assert ">mechazyme<" in svg and not re.search(r'id="[^"]*\.rule\d"', svg)
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    assert "<a:tbl>" in slide and not re.search(r'<a:ln[TB] w="[1-9]', slide)
+    # Written to its file, and read back, as it was asked.
+    written = deck_document(deck)["slides"][0]["body"][0]
+    assert written["outline"] is False and written["header"] is False
+    plain = Deck("plain")
+    plain.slide("Methods").table(rows)
+    assert "outline" not in deck_document(plain)["slides"][0]["body"][0]
+    again = deck_from_document(deck_document(deck), tmp_path).render()[0].svg
+    assert not re.search(r'id="[^"]*\.rule\d"', again)
+    headed = Deck("headed")
+    headed.slide("Methods").table([["Method", "What"], *rows], outline=False)
+    assert len(re.findall(r'id="[^"]*\.rule\d"', headed.render()[0].svg)) == 1
+
+
 def test_bold_in_a_bold_statement_shows_in_the_accent(tmp_path: Path) -> None:
     deck = Deck("strong")
     deck.statement("A queue lets the customer **stop waiting** for us.")

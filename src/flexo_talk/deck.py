@@ -429,6 +429,8 @@ class _Table:
     """Words set under it, centred, a size smaller: its caption, part of it."""
     caption_held: bool = False
     """Its caption put there empty, to be written: its placeholder drawn while editing."""
+    outline: bool = True
+    """Whether it has its rules above and below (Keynote's Table Outline)."""
 
 
 @dataclass(slots=True)
@@ -595,6 +597,32 @@ type _Block = (
     _Bullets | _Words | _Figure | _Image | _Plot | _Table | _Code | _Gallery | _Quote | _Stats | _Callout
     | _Math | _Missing
 )
+
+PLACED = (_Figure, _Image, _Table)
+"""What stands across its place by moving in it (``Region.place``); anything else is set
+there in a box as wide as it is (words, a list, a listing, numbers)."""
+ACROSS = {"start": 0.0, "left": 0.0, "middle": 0.5, "centre": 0.5, "center": 0.5, "end": 1.0, "right": 1.0}
+DOWN = {"top": 0.0, "middle": 0.5, "centre": 0.5, "center": 0.5, "bottom": 1.0}
+"""Where an object stands across (down) its place, by name: the share of the room it has
+to spare on its left (above it)."""
+
+
+def share_of(value: object, names: dict[str, float]) -> float | None:
+    """A place across or down as the share of the room to spare before it: a name
+    (``start``, ``middle``, ``end``; ``top``, ``middle``, ``bottom``) or a number from 0 to 1
+    (0.25, between the start and the middle). None for anything else."""
+
+    if isinstance(value, str):
+        return names.get(value.strip().lower())
+    if isinstance(value, int | float) and not isinstance(value, bool) and 0.0 <= value <= 1.0:
+        return float(value)
+    return None
+
+
+def share_written(share: float, names: dict[str, float]) -> str | float:
+    """A share as a deck document writes it: by its name where it has one (the first)."""
+
+    return next((name for name, value in names.items() if value == share), share)
 
 
 def accent_field(palette: Palette) -> str:
@@ -783,6 +811,12 @@ class Region:
         self.builds: set[int] = set()
         """The blocks (by index) that build in: each appears on a click of its own, in the
         order they are on the slide (see ``build_in``)."""
+        self.across: dict[int, float] = {}
+        """Where blocks (by index) asked to stand across their place stand: the share of the
+        room to spare on their left (see ``place``)."""
+        self.down: dict[int, float] = {}
+        """Where blocks (by index) asked to stand down their place stand: the share of the
+        room the region has to spare that is above them (see ``place``)."""
         """The blocks (by index) that are placeholders: put there to be made one's own (the
         studio's sample table, figure or equation), drawn faintly while editing and never
         presented or exported until changed."""
@@ -1127,6 +1161,34 @@ class Region:
             self.sources[-1]["build"] = True
         return self
 
+    def place(
+        self, horizontal: str | float | None = None, *, vertical: str | float | None = None
+    ) -> Region:
+        """The block added last set across its place (``horizontal``: ``start``, ``middle``,
+        ``end``, or a share between, 0.25 halfway from the left to the middle) and down it
+        (``vertical``: ``top``, ``middle``, ``bottom``, or a share) -- as Keynote's Align --
+        not where the slide puts it. Words, a list, a listing or numbers stand there as a
+        box as wide as they are, their lines as set; down, it takes that share of the room
+        its place has to spare above it, what comes after it following it down."""
+
+        if not self.blocks:
+            raise ValueError("Add a block before placing it.")
+        if horizontal is None and vertical is None:
+            raise ValueError("Say where the block goes: horizontal, vertical or both.")
+        at = len(self.blocks) - 1
+        asked = ((horizontal, ACROSS, self.across, "horizontal"), (vertical, DOWN, self.down, "vertical"))
+        for value, names, kept, key in asked:
+            if value is None:
+                continue
+            share = share_of(value, names)
+            if share is None:
+                said = ", ".join(dict.fromkeys(names))
+                raise SettingError(key, f"{key} must be {said} or a number from 0 to 1, not {value!r}.")
+            kept[at] = share
+            if self.sources[-1]:  # a stand-in for what is missing is written as nothing
+                self.sources[-1][key] = share_written(share, names)
+        return self
+
     def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
         """A box where the ``what`` (picture, figure, plot) in the file ``name`` would be,
         saying it is missing -- or what else is wrong (``said``): the rest of the slide is
@@ -1144,6 +1206,7 @@ class Region:
         align: str | Sequence[str] = "",
         size: float | None = None,
         caption: str | None = None,
+        outline: bool = True,
     ) -> Region:
         """A table, ruled as in a paper: a rule above, one under the header, one below.
 
@@ -1151,12 +1214,14 @@ class Region:
         the first row is the header unless ``header=False``. ``align`` gives each
         column ``start``, ``middle``, or ``end`` (``"lrr"`` also works); by
         default a column of numbers is set flush right and any other flush left.
-        ``caption`` is set under it, centred, a size smaller.
+        ``caption`` is set under it, centred, a size smaller. ``outline=False`` leaves
+        out the rules above and below: with no header too, it is words in columns
+        (names and what each is), with no lines at all.
         """
 
         if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
             raise ValueError("A table must be a list of rows, each a list of cells.")
-        header, size = _flag(header, "header"), _size(size)
+        header, size, outline = _flag(header, "header"), _size(size), _flag(outline, "outline")
         cells = [[inline("" if cell is None else _words(cell, "A table cell")) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
         ragged = len({len(row) for row in cells}) > 1
@@ -1181,11 +1246,11 @@ class Region:
                 for index in range(columns)
             )
         held, caption = caption == "", _caption(caption)
-        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held))
+        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held, outline))
         given = align if isinstance(align, str) else list(align)
         self._record(
             "table", _plain(rows), header=None if header else False, align=given or None, size=size,
-            caption=caption or None,
+            caption=caption or None, outline=None if outline else False,
         )
         return self
 
@@ -1412,6 +1477,14 @@ class Slide:
         """The block added last appears on a click (see ``Region.build_in``)."""
 
         next(iter(self.regions.values())).build_in()
+        return self
+
+    def place(
+        self, horizontal: str | float | None = None, *, vertical: str | float | None = None
+    ) -> Slide:
+        """The block added last set across and down its place (see ``Region.place``)."""
+
+        next(iter(self.regions.values())).place(horizontal, vertical=vertical)
         return self
 
     def gallery(self, items, **options: object) -> Slide:
