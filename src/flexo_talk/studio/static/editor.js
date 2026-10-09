@@ -6212,7 +6212,8 @@ export function mount(studio, container) {
       h("div.section.block-top", {}, crumbs(slide, block),
         // In the order they are drawn, for Tab. (Its words are edited on the slide -- Return, or a
         // double-click -- or in the field below.)
-        h("div.block-actions", {},
+        // (With the breadcrumb, the inspector's head: ⌥⌘I passes them.)
+        h("div.block-actions", { dataset: { head: "" } },
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up (⌥↑)", disabled: at.index === 0 }),
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down (⌥↓)", disabled: at.index >= count - 1 }),
           ui.button("", () => { if (!awayFrom("duplicate objects")) duplicateBlock(at); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
@@ -8134,9 +8135,11 @@ export function mount(studio, container) {
     if (mod && event.altKey && key.toLowerCase() === "i") {
       event.preventDefault();
       // (A field of words is one, though its tabIndex reads -1 with none set: the slide's
-      // Title is the first, as in Keynote's inspector.)
-      const first = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")]
-        .find((node) => node.offsetParent && (node.tabIndex >= 0 || (node.isContentEditable && !node.hasAttribute("tabindex"))));
+      // Title is the first, as in Keynote's inspector. An object's head -- the breadcrumb, its
+      // buttons, a figure's shape's too -- is passed, to what changes it.)
+      const controls = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")]
+        .filter((node) => node.offsetParent && !node.disabled && (node.tabIndex >= 0 || (node.isContentEditable && !node.hasAttribute("tabindex"))));
+      const first = controls.find((node) => !node.closest(".crumbs, .insp-actions, [data-head]")) || controls[0];
       // Ringed, as the keys brought it there (a web view rings nothing focused by a shortcut).
       if (first) {
         first.focus({ focusVisible: true });
