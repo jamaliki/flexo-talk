@@ -7669,7 +7669,10 @@ export function mount(studio, container) {
     // ⌥⌘I goes to the inspector, as Keynote's shows it; Esc there comes back to the slide.
     if (mod && event.altKey && key.toLowerCase() === "i") {
       event.preventDefault();
-      const first = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")].find((node) => node.offsetParent && node.tabIndex >= 0);
+      // (A field of words is one, though its tabIndex reads -1 with none set: the slide's
+      // Title is the first, as in Keynote's inspector.)
+      const first = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")]
+        .find((node) => node.offsetParent && (node.tabIndex >= 0 || (node.isContentEditable && !node.hasAttribute("tabindex"))));
       // Ringed, as the keys brought it there (a web view rings nothing focused by a shortcut).
       if (first) {
         first.focus({ focusVisible: true });
