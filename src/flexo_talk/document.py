@@ -980,7 +980,7 @@ def _maker(
 
         if not code_allowed.get():
             raise UntrustedCode(
-                where, f"{target} was not run. Python code in this folder runs only after you trust the folder."
+                where, f"{file} hasn\u2019t been run: Python in this folder runs once you trust the folder."
             )
         root = worker.root()
         if root is not None:
