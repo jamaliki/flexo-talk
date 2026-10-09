@@ -2849,8 +2849,10 @@ export function mount(studio, container) {
     if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", keys: "A", run: () => whenFigure(() => figure.parts.addPalette(point)) });
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
+    // Another picture in its place, as Keynote's Replace: its size, caption and place kept.
+    if (kind === "image") items.push({ icon: "image", label: "Replace Picture…", run: () => replacePicture(at) });
     if (items.length) items.push("-");
-    items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, copyOf(block), at, `Duplicate ${blockLabel(block)}`) });
+    items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => duplicateBlock(at) });
     items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
       { icon: "down", label: "Move Down", keys: "⌥↓", disabled: at.index >= count - 1, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
     for (const other of regionsOf(slide)) {
@@ -5337,10 +5339,13 @@ export function mount(studio, container) {
     if (!room) return;
     // Where structures would go: after the figure's part under the pointer, into the
     // figure, or a figure of their own. (Pictures always come as pictures.)
-    const pictures = [...(event.dataTransfer?.items || [])].every((item) => item.type.startsWith("image/") || item.type === "application/pdf");
-    const part = pictures ? null : partAt(event);
+    const items = [...(event.dataTransfer?.items || [])];
+    const pictures = items.every((item) => item.type.startsWith("image/") || item.type === "application/pdf");
+    const part = partAt(event);
     const block = part?.kind === "block" ? blocksAt(slideAt(), part.region)[part.index] : null;
-    if (block && kindOf(block) === "figure" && editable(block)) {
+    // One picture over a picture takes its place, as in Keynote.
+    if (pictures && items.length === 1 && block && kindOf(block) === "image") place(hover, boxOf(part.id), "Replace Picture");
+    else if (!pictures && block && kindOf(block) === "figure" && editable(block)) {
       const inner = figurePartAt(event, part) || (figure && inFigure(event) && figure.parts.model && figure.parts.idAt(event)
         ? { element: pageNode.querySelector(`[id="${CSS.escape(figurePrefix() + figure.parts.idAt(event))}"]`), name: figure.parts.nameOf(figure.parts.idAt(event)) } : null);
       if (inner?.element) place(hover, boxOf(inner.element.id), `Add after ${inner.name}`);
@@ -5366,6 +5371,13 @@ export function mount(studio, container) {
     if (!pictures.length && !structures.length) {
       if (all.length) toast("Only pictures and structure files (PDB, mmCIF) can be added to a slide.", { icon: "info" });
       return all.length > 0;
+    }
+    // One picture let go on a picture takes its place.
+    const over = part?.kind === "block" ? blocksAt(slideAt(), part.region)[part.index] : null;
+    if (at && pictures.length === 1 && !structures.length && kindOf(over) === "image") {
+      await replacePicture(part, await studio.upload(pictures[0]));
+      toast("Picture replaced", { icon: "image" });
+      return true;
     }
     for (const file of pictures) await insertBlock("image", { image: await studio.upload(file) });
     if (structures.length) {
@@ -7648,6 +7660,13 @@ export function mount(studio, container) {
 
   // ⌘D (and Edit › Duplicate) duplicates what is chosen: a figure's shapes, the object on
   // the slide, else the slide.
+  // A picture's file swapped for another (`path`, else one chosen), all else about it kept.
+  async function replacePicture(at, path = null) {
+    path ||= await chooseFile({ title: "Replace Picture", types: ["image"], action: "Replace" });
+    if (!path || kindOf(blocksAt(slideAt(), at.region)[at.index]) !== "image") return;
+    editBlock(at, (b) => { b.image = path; }, { label: "Replace Picture" });
+    focusBlock(at.region, at.index);
+  }
   // An object copied after itself (its figure with an id of its own), the copy chosen.
   function duplicateBlock(at) {
     const block = blocksAt(slideAt(), at.region)[at.index];
