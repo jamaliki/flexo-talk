@@ -1356,6 +1356,8 @@ def _region(
         canvas.place = None
         top += style.block_gap
     used = used if used is not None else max(top - box.y - style.block_gap, 0.0)
+    # The room it has to spare, for an editor to say where its objects would stand down it.
+    canvas.layer.set("data-flexo-spare", number(max(box.height - used, 0.0)))
     if any(index in region.down for index in shown):
         _stand(canvas, region, marks, shown, max(box.height - used, 0.0))
         # It fills its place: the slide sets it where it is, moving it no further.
@@ -1380,7 +1382,8 @@ def _stand(canvas: _Canvas, region: Region, marks: list, shown: list[int], spare
         children = list(canvas.layer)[first:after[0]]
         if not children:
             continue
-        group = ET.Element("g")
+        # (How far down it moved, for an editor: where it would stand were it not.)
+        group = ET.Element("g", {"data-flexo-down": number(down)})
         for child in children:
             canvas.layer.remove(child)
             group.append(child)
@@ -2848,6 +2851,12 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
             spec, style=deck.theme, palette=deck.palette_name,
             font=deck.figure_font or deck.font or spec.font,
         )
+        if deck.conventions:
+            # The deck's conventions (its arrowheads, say), the figure's own over them.
+            from flexo.conventions import parse_conventions
+
+            ours = parse_conventions(deck.conventions)
+            spec = replace(spec, conventions=ours.with_updates(spec.conventions) if spec.conventions else ours)
     style = figure_style(spec)
     base = style.typography.size.points
     # A figure its person arranged by hand -- a part put under another, or on a line of its

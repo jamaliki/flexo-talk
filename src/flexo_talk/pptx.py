@@ -432,6 +432,19 @@ def _tip(head) -> tuple[float, float]:
     return max(points, key=lambda point: point[0] * along[0] + point[1] * along[1]) if points else head.tip
 
 
+def _middle(head) -> tuple[float, float]:
+    """An arrowhead's middle, along the way it points, on the line it ends."""
+
+    import math
+
+    along = (math.cos(head.angle), math.sin(head.angle))
+    reach = [point[0] * along[0] + point[1] * along[1] for segment in head.outline for point in segment.points]
+    if not reach:
+        return head.tip
+    shift = (min(reach) + max(reach)) / 2.0 - (head.tip[0] * along[0] + head.tip[1] * along[1])
+    return (head.tip[0] + along[0] * shift, head.tip[1] + along[1] * shift)
+
+
 def _join(ids: _Ids) -> None:
     """Name each of a drawing's lines for what it joins ("Line from Customer to Orders
     API"), and join each connector to the shapes at its ends."""
@@ -493,8 +506,11 @@ def _met(
     return best[2], side, abs((point[1] if across else point[0]) - middle) <= max(1.0, 1.5 * width)
 
 
-_HEADS = {"triangle": "triangle", "latex": "triangle", "stealth": "stealth", "open": "arrow"}
+_HEADS = {"triangle": "triangle", "latex": "triangle", "stealth": "stealth", "open": "arrow",
+          "dot": "oval", "diamond": "diamond"}
 """Flexo's arrowheads that a slide program's line ends draw, by the line end's name."""
+_CENTRED = {"oval", "diamond"}
+"""The line ends a slide program draws centred on the line's end, not with their tip there."""
 
 _CONNECTORS = {2: "straightConnector1", 3: "bentConnector2", 4: "bentConnector3", 5: "bentConnector4",
                6: "bentConnector5"}
@@ -518,8 +534,9 @@ def _connector(shape: Shape, placement: Placement, ids: _Ids) -> etree._Element 
         colour = head.paint.fill or head.paint.stroke
         if kind is None or colour is None or _colour(colour) != _colour(paint.stroke):
             return None
-        # The line runs on to the head's tip, where the slide program's line end has its own.
-        points[0 if head.end == "start" else -1] = _tip(head)
+        # The line runs on to the head's tip, where the slide program's line end has its own
+        # (to its middle, for one drawn round the line's end).
+        points[0 if head.end == "start" else -1] = _middle(head) if kind in _CENTRED else _tip(head)
 
         def size(value: float) -> str:
             share = max(value / max(paint.stroke_width, 1e-6), 1e-6)

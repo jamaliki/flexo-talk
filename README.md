@@ -397,8 +397,9 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   click on a box, a structure or a line chooses it, a double-click types on it,
   and a click where none of a figure's parts is chooses the figure. A part chosen
   can be connected, gathered, and dragged to another place in its row or into
-  another group where it is drawn (dragged before anything in it is chosen, the
-  figure moves on the slide), as in flexo's figure editor: a bar above the
+  another group where it is drawn (a figure's only part -- a structure added with
+  **Structure** -- moves the figure on the slide instead, and has **Position** in
+  its panel), as in flexo's figure editor: a bar above the
   figure adds parts (A) and draws lines (C), a **+** beside the part chosen adds
   the next step, joined to it, its words typed at once, and the inspector shows
   the part chosen. A part added after one whose single line runs on to the next

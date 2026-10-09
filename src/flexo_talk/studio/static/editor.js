@@ -1927,13 +1927,26 @@ export function mount(studio, container) {
       if (figure.parts.turnable(event)) { figure.parts.pointerdown(event); return; }
       const id = figure.parts.idAt(event);
       const holder = id && figure.parts.parentOf(id);
-      const alone = holder?.id === figure.parts.model.root && (holder.children || []).length < 2;
-      if (figure.parts.connecting || (id && holder && !alone)) { figure.parts.pointerdown(event); return; }
+      if (figure.parts.connecting || (id && holder && !loneShape(figure.parts.model, id))) { figure.parts.pointerdown(event); return; }
     }
     const part = partAt(event);
-    // A shape of a figure not yet chosen is dragged as the shape, the figure chosen first.
-    if (part && figurePartAt(event, part)) { focusBlock(part.region, part.index, () => figure.parts.pointerdown(event)); return; }
+    // A shape of a figure not yet chosen is dragged as the shape, the figure chosen first --
+    // but a figure's only shape is the figure, moved on the slide as it is once chosen.
+    const inner = part && figurePartAt(event, part);
+    if (inner && !inner.alone) { focusBlock(part.region, part.index, () => figure.parts.pointerdown(event)); return; }
     pressBlock(event, part);
+  }
+  // An object chosen as a click on it chooses it: a figure's only shape (a structure), the shape.
+  function chooseObject(at) {
+    const block = blocksAt(slideAt(), at.region)[at.index];
+    const model = block && kindOf(block) === "figure" ? known.get(knownKey(state.slide, at.region, at.index)) : null;
+    const only = model?.groups?.find((group) => group.id === model.root)?.children?.[0];
+    focusBlock(at.region, at.index, only && loneShape(model, only) ? () => figure?.parts.select([only]) : null);
+  }
+  // A figure's only shape (a structure, added as one): the object itself, on the slide.
+  function loneShape(model, id) {
+    const holder = id && model?.groups?.find((group) => (group.children || []).includes(id));
+    return Boolean(holder && holder.id === model.root && (holder.children || []).length < 2);
   }
 
   // -- the slide's parts, moved on it --
@@ -2062,12 +2075,28 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt(), carry.from.region)[carry.from.index];
     const own = !carry.all && block ? regions.find((region) => region.key === carry.from.region)?.room : null;
     const room = own && home.width < own.right - own.left - 2 ? own : null;
-    const guide = h("div.block-guide");
-    pageNode.append(zone, line, guide);
+    const guide = h("div.block-guide"), guideDown = h("div.block-guide.down");
+    pageNode.append(zone, line, guide, guideDown);
     pageNode.classList.add("block-dragging");
     document.body.classList.add("block-grabbing");
-    Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, guide, room, shifted: [],
-      placed: block ? placedAt(slideAt(), carry.from.region, block) : null });
+    Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, guide, guideDown, room, shifted: [],
+      placed: block ? placedAt(slideAt(), carry.from.region, block) : null, downs: own && block ? downsOf(carry.from, home) : null });
+  }
+  // Moved down in its own place, where an object would stand at each stop down it: the room
+  // its place has to spare (compose's `data-flexo-spare`), where it stands were it not moved
+  // down (`data-flexo-down`, nor its place moved, as the slide centres its content), and how
+  // far down what is before it stands -- it is never above that. In the window's pixels.
+  function downsOf(from, home) {
+    const region = regionsOf(slideAt()).find((item) => item.key === from.region);
+    const holder = region && pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`);
+    const ratio = holder?.getScreenCTM?.()?.d;
+    const spare = Number(holder?.getAttribute("data-flexo-spare"));
+    if (!ratio || !(spare * ratio > 2)) return null;
+    const downOf = (element) => Number(element?.closest("g[data-flexo-down]")?.getAttribute("data-flexo-down") || 0) * ratio;
+    const lowered = Number(/translate\(\s*[-\d.]+[ ,]+([-\d.]+)/.exec(holder.getAttribute("transform") || "")?.[1] || 0) * ratio;
+    const before = from.index > 0 ? blockElement(from.region, from.index - 1) : null;
+    const block = blocksAt(slideAt(), from.region)[from.index];
+    return { natural: home.top - downOf(carry.element) - lowered, before: downOf(before), spare: spare * ratio, current: shareOf(block?.vertical, DOWN_NAMES) };
   }
   // Where a part left behind shows while several are dragged (closed up), as a transform,
   // with `x`, `y` more.
@@ -2098,7 +2127,7 @@ export function mount(studio, container) {
     if (!carry?.started) return;
     carry.frame = 0;
     let dx = carry.pointer.x - carry.start.x;
-    const dy = carry.pointer.y - carry.start.y;
+    let dy = carry.pointer.y - carry.start.y;
     let at = thumbAt(carry.pointer) || dropAt(carry.pointer);
     // In its own place, moved across: it snaps to the left, middle or right of it, whichever
     // it is nearest -- where it lands if let go, the guide showing it.
@@ -2108,6 +2137,19 @@ export function mount(studio, container) {
       const place = ACROSS.map(([share]) => share).reduce((best, share) => (Math.abs(spot(share) - (home.left + dx)) < Math.abs(spot(best) - (home.left + dx)) ? share : best), carry.placed);
       at = { kind: "home", place };
       dx = spot(place) - home.left;
+    }
+    // And moved down it: to the stop down it it is nearest (never above what is before it),
+    // or where it is, nearer that.
+    if (at?.kind === "home" && carry.downs) {
+      const { natural, before, spare } = carry.downs, want = carry.home.top + dy;
+      let best = { share: undefined, top: carry.home.top };
+      for (const [share] of DOWN) {
+        const top = natural + Math.max(before, share * spare);
+        if (Math.abs(top - want) < Math.abs(best.top - want) - 0.5) best = { share, top };
+      }
+      if (best.share !== undefined && Math.abs(best.top - carry.home.top) < 1) best = { share: undefined, top: carry.home.top };
+      at = { ...at, ...(best.share !== undefined ? { down: best.share } : {}) };
+      dy = best.top - carry.home.top;
     }
     carry.lifted.style.transform = `translate(${dx * carry.scale}px, ${dy * carry.scale}px)`;
     carry.group.forEach((wrap, k) => { wrap.style.transform = `translate(${(dx + carry.offsets[k].x) * scaleOf(wrap)}px, ${(dy + carry.offsets[k].y) * scaleOf(wrap)}px)`; });
@@ -2186,6 +2228,7 @@ export function mount(studio, container) {
     carry.zone.classList.remove("on");
     carry.line.classList.remove("on");
     carry.guide.classList.remove("on");
+    carry.guideDown.classList.remove("on");
     carry.lifted.classList.toggle("block-astray", !at);
     for (const wrap of carry.group) wrap.classList.toggle("block-astray", !at);
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
@@ -2198,6 +2241,17 @@ export function mount(studio, container) {
       Object.assign(carry.guide.style, { left: `${x - origin.left}px`, top: `${room.top - origin.top}px`, height: `${room.bottom - room.top}px` });
       carry.guide.dataset.said = stopName(ACROSS, at.place);
       carry.guide.classList.add("on");
+    }
+    if (at?.down !== undefined && carry.downs) {
+      // Down: the line through where its middle would stand, across its place.
+      const span = carry.room || carry.regions.find((region) => region.key === carry.from.region)?.room;
+      const { natural, before, spare } = carry.downs, height = carry.home.bottom - carry.home.top;
+      const y = natural + Math.max(before, at.down * spare) + height / 2;
+      if (span) {
+        Object.assign(carry.guideDown.style, { left: `${span.left - origin.left}px`, top: `${y - origin.top}px`, width: `${span.right - span.left}px` });
+        carry.guideDown.dataset.said = stopName(DOWN, at.down);
+        carry.guideDown.classList.add("on");
+      }
     }
     if (!at || at.kind === "home") return;
     // A mark not shown yet appears where it goes; one shown glides there.
@@ -2251,6 +2305,7 @@ export function mount(studio, container) {
     was.zone.remove();
     was.line.remove();
     was.guide?.remove();
+    was.guideDown?.remove();
     was.ghost?.remove();
     for (const wrap of [was.lifted, ...was.group]) wrap.style.visibility = "";
     railList.querySelectorAll(".thumb.drop-into").forEach((thumb) => thumb.classList.remove("drop-into"));
@@ -2312,13 +2367,17 @@ export function mount(studio, container) {
     const was = finishCarry();
     if (!was) return;
     const at = was.at;
-    if (at?.kind === "home" && at.place !== undefined && at.place !== was.placed) {
-      // Moved across in its place: it stands there now, gliding the rest of the way.
+    const across = at?.place !== undefined && at.place !== was.placed ? at.place : undefined;
+    const down = at?.down !== undefined && at.down !== was.downs?.current ? at.down : undefined;
+    if (at?.kind === "home" && (across !== undefined || down !== undefined)) {
+      // Moved in its place: it stands there now, gliding the rest of the way.
       moving = { slide: state.slide, at: Date.now(), plan: [[was.from, was.from]], wraps: [was.lifted] };
       const mine = moving;
       setTimeout(() => { if (moving === mine) { moving = null; was.lifted.style.transform = ""; placeChosen(); } }, 6000);
       chosen.hidden = true;
-      placeBlock(was.from, { across: at.place });
+      placeBlock(was.from, { across, down });
+      // It is the object chosen, as one moved to another place is.
+      if (!samePlace(state.focus, was.from)) chooseObject(was.from);
       return;
     }
     if (!at || at.kind === "home") { sendHome(was); return; }
@@ -3130,7 +3189,7 @@ export function mount(studio, container) {
     for (let at = event.target; at && at !== pageNode; at = at.parentElement) {
       if (!at.matches?.("[data-flexo-entity][id]") || !at.id.startsWith(prefix)) continue;
       const node = model.nodes.find((item) => item.id === at.id.slice(prefix.length));
-      if (node) return { element: at, name: plain(Array.isArray(node.label) ? node.label.map((run) => run?.text ?? "").join("") : node.label) || catalog.figure_editor.parts[node.kind || "block"]?.title || node.kind };
+      if (node) return { element: at, alone: loneShape(model, node.id), name: plain(Array.isArray(node.label) ? node.label.map((run) => run?.text ?? "").join("") : node.label) || catalog.figure_editor.parts[node.kind || "block"]?.title || node.kind };
     }
     return null;
   }
@@ -5671,7 +5730,7 @@ export function mount(studio, container) {
       clear(inspectorHead, tabBar);
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
-      else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, figure.parts.panel());
+      else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else if (allOn()) clear(inspectorBody, manyPanel(slide));
       else clear(inspectorBody, slidePanel(slide));
@@ -5707,6 +5766,18 @@ export function mount(studio, container) {
     const room = region && roomOf(pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`));
     return Boolean(box && room && box.width >= room.right - room.left - 2);
   }
+  // Whether its place has no room to spare down it (compose's `data-flexo-spare`): it
+  // fills the height left, and has nowhere down it to go.
+  function fillsDown(at) {
+    const region = regionsOf(slideAt()).find((item) => item.key === at.region);
+    const spare = pageNode?.querySelector(`[id="slide${state.slide + 1}.${region?.svg}"]`)?.getAttribute("data-flexo-spare");
+    return spare != null && Number(spare) < 2;
+  }
+  // What it fills, said beside Position: there it has nowhere to go.
+  function fillsHint(at) {
+    const wide = fillsPlace(at), tall = fillsDown(at);
+    return wide && tall ? { hint: "Fills its place" } : wide ? { hint: "Fills its width" } : tall ? { hint: "Fills its height" } : {};
+  }
   // An object set at a stop across its place (`across`) or down it (`down`; null, back where
   // the slide sets it), one step: written only when it is not where the slide would set it
   // anyway (an equation's at its ends and middle, as its alignment).
@@ -5716,8 +5787,8 @@ export function mount(studio, container) {
     if (across !== undefined && placedAt(slideAt(), at.region, block) === across) across = undefined;
     if (down !== undefined && shareOf(block.vertical, DOWN_NAMES) === down) down = undefined;
     if (across === undefined && down === undefined) return false;
-    const name = blockLabel(block);
-    const label = across !== undefined
+    const name = objectName(block);
+    const label = across !== undefined && down !== undefined ? `Move ${name}` : across !== undefined
       ? (across === 0.5 ? `Centre ${name}` : [0, 1].includes(across) ? `Align ${name} ${stopName(ACROSS, across)}` : `Move ${name} ${stopName(ACROSS, across)}`)
       : down === null ? `Put ${name} Back in Line` : [0, 0.5, 1].includes(down) ? `Align ${name} ${stopName(DOWN, down)}` : `Move ${name} ${stopName(DOWN, down)}`;
     editBlock(at, (b, slide) => {
@@ -5744,6 +5815,15 @@ export function mount(studio, container) {
       h("div.position-row", {}, h("span.position-label", {}, "Down"), down));
   }
 
+  // A figure's only shape chosen -- a structure added as one -- is the object on the slide:
+  // where it stands is set with its own settings, under its name.
+  function placedPanel(panel, slide, block) {
+    const one = figure.parts.selected.length === 1 ? figure.parts.selected[0] : null;
+    if (!one || !loneShape(figure.parts.model, one) || !Array.isArray(panel) || !state.focus) return panel;
+    const place = h("div.section", {}, ui.field("Position", positionPad(slide, state.focus, block), fillsHint(state.focus)));
+    return [panel[0], place, ...panel.slice(1)];
+  }
+
   function blockPanel(slide, block) {
     const kind = kindOf(block);
     const at = state.focus;
@@ -5764,8 +5844,8 @@ export function mount(studio, container) {
         regions.length > 1 ? ui.field("Column", ui.segmented({ value: at.region, options: regions.map((r) => ({ value: r.key, label: r.label })),
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null,
         // Across its place, as Keynote's Arrange › Align: where it stands, chosen. (One as wide
-        // as its place -- a paragraph filling it -- has nowhere to go, and says so.)
-        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block), fillsPlace(at) ? { hint: "Fills its width" } : {}) : null),
+        // as its place -- a paragraph filling it -- or as tall, has nowhere to go, and says so.)
+        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block), fillsHint(at)) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
       buildSection(block, at),
     ];
@@ -7258,6 +7338,17 @@ export function mount(studio, container) {
       h("div.section", {}, h("div.section-title", {}, "Look"), looks),
       h("div.section", {}, h("div.section-title", {}, "Fonts"),
         fonts("font", "Body", "Default"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
+      // Every arrow in the deck's figures, in one shape (a line with a head of its own keeps it).
+      h("div.section", {}, h("div.section-title", {}, "Figures"),
+        ui.field("Arrowheads", ui.segmented({ value: deck.conventions?.arrowheads || "theme", key: "deck.arrowheads",
+          options: [{ value: "theme", label: "Theme", title: "As the theme draws them" },
+            ...[["triangle", "Triangle"], ["stealth", "Stealth"], ["latex", "LaTeX"], ["open", "Open"]].map(([value, title]) => ({ value, title, label: icon(`head-${value}`) }))],
+          onChange: (value) => { editDeck((d) => {
+            d.conventions = { ...(d.conventions || {}) };
+            if (value === "theme") delete d.conventions.arrowheads; else d.conventions.arrowheads = value;
+            if (!Object.keys(d.conventions).length) delete d.conventions;
+          }, { label: "Change Arrowheads" }); renderInspector(); } }),
+        { hint: "Every arrow without a head of its own" })),
       h("div.section", {}, h("div.section-title", {}, "Deck"),
         ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: "Group meeting · 2026", colours: false, key: "deck.footer", onInput: typeDeck("footer") })),
         ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", key: "deck.id", onInput: typeDeck("id") }), { hint: `${deck.id || "talk"}.pptx, ${deck.id || "talk"}.pdf` })),

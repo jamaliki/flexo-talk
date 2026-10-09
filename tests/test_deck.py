@@ -269,6 +269,40 @@ def test_a_line_that_inhibits_or_catalyses_keeps_its_head_in_powerpoint(tmp_path
         assert line is not None and line.group(0).count("<a:custGeom>") >= 2, head
 
 
+def test_a_dot_or_diamond_head_is_a_slide_programs_own_line_end_round_the_lines_end(tmp_path: Path) -> None:
+    from flexo_talk.document import deck_from_document
+
+    nodes = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
+    edges = [{"from": "a", "to": "b", "arrow": "both", "head": "diamond", "tail": "dot"}]
+    figure = {"figure": {"id": "f"}, "nodes": nodes, "edges": edges}
+    deck = deck_from_document({"deck": {"id": "ends"}, "slides": [{"title": "Ends", "body": [{"figure": figure}]}]},
+                              tmp_path)
+    xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
+    assert re.findall(r'<a:(headEnd|tailEnd) type="(\w+)"', xml) == [("headEnd", "oval"), ("tailEnd", "diamond")]
+    # One connector, its heads the slide program's own: neither is drawn as a shape of its own.
+    line = re.search(r"<p:cxnSp>.*?</p:cxnSp>", xml, re.S)
+    assert line is not None and "<a:custGeom>" not in line.group(0)
+
+
+def test_a_decks_arrowheads_draw_every_arrow_of_its_figures_in_that_shape(tmp_path: Path) -> None:
+    from flexo.drawing import read_drawing
+
+    from flexo_talk import compose
+    from flexo_talk.document import deck_from_document
+
+    nodes = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
+    figure = {"figure": {"id": "f"}, "nodes": nodes, "edges": [{"from": "a", "to": "b"}]}
+
+    def shapes(**deck: object) -> set[str]:
+        slides = [{"title": "Heads", "body": [{"figure": figure}]}]
+        made = deck_from_document({"deck": {"id": "heads", **deck}, "slides": slides}, tmp_path)
+        drawing = read_drawing(compose.render_slide(made, made.slides[0]).svg)
+        return {head.shape for item in drawing.walk() for head in getattr(item, "arrowheads", ())}
+
+    assert shapes() == {"stealth"}
+    assert shapes(conventions={"arrowheads": "triangle"}) == {"triangle"}
+
+
 def test_a_tall_formula_opens_only_its_own_line_and_its_words_read_as_one_paragraph(tmp_path: Path) -> None:
     pdfium = pytest.importorskip("pypdfium2")
     from flexo_talk import compose
