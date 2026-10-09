@@ -1770,10 +1770,12 @@ class Deck:
         made.source.update(author=author, date=date)
         parts = [part for part in (author, date) if part]
         # In a right-to-left byline a middle dot reads as the Persian and Arabic zero
-        # (15 and a dot read as 150): a dash keeps author and date apart.
+        # (15 and a dot read as 150): a dash keeps author and date apart. An author of
+        # several lines (a name over a place) has the date on a line of its own under it.
         from flexo.bidi import has_rtl
 
-        byline = (" \u2013 " if any(has_rtl(part) for part in parts) else " · ").join(parts)
+        between = "\n" if "\n" in author.strip() else " \u2013 " if any(has_rtl(part) for part in parts) else " · "
+        byline = between.join(parts)
         made.byline_runs = inline(byline) if byline else ()
         return made
 

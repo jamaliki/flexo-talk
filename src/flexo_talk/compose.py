@@ -730,11 +730,24 @@ def _skipped(slide: Slide) -> bool:
     return bool((getattr(slide, "source", None) or {}).get("skip"))
 
 
-def _section_number(slide: Slide) -> int:
-    # (Where it is among the slides there are: an export has none of those skipped.)
+def _upto(slide: Slide) -> list[Slide]:
+    """The deck's slides up to and with this one, where it is among the slides there are:
+    an export has none of those skipped."""
+
     slides = slide.deck.slides
-    upto = slides.index(slide) + 1 if slide in slides else slide.index
-    return sum(other.layout == "section" and not _skipped(other) for other in slides[:upto])
+    return slides[: slides.index(slide) + 1 if slide in slides else slide.index]
+
+
+def _section_number(slide: Slide) -> int:
+    return sum(other.layout == "section" and not _skipped(other) for other in _upto(slide))
+
+
+def _slide_number(slide: Slide) -> int | None:
+    """The number a slide is shown with, as Keynote numbers them: its place among the slides
+    presented, those skipped not counted -- so the show, the PDF and the PowerPoint agree.
+    A slide skipped has none."""
+
+    return None if _skipped(slide) else sum(not _skipped(other) for other in _upto(slide))
 
 
 def _heading(canvas: _Canvas, slide: Slide) -> float:
@@ -1194,10 +1207,11 @@ def _furniture(canvas: _Canvas, slide: Slide) -> None:
     footer = inline(deck.footer) if deck.footer else ()
     # A footer in a right-to-left script stands at the right, the number at the left.
     rtl = bool(footer) and _rtl(footer)
-    if style.numbers:
+    number = _slide_number(slide)
+    if style.numbers and number is not None:
         x = style.margin if rtl else style.width - style.margin - 60.0
         canvas.words(
-            f"{slide.id}.number", (TextRun(str(slide.index)),),
+            f"{slide.id}.number", (TextRun(str(number)),),
             Box(x, y, 60.0, 0.0), size=size, align="start" if rtl else "end", role="muted-ink",
         )
     if footer:

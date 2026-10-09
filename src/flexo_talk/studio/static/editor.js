@@ -8,7 +8,7 @@ import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus,
 import { figureParts, widenLines, fileLabel, markupOf, oneLine } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
-import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
+import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
 import { follows, merge3 } from "/static/studio/merge.js";
 
 const BLOCKS = {
@@ -256,8 +256,8 @@ function summary(block) {
     case "figure": return typeof value === "string" ? value : structures(block) ? value.nodes.map((node) => readable(String(node.label ?? ""))).filter(Boolean).join(", ") || "Structure"
       : count((value?.nodes || []).length, "shape");
     case "image": return value || "No picture chosen";
-    // Named as the slide names one waiting for its folder to be trusted: "spread from plots.py".
-    case "plot": { const [file, name] = String(value || "").split(/:(?=[^:]*$)/); return !value ? "No function chosen" : name && file ? `${name} from ${file}` : String(value); }
+    // Named as the person wrote it, as the slide names one held back ("spread from plots.py").
+    case "plot": { const [, file, name] = /^(.*):([^:]+)$/.exec(String(value ?? "")) || []; return file && name ? `${name} from ${file}` : value || "No function chosen"; }
     case "callout": return plain(block.title) || plain(value);
     case "math": return mathWords(value) || "Empty equation";
     // Its steps, and what is written by them (a step's name, its reagents) -- never its SMILES.
@@ -793,7 +793,19 @@ export function mount(studio, container) {
     // A slider dragged, or a colour moved through in the system's picker, is one step in the
     // history from where it was taken to where it was let go, as in Keynote: its values on
     // the way are one run, ended when it is let go (its change), so the next drag is another.
+    // A slider moved by its keys (←, →, Page Up…) is one step however many presses, as an
+    // object nudged by them is: ended as the keys leave it (leftField) or it is dragged.
+    let keyed = null;
+    container.addEventListener("keydown", (event) => {
+      const target = event.target;
+      if (target?.tagName === "INPUT" && target.type === "range" && /^(Arrow|Page|Home$|End$)/.test(event.key)) keyed = target;
+    }, true);
+    container.addEventListener("keyup", () => { keyed = null; }, true);
+    container.addEventListener("pointerdown", (event) => {
+      if (event.target?.tagName === "INPUT" && event.target.type === "range" && studio.lastMerge) studio.step();
+    }, true);
     container.addEventListener("change", (event) => {
+      if (event.target === keyed) return;
       if (event.target?.tagName === "INPUT" && !TYPED.test(event.target.type || "text")) studio.step();
     }, true);
   };
@@ -897,8 +909,11 @@ export function mount(studio, container) {
     const made = NEW_SLIDES[layout]();
     // (After a slide just like it there -- another's new slide, made a moment ago, not yet
     // typed in: merges know slides by what they hold, the first of two alike taken for the
-    // first, so this one, made later, goes later, and neither is typed in for the other.)
-    while (at < slides().length && same(slides()[at], made)) at += 1;
+    // first, so this one, made later, goes later, and neither is typed in for the other.
+    // With no one else here there is no other's to take it for: it goes right after the
+    // slide shown, as in Keynote -- a new deck's title slide followed by it, not by its blank
+    // second slide.)
+    if (studio.others().length) while (at < slides().length && same(slides()[at], made)) at += 1;
     const shown = slides().length ? [Math.min(state.slide, slides().length - 1)] : null;
     studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, made); }, { label: "Add Slide" });
     // (Named as what was done, where: not "Duplicate Slide", nor the place of a slide just
@@ -1035,17 +1050,22 @@ export function mount(studio, container) {
     pickedLeft = null;
   }
   function pickSlide(index, event) {
+    // ⇧-click: a run from the slide it began at -- the one clicked, or ⌘-clicked, last without
+    // ⇧ -- to this one, as a Mac list extends one: a ⇧-click after it moves where it ends, not
+    // where it begins (runFrom, as ⇧↓ keeps it).
     if (event.shiftKey && slides().length) {
-      const from = Math.min(state.slide, index), to = Math.max(state.slide, index);
-      const run = Array.from({ length: to - from + 1 }, (_, n) => from + n);
+      const from = state.picked.length > 1 && runFrom !== null ? runFrom : state.slide;
+      const low = Math.min(from, index), high = Math.max(from, index);
       select(index);
-      state.picked = run;
+      state.picked = Array.from({ length: high - low + 1 }, (_, n) => low + n);
+      runFrom = from;
     } else if (event.metaKey || event.ctrlKey) {
       const now = new Set(chosenSlides());
       if (now.has(index) && now.size > 1) now.delete(index); else now.add(index);
       const shown = now.has(index) ? index : Math.min(...now);
       select(shown);
       state.picked = [...now];
+      runFrom = shown;
     } else { select(index); return; }
     railList.focus({ preventScroll: true });
     renderRail();
@@ -1398,7 +1418,7 @@ export function mount(studio, container) {
       renderRail();
     }
   });
-  let runFrom = null;  // where a run of slides chosen with ⇧↓ began
+  let runFrom = null;  // where a run of slides chosen with ⇧↓ or ⇧-click began
   // Keys go to what was chosen last: once something on the slide is chosen, not the slides.
   const offRail = () => { if (railList.contains(document.activeElement)) document.activeElement.blur(); };
 
@@ -1900,13 +1920,24 @@ export function mount(studio, container) {
     return best ? best.item : null;
   }
   // Which of a title slide's author and date -- drawn as one line, its byline -- is under a
-  // point: the date from the dot between them on.
+  // point: the date from the dot between them on, or, under an author of several lines,
+  // from the line it starts.
   function bylineAt(point) {
     const slide = slideAt() || {};
     const said = (words) => readable(String(words ?? "")).replace(/\s+/g, " ").trim();
     const author = said(slide.author), date = said(slide.date);
     if (!author || !date || !point) return author || !date ? "author" : "date";
     const element = pageNode?.querySelector(`[id="${CSS.escape(fieldId("author"))}"]`);
+    if (String(slide.author).trim().includes("\n")) {
+      // (Its letters counted back from the end, as its lines drop the spaces they break at.)
+      const text = element ? wordsIn(element).at(-1) : null, words = text?.textContent || "";
+      let at = words.length;
+      for (let left = date.replace(/\s/g, "").length; at > 0 && left > 0; at -= 1) if (/\S/.test(words[at - 1])) left -= 1;
+      const ctm = text?.getScreenCTM();
+      if (!ctm || at >= words.length) return "author";
+      const box = text.getExtentOfChar(at);
+      return point.y >= new DOMPoint(box.x, box.y).matrixTransform(ctm).y ? "date" : "author";
+    }
     let before = 0;
     for (const text of element ? wordsIn(element) : []) {
       const words = text.textContent || "";
@@ -4080,15 +4111,19 @@ export function mount(studio, container) {
   // that follows (one step in the history, "Undo Typing" taking all of it back), not a step
   // of their own (see typingSteps).
   const typedOver = () => new CustomEvent("input", { bubbles: true, detail: { tidy: true } });
-  // How many of the slide's drawn words (not those being typed) a rect on the page covers:
-  // the format bar is put where it covers least.
+  // How much of the slide's drawn words (not those being typed) a rect on the page covers:
+  // the format bar is put where it covers least. So too of a byline's other part, shown by
+  // the words typed in place of its drawing (an author over the date typed).
   function wordsUnder(rect) {
     if (!pageNode) return 0;
-    return [...pageNode.querySelectorAll("text")].filter((text) => {
-      if (!text.textContent.trim() || getComputedStyle(text).visibility === "hidden") return false;
-      const box = text.getBoundingClientRect();
-      return box.width && box.left < rect.right && box.right > rect.left && box.top < rect.bottom && box.bottom > rect.top;
-    }).length;
+    const drawn = [...pageNode.querySelectorAll("text")].reduce((sum, text) => {
+      if (!text.textContent.trim() || getComputedStyle(text).visibility === "hidden") return sum;
+      return sum + overlap(text.getBoundingClientRect(), rect);
+    }, 0);
+    if (!inline?.node.classList.contains("byline-part")) return drawn;
+    const { left, top, right, bottom } = inline.node.getBoundingClientRect(), own = inline.area.getBoundingClientRect();
+    const others = [{ left, top, right, bottom: own.top }, { left, top: own.bottom, right, bottom }, { left, top, right: own.left, bottom }, { left: own.right, top, right, bottom }];
+    return drawn + others.reduce((sum, part) => sum + overlap(part, rect), 0);
   }
   // What a slide's line of words shows while it is empty, on the slide and in the panel alike.
   const fieldHint = (key, slide) => ({
@@ -5175,17 +5210,30 @@ export function mount(studio, container) {
     const node = inline.node;
     if (key !== "author" && key !== "date" && key !== "by") return;
     const slide = slideAt() || {};
-    const other = key === "by" ? "" : plain(slide[key === "author" ? "date" : "author"] ?? "").trim();
+    // (All its lines: an author of several shows them all over the date.)
+    const other = key === "by" ? "" : readable(String(slide[key === "author" ? "date" : "author"] ?? "")).trim();
+    // An author of several lines has the date on a line of its own under it (deck.py's
+    // title): so too as it is typed, from the Return that starts its second line.
+    const area = inline.area;
+    const stacking = () => key !== "by" && Boolean(other) && /\S[^]*\n/.test(key === "author" ? (area.rich ? area.letters() : area.value) : String(slide.author ?? "").trim());
+    const stacked = stacking();
     // A dash, not a middle dot, in a right-to-left byline (deck.py's title).
     const between = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/.test(`${slide.author ?? ""}${slide.date ?? ""}`) ? " \u2013 " : " \u00b7 ";
     node.classList.add("byline-part");
-    node.dataset.before = key === "by" ? "\u2014 " : key === "date" && other ? `${other}${between}` : "";
-    node.dataset.after = key === "author" && other ? `${between}${other}` : "";
+    node.classList.toggle("stacked", stacked);
+    node.dataset.before = key === "by" ? "\u2014 " : key === "date" && other ? `${other}${stacked ? "" : between}` : "";
+    node.dataset.after = key === "author" && other ? `${stacked ? "" : between}${other}` : "";
     // Empty, as wide as its placeholder ("Date"), which it shows.
     inkPen.font = `${look?.weight || 400} ${size}px ${look?.family || "sans-serif"}`;
     inline.area.style.minWidth = `${Math.ceil(inkPen.measureText(inline.area.dataset.placeholder || "").width) + 10}px`;
+    const side = centred ? "center" : look?.anchor === "end" ? "flex-end" : "flex-start";
     Object.assign(node.style, { fontSize: `${size}px`, fontFamily: look?.family || "", fontWeight: look?.weight || "", color: look?.colour || "",
-      justifyContent: centred ? "center" : look?.anchor === "end" ? "flex-end" : "flex-start" });
+      justifyContent: stacked ? "" : side, alignItems: stacked ? side : "", textAlign: centred ? "center" : "" });
+    // (Typed, a line more or fewer in the author moves the date: under it, or beside it.)
+    if (key === "author" && !area.restacks) {
+      area.restacks = true;
+      area.addEventListener("input", () => { if (inline?.area === area && node.classList.contains("stacked") !== stacking()) positionInline(); });
+    }
   }
   // Where an object not yet drawn (a text just added) will be: under the one before it, in
   // its words' look.
@@ -5457,8 +5505,9 @@ export function mount(studio, container) {
       }
     }
     // So does a new line left empty at the end of the words (or of a list's item): a Return
-    // that waited for words that never came.
-    const ended = inline.bullets ? area.value.split("\n").map((line) => line.replace(TRAILING_BREAKS, "")).join("\n") : area.value.replace(/\n+$/, "");
+    // that waited for words that never came -- and one left empty before them, which the
+    // slide does not draw.
+    const ended = inline.bullets ? area.value.split("\n").map((line) => line.replace(TRAILING_BREAKS, "")).join("\n") : area.value.replace(/\n+$/, "").replace(/^([ \t]*\n)+/, "");
     if (ended !== area.value && ended.trim()) {
       area.value = ended;
       tidied();
@@ -6178,7 +6227,8 @@ export function mount(studio, container) {
       h("div.section.block-top", {}, crumbs(slide, block),
         // In the order they are drawn, for Tab. (Its words are edited on the slide -- Return, or a
         // double-click -- or in the field below.)
-        h("div.block-actions", {},
+        // (With the breadcrumb, the inspector's head: ⌥⌘I passes them.)
+        h("div.block-actions", { dataset: { head: "" } },
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up (⌥↑)", disabled: at.index === 0 }),
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down (⌥↓)", disabled: at.index >= count - 1 }),
           ui.button("", () => { if (!awayFrom("duplicate objects")) duplicateBlock(at); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
@@ -6740,6 +6790,16 @@ export function mount(studio, container) {
       if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.isComposing)) { event.stopPropagation(); area.blur(); }
     });
     onRich(area, onInput);
+    // A new line left empty before the words or after them goes as the field is left, as on
+    // the slide (trimTyped): one with the typing. (Not as it is drawn again under the keys --
+    // keepFocus gives them back to it, typed on in -- nor for its format bar's link field.)
+    if (!list) area.addEventListener("blur", () => setTimeout(() => {
+      if (document.activeElement?.dataset?.key === key || area.holding?.()) return;
+      const ended = area.value.replace(/\n+$/, "").replace(/^([ \t]*\n)+/, "");
+      if (ended === area.value || !ended.trim()) return;
+      area.value = ended;
+      area.dispatchEvent(new CustomEvent("input", { bubbles: true, detail: { tidy: true } }));
+    }, 0));
     return h(`div.rich-field${short ? ".single" : ""}`, {}, area);
   }
 
@@ -7938,12 +7998,13 @@ export function mount(studio, container) {
 
   // ⌘B and ⌘I with words chosen, not being typed in (a text, a list, a title): all their
   // words bold (italic), or none when all are already, as Keynote does to a text box chosen.
-  function emphasiseChosen(look) {
+  // (`asking`: whether it would, for the Format menu, nothing done.)
+  function emphasiseChosen(look, { asking = false } = {}) {
     const label = look === "bold" ? "Bold" : "Italic";
     // Several chosen: the words of all those that have words, as one -- all bold, or none.
     if (allOn()) {
       const worded = allBlocks().filter(({ block }) => WORDY.has(kindOf(block)));
-      if (!worded.length) return false;
+      if (!worded.length || asking) return Boolean(worded.length);
       const linesOf = (block) => (kindOf(block) === "bullets" ? bulletsText(block.bullets).split("\n") : [String(block[kindOf(block)] ?? "")]);
       const all = worded.flatMap(({ block }) => linesOf(block).map((line) => line.trim()));
       const made = emphasised(all, look);
@@ -7969,6 +8030,7 @@ export function mount(studio, container) {
     if (block) {
       const kind = kindOf(block);
       if (!WORDY.has(kind) || !bulletsText(kind === "bullets" ? block.bullets : block[kind] ?? "").trim()) return false;
+      if (asking) return true;
       editBlock(state.focus, (b) => {
         if (kindOf(b) !== kind) return;
         if (kind !== "bullets") { b[kind] = emphasised([String(b[kind] ?? "")], look)[0]; return; }
@@ -7980,6 +8042,7 @@ export function mount(studio, container) {
     }
     const key = state.field?.field;
     if (!key || typeof slideAt()?.[key] !== "string" || !slideAt()[key].trim()) return false;
+    if (asking) return true;
     editSlide((s) => { s[key] = emphasised([s[key]], look)[0]; }, { label });
     return true;
   }
@@ -8090,9 +8153,11 @@ export function mount(studio, container) {
     if (mod && event.altKey && key.toLowerCase() === "i") {
       event.preventDefault();
       // (A field of words is one, though its tabIndex reads -1 with none set: the slide's
-      // Title is the first, as in Keynote's inspector.)
-      const first = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")]
-        .find((node) => node.offsetParent && (node.tabIndex >= 0 || (node.isContentEditable && !node.hasAttribute("tabindex"))));
+      // Title is the first, as in Keynote's inspector. An object's head -- the breadcrumb, its
+      // buttons, a figure's shape's too -- is passed, to what changes it.)
+      const controls = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")]
+        .filter((node) => node.offsetParent && !node.disabled && (node.tabIndex >= 0 || (node.isContentEditable && !node.hasAttribute("tabindex"))));
+      const first = controls.find((node) => !node.closest(".crumbs, .insp-actions, [data-head]")) || controls[0];
       // Ringed, as the keys brought it there (a web view rings nothing focused by a shortcut).
       if (first) {
         first.focus({ focusVisible: true });
@@ -8253,18 +8318,23 @@ export function mount(studio, container) {
     ...clipCommands(),
     ...chosenCommands(),
     ...(slides().length ? slideCommands() : []),
-    // Words being typed: the Mac app's Format menu's Bold, Italic, Code and Inline Equation,
-    // and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the field's own). Link… wants words chosen, or
-    // the caret in a link.
-    ...(inline?.area?.rich ? [["bold", "Bold", "b"], ["italic", "Italic", "i"], ["code", "Code", "e"], ["math", "Inline Equation", "e", true], ["link", "Link…", "k"]].map(([name, label, key, alt = false]) => ({
+    // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
+    // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the
+    // field's own; Link… with nothing chosen links the word at the caret, or else makes a link
+    // of the address typed, as ⌘K does).
+    ...(richNow() ? [["bold", "Bold", "b"], ["italic", "Italic", "i"], ["code", "Code", "e"], ["math", "Inline Equation", "e", true], ["link", "Link…", "k"]].map(([name, label, key, alt = false]) => ({
       icon: name, label, keys: `${alt ? "⌥" : ""}⌘${key.toUpperCase()}`,
-      ...(name === "link" && !linkable() ? { disabled: true, hint: "Choose the words to link" } : {}),
       // As if its keys were pressed in the field, which knows what bold means there (a bold title).
       run: () => {
-        const mac = /Mac|iP/.test(navigator.platform);
-        inline?.area.focus();
-        inline?.area.dispatchEvent(new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, metaKey: mac, ctrlKey: !mac, altKey: alt, bubbles: true, cancelable: true }));
-      } })) : []),
+        const mac = /Mac|iP/.test(navigator.platform), area = richNow();
+        area?.focus();
+        area?.dispatchEvent(new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, metaKey: mac, ctrlKey: !mac, altKey: alt, bubbles: true, cancelable: true }));
+      } }))
+      // Not typing, with words chosen -- an object of words, several, a title: Bold and Italic
+      // make all their words so, as ⌘B and ⌘I do.
+      : !typingNow() && emphasiseChosen("bold", { asking: true }) ? [["bold", "Bold", "b"], ["italic", "Italic", "i"]].map(([name, label, key]) => ({
+        icon: name, label, keys: `⌘${key.toUpperCase()}`, run: () => emphasiseChosen(name) }))
+        : []),
     ...(state.slide < slides().length - 1 ? [{ icon: "down", label: "Go to Next Slide", run: () => select(state.slide + 1) }] : []),
     ...(state.slide > 0 ? [{ icon: "up", label: "Go to Previous Slide", run: () => select(state.slide - 1) }] : []),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
@@ -8322,11 +8392,12 @@ export function mount(studio, container) {
       document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
     }).catch(() => toast("Paste with ⌘V: the studio may not read the clipboard here.", { icon: "paste", seconds: 3 }));
   }
-  // Words chosen in what is typed, or the caret in a link: what Link… acts on.
-  function linkable() {
-    const chosenWords = window.getSelection();
-    if (!inline?.area || !chosenWords?.rangeCount || !inline.area.contains(chosenWords.anchorNode)) return false;
-    return !chosenWords.isCollapsed || Boolean(chosenWords.anchorNode.parentElement?.closest("a"));
+  // The words being typed, as the slide shows them: on the slide, or in a field of the
+  // inspector (its title, a text's words).
+  function richNow() {
+    if (inline?.area?.rich) return inline.area;
+    const keys = document.activeElement;
+    return keys?.rich && inspectorBody.contains(keys) ? keys : null;
   }
   function chosenCommands() {
     // Several chosen: Arrange moves them all, where any can go.

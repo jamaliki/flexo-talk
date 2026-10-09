@@ -78,8 +78,9 @@ def build_deck(
     folder, prefix = (directory, name) if images is None else (images, "slide")
     if images is not None and {"svg", "png"} & set(formats):
         folder.mkdir(parents=True, exist_ok=True)
-    for item in rendered:
-        stem = f"{prefix}-{item.slide.index:0{digits}d}"
+    # (Numbered as the slides are shown: a slide skipped leaves no gap -- compose._slide_number.)
+    for number, item in enumerate(rendered, 1):
+        stem = f"{prefix}-{number:0{digits}d}"
         if "svg" in formats:
             path = folder / f"{stem}.svg"
             path.write_text(item.svg, encoding="utf-8")

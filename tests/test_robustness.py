@@ -648,6 +648,15 @@ def test_a_date_is_written_as_a_document_writes_one() -> None:
     assert DeckKind().parse("title: yes\ndate: 2026-10-01\n") == {"title": "yes", "date": "2026-10-01"}
 
 
+def test_an_author_of_several_lines_has_the_date_on_a_line_of_its_own() -> None:
+    # Not after the author's last line (a place under a name), as one byline line would.
+    deck = Deck("d")
+    one = deck.title("T", author="Ada Lovelace", date="2026")
+    several = deck.title("T", author="Ada Lovelace\nUniversity College London", date="2026")
+    assert "".join(run.text for run in one.byline_runs) == "Ada Lovelace · 2026"
+    assert "".join(run.text for run in several.byline_runs) == "Ada Lovelace\nUniversity College London\n2026"
+
+
 def test_a_document_nested_past_any_deck_is_refused_in_words(tmp_path: Path) -> None:
     deep: list = ["x"]
     for _ in range(3000):
@@ -965,4 +974,6 @@ def test_the_command_line_build_leaves_out_a_skipped_slide(tmp_path: Path) -> No
     )
     out = tmp_path / "out"
     assert main(["build", str(tmp_path / "talk.yaml"), "--formats", "svg", "-o", str(out)]) == 0
-    assert sorted(path.name for path in out.glob("*.svg")) == ["skips-01.svg", "skips-03.svg"]
+    # Numbered as they are shown, as the numbers drawn on them are: no gap where one was skipped.
+    assert sorted(path.name for path in out.glob("*.svg")) == ["skips-01.svg", "skips-02.svg"]
+    assert "Three" in (out / "skips-02.svg").read_text(encoding="utf-8")
