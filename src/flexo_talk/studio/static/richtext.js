@@ -440,11 +440,18 @@ function markupOf(runs) {
   return out + closeAll() + pending;
 }
 
-// An element as copies of it a line each, and the line ends ("\n") between them.
+// An element as copies of it a line each, and the line ends ("\n") between them: its line
+// breaks, and the "\n" a field that keeps its spaces types for one (a Return at a colour's
+// or a link's edge, typed in it).
 function byLine(element) {
-  if (!element.querySelector("br")) return [element];
+  const own = element.cloneNode(true);
+  const typed = [];
+  const walker = document.createTreeWalker(own, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) if (text.data.includes("\n")) typed.push(text);
+  for (const text of typed) text.replaceWith(...text.data.split("\n").flatMap((part, n) => [...(n ? [document.createElement("br")] : []), ...(part ? [document.createTextNode(part)] : [])]));
+  if (!own.querySelector("br")) return [element];
   const parts = [];
-  const rest = element.cloneNode(true);
+  const rest = own;
   for (let end = rest.querySelector("br"); end; end = rest.querySelector("br")) {
     const before = document.createRange();
     before.setStart(rest, 0);
@@ -523,7 +530,10 @@ export function richText({ value = "", list = false, single = false, breakWith =
     const line = document.createElement("div");
     line.className = "rt-line";
     line.dataset.level = String(level);
-    line.append(...inlineNodes(words, colours));
+    line.append(...inlineNodes(words.replaceAll(ITEM_BREAK, "\n"), colours));
+    // A line break in an item is the "\n" ⇧Return types in it, as the field keeps its
+    // spaces: its letters counted as typed ones are (a <br> in an item only holds its place).
+    for (const end of line.querySelectorAll("br")) end.replaceWith("\n");
     if (!line.childNodes.length) line.append(document.createElement("br"));
     return line;
   };
@@ -546,7 +556,7 @@ export function richText({ value = "", list = false, single = false, breakWith =
   const read = () => {
     tidy();
     const strip = (text) => text.replace(/\n$/, "");
-    if (list) return lines().map((line) => "  ".repeat(Number(line.dataset.level) || 0) + strip(serialise(line, undefined, names)).replace(/\n/g, " ")).join("\n");
+    if (list) return lines().map((line) => "  ".repeat(Number(line.dataset.level) || 0) + strip(serialise(line, undefined, names)).replace(/\n/g, ITEM_BREAK)).join("\n");
     const text = strip(serialise(area, undefined, names));
     return single ? text.replace(/\n/g, " ") : text;
   };
@@ -647,9 +657,10 @@ export function richText({ value = "", list = false, single = false, breakWith =
   // (a menu's or the system's), which saving would drop.
   area.addEventListener("beforeinput", (event) => {
     if (/^format/.test(event.inputType) && !["formatBold", "formatItalic"].includes(event.inputType)) event.preventDefault();
-    // A line of its own takes no second line, however asked for (⌃O, a menu).
+    // A line of its own takes no second line, however asked for (⌃O, a menu); a list's item
+    // one only as ⇧Return makes it (lineBreak), not as the browser would.
     if (single && /^insert(LineBreak|Paragraph)$/.test(event.inputType)) event.preventDefault();
-    if (list && event.inputType === "insertLineBreak") event.preventDefault();
+    if (list && event.inputType === "insertLineBreak" && !breaking) event.preventDefault();
     if (overAtoms(event)) return;
     // Typing at a link's end goes on after it, as in Pages and Keynote: a link ends where it
     // ends (the caret in its last letters or just past it, where the browser would type in it);
@@ -901,12 +912,16 @@ export function richText({ value = "", list = false, single = false, breakWith =
       return;
     }
     if (event.key !== "Enter" || event.isComposing) return;
-    // One line (a title, a cell): no line break, which it would not keep.
+    // ⌘Return ends the typing, wherever it is: whoever holds the field ends it.
+    if (mod) { event.preventDefault(); return; }
+    // One line (a number): no line break, which it would not keep.
     if (single) { event.preventDefault(); return; }
+    // ⇧Return (or ⌥Return) is a new line in a list's item, or a table's cell, whose Return
+    // is another's: the next item, the cell below.
+    const within = event.shiftKey || event.altKey;
+    if (breakWith === "shift" && !within) return;
     event.preventDefault();
-    // (A list's item is one line, as the deck writes it: ⇧Return breaks no line in it.)
-    if (list && event.shiftKey) return;
-    if (!list) { document.execCommand("insertLineBreak"); return; }
+    if (!list || within) { lineBreak(); return; }
     // Return ends an item and starts the next at its level; on an empty item, it moves out a level.
     const s = selection();
     if (!s.rangeCount) return;
@@ -1559,7 +1574,8 @@ export function richText({ value = "", list = false, single = false, breakWith =
     const holder = document.createElement("div");
     holder.append(onWords(s.getRangeAt(0)).cloneContents());
     const items = list && holder.querySelector(".rt-line")
-      ? [...holder.children].filter((line) => line.classList?.contains("rt-line")).map((line) => ({ level: Number(line.dataset.level) || 0, markup: serialise(line, undefined, names).replace(/\n/g, " "), text: line.textContent }))
+      // (A line break in an item kept in its HTML; in plain words, one item a line, a space.)
+      ? [...holder.children].filter((line) => line.classList?.contains("rt-line")).map((line) => ({ level: Number(line.dataset.level) || 0, markup: serialise(line, undefined, names).replace(/\n$/, ""), text: line.textContent.replace(/\n/g, " ") }))
       : null;
     let html, text;
     if (items) {

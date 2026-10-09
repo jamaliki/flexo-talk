@@ -403,7 +403,7 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .list-row:has(> .rich-field) { align-items: flex-start; }
 .list-row:has(> .rich-field) > button { margin-top: 3px; }
 .list-add { scroll-margin-bottom: 16px; }
-.list-row > .input { flex: 1; }
+.list-row > .input, .list-row > .rich-field { flex: 1; min-width: 0; }
 .list-row .pic, .menu-item .pic { width: 34px; height: 34px; border-radius: 5px; background: var(--sunken); border: 1px solid var(--line); object-fit: cover; flex: none; }
 .list-row .pic.round { border-radius: 50%; }
 .figure-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); }
