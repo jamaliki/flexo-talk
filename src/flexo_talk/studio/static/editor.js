@@ -7556,7 +7556,8 @@ export function mount(studio, container) {
     // The whole deck in one face, a click away -- its titles and figures too: the theme's,
     // or one of those most often wanted. The pop-ups under them set each apart.
     const families = studio.info?.fonts || {};
-    const quick = suggestedFonts(catalog.fonts || []).filter((name) => name !== "Helvetica Neue").slice(0, 7);
+    // (The theme's own face is the Theme tile's: not offered twice.)
+    const quick = suggestedFonts(catalog.fonts || []).filter((name) => name !== "Helvetica Neue" && name !== families.theme).slice(0, 7);
     const one = !deck.title_font && !deck.figure_font ? deck.font || "" : null;
     const fontTile = (name, label, face) => h(`button.font-tile${one === name ? ".on" : ""}`, { type: "button", "aria-pressed": String(one === name),
       title: name ? `Set the whole deck in ${name}` : `The theme’s fonts${families.theme ? ` (${families.theme})` : ""}`,
@@ -7586,9 +7587,9 @@ export function mount(studio, container) {
     const changed = Object.keys(changes).length;
     return [
       h("div.section", {}, h("div.section-title", {}, "Theme"),
+        // (Customise… is the button under it, not again in its menu.)
         themeField(studio, { value: deck.theme, fallback: "paper",
-          onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); },
-          onCustomise: () => themeIsFile ? openTheme(studio.folder() + deck.theme) : customiseTheme(deck) }),
+          onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); } }),
         h("div.row", {},
           themeIsFile ? ui.button("Edit Theme", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" })
             : ui.button("Customise…", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Create a theme file based on this theme to edit its colours, fonts and lines" })),
@@ -7598,7 +7599,8 @@ export function mount(studio, container) {
         fontTiles,
         fonts("font", "Body", families.theme ? `Theme’s (${families.theme})` : "Theme’s"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
       // Every arrow in the deck's figures, in one shape (a line with a head of its own keeps it).
-      h("div.section", {}, h("div.section-title", {}, "Figures"),
+      // (Not "Figures", the name of the font field just above.)
+      h("div.section", {}, h("div.section-title", {}, "Arrows"),
         ui.field("Arrowheads", ui.segmented({ value: deck.conventions?.arrowheads || "theme", key: "deck.arrowheads",
           options: [{ value: "theme", label: "Theme", title: "As the theme draws them" },
             ...[["triangle", "Triangle"], ["stealth", "Stealth"], ["latex", "LaTeX"], ["open", "Open"]].map(([value, title]) => ({ value, title, label: icon(`head-${value}`) }))],
