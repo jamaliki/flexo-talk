@@ -256,7 +256,8 @@ function summary(block) {
     case "figure": return typeof value === "string" ? value : structures(block) ? value.nodes.map((node) => readable(String(node.label ?? ""))).filter(Boolean).join(", ") || "Structure"
       : count((value?.nodes || []).length, "shape");
     case "image": return value || "No picture chosen";
-    case "plot": return value || "No function chosen";
+    // Named as the person wrote it, as the slide names one held back ("spread from plots.py").
+    case "plot": { const [, file, name] = /^(.*):([^:]+)$/.exec(String(value ?? "")) || []; return file && name ? `${name} from ${file}` : value || "No function chosen"; }
     case "callout": return plain(block.title) || plain(value);
     case "math": return mathWords(value) || "Empty equation";
     // Its steps, and what is written by them (a step's name, its reagents) -- never its SMILES.
