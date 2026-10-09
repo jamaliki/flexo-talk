@@ -513,8 +513,13 @@ const sameColour = (a, b) => Boolean(a && b) && colourAs(a) === colourAs(b) && c
 // and whether it was numbered; `split`: the words before the caret and after it, as markup --
 // so too `onCells(cells, split)`, but for a list's or one line's).
 // A list's `value` holds a line break within an item as ITEM_BREAK, its items being its lines.
-// `clear(rect)`: how much of what the slide shows round the words a rect over it would cover
-// (its format bar is put where it covers least).
+// `clear(rect)`: how much of what the slide shows round the words a rect over it would cover,
+// as an area (its format bar is put where it covers least: see `overlap`).
+// How much of `one` (a box: left, top, right, bottom) `other` covers, as an area.
+export function overlap(one, other) {
+  return Math.max(0, Math.min(one.right, other.right) - Math.max(one.left, other.left)) * Math.max(0, Math.min(one.bottom, other.bottom) - Math.max(one.top, other.top));
+}
+
 export function richText({ value = "", list = false, single = false, breakWith = "return", numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, clear = null, onCells = null, docked = false, onEnd = null, onListStart = null, onList = null } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}${plain ? " rt-plain" : ""}`;
@@ -1512,12 +1517,20 @@ export function richText({ value = "", list = false, single = false, breakWith =
     const all = document.createRange();
     all.selectNodeContents(area);
     const ownLines = [...all.getClientRects()].filter((rect) => rect.width && rect.height);
+    // (How much of them: a bar over a title's line and one grazing a byline cover one line
+    // each, and it goes where it hides least of the words.)
     const covered = (top) => {
       const rect = { left, top, right: left + own.width, bottom: top + own.height };
-      const meets = (other) => other.left < rect.right && other.right > rect.left && other.top < rect.bottom && other.bottom > rect.top;
-      return ownLines.filter(meets).length + (clear ? clear(rect) : 0);
+      return ownLines.reduce((sum, line) => sum + overlap(line, rect), 0) + (clear ? clear(rect) : 0);
     };
-    const best = places.map((top) => ({ top, covers: covered(top) })).reduce((one, other) => (other.covers < one.covers ? other : one), { top: places[0] ?? over.bottom + 6, covers: Infinity });
+    let best = places.map((top) => ({ top, covers: covered(top) })).reduce((one, other) => (other.covers < one.covers ? other : one), { top: places[0] ?? over.bottom + 6, covers: Infinity });
+    // Covering some either way (a title over the subtitle chosen, a byline under it): the
+    // nearest place clear of them all, over the field's words or under them, if it is near
+    // enough to be theirs.
+    for (let step = 4; best.covers > 0 && step <= own.height * 3; step += 4) {
+      const near = [whole.top - own.height - 6 - step, whole.bottom + 6 + step].find((top) => top >= bounds.top + 4 && top + own.height <= bounds.bottom - 4 && !covered(top));
+      if (near !== undefined) best = { top: near, covers: 0 };
+    }
     const top = keep && barTop !== null ? barTop : within(best.top);
     if (!keep) { barLeft = left; barTop = top; }
     Object.assign(bar.style, { top: `${top}px`, left: `${left}px` });

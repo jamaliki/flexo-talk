@@ -8,7 +8,7 @@ import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus,
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
-import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
+import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
 import { follows, merge3 } from "/static/studio/merge.js";
 
 const BLOCKS = {
@@ -4107,11 +4107,10 @@ export function mount(studio, container) {
   // the format bar is put where it covers least.
   function wordsUnder(rect) {
     if (!pageNode) return 0;
-    return [...pageNode.querySelectorAll("text")].filter((text) => {
-      if (!text.textContent.trim() || getComputedStyle(text).visibility === "hidden") return false;
-      const box = text.getBoundingClientRect();
-      return box.width && box.left < rect.right && box.right > rect.left && box.top < rect.bottom && box.bottom > rect.top;
-    }).length;
+    return [...pageNode.querySelectorAll("text")].reduce((sum, text) => {
+      if (!text.textContent.trim() || getComputedStyle(text).visibility === "hidden") return sum;
+      return sum + overlap(text.getBoundingClientRect(), rect);
+    }, 0);
   }
   // What a slide's line of words shows while it is empty, on the slide and in the panel alike.
   const fieldHint = (key, slide) => ({
