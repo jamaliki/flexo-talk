@@ -28,6 +28,7 @@ from flexo_talk.document import (
     SLIDE_KEYS,
     DeckDocumentError,
     InvalidFigure,
+    InvalidObject,
     MissingFile,
     UnknownLayout,
     UntrustedCode,
@@ -148,7 +149,7 @@ FIELD_LABELS = {
     "title": "Title", "subtitle": "Subtitle", "author": "Author", "date": "Date", "words": "Statement",
     "by": "Attribution", "notes": "Notes", "footnotes": "Footnotes", "background": "Background",
     "shade": "Background", "layout": "Layout", "columns": "Columns", "widths": "Columns", "split": "Columns",
-    "dark": "Background", "align": "Content Position",
+    "dark": "Background", "align": "Content Position", "skip": "Skip Slide",
 }
 """What the studio calls a slide's settings, where a message names one."""
 
@@ -490,7 +491,7 @@ class DeckKind:
 
         from flexo.draft import give_up_if_newer
 
-        from flexo_talk.compose import EDITING, PLACEHOLDERS, render_slide
+        from flexo_talk.compose import CANT_DRAW, EDITING, PLACEHOLDERS, STANDING_ASIDE, render_slide
 
         errors: list[DeckDocumentError] = []
         try:
@@ -501,8 +502,9 @@ class DeckKind:
             return Drawing([], _placed([Message(explain(error), "error", "deck")], document))
         slides = document.get("slides") or []
         # A picture or figure whose file is missing is said, and a box stands in for it:
-        # the rest of its slide is drawn. So is a figure that cannot be drawn as written.
-        stood_in = MissingFile | InvalidFigure | UnknownLayout
+        # the rest of its slide is drawn. So is a figure, or any object, that cannot be
+        # drawn as written.
+        stood_in = MissingFile | InvalidFigure | InvalidObject | UnknownLayout
         absent = [error for error in errors if isinstance(error, stood_in)]
         failed = {_slide_of(error.where): error for error in errors if not isinstance(error, stood_in)}
         deck_data = document.get("deck") or {}
@@ -513,9 +515,10 @@ class DeckKind:
             # A theme file edited in the studio changes every slide without changing the deck.
             "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
         })
+        # (A section skipped is not among them: compose._skipped.)
         sections = [
             (slide.get("title"), slide.get("subtitle")) for slide in slides
-            if isinstance(slide, dict) and slide.get("layout") == "section"
+            if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
         ]
         watched: set[Path] = set(_theme_files(document.get("deck") or {}, base))
         keys: list[str] = []
@@ -528,7 +531,8 @@ class DeckKind:
                 "index": index,
                 "sections": sections if layout == "agenda" else None,
                 "before": sum(
-                    1 for item in slides[:index] if isinstance(item, dict) and item.get("layout") == "section"
+                    1 for item in slides[:index]
+                    if isinstance(item, dict) and item.get("layout") == "section" and not _skipped(item)
                 ),
                 "slide": data,
                 "files": [(str(file), _stamp(file)) for file in files],
@@ -548,7 +552,7 @@ class DeckKind:
                 break
             slide = deck.slides[index]
             give_up_if_newer()  # (a settling given up for a change: flexo.draft)
-            editing, placeholders = EDITING.set(not settle), PLACEHOLDERS.set(True)
+            editing, placeholders, aside = EDITING.set(not settle), PLACEHOLDERS.set(True), STANDING_ASIDE.set(True)
             try:
                 rendered = render_slide(deck, slide)
                 self._slides[keys[index]] = {"svg": _presentable(rendered.svg, deck, slide), "steps": rendered.steps,
@@ -564,6 +568,7 @@ class DeckKind:
             finally:
                 EDITING.reset(editing)
                 PLACEHOLDERS.reset(placeholders)
+                STANDING_ASIDE.reset(aside)
             drawn_one = True
         # Slides with photos carry them inside: the cache is held to a size in bytes too.
         while len(self._slides) > CACHE_SIZE or (
@@ -577,7 +582,8 @@ class DeckKind:
             done = self._slides.get(keys[index])
             for error in absent:
                 if _slide_of(error.where) == index:
-                    code = "deck.missing" if isinstance(error, MissingFile) else "deck.figure"
+                    code = ("deck.missing" if isinstance(error, MissingFile) else "deck.object"
+                            if isinstance(error, InvalidObject) else "deck.figure")
                     if isinstance(error, UnknownLayout):
                         # Drawn all the same, as Content: a note to choose one, not a fault.
                         messages.append(Message(error.message, "warning", error.where, identifier, "deck.layout"))
@@ -599,6 +605,11 @@ class DeckKind:
             else:
                 self._slides.move_to_end(keys[index])
                 for text in done["diagnostics"]:
+                    # An object that can't be drawn says so in its box; why, under the slide.
+                    cant = re.match(rf"(\S+ \S+: )This \w+ {CANT_DRAW}: (.*)", text, re.S)
+                    if cant:
+                        messages.append(_diagnostic(cant[1] + cant[2], identifier, index, "error"))
+                        continue
                     messages.append(_sized(_diagnostic(text, identifier, index, "warning")))
                 for text in done["notes"]:
                     messages.append(_sized(_diagnostic(text, identifier, index, "note")))
@@ -700,15 +711,17 @@ class DeckKind:
         showing it whole, as Keynote's does; with ``steps``, a page per stage of each list
         a slide reveals."""
 
-        from flexo_talk.compose import FIGURE_FAILED
+        from flexo_talk.compose import CANT_DRAW, STANDING_ASIDE
         from flexo_talk.export import build_deck, file_stem
 
         errors: list[DeckDocumentError] = []
         try:
             deck = deck_from_document(document, base, errors=errors)
-            # A figure that can't be drawn is left an empty box, and said (``export_notes``);
-            # anything else wrong stops the export, said where it is.
-            wrong = next((error for error in errors if not isinstance(error, InvalidFigure | UnknownLayout)), None)
+            # An object that can't be drawn, or whose file is not there, is left out, and said
+            # (``export_notes``): one object does not stop the export. A slide that can't be
+            # made at all does, said where it is.
+            stood_in = MissingFile | InvalidFigure | InvalidObject | UnknownLayout
+            wrong = next((error for error in errors if not isinstance(error, stood_in)), None)
             if wrong is not None:
                 raise wrong
         except DeckDocumentError as error:
@@ -719,20 +732,35 @@ class DeckKind:
             # A slide of a layout there is none of is exported as it is drawn: as Content.
             f"{_place(found[0], document)}: {error.message.removesuffix(' Choose one from Layout.')}"
             if isinstance(error, UnknownLayout) and (found := re.match(r"slides\[\d+\]", error.where))
+            else f"{_place(error.where, document) or 'A picture'} is left out: it isn\u2019t in the deck\u2019s "
+            f"folder ({error.name})."
+            if isinstance(error, MissingFile)
             else f"{_place(error.where, document) or 'A figure'}: {_drawn_plainly(error.message)}"
             if getattr(error, "drawn", None) is not None
-            else f"{_place(error.where, document) or 'A figure'} is left empty: it can\u2019t be drawn as it is."
+            else f"{_place(error.where, document) or 'An object'} is left empty: it can\u2019t be drawn as it is."
             for error in errors
         ]
+        # A slide skipped (Keynote's Skip Slide) is not exported, as it is not presented; the
+        # others keep their numbers, as they are shown when presented.
+        skipped = {index for index, data in enumerate(document.get("slides") or []) if _skipped(data)}
+        deck.slides = [slide for index, slide in enumerate(deck.slides) if index not in skipped]
+        if not deck.slides:
+            raise ValueError("Every slide is skipped: there is nothing to export.")
+        self.export_notes = [note for note in self.export_notes
+                             if not (found := re.match(r"Slide (\d+)\b", note)) or int(found[1]) - 1 not in skipped]
         folder = into or base / "build"
         images = folder / file_stem(deck.id) if into is not None else None
-        result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images)
-        # (One that failed only as it was laid out for its slide is left empty too, and said.)
+        aside = STANDING_ASIDE.set(True)
+        try:
+            result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images)
+        finally:
+            STANDING_ASIDE.reset(aside)
+        # (One that failed only as it was drawn for its slide is left empty too, and said.)
         self.export_notes += [
-            f"{_place(f'slides[{int(found[1]) - 1}]', document)} has a figure left empty: "
+            f"{_place(f'slides[{int(found[1]) - 1}] {found[2]}', document)} is left empty: "
             "it can\u2019t be drawn as it is."
             for text in dict.fromkeys(result.diagnostics)
-            if (found := re.match(r"slide(\d+)\b.*" + re.escape(FIGURE_FAILED), text))
+            if (found := re.match(r"slide(\d+) (\S+): This \w+ " + re.escape(CANT_DRAW), text))
         ]
         # A shape it can't draw as written is a plain box of its words, and said so.
         plain: dict[int, list[str]] = {}
@@ -1808,6 +1836,12 @@ def _diagnostic(text: str, identifier: str, index: int, severity: str) -> Messag
     rest = text[len(identifier):].lstrip(" :") if text.startswith(identifier) else text
     region = re.match(r"(\S+):\s*(.*)", rest, re.S)
     where = f"slides[{index}]"
+    # An object of the slide's (``left.0``, ``column2.1``: one that can't be drawn) is said
+    # where the document has it, to be chosen by.
+    own = re.fullmatch(r"(body|left|right|column(\d+))\.(\d+)", region.group(1)) if region else None
+    if own:
+        name = f"columns[{int(own[2]) - 1}]" if own[2] else own[1]
+        return Message(region.group(2), severity, f"{where}.{name}[{own[3]}]", identifier)
     if region and not region.group(1).startswith(("its", "the")):
         return Message(region.group(2), severity, f"{where} {region.group(1)}", identifier)
     return Message(rest, severity, where, identifier)
@@ -1842,7 +1876,8 @@ def _place(where: str, document: Any) -> str:
             slide = document["slides"][index]
             column = int(block.group(2)) if block.group(2) else int(block.group(3) or 1) - 1  # drawn ids count from 1
             region = slide[block.group(1)] if block.group(1) else slide["columns"][column]
-            named = next((BLOCK_LABELS[key] for key in region[int(block.group(4))] if key in BLOCK_LABELS), None)
+            # (One of no kind there is, an object all the same.)
+            named = next((BLOCK_LABELS[key] for key in region[int(block.group(4))] if key in BLOCK_LABELS), "Object")
         except (KeyError, IndexError, TypeError, ValueError):
             named = None
     elif field:
@@ -1850,6 +1885,12 @@ def _place(where: str, document: Any) -> str:
     elif re.match(r"\s+[^\s.#]+#\S", rest):
         named = BLOCK_LABELS.get("figure")  # a part of a figure, named by its id ("f#p:length")
     return f"Slide {index + 1} · {named}" if named else f"Slide {index + 1}"
+
+
+def _skipped(data: object) -> bool:
+    """Whether a slide as the document writes it is skipped (Keynote's Skip Slide)."""
+
+    return isinstance(data, dict) and data.get("skip") is True
 
 
 def _blank(deck, slide) -> str:
@@ -1960,8 +2001,9 @@ def _presentable(svg: str, deck: Any, slide: Any) -> str:
 
     held = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', svg)
     block = re.compile(rf"{re.escape(slide.id)}\.[^.]+\.\d+")
-    # (A figure that can't be drawn says why on the stage, and is a quiet box presented.)
-    invalid = 'data-flexo-talk="invalid"' in svg
+    # (An object that can't be drawn, or whose file is not there, says so on the stage, and
+    # is a quiet box presented.)
+    invalid = 'data-flexo-talk="invalid"' in svg or 'data-flexo-talk="missing"' in svg
     if not invalid and not any(words != "Placeholder" and block.fullmatch(ident) for ident, words in held):
         return svg
     token = PLACEHOLDERS.set(False)

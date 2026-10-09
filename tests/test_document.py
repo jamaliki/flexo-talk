@@ -116,11 +116,25 @@ def test_a_wrong_document_says_where(tmp_path: Path, slide: dict, where: str, wo
 
 def test_a_wrong_slide_stands_aside_when_errors_are_collected(tmp_path: Path) -> None:
     errors: list[DeckDocumentError] = []
-    document = {"deck": {}, "slides": [{"title": "Fine"}, {"body": [{"table": 3}]}, {"title": "Also fine"}]}
+    document = {"deck": {}, "slides": [{"title": "Fine"}, {"title": "T", "colour": "red"}, {"title": "Also fine"}]}
     deck = deck_from_document(document, tmp_path, errors=errors)
     assert [slide.index for slide in deck.slides] == [1, 2, 3]
     assert deck.slides[1].layout == "blank"
-    assert [error.where for error in errors] == ["slides[1].body[0] (table)"]
+    assert [error.where for error in errors] == ["slides[1]"]
+
+
+def test_a_wrong_object_stands_aside_and_the_rest_of_its_slide_is_made(tmp_path: Path) -> None:
+    from flexo_talk.document import InvalidObject
+
+    errors: list[DeckDocumentError] = []
+    slide = {"title": "Kept", "body": [{"table": 3}, {"python": "plots.py:spread"}, {"text": "Words stay"}]}
+    deck = deck_from_document({"deck": {}, "slides": [slide]}, tmp_path, errors=errors)
+    (made,) = deck.slides
+    assert made.layout == "content" and [type(block).__name__ for block in made.regions["body"].blocks] == [
+        "_Missing", "_Missing", "_Words"]
+    assert [(type(error), error.where) for error in errors] == [
+        (InvalidObject, "slides[0].body[0] (table)"), (InvalidObject, "slides[0].body[1]")]
+    assert made.regions["body"].blocks[0].said == "This table can\u2019t be drawn as it is"
 
 
 def test_figures_and_plots_named_by_python_are_made_when_drawn(tmp_path: Path) -> None:
@@ -195,12 +209,50 @@ def test_a_figure_written_in_the_deck_is_read_once_for_each_version(tmp_path: Pa
 
 def test_the_studio_reports_a_wrong_slide_on_its_page(tmp_path: Path) -> None:
     kind = DeckKind()
-    document = {"deck": {}, "slides": [{"title": "Fine"}, {"body": [{"stats": []}]}]}
+    document = {"deck": {}, "slides": [{"title": "Fine"}, {"title": "Not", "colour": "red"}]}
     drawing = kind.draw(document, tmp_path, {})
     assert [page.extra["error"] for page in drawing.pages] == [False, True]
     (message,) = [message for message in drawing.messages if message.severity == "error"]
-    assert message.page == "slide2" and message.where == "slides[1].body[0] (stats)"
-    assert message.place == "Slide 2 · Numbers"
+    assert message.page == "slide2" and message.where == "slides[1]" and message.place == "Slide 2"
+
+
+def test_the_studio_draws_a_slide_with_an_object_that_cannot_be_and_says_which(tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    (tmp_path / "plots.py").write_text("def broken():\n    raise RuntimeError('no data')\n")
+    document = {"deck": {}, "slides": [
+        {"title": "Numbers", "body": [{"stats": []}, {"text": "Words stay"}]},
+        {"layout": "two-columns", "title": "A plot", "left": [{"plot": "plots.py:spred"}],
+         "right": [{"text": "Beside it"}]},
+        {"title": "Another", "body": [{"text": "Above"}, {"plot": "plots.py:broken"}]},
+    ]}
+    kind = DeckKind()
+    drawing = kind.draw(document, tmp_path, {"settle": True})
+    while drawing.unfinished:
+        drawing = kind.draw(document, tmp_path, {"settle": True})
+    # Each slide drawn, the object that can't be a box saying so, the rest as written.
+    assert [page.extra["error"] for page in drawing.pages] == [False, False, False]
+    first, second, third = (page.svg for page in drawing.pages)
+    assert "Words stay" in first and "This object can\u2019t be drawn as it is" in first
+    assert "Beside it" in second and "This plot can\u2019t be drawn as it is" in second
+    assert "Above" in third and 'data-flexo-talk="invalid"' in third
+    # Why, said under its slide, naming it as a person would: to be chosen by.
+    said = [(message.where, message.place, message.text) for message in drawing.messages if message.severity == "error"]
+    assert said[0][:2] == ("slides[0].body[0] (stats)", "Slide 1 \u00b7 Numbers")
+    assert said[1] == ("slides[1].left[0]", "Slide 2 \u00b7 Plot", "plots.py has no function spred")
+    assert said[2][:2] == ("slides[2].body[1]", "Slide 3 \u00b7 Plot") and "no data" in said[2][2]
+    # Presented, and exported, the box is not there: the export goes ahead, and says so.
+    (pdf,) = kind.export(document, tmp_path, "talk", ["pdf"], into=tmp_path / "out")
+    assert pdf.read_bytes().count(b"/Type /Page ") == 3
+    assert kind.export_notes == [
+        "Slide 1 \u00b7 Numbers is left empty: it can\u2019t be drawn as it is.",
+        "Slide 2 \u00b7 Plot is left empty: it can\u2019t be drawn as it is.",
+        "Slide 3 \u00b7 Plot is left empty: it can\u2019t be drawn as it is.",
+    ]
+    svgs = kind.export(document, tmp_path, "talk", ["svg"], into=tmp_path / "svg")
+    assert all("can\u2019t be drawn" not in path.read_text() for path in svgs)
+    # On the command line, a plot that fails stops the build, said.
+    with pytest.raises(DeckDocumentError, match="no function spred"):
+        deck_from_document({"deck": {}, "slides": document["slides"][1:2]}, tmp_path).render()
 
 
 def test_a_missing_picture_or_figure_file_stands_aside_and_its_slide_is_drawn(tmp_path: Path) -> None:
@@ -2401,7 +2453,7 @@ def test_a_figure_that_fails_as_it_is_laid_out_leaves_the_rest_of_its_slide(
     assert any("“Log it”" in message.text for message in drawing.messages)
     kind = DeckKind()
     assert kind.export(document, tmp_path, "t", ["pdf"])
-    assert kind.export_notes == ["Slide 1 has a figure left empty: it can\u2019t be drawn as it is."]
+    assert kind.export_notes == ["Slide 1 \u00b7 Figure is left empty: it can\u2019t be drawn as it is."]
 
 
 def test_a_figure_edited_on_a_slide_is_said_as_the_figure_says_it() -> None:

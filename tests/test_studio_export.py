@@ -110,3 +110,29 @@ def test_shapes_found_wanting_as_they_are_drawn_are_plain_boxes_each_said(tmp_pa
         "Slide 3 \u00b7 Figure: \u201cpUC19\u201d is drawn as a plain box: a plasmid of -5 bp is too short to draw."
         " \u201cTree\u201d is drawn as a plain box: the tree's Newick does not read: a ( is never closed."
     ]
+
+
+def test_a_skipped_slide_is_kept_but_neither_exported_nor_counted_among_the_sections(tmp_path: Path) -> None:
+    import pytest
+
+    from flexo_talk.document import DeckDocumentError, deck_from_document
+
+    deck = {**DECK, "slides": [
+        {"layout": "agenda"},
+        {"layout": "section", "title": "Skipped part", "skip": True},
+        {"layout": "section", "title": "Shown part"},
+        {"title": "Last", "body": [{"text": "Words"}]},
+    ]}
+    kind = DeckKind()
+    # Drawn to be edited, as Keynote's slide navigator shows a slide skipped.
+    drawing = kind.draw(deck, tmp_path, {"settle": True})
+    while drawing.unfinished:
+        drawing = kind.draw(deck, tmp_path, {"settle": True})
+    agenda, skipped, *_ = (page.svg for page in drawing.pages)
+    assert "Skipped part" in skipped
+    # The agenda lists the sections presented, numbered as they are.
+    assert "Shown part" in agenda and "Skipped part" not in agenda
+    (pdf,) = kind.export(deck, tmp_path, "talk", ["pdf"], into=tmp_path / "out")
+    assert _pages(pdf) == 3
+    with pytest.raises(DeckDocumentError, match="skip must be true or false"):
+        deck_from_document({**DECK, "slides": [{"title": "T", "skip": "yes"}]}, tmp_path)

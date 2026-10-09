@@ -457,18 +457,19 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                     if own in empty:
                         del empty[f"{own}.{attribute}"]
     try:
-        # A figure that fails as it is laid out for its place (what flexo did not foresee)
-        # is a box where it would be, as one that can't be read is: the slide is drawn, and
-        # why is said under it.
+        # A figure that fails as it is laid out for its place (what flexo did not foresee),
+        # or any object that fails as it is drawn (a plot whose Python fails), is a box where
+        # it would be, as one that can't be read is: the slide is drawn, and why is said
+        # under it, naming the object where it is (``left.0``).
         failed: list[str] = []
         for _ in range(sum(len(region.blocks) for region in slide.regions.values()) + 1):
             try:
                 rendered = _render_slide(deck, slide, empty)
             except _FigureFailed as failure:
-                swapped = _swap_failed(slide, failure, kept)
-                if not swapped:
+                place = _swap_failed(slide, failure)
+                if place is None:
                     raise failure.error from None
-                failed.append(failure.diagnostic)
+                failed.append(f"{slide.id} {place}: {failure.diagnostic}")
                 continue
             rendered.diagnostics.extend(failed)
             return rendered
@@ -478,31 +479,58 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
             setattr(owner, attribute, value)
 
 
-FIGURE_FAILED = "This figure can\u2019t be drawn as it is"
-"""How a figure that failed as it was laid out for its slide is said (the export's note
-finds it by these words)."""
+STANDING_ASIDE = contextvars.ContextVar("flexo_talk_standing_aside", default=False)
+"""Whether an object that fails as it is drawn -- a plot whose Python fails -- stands aside,
+as the studio has it (a box while editing, nothing presented or exported, and said), or
+stops the build, as on the command line. (A figure flexo fails to lay out always stands
+aside: it is no fault of the deck's.)"""
+
+CANT_DRAW = "can\u2019t be drawn as it is"
+FIGURE_FAILED = f"This figure {CANT_DRAW}"
+"""How an object that failed as it was drawn for its slide is said ("This plot can't be
+drawn as it is"): the export's note finds it by these words."""
+
+_NOUNS = {
+    _Bullets: "list", _Words: "text", _Figure: "figure", _Image: "picture", _Plot: "plot", _Table: "table",
+    _Gallery: "gallery", _Code: "code", _Quote: "quote", _Callout: "callout", _Math: "equation",
+}
+"""What a person calls each object, in what is said of one that can't be drawn."""
 
 
 class _FigureFailed(Exception):
-    """A figure that failed as it was laid out (``error``): what its box says, and what is
-    said under the slide (``diagnostic``)."""
+    """An object -- a figure, most often -- that failed as it was laid out (``error``):
+    what its box says, and what is said under the slide (``diagnostic``)."""
 
     def __init__(self, block: object, error: BaseException, said: str, diagnostic: str) -> None:
         super().__init__(said)
         self.block, self.error, self.said, self.diagnostic = block, error, said, diagnostic
 
 
-def _swap_failed(slide: Slide, failure: _FigureFailed, kept: list) -> bool:
-    """The failed figure's place given to a box saying why, until the slide is drawn."""
+def _object_failed(block: object, error: BaseException) -> _FigureFailed:
+    """An object that failed as it was made or drawn (a plot whose Python fails, a picture
+    that does not read): its box says so, and why is said under the slide."""
+
+    from flexo.studio.plain import explain
+
+    from flexo_talk.document import DeckDocumentError
+
+    said = f"This {_NOUNS.get(type(block), 'object')} {CANT_DRAW}"
+    why = error.message if isinstance(error, DeckDocumentError) else explain(error)
+    return _FigureFailed(block, error, said, f"{said}: {why}")
+
+
+def _swap_failed(slide: Slide, failure: _FigureFailed) -> str | None:
+    """The failed object's place given to a box saying so -- for good: drawn again (as it is
+    presented), it would only fail again, as slowly (a plot stopped after its time) -- and
+    where it is (``left.0``), or None should it be in none."""
 
     for region in slide.regions.values():
         for index, block in enumerate(region.blocks):
             if block is failure.block:
-                kept.append((region, "blocks", list(region.blocks)))
                 region.blocks = [*region.blocks[:index], _Missing("figure", "", said=failure.said),
                                  *region.blocks[index + 1:]]
-                return True
-    return False
+                return f"{region.name}.{index}"
+    return None
 
 
 STAT_HINT = (TextRun("93%"),)
@@ -636,6 +664,15 @@ def _held_back(canvas: _Canvas, slide: Slide) -> None:
                     inline(f"*{reference.target}* will appear when you trust this folder"),
                     align="middle", muted=True,
                 )
+            except Exception as error:
+                # Python that fails (a function there is none of) stands aside in its place, as
+                # an object that fails as it is drawn does (render_slide) -- not run again as the
+                # slide is drawn again -- or stops the build where nothing can stand aside.
+                if not STANDING_ASIDE.get():
+                    raise
+                failure = _object_failed(block, error)
+                canvas.diagnostics.append(f"{slide.id} {region.name}.{index}: {failure.diagnostic}")
+                region.blocks[index] = _Missing("figure", "", said=failure.said)
 
 
 def _paint_rect(canvas: _Canvas, identifier: str, box: Box, role: str | None, *, opacity: float = 1.0) -> None:
@@ -683,8 +720,18 @@ def _words_on(canvas: _Canvas) -> str:
     return "canvas" if contrast(page, field) > contrast(ink, field) else "ink"
 
 
+def _skipped(slide: Slide) -> bool:
+    """Whether a slide is skipped (Keynote's Skip Slide): kept and edited, but neither
+    presented nor exported -- nor counted among the deck's sections."""
+
+    return bool((getattr(slide, "source", None) or {}).get("skip"))
+
+
 def _section_number(slide: Slide) -> int:
-    return sum(other.layout == "section" for other in slide.deck.slides[: slide.index])
+    # (Where it is among the slides there are: an export has none of those skipped.)
+    slides = slide.deck.slides
+    upto = slides.index(slide) + 1 if slide in slides else slide.index
+    return sum(other.layout == "section" and not _skipped(other) for other in slides[:upto])
 
 
 def _heading(canvas: _Canvas, slide: Slide) -> float:
@@ -905,7 +952,7 @@ def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
     columns when one would run past the slide even set smaller."""
 
     style = canvas.deck.style
-    sections = [other for other in slide.deck.slides if other.layout == "section"]
+    sections = [other for other in slide.deck.slides if other.layout == "section" and not _skipped(other)]
     hinted = not sections and PLACEHOLDERS.get()
     if hinted:
         # No sections yet while editing -- an agenda is often put in before them: the rows
@@ -1297,56 +1344,16 @@ def _region(
         canvas.place = region.across.get(index)
         # (What it draws, for it to be moved down its place after: see _stand.)
         marks.append((index, len(canvas.layer), len(canvas.lists), len(canvas.tables), len(canvas.worded)))
-        # Asked to stand across its place, an object narrower than it is set in a box as wide
-        # as it is, there (a figure, picture or table moves in its own place: _across).
-        left, wide = box.x, box.width
-        asked = canvas.place is not None and not isinstance(block, PLACED)
-        natural = _natural(canvas, block, box.width, share) if asked else None
-        if natural is not None and natural < box.width - 0.5:
-            wide = natural + 0.01
-            left = box.x + (box.width - wide) * canvas.place
-        if isinstance(block, _Bullets):
-            top += _bullets(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Words):
-            size = block.size or style.body_size
-            role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
-            # Words under a picture (its caption) are centred under it, unless set otherwise.
-            given = index < len(region.sources) and "align" in region.sources[index]
-            align = "middle" if placing == "captioned" and not given else block.align
-            top += canvas.words(
-                identifier, block.runs, Box(left, top, wide, 0.0), size=size,
-                align=align, role=role, fill=fill,
-            )
-            if align != block.align and (drawn := _drawn(canvas, identifier)) is not None:
-                # What is drawn, for an editor to say so.
-                drawn.set("data-flexo-align", align)
-        elif isinstance(block, _Gallery):
-            top += _gallery(canvas, identifier, block, Box(left, top, wide, max(share, 40.0)))
-        elif isinstance(block, _Figure):
-            scale = scales[index]
-            height = prepared[index].height * scale
-            top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
-        elif isinstance(block, _Image):
-            top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
-        elif isinstance(block, _Plot):
-            top += _plot(canvas, identifier, block, Box(left, top, wide, max(share, 60.0)))
-        elif isinstance(block, _Missing):
-            top += _missing(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
-        elif isinstance(block, _Table):
-            top += _table(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
-        elif isinstance(block, _Code):
-            top += _code(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Quote):
-            top += _quote(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Stats):
-            top += _stats(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Callout):
-            least = panel if index == 0 else 0.0
-            top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=least)
-        elif isinstance(block, _Math):
-            top += _equation(canvas, identifier, block, Box(left, top, wide, 0.0))
-        if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
-            top += _caption(canvas, identifier, block.caption, box, top)
+        try:
+            top = _block(canvas, region, index, block, identifier, box, top, placing, prepared, scales, share, panel)
+        except _FigureFailed:
+            raise
+        except Exception as error:
+            # One object that fails as it is drawn is a box where it would be, not a slide
+            # that is not drawn (render_slide) -- where it can stand aside.
+            if not STANDING_ASIDE.get():
+                raise
+            raise _object_failed(region.blocks[index], error) from error
         built = index in region.builds and index not in aside and not getattr(block, "reveal", False)
         if built and (drawn := _drawn(canvas, identifier)) is not None:
             # It appears on a click of its own, after what is on the slide before it.
@@ -1363,6 +1370,66 @@ def _region(
         # It fills its place: the slide sets it where it is, moving it no further.
         return max(box.height, used)
     return used
+
+
+def _block(
+    canvas: _Canvas, region: Region, index: int, block: object, identifier: str, box: Box, top: float,
+    placing: str, prepared: dict, scales: dict, share: float, panel: float,
+) -> float:
+    """One of a region's blocks drawn from ``top`` down: where the next starts."""
+
+    style = canvas.deck.style
+    # Asked to stand across its place, an object narrower than it is set in a box as wide
+    # as it is, there (a figure, picture or table moves in its own place: _across).
+    left, wide = box.x, box.width
+    asked = canvas.place is not None and not isinstance(block, PLACED)
+    natural = _natural(canvas, block, box.width, share) if asked else None
+    if natural is not None and natural < box.width - 0.5:
+        wide = natural + 0.01
+        left = box.x + (box.width - wide) * canvas.place
+    if isinstance(block, _Bullets):
+        top += _bullets(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Words):
+        size = block.size or style.body_size
+        role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
+        # Words under a picture (its caption) are centred under it, unless set otherwise.
+        given = index < len(region.sources) and "align" in region.sources[index]
+        align = "middle" if placing == "captioned" and not given else block.align
+        top += canvas.words(
+            identifier, block.runs, Box(left, top, wide, 0.0), size=size,
+            align=align, role=role, fill=fill,
+        )
+        if align != block.align and (drawn := _drawn(canvas, identifier)) is not None:
+            # What is drawn, for an editor to say so.
+            drawn.set("data-flexo-align", align)
+    elif isinstance(block, _Gallery):
+        top += _gallery(canvas, identifier, block, Box(left, top, wide, max(share, 40.0)))
+    elif isinstance(block, _Figure):
+        scale = scales[index]
+        height = prepared[index].height * scale
+        top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
+    elif isinstance(block, _Image):
+        top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
+    elif isinstance(block, _Plot):
+        top += _plot(canvas, identifier, block, Box(left, top, wide, max(share, 60.0)))
+    elif isinstance(block, _Missing):
+        top += _missing(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
+    elif isinstance(block, _Table):
+        top += _table(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+    elif isinstance(block, _Code):
+        top += _code(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Quote):
+        top += _quote(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Stats):
+        top += _stats(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Callout):
+        least = panel if index == 0 else 0.0
+        top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=least)
+    elif isinstance(block, _Math):
+        top += _equation(canvas, identifier, block, Box(left, top, wide, 0.0))
+    if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
+        top += _caption(canvas, identifier, block.caption, box, top)
+    return top
 
 
 def _stand(canvas: _Canvas, region: Region, marks: list, shown: list[int], spare: float) -> None:
@@ -2321,15 +2388,20 @@ def _height(canvas: _Canvas, block, width: float) -> float:
 
 
 def _dark_slide(deck: Deck, slide: Slide) -> bool:
+    """Whether the slide's words are light: as its Text asks (Light, Dark), else (Auto) as
+    reads best on its backdrop."""
+
     if slide.dark is not None:
         return slide.dark
     backdrop = slide.backdrop
     if not backdrop:
         return False
     if backdrop.startswith("#"):
-        from flexo.colour import is_dark
+        from flexo.colour import contrast
 
-        return is_dark(backdrop)
+        # The words that read better on it -- light ones where they read about as well (within
+        # a tenth), as Keynote sets words on a theme's mid blue; dark on a yellow or a grey.
+        return contrast(LIGHT_WORDS["ink"], backdrop) >= 0.9 * contrast(DARK_WORDS["ink"], backdrop)
     shade = min(max(slide.shade, 0.0), 1.0)
     _, mean, darkest, _ = _picture(backdrop)
     if shade > 0:
@@ -2407,11 +2479,49 @@ def _lightness(source: str) -> float:
     return _picture(source)[1]
 
 
+LIGHT_WORDS = {"ink": "#f7f5f0", "muted-ink": "#d4d0c8"}
+DARK_WORDS = {"ink": "#1c1c1e", "muted-ink": "#55555a"}
+"""The words of a slide set on a backdrop of its own: light, or dark."""
+
+
+def _readable(colour: str, backdrop: str, ratio: float, light: bool) -> str:
+    """``colour`` made lighter (``light``) or darker until it reads on ``backdrop`` at
+    ``ratio`` -- as far as it goes that way: words asked to be light stay light."""
+
+    from flexo.colour import contrast, from_oklab, to_hex, to_oklab, to_rgb
+
+    lightness, a, b = to_oklab(colour)
+    result = to_hex(to_rgb(colour))
+    for _ in range(50):
+        if contrast(result, backdrop) >= ratio or not 0.0 < lightness < 1.0:
+            break
+        lightness = min(max(lightness + (0.02 if light else -0.02), 0.0), 1.0)
+        result = from_oklab((lightness, a, b))
+    return result
+
+
+def _marks_on(palette: Palette, paints: dict[str, str], backdrop: str, light: bool) -> dict[str, str]:
+    """The slide's accents (its title's rule, accented words, a figure's lines) that would not
+    be seen on its own colour -- an accent on a slide of that accent -- made to show on it."""
+
+    from flexo.colour import contrast
+
+    marks = {}
+    for role, colour in palette.paints.items():
+        if role in {"canvas", "ink", "muted-ink", "shadow"} or role.endswith(("-ink", "-fill")):
+            continue
+        now = paints.get(role, colour)
+        if contrast(now, backdrop) < 4.5:
+            marks[role] = _readable(now, backdrop, 4.5, light)
+    return marks
+
+
 def _slide_palette(deck: Deck, slide: Slide):
     """The deck's paints, or paints for words over this slide's own backdrop: light
-    words on a dark one, dark words on a light one when the deck's page is dark."""
+    words on a dark one, dark words on a light one when the deck's page is dark -- or as
+    the slide's Text asks."""
 
-    from flexo.colour import is_dark, with_contrast, with_lightness
+    from flexo.colour import is_dark, with_lightness
 
     palette = deck.palette
     page_dark = is_dark(palette.get("canvas"))
@@ -2420,15 +2530,16 @@ def _slide_palette(deck: Deck, slide: Slide):
     if not slide.backdrop and slide.dark is None:
         return palette
     if not dark and not page_dark:
-        # A light backdrop in a light deck (a mid grey): the deck's words, kept readable on it.
+        # A light backdrop in a light deck (a mid grey): the deck's words, kept readable on it
+        # -- and dark, as asked, however dark the colour.
         if colour is None:
             return palette
-        return palette.with_overrides({
-            "ink": with_contrast(palette.get("ink"), colour, 7.0),
-            "muted-ink": with_contrast(palette.get("muted-ink"), colour, 4.5),
-        })
-    light, deep = {"ink": "#f7f5f0", "muted-ink": "#d4d0c8"}, {"ink": "#1c1c1e", "muted-ink": "#55555a"}
-    paints = light if dark else deep
+        paints = {
+            "ink": _readable(palette.get("ink"), colour, 7.0, False),
+            "muted-ink": _readable(palette.get("muted-ink"), colour, 4.5, False),
+        }
+        return palette.with_overrides(paints | _marks_on(palette, paints, colour, False))
+    paints = dict(LIGHT_WORDS if dark else DARK_WORDS)
     backdrop = slide.backdrop or ""
     if backdrop.startswith("#"):
         paints["canvas"] = backdrop
@@ -2446,8 +2557,10 @@ def _slide_palette(deck: Deck, slide: Slide):
             # Accents, strokes and connectors drawn for the page read poorly over it.
             paints[role] = with_lightness(colour, 0.78 if dark else 0.45, 0.14)
     if backdrop.startswith("#"):
-        paints["ink"] = with_contrast(paints["ink"], backdrop, 7.0)
-        paints["muted-ink"] = with_contrast(paints["muted-ink"], backdrop, 4.5)
+        # As light (or dark) as it takes to read, never the other: the slide's Text is kept.
+        paints["ink"] = _readable(paints["ink"], backdrop, 7.0, dark)
+        paints["muted-ink"] = _readable(paints["muted-ink"], backdrop, 4.5, dark)
+        paints |= _marks_on(palette, paints, backdrop, dark)
     return palette.with_overrides(paints)
 
 
@@ -2771,10 +2884,16 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
     except Exception as error:
         from flexo.studio.plain import explain
 
-        from flexo_talk.document import DeckDocumentError
+        from flexo_talk.document import DeckDocumentError, UntrustedCode
 
+        if isinstance(error, UntrustedCode):
+            raise  # (Python not yet trusted: said in its place, as the folder waits)
         if isinstance(error, DeckDocumentError):
-            raise  # (the deck's own: Python not yet trusted, a file that is not there)
+            # Made by the deck's Python, which failed (a function there is none of): it stands
+            # aside where it can (the studio), and stops the build where it can't.
+            if not STANDING_ASIDE.get():
+                raise
+            raise _FigureFailed(block, error, FIGURE_FAILED, f"{FIGURE_FAILED}: {error.message}") from error
         spec = getattr(block.figure, "spec", block.figure)
         # Only some of its shapes at fault (a plasmid of -5 bp, a tree whose Newick does not
         # read): those drawn as plain boxes of their words, the rest as written -- each said,
@@ -2794,8 +2913,7 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
                 continue
             canvas.diagnostics.extend(f"{canvas.slide.id} {spec.id}{text}" for text in told)
             return prepared
-        said = f"{FIGURE_FAILED}: {_named(spec, explain(error))}"
-        raise _FigureFailed(block, error, said, f"{canvas.slide.id} {getattr(spec, 'id', 'figure')}: {said}") from error
+        raise _FigureFailed(block, error, FIGURE_FAILED, f"{FIGURE_FAILED}: {_named(spec, explain(error))}") from error
 
 
 def _stood_in(spec: object, error: BaseException) -> tuple[object, list[str]] | None:
@@ -4052,9 +4170,10 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
     height = min(box.height, max(box.width * 0.6, 40.0))
     canvas.span = (box.x, box.width)
     ink = canvas.palette.get("muted-ink")
-    # A figure that can't be drawn keeps its place, presented and exported, but shows nothing
-    # there -- not a box of nothing: why is said on the editing stage alone, not to the audience.
-    quiet = block.said is not None and not PLACEHOLDERS.get()
+    # An object that can't be drawn, or whose file is not there, keeps its place, presented
+    # and exported, but shows nothing there -- not a box of nothing: why is said on the
+    # editing stage alone, not to the audience.
+    quiet = not PLACEHOLDERS.get()
     group = element(
         canvas.layer, "g", id=identifier, data__flexo__talk="invalid" if block.said is not None else "missing"
     )

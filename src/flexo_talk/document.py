@@ -106,7 +106,9 @@ DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
     "conventions", "sketch", "style",
 )
-COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade")
+COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip")
+"""The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
+and edited, but the studio neither presents nor exports it."""
 SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "title": ("title", "subtitle", "author", "date"),
     "section": ("title", "subtitle"),
@@ -157,6 +159,12 @@ class InvalidFigure(DeckDocumentError):
 class UnknownLayout(DeckDocumentError):
     """A slide of a layout there is none of (a typo, ``layout: quote``): drawn as Content
     all the same, every object it has in its body, and said in plain words."""
+
+
+class InvalidObject(DeckDocumentError):
+    """An object written in the deck that can't be made as written (a kind there is none
+    of, a table that is not rows): a box where it would be, the rest of its slide drawn,
+    and left empty when the deck is presented or exported."""
 
 
 class UntrustedCode(DeckDocumentError):
@@ -443,6 +451,8 @@ def add_slide(
         ))
         data, layout = _as_content(data), "content"
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
+    if not isinstance(data.get("skip", False), bool):
+        raise DeckDocumentError(f"{where}.skip", "skip must be true or false.")
     background = data.get("background")
     # A picture file, unless it names a colour (#1b2a41, or one of the theme's: accent).
     if isinstance(background, str) and not background.startswith("#") and not named_colour(background):
@@ -558,7 +568,20 @@ def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object,
             if not isinstance(blocks, list):
                 raise DeckDocumentError(names[name], "A region must be a list of blocks.")
             for index, block in enumerate(blocks):
-                add_block(slide.regions[name], block, base, f"{names[name]}[{index}]", missing=missing)
+                region, count = slide.regions[name], len(slide.regions[name].blocks)
+                try:
+                    add_block(region, block, base, f"{names[name]}[{index}]", missing=missing)
+                except DeckDocumentError as error:
+                    if missing is None:
+                        raise
+                    # One object that can't be made is a box where it would be, the rest of its
+                    # slide drawn -- not a slide that is not drawn.
+                    del region.blocks[count:], region.sources[count:]
+                    missing.append(InvalidObject(error.where, error.message))
+                    kind = next((key for key in block if key in BLOCKS), None) if isinstance(block, dict) else None
+                    noun = {"bullets": "list", "image": "picture", "stats": "object", "math": "equation"}.get(
+                        kind, kind or "object")
+                    region.stand_in("object", "", said=f"This {noun} can\u2019t be drawn as it is")
     return slide
 
 

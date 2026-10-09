@@ -16,7 +16,7 @@ const BLOCKS = {
   bullets: { icon: "list", label: "List", hint: "A bulleted or numbered list" },
   figure: { icon: "figure", label: "Figure", hint: "A diagram of shapes and lines" },
   flow: { icon: "flow", label: "Flow Chart", hint: "Steps and decisions connected by arrows" },
-  structure: { icon: "structure", label: "Structure", hint: "A protein structure from a PDB or mmCIF file or a PDB ID, drawn with mol-sketch" },
+  structure: { icon: "structure", label: "Structure", hint: "A protein structure from a PDB or mmCIF file, or a PDB ID" },
   image: { icon: "image", label: "Picture", hint: "PNG, JPEG or SVG (SVG stays as vectors)" },
   table: { icon: "table", label: "Table", hint: "Rows and columns with simple rules" },
   stats: { icon: "stats", label: "Numbers", hint: "Key numbers, shown large" },
@@ -24,7 +24,7 @@ const BLOCKS = {
   callout: { icon: "callout", label: "Callout", hint: "A key point on a tinted panel" },
   code: { icon: "code", label: "Code", hint: "Code in a monospace font" },
   gallery: { icon: "gallery", label: "Gallery", hint: "A grid of logos or portraits" },
-  plot: { icon: "plot", label: "Plot", hint: "A matplotlib chart from a Python function" },
+  plot: { icon: "plot", label: "Plot", hint: "A Matplotlib chart, drawn by a Python function" },
   math: { icon: "math", label: "Equation", hint: "A LaTeX equation on its own line" },
   mechanism: { icon: "mechanism", label: "Mechanism", hint: "A reaction mechanism from SMILES, with checked curly arrows" },
   // What the file holds but Flexo does not know: shown for what it is, never offered.
@@ -740,10 +740,13 @@ export function mount(studio, container) {
   // studio and back later, are its own: parts.js.)
   // (Kept by the field's key, as the panel is drawn again under the keys.)
   const turns = new Map(), turnOf = (target) => target.dataset?.key || target;
+  const TYPED = /^(text|search|number|email|url|tel|password)$/;
   const typingSteps = (container) => {
     const field = (event) => {
       const target = event.target;
       if (!(target?.isContentEditable || /^(INPUT|TEXTAREA)$/.test(target?.tagName || "")) || target.closest?.(".fig-inline")) return null;
+      // (A slider dragged, a colour picked, a box ticked: no words typed -- see its change below.)
+      if (target.tagName === "INPUT" && !TYPED.test(target.type || "text")) return null;
       if (figure?.parts.model && inspectorBody.contains(target) && figureBlock()) return null;
       return target.rich ? target : target.closest?.(".rich") || target;
     };
@@ -780,6 +783,12 @@ export function mount(studio, container) {
       if ((turn.last !== undefined && kind !== turn.last) || over) studio.step();
       if (turns.size > 200) turns.clear();
       turns.set(turnOf(target), { last: kind === "look" ? "edge" : kind });
+    }, true);
+    // A slider dragged, or a colour moved through in the system's picker, is one step in the
+    // history from where it was taken to where it was let go, as in Keynote: its values on
+    // the way are one run, ended when it is let go (its change), so the next drag is another.
+    container.addEventListener("change", (event) => {
+      if (event.target?.tagName === "INPUT" && !TYPED.test(event.target.type || "text")) studio.step();
     }, true);
   };
   typingSteps(center);
@@ -844,6 +853,9 @@ export function mount(studio, container) {
     if (note && block) note.hidden = !blank(block);
   });
 
+  // A slide whose layout has no room for objects (a title slide, a section): what it is, and
+  // what to do, said where an object would be added -- a greyed button, a file dropped.
+  const noRoomSaid = (slide) => `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, such as a logo, choose a layout with room, such as Content`;
   const renderBar = () => {
     const slide = slideAt();
     const room = regionsOf(slide).length > 0;
@@ -851,7 +863,7 @@ export function mount(studio, container) {
     for (const button of [...insertButtons, moreButton]) {
       button.dataset.title ||= button.title || "More objects";
       button.disabled = !room;
-      button.title = room ? button.dataset.title : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects`;
+      button.title = room ? button.dataset.title : noRoomSaid(slide);
     }
   };
 
@@ -881,11 +893,14 @@ export function mount(studio, container) {
     // typed in: merges know slides by what they hold, the first of two alike taken for the
     // first, so this one, made later, goes later, and neither is typed in for the other.)
     while (at < slides().length && same(slides()[at], made)) at += 1;
+    const shown = slides().length ? [Math.min(state.slide, slides().length - 1)] : null;
     studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, made); }, { label: "Add Slide" });
     // (Named as what was done, where: not "Duplicate Slide", nor the place of a slide just
     // like it beside it.)
     const entry = studio.past[studio.past.length - 1];
     if (entry) Object.assign(studio.said(entry), { place: `Slide ${at + 1}`, where: at, made: { where: at, place: `Slide ${at + 1}` } });
+    // Undone, the slide shown before it is shown again; redone, the new slide is.
+    markSlides(shown, [at]);
     select(at);
     // Its first words are ready to type: the title (a blank slide has none).
     if (layout !== "agenda" && layout !== "blank") openSoon({ kind: "field", field: layout === "statement" ? "words" : "title" });
@@ -959,6 +974,25 @@ export function mount(studio, container) {
     const entry = studio.past[studio.past.length - 1];
     if (entry) studio.said(entry).moved = { from, to };
     select(to);
+  }
+
+  // Keynote's Skip Slide: the slides chosen kept, and edited, but neither presented nor
+  // exported -- or (Don't Skip Slide) shown again: all as the first of them is not now.
+  function skipSlides(indices) {
+    const skip = slides()[indices[0]]?.skip !== true, many = indices.length > 1 ? `${indices.length} Slides` : "Slide";
+    studio.change((d) => { for (const index of indices) if (d.slides?.[index]) setOption(d.slides[index], "skip", skip || null); },
+      { label: `${skip ? "Skip" : "Don’t Skip"} ${many}` });
+    markSlides(indices, indices);
+  }
+
+  // The slides chosen moved one place up or down the list (⌥↑, ⌥↓), as an object is on its
+  // slide: several, together, in their order.
+  function nudgeSlides(indices, way) {
+    const sorted = [...indices].sort((a, b) => a - b);
+    if (way < 0 ? sorted[0] <= 0 : sorted[sorted.length - 1] >= slides().length - 1) return;
+    if (sorted.length === 1) moveSlide(sorted[0], sorted[0] + way);
+    else moveSlides(sorted, way < 0 ? sorted[0] - 1 : sorted[sorted.length - 1] + 2);
+    railList.focus({ preventScroll: true });
   }
 
   function duplicateSlide(index) {
@@ -1107,10 +1141,11 @@ export function mount(studio, container) {
       "-",
       ...clipItems(),
       { icon: "duplicate", label: `Duplicate ${many}`, keys: "⌘D", run: () => (together ? duplicateSlides(together) : duplicateSlide(index)) },
+      { icon: "eye", label: `${slides()[(together || [index])[0]]?.skip === true ? "Don’t Skip" : "Skip"} ${many}`, run: () => skipSlides(together || [index]) },
       "-",
       // Greyed where it cannot go, as a Mac menu's items are, rather than left out.
-      ...(!together ? [{ icon: "up", label: "Move Up", disabled: index === 0, run: () => moveSlide(index, index - 1) },
-        { icon: "down", label: "Move Down", disabled: index >= count - 1, run: () => moveSlide(index, index + 1) }] : []),
+      { icon: "up", label: "Move Up", keys: "⌥↑", disabled: Math.min(...(together || [index])) === 0, run: () => nudgeSlides(together || [index], -1) },
+      { icon: "down", label: "Move Down", keys: "⌥↓", disabled: Math.max(...(together || [index])) >= count - 1, run: () => nudgeSlides(together || [index], 1) },
       "-",
       { icon: "trash", label: `Delete ${many}`, keys: "⌫", danger: true, run: () => deleteSlides(together || [index]) },
     ]);
@@ -1192,7 +1227,7 @@ export function mount(studio, container) {
       const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note");
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = others.filter((entry) => entry.where?.page === index + 1);
-      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
+      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true, index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
         worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
       keys.push(key);
       // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere).
@@ -1207,7 +1242,11 @@ export function mount(studio, container) {
       if (at === node) { at = at.nextSibling; continue; }
       railList.insertBefore(node, at);
     }
+    // Slides chosen together, or no longer: the panel says so, with what applies to them all.
+    if (pickedKey() !== pickedShown && !state.focus) renderInspector();
   }
+  let pickedShown = "";
+  const pickedKey = () => (state.picked.length > 1 ? [...state.picked].sort((a, b) => a - b).join() : "");
 
   // A slide carried in the list, under the pointer as Keynote's slide navigator shows it: a
   // copy of its thumbnail (several chosen: the one held, with how many), not the browser's
@@ -1252,7 +1291,7 @@ export function mount(studio, container) {
 
   function thumbNode(slide, index, page, own, worst, here) {
     const on = index === state.slide || (state.picked.length > 1 && state.picked.includes(index));
-    const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}`, {
+    const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}${slide?.skip === true ? ".skipped" : ""}`, {
       draggable: true, dataset: { index },
       onclick: (event) => pickSlide(index, event),
       oncontextmenu: (event) => { event.preventDefault(); slideMenu({ x: event.clientX, y: event.clientY }, index); },
@@ -1268,12 +1307,7 @@ export function mount(studio, container) {
       ondrop: (event) => {
         if (dragFrom === null) return;
         event.preventDefault();
-        let to = index + (node.classList.contains("drop-after") ? 1 : 0);
-        // One of several chosen: they all go there, in their order, one step.
-        const together = chosenSlides();
-        if (together.length > 1 && together.includes(dragFrom)) { moveSlides(together, to); return; }
-        if (dragFrom < to) to -= 1;
-        moveSlide(dragFrom, to);
+        dropSlide(index + (node.classList.contains("drop-after") ? 1 : 0));
       },
     },
     h("div.num", {}, index + 1),
@@ -1284,6 +1318,8 @@ export function mount(studio, container) {
       here.length ? h("div.ring", { style: { boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 3px ${colourOf(here[0].who)}` } }) : null,
       worst ? h(`div.badge.${worst}`, { title: own.map((m) => m.text).join("\n") }, icon(worst === "error" ? "exclaim" : "warning", { weight: "2" })) : null,
       page?.steps > 1 ? h("div.steps", { title: buildsSaid(slide) }, `${page.steps} builds`) : null,
+      // Skipped (Skip Slide): faint, and said, as Keynote's slide navigator shows one.
+      slide?.skip === true ? h("div.skip-tag", { title: "Not presented or exported" }, "Skipped") : null,
       // Two at most, and how many more there are.
       here.length ? h("div.here", { title: here.map((entry) => nameOf(entry.who)).join(", ") }, here.slice(0, 2).map((entry) => avatar(entry.who, { size: 18 })),
         here.length > 2 ? h("span.avatar.count", { style: { width: "18px", height: "18px", background: "var(--muted, #868e96)" } }, `+${here.length - 2}`) : null) : null,
@@ -1291,6 +1327,30 @@ export function mount(studio, container) {
     h("button.insert-after", { type: "button", tabindex: -1, title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
     return node;
   }
+
+  // The slide carried put at `to` (a place as the list is now): one of several chosen, they
+  // all go there, in their order, one step.
+  function dropSlide(to) {
+    const together = chosenSlides();
+    if (together.length > 1 && together.includes(dragFrom)) { moveSlides(together, to); return; }
+    moveSlide(dragFrom, dragFrom < to ? to - 1 : to);
+  }
+  // Carried below the last slide (or above the first), in the list's own room: the line shows
+  // it goes at the end (or the start), and there it goes.
+  railList.addEventListener("dragover", (event) => {
+    if (dragFrom === null || event.target.closest?.(".thumb")) return;
+    const thumbs = railList.querySelectorAll(":scope > .thumb");
+    if (!thumbs.length) return;
+    event.preventDefault();
+    clearSlideDrops();
+    if (event.clientY < thumbs[0].getBoundingClientRect().top) thumbs[0].classList.add("drop-before");
+    else thumbs[thumbs.length - 1].classList.add("drop-after");
+  });
+  railList.addEventListener("drop", (event) => {
+    if (dragFrom === null || event.target.closest?.(".thumb")) return;
+    event.preventDefault();
+    dropSlide(railList.querySelector(":scope > .thumb.drop-before") ? 0 : slides().length);
+  });
 
   function slideMoreButton(index) {
     const button = ui.button("", (event) => { event.stopPropagation(); slideMenu(event.currentTarget, index); }, { kind: "ghost", icon: "more", small: true, title: "Slide actions" });
@@ -1311,6 +1371,12 @@ export function mount(studio, container) {
       event.stopPropagation();
       state.picked = slides().map((_, n) => n);
       renderRail();
+    }
+    // ⌥↑ and ⌥↓ move the slides chosen up or down the list, as they move an object on its slide.
+    else if (event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      event.stopPropagation();
+      nudgeSlides(chosenSlides(), event.key === "ArrowUp" ? -1 : 1);
     }
     // ⇧↓ and ⇧↑ choose a run of slides from the one first chosen, as a Mac list does.
     else if (event.shiftKey && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
@@ -2381,7 +2447,7 @@ export function mount(studio, container) {
   function carryToSlide(was, index) {
     const target = slides()[index];
     const into = regionsOf(target)[0];
-    if (!into) { sendHome(was); toast(`Slide ${index + 1}'s layout has no room for objects.`, { icon: "info" }); return; }
+    if (!into) { sendHome(was); toast(`Slide ${index + 1}’s layout has no room for objects.`, { icon: "info" }); return; }
     const here = state.slide;
     const picks = [...(was.all || [was.from])];
     const first = blocksAt(slideAt(), picks[0].region)[picks[0].index];
@@ -2844,8 +2910,10 @@ export function mount(studio, container) {
     if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", keys: "A", run: () => whenFigure(() => figure.parts.addPalette(point)) });
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
+    // Another picture in its place, as Keynote's Replace: its size, caption and place kept.
+    if (kind === "image") items.push({ icon: "image", label: "Replace Picture…", run: () => replacePicture(at) });
     if (items.length) items.push("-");
-    items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => insertBlock(kind, copyOf(block), at, `Duplicate ${blockLabel(block)}`) });
+    items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => duplicateBlock(at) });
     items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
       { icon: "down", label: "Move Down", keys: "⌥↓", disabled: at.index >= count - 1, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
     for (const other of regionsOf(slide)) {
@@ -5469,15 +5537,24 @@ export function mount(studio, container) {
   // to the next.
   let dropNote = null;
   stage.addEventListener("dragover", (event) => {
-    if (![...(event.dataTransfer?.types || [])].includes("Files") || !regionsOf(slideAt()).length) return;
+    if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+    // (Never opened in place of the deck, as a browser opens a file dropped where none is taken.)
     event.preventDefault();
-    if (!dropNote) { dropNote = h("div.drop-note", {}, "Drop pictures or structure files (PDB, mmCIF) to add them to the slide"); center.append(dropNote); }
+    const room = regionsOf(slideAt()).length > 0;
+    if (!room) event.dataTransfer.dropEffect = "none";
+    const said = room ? "Drop pictures or structure files (PDB, mmCIF) to add them to the slide"
+      : `The ${LAYOUT_NAMES[layoutOf(slideAt())]} layout has no room for pictures: choose one with room, such as Content`;
+    if (dropNote?.textContent !== said) { dropNote?.remove(); dropNote = h("div.drop-note", {}, said); center.append(dropNote); }
+    if (!room) return;
     // Where structures would go: after the figure's part under the pointer, into the
     // figure, or a figure of their own. (Pictures always come as pictures.)
-    const pictures = [...(event.dataTransfer?.items || [])].every((item) => item.type.startsWith("image/") || item.type === "application/pdf");
-    const part = pictures ? null : partAt(event);
+    const items = [...(event.dataTransfer?.items || [])];
+    const pictures = items.every((item) => item.type.startsWith("image/") || item.type === "application/pdf");
+    const part = partAt(event);
     const block = part?.kind === "block" ? blocksAt(slideAt(), part.region)[part.index] : null;
-    if (block && kindOf(block) === "figure" && editable(block)) {
+    // One picture over a picture takes its place, as in Keynote.
+    if (pictures && items.length === 1 && block && kindOf(block) === "image") place(hover, boxOf(part.id), "Replace Picture");
+    else if (!pictures && block && kindOf(block) === "figure" && editable(block)) {
       const inner = figurePartAt(event, part) || (figure && inFigure(event) && figure.parts.model && figure.parts.idAt(event)
         ? { element: pageNode.querySelector(`[id="${CSS.escape(figurePrefix() + figure.parts.idAt(event))}"]`), name: figure.parts.nameOf(figure.parts.idAt(event)) } : null);
       if (inner?.element) place(hover, boxOf(inner.element.id), `Add after ${inner.name}`);
@@ -5488,7 +5565,11 @@ export function mount(studio, container) {
   stage.addEventListener("drop", async (event) => {
     dropNote?.remove(); dropNote = null;
     hover.hidden = true;
-    if (await addFiles([...(event.dataTransfer?.files || [])], partAt(event), event)) event.preventDefault();
+    const files = [...(event.dataTransfer?.files || [])];
+    // Taken now, before anything is waited for: later, the browser would have opened the file.
+    if (files.length) event.preventDefault();
+    if (files.length && !regionsOf(slideAt()).length) { toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return; }
+    await addFiles(files, partAt(event), event);
   });
 
   // Files added to the slide, dropped or pasted: pictures, and structures into the figure
@@ -5499,6 +5580,13 @@ export function mount(studio, container) {
     if (!pictures.length && !structures.length) {
       if (all.length) toast("Only pictures and structure files (PDB, mmCIF) can be added to a slide.", { icon: "info" });
       return all.length > 0;
+    }
+    // One picture let go on a picture takes its place.
+    const over = part?.kind === "block" ? blocksAt(slideAt(), part.region)[part.index] : null;
+    if (at && pictures.length === 1 && !structures.length && kindOf(over) === "image") {
+      await replacePicture(part, await studio.upload(pictures[0]));
+      toast("Picture replaced", { icon: "image" });
+      return true;
     }
     for (const file of pictures) await insertBlock("image", { image: await studio.upload(file) });
     if (structures.length) {
@@ -5559,7 +5647,12 @@ export function mount(studio, container) {
     event.clipboardData?.setData("text/plain", plainOf(clip));
     return clip;
   }
-  const copied = (clip) => toast(`${clip.label.charAt(0).toUpperCase()}${clip.label.slice(1)} copied`, { icon: "copy", seconds: 1.5 });
+  // (Copied again, the note says so again in its place: notes do not pile up.)
+  let copiedNote = null;
+  const copied = (clip) => {
+    copiedNote?.remove();
+    copiedNote = toast(`${clip.label.charAt(0).toUpperCase()}${clip.label.slice(1)} copied`, { icon: "copy", seconds: 1.5 });
+  };
   // The object cut last, as it was cut: pasted, it is moved (see pasteClip).
   let cutLast = null;
   function cutAway(clip) {
@@ -5765,7 +5858,7 @@ export function mount(studio, container) {
     closeInline();
     const slide = slideAt();
     const regions = regionsOf(slide);
-    if (!regions.length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
+    if (!regions.length) { toast(`${noRoomSaid(slide)}.`, { icon: "info", seconds: 6 }); return; }
     const more = Array.isArray(given) ? given.slice(1) : [];
     if (Array.isArray(given)) given = given[0];
     let block = given || NEW_BLOCKS[kind]?.();
@@ -5910,6 +6003,7 @@ export function mount(studio, container) {
   let lastWho = null;
   function renderInspector() {
     remember(placeKey, JSON.stringify({ slide: state.slide, tab: state.tab }));
+    pickedShown = pickedKey();
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
     if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
@@ -5924,9 +6018,11 @@ export function mount(studio, container) {
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else if (allOn()) clear(inspectorBody, manyPanel(slide));
+      else if (chosenSlides().length > 1) clear(inspectorBody, slidesPanel(slide));
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
     }, { undone: undoing });
+    markFills();
   }
 
   function crumbs(slide, block) {
@@ -5964,10 +6060,20 @@ export function mount(studio, container) {
     const spare = pageNode?.querySelector(`[id="slide${state.slide + 1}.${region?.svg}"]`)?.getAttribute("data-flexo-spare");
     return spare != null && Number(spare) < 2;
   }
-  // What it fills, said beside Position: there it has nowhere to go.
-  function fillsHint(at) {
+  // What it fills, said under Position, the stops that would not move it greyed: there it
+  // has nowhere to go. (Kept to the slide as it is drawn again: a width changed.)
+  function markFills() {
+    const pad = inspectorBody.querySelector(".position-pad"), at = state.focus;
+    if (!pad || !at) return;
     const wide = fillsPlace(at), tall = fillsDown(at);
-    return wide && tall ? { hint: "Fills its place" } : wide ? { hint: "Fills its width" } : tall ? { hint: "Fills its height" } : {};
+    const [across, down] = pad.querySelectorAll(".position-row");
+    across?.querySelectorAll("button").forEach((button) => { button.disabled = wide; });
+    down?.querySelectorAll("button").forEach((button) => { button.disabled = tall; });
+    const note = pad.querySelector(".position-note");
+    note.textContent = wide && tall ? "It fills its place: there is nowhere to move it."
+      : wide ? "It fills its place’s width: there is nowhere across to move it."
+        : tall ? "It fills the height left: there is nowhere down to move it." : "";
+    note.hidden = !wide && !tall;
   }
   // An object set at a stop across its place (`across`) or down it (`down`; null, back where
   // the slide sets it), one step: written only when it is not where the slide would set it
@@ -6003,7 +6109,7 @@ export function mount(studio, container) {
       options: [{ value: "auto", label: "Auto", title: "Automatic: in line under what is before it" }, ...stops(DOWN, true)],
       onChange: (value) => placeBlock(at, { down: value === "auto" ? null : value }) });
     return h("div.position-pad", {}, h("div.position-row", {}, h("span.position-label", {}, "Across"), across),
-      h("div.position-row", {}, h("span.position-label", {}, "Down"), down));
+      h("div.position-row", {}, h("span.position-label", {}, "Down"), down), h("div.hint-line.position-note", { hidden: true }));
   }
 
   // A figure's only shape chosen -- a structure added as one -- is the object on the slide:
@@ -6011,7 +6117,7 @@ export function mount(studio, container) {
   function placedPanel(panel, slide, block) {
     const one = figure.parts.selected.length === 1 ? figure.parts.selected[0] : null;
     if (!one || !loneShape(figure.parts.model, one) || !Array.isArray(panel) || !state.focus) return panel;
-    const place = h("div.section", {}, ui.field("Position", positionPad(slide, state.focus, block), fillsHint(state.focus)));
+    const place = h("div.section", {}, ui.field("Position", positionPad(slide, state.focus, block)));
     return [panel[0], place, ...panel.slice(1)];
   }
 
@@ -6025,9 +6131,9 @@ export function mount(studio, container) {
         // In the order they are drawn, for Tab. (Its words are edited on the slide -- Return, or a
         // double-click -- or in the field below.)
         h("div.block-actions", {},
-          ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up", disabled: at.index === 0 }),
-          ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down", disabled: at.index >= count - 1 }),
-          ui.button("", () => { editSlide((s) => { const list = blocksAt(s, at.region); list.splice(at.index + 1, 0, structuredClone(list[at.index])); }); focusBlock(at.region, at.index + 1); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
+          ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up (⌥↑)", disabled: at.index === 0 }),
+          ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down (⌥↓)", disabled: at.index >= count - 1 }),
+          ui.button("", () => { if (!awayFrom("duplicate objects")) duplicateBlock(at); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
           ui.button("", () => deleteBlock(at), { kind: "ghost", small: true, icon: "trash", title: "Delete (⌫)" })),
         // A placeholder says so, at the top: it looks like an object, but no one sees it yet --
         // until something is typed in it, here or on the slide (the note goes as it is).
@@ -6036,7 +6142,7 @@ export function mount(studio, container) {
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null,
         // Across its place, as Keynote's Arrange › Align: where it stands, chosen. (One as wide
         // as its place -- a paragraph filling it -- or as tall, has nowhere to go, and says so.)
-        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block), fillsHint(at)) : null),
+        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block)) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
       buildSection(block, at),
     ];
@@ -6117,6 +6223,35 @@ export function mount(studio, container) {
         onChange: (value) => { editBlock(at, (b) => { if (value === "items") { b.reveal = true; delete b.build; } else { delete b.reveal; b.build = true; } }); renderInspector(); } })) : null);
   }
 
+  // An edit to each slide chosen in the slide list, in one step -- else to the slide shown.
+  // (`name`: what is done, for the history -- "Change Background of 3 Slides".)
+  const editChosen = (mutate, options = {}, name = "Change Background") => {
+    const picked = chosenSlides();
+    if (picked.length < 2) { editSlide(mutate, options); return; }
+    studio.change((d) => { for (const index of picked) { const slide = (d.slides || [])[index]; if (slide) mutate(slide, d); } },
+      { label: `${name} of ${picked.length} Slides`, ...options });
+    // (Undone or redone, they are chosen again.)
+    markSlides(picked, picked);
+  };
+  // Several slides chosen in the slide list: said so, with what applies to them all, as in
+  // Keynote -- a layout, a background, where their objects stand -- each given to every one
+  // of them in one step. (Their words are each their own: chosen one at a time.)
+  function slidesPanel(slide) {
+    const picked = chosenSlides(), chosenNow = picked.map((index) => slides()[index]).filter(Boolean);
+    const layoutsNow = new Set(chosenNow.map(layoutOf));
+    const allowed = new Set(catalog.slide_keys[layoutOf(slide)].filter((key) => chosenNow.every((each) => catalog.slide_keys[layoutOf(each)].includes(key))));
+    const numbers = picked.map((index) => index + 1);
+    const listed = `${numbers.slice(0, -1).join(", ")} and ${numbers[numbers.length - 1]}`;
+    return [
+      h("div.section.block-top", {},
+        h("div.insp-title", {}, icon("layout"), h("div.insp-words", {}, h("div.insp-name", {}, `${chosenNow.length} Slides Selected`),
+          h("div.insp-hint", {}, `Slides ${listed}`)))),
+      h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layoutsNow.size === 1 ? [...layoutsNow][0] : null, (name) => changeLayout(name), layouts, studio.info?.palette),
+        allowed.has("align") ? alignControl(slide, chosenNow) : null),
+      h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)),
+    ];
+  }
+
   function slidePanel(slide) {
     const layout = layoutOf(slide);
     const allowed = new Set(catalog.slide_keys[layout]);
@@ -6137,6 +6272,8 @@ export function mount(studio, container) {
         layout === "title" ? [text("author", "Author"), text("date", "Date")] : null,
         text("by", "Attribution"),
         layout === "agenda" ? h("div.hint-line", {}, "Lists the section slides.") : null,
+        // (Said once here, where the slide's objects would be listed: the toolbar's are greyed.)
+        WORDLESS.has(layout) ? h("div.hint-line", {}, `${noRoomSaid(slide).replace(/^The \S+ layout/, "This layout")}.`) : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn’t show its title.") : null),
     ];
     const regions = regionsOf(slide);
@@ -6144,17 +6281,22 @@ export function mount(studio, container) {
     parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts, studio.info?.palette),
       layout === "two-columns" ? splitControl(slide) : null,
       layout === "columns" ? columnsControls(slide) : null,
-      // Unset, the slide follows the deck's Design: said, so it is not taken for one of the
-      // others -- and the Design's own choice is offered only as that, not twice by one name
-      // (unless the slide already sets it).
-      allowed.has("align") ? ui.field(styleName("align"), ui.select({ value: slide.align ?? "", key: "slide.align", options: [
-        { value: "", label: choiceName("align", deckStyle("align") || "auto") },
-        ...["auto", "top", "middle"].filter((value) => value !== (deckStyle("align") || "auto") || value === slide.align)
-          .map((value) => ({ value, label: choiceName("align", value) }))],
-        onChange: (value) => editSlide((s) => setOption(s, "align", value), { quiet: true }) })) : null));
+      allowed.has("align") ? alignControl(slide, [slide]) : null));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Footnotes"), footnotesControls(slide)));
     return parts;
+  }
+
+  // Where a slide's objects stand down it. Unset, the slide follows the deck's Design: said,
+  // so it is not taken for one of the others -- and the Design's own choice is offered only
+  // as that, not twice by one name (unless a slide chosen already sets it).
+  function alignControl(slide, chosenNow) {
+    const value = chosenNow.every((each) => (each.align ?? "") === (slide.align ?? "")) ? slide.align ?? "" : "";
+    return ui.field(styleName("align"), ui.select({ value, key: "slide.align", options: [
+      { value: "", label: choiceName("align", deckStyle("align") || "auto") },
+      ...["auto", "top", "middle"].filter((each) => each !== (deckStyle("align") || "auto") || chosenNow.some((other) => other.align === each))
+        .map((each) => ({ value: each, label: choiceName("align", each) }))],
+      onChange: (choice) => editChosen((s) => setOption(s, "align", choice), { quiet: true }, `Change ${styleName("align")}`) }));
   }
 
   function splitControl(slide) {
@@ -6170,22 +6312,30 @@ export function mount(studio, container) {
   // A layout tried and left keeps what it could not show: going back to the layout before
   // gives the slide back as it was there (if it was not changed in between), and objects
   // a layout without room for them set aside come back with the next layout that has room.
+  // Words it has no place for (a title slide's author and date) are kept with the slide as
+  // it is typed in since (followStash): they come back with a layout that has their place.
   const layoutStash = new Map();
-  function changeLayout(layout) {
-    const current = slideAt();
-    if (!current || (layoutOf(current) === layout && !unknownLayout(current))) return;
-    if (awayFrom("change the layout")) return;
-    const earlier = layoutStash.get(JSON.stringify(current));
-    if (earlier && layoutOf(earlier) === layout) {
-      editSlide((slide) => { for (const key of Object.keys(slide)) delete slide[key]; Object.assign(slide, structuredClone(earlier)); });
-      layoutStash.set(JSON.stringify(slideAt()), current);
-      state.focus = null;
-      renderInspector();
-      renderBar();
-      return;
+  function followStash(before, after) {
+    if (!layoutStash.size || before === after) return;
+    const was = before.map((slide) => JSON.stringify(slide)), now = after.map((slide) => JSON.stringify(slide));
+    let map = null;
+    for (const [key, stashed] of [...layoutStash]) {
+      const at = was.indexOf(key);
+      if (at < 0 || now.includes(key)) continue;
+      const to = (map ||= follow(before, after))[at];
+      layoutStash.delete(key);
+      if (to >= 0 && now[to]) layoutStash.set(now[to], { ...stashed, edited: true });
     }
+  }
+  // The words of a slide's own that a layout shows, and what each is called in a note.
+  const LAYOUT_WORDS = { subtitle: "subtitle", author: "author", date: "date", by: "attribution" };
+  // `current` in `layout`: the slide as it will be, the slide after it its objects go to if the
+  // layout has no room for them (or null), those objects, and the words it has no place for.
+  function relaid(current, layout) {
+    const stashed = layoutStash.get(JSON.stringify(current));
+    const earlier = stashed?.slide;
     // What the slide had: from before a layout without room, if it came from one.
-    const before = earlier && !regionsOf(current).length ? earlier : current;
+    const before = earlier && !stashed.edited && !regionsOf(current).length ? earlier : current;
     // Of a layout there is none of, every object it has, wherever it was written.
     const blocks = unknownLayout(before) ? [before.body, before.left, before.right, ...(before.columns || [])].filter(Array.isArray)
       : regionsOf(before).map((region) => blocksAt(before, region.key));
@@ -6202,61 +6352,137 @@ export function mount(studio, container) {
       ...Object.fromEntries(["body", "left", "right", "split", "widths", "align"].filter((key) => key in before).map((key) => [key, ownOnly(before[key])])),
       ...(Array.isArray(before.columns) ? { columns: before.columns.map(ownOnly) } : {}),
     } : null;
+    const slide = structuredClone(current);
+    for (const [key, value] of Object.entries(before)) if (!(key in slide) && !["layout", "body", "left", "right", "columns"].includes(key)) slide[key] = structuredClone(value);
+    const all = structuredClone(blocks.flat());
+    const words = layoutOf(slide) === "statement" ? slide.words : slide.title;
+    for (const key of ["body", "left", "right", "columns", "split", "widths"]) delete slide[key];
+    if (layout === "content") delete slide.layout; else slide.layout = layout;
+    if (layout === "statement") { if (words) slide.words = words; delete slide.title; }
+    else if (words) { slide.title = words; delete slide.words; }
+    // One body made two columns, its objects kept in their order: words on the left and
+    // what is drawn on the right where the words come first, as a slide with both is set
+    // out; else the first half on the left and the rest on the right.
+    const drawn = (block) => VISUAL.has(kindOf(block));
+    const first = all.findIndex(drawn);
+    if (layout === "two-columns" && blocks.length === 1 && first > 0 && all.slice(first).every(drawn)) {
+      slide.left = all.slice(0, first);
+      slide.right = all.slice(first);
+    } else if (layout === "two-columns" && blocks.length === 1 && all.length > 1) {
+      const half = Math.ceil(all.length / 2);
+      slide.left = all.slice(0, half);
+      slide.right = all.slice(half);
+    } else if (layout === "two-columns") { slide.left = structuredClone(blocks[0] || []); slide.right = structuredClone(blocks.slice(1).flat()); }
+    else if (layout === "columns" && blocks.length === 1 && all.length > 1) {
+      const count = Math.min(all.length, 3), size = Math.ceil(all.length / count);
+      slide.columns = Array.from({ length: count }, (_, index) => all.slice(index * size, (index + 1) * size));
+    } else if (layout === "columns") slide.columns = blocks.length > 1 ? structuredClone(blocks) : [all, [], []];
+    else if (!WORDLESS.has(layout)) slide.body = all;
+    // Words set aside with the slide (an author, a date) come back where the layout has a
+    // place for them, typed in since or not.
+    const allowed = new Set([...catalog.slide_keys[layout], "layout"]);
+    for (const [key, value] of Object.entries(earlier || {})) if (key in LAYOUT_WORDS && allowed.has(key) && !(key in slide)) slide[key] = structuredClone(value);
+    // What is still empty shows the layout's placeholders, as a new slide of it does: its
+    // title and subtitle, and a place to type in each column -- not a column of nothing.
+    const fresh = NEW_SLIDES[layout]();
+    for (const key of ["title", "subtitle", "words"]) if (key in fresh && !(key in slide)) slide[key] = fresh[key];
+    for (const region of regionsOf(slide)) {
+      if (blocksAt(slide, region.key).length) continue;
+      const sample = blocksAt(fresh, region.key).length ? blocksAt(fresh, region.key) : blocksAt(fresh, regionsOf(fresh)[0]?.key || "body");
+      blocksAt(slide, region.key, true).push(...structuredClone(sample));
+    }
+    for (const key of Object.keys(slide)) if (!allowed.has(key)) delete slide[key];
+    // Words it now has no place for, said: they are kept for the layout that has.
+    const hidden = Object.keys(LAYOUT_WORDS).filter((key) => plain(String(before[key] ?? "")).trim() && !(key in slide));
+    return { slide, kept, real, hidden, from: layoutOf(before) };
+  }
+  // The note for words a layout has no place for: "Content has no place for the author and
+  // date: they come back with Title".
+  const hiddenSaid = (layout, made) => {
+    const names = made.hidden.map((key) => LAYOUT_WORDS[key]);
+    const listed = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+    return `${LAYOUT_NAMES[layout]} has no place for the ${listed}: ${names.length > 1 ? "they come" : "it comes"} back with ${LAYOUT_NAMES[made.from] || "the layout before"}`;
+  };
+  function changeLayout(layout) {
+    // Several slides chosen in the slide list: each takes the layout, as in Keynote.
+    if (chosenSlides().length > 1) { changeLayouts(chosenSlides(), layout); return; }
+    const current = slideAt();
+    if (!current || (layoutOf(current) === layout && !unknownLayout(current))) return;
+    if (awayFrom("change the layout")) return;
+    const stashed = layoutStash.get(JSON.stringify(current));
+    if (stashed && !stashed.edited && layoutOf(stashed.slide) === layout) {
+      const earlier = stashed.slide;
+      editSlide((slide) => { for (const key of Object.keys(slide)) delete slide[key]; Object.assign(slide, structuredClone(earlier)); });
+      layoutStash.set(JSON.stringify(slideAt()), { slide: current });
+      state.focus = null;
+      renderInspector();
+      renderBar();
+      return;
+    }
+    const made = relaid(current, layout);
     editSlide((slide, d) => {
-      for (const [key, value] of Object.entries(before)) if (!(key in slide) && !["layout", "body", "left", "right", "columns"].includes(key)) slide[key] = structuredClone(value);
-      const all = blocks.flat();
-      const words = layoutOf(slide) === "statement" ? slide.words : slide.title;
-      for (const key of ["body", "left", "right", "columns", "split", "widths"]) delete slide[key];
-      if (layout === "content") delete slide.layout; else slide.layout = layout;
-      if (layout === "statement") { if (words) slide.words = words; delete slide.title; }
-      else if (words) { slide.title = words; delete slide.words; }
-      // One body made two columns, its objects kept in their order: words on the left and
-      // what is drawn on the right where the words come first, as a slide with both is set
-      // out; else the first half on the left and the rest on the right.
-      const drawn = (block) => VISUAL.has(kindOf(block));
-      const first = all.findIndex(drawn);
-      if (layout === "two-columns" && blocks.length === 1 && first > 0 && all.slice(first).every(drawn)) {
-        slide.left = all.slice(0, first);
-        slide.right = all.slice(first);
-      } else if (layout === "two-columns" && blocks.length === 1 && all.length > 1) {
-        const half = Math.ceil(all.length / 2);
-        slide.left = all.slice(0, half);
-        slide.right = all.slice(half);
-      } else if (layout === "two-columns") { slide.left = blocks[0] || []; slide.right = blocks.slice(1).flat(); }
-      else if (layout === "columns" && blocks.length === 1 && all.length > 1) {
-        const count = Math.min(all.length, 3), size = Math.ceil(all.length / count);
-        slide.columns = Array.from({ length: count }, (_, index) => all.slice(index * size, (index + 1) * size));
-      } else if (layout === "columns") slide.columns = blocks.length > 1 ? blocks : [all, [], []];
-      else if (!WORDLESS.has(layout)) slide.body = all;
-      const allowed = new Set([...catalog.slide_keys[layout], "layout"]);
-      for (const key of Object.keys(slide)) if (!allowed.has(key)) delete slide[key];
-      if (kept) d.slides.splice(state.slide + 1, 0, kept);
-    }, kept ? { label: "Change Layout" } : {});
+      for (const key of Object.keys(slide)) delete slide[key];
+      Object.assign(slide, made.slide);
+      if (made.kept) d.slides.splice(state.slide + 1, 0, made.kept);
+    }, made.kept ? { label: "Change Layout" } : {});
     // Objects kept on the next slide are there, not set aside to come back here too.
-    if (!kept) layoutStash.set(JSON.stringify(slideAt()), current);
+    if (!made.kept) layoutStash.set(JSON.stringify(slideAt()), { slide: current });
     state.focus = null;
     renderRail();
     renderInspector();
     renderBar();
-    if (lost) {
-      const count = real.length, what = count === 1 ? blockLabel(real[0]) : `${count} objects`;
+    if (made.kept) {
+      const count = made.real.length, what = count === 1 ? blockLabel(made.real[0]) : `${count} objects`;
       undoNote(`${LAYOUT_NAMES[layout]} has no room for objects: ${count === 1 ? `the ${what.toLowerCase()} is` : `${what} are`} on a new slide after this one`, { icon: "info", seconds: 7 });
-    }
+    } else if (made.hidden.length) undoNote(hiddenSaid(layout, made), { icon: "info", seconds: 7 });
+  }
+  // Several slides given one layout, in one step: those with objects it has no room for
+  // keep them on a new slide after each, as one slide does; still chosen after.
+  function changeLayouts(indices, layout) {
+    const sorted = [...indices].sort((a, b) => a - b).filter((index) => slides()[index]);
+    const changing = sorted.filter((index) => layoutOf(slides()[index]) !== layout || unknownLayout(slides()[index]));
+    if (!changing.length || awayFrom("change the layout")) return;
+    const made = new Map(changing.map((index) => [index, relaid(slides()[index], layout)]));
+    const olds = new Map(changing.map((index) => [index, structuredClone(slides()[index])]));
+    studio.change((d) => {
+      for (const index of [...changing].reverse()) {
+        d.slides[index] = made.get(index).slide;
+        if (made.get(index).kept) d.slides.splice(index + 1, 0, made.get(index).kept);
+      }
+    }, { label: `Change Layout of ${changing.length === 1 ? "Slide" : `${changing.length} Slides`}` });
+    // Where each chosen slide is now, those kept on new slides before it counted.
+    const after = sorted.map((index) => index + changing.filter((other) => other < index && made.get(other).kept).length);
+    markSlides(sorted, after);
+    for (const index of changing) if (!made.get(index).kept) layoutStash.set(JSON.stringify(slides()[after[sorted.indexOf(index)]]), { slide: olds.get(index) });
+    state.slide = after[Math.max(sorted.indexOf(state.slide), 0)];
+    state.picked = after;
+    state.focus = null;
+    renderRail();
+    renderInspector();
+    renderBar();
+    const moved = changing.filter((index) => made.get(index).kept).length;
+    if (moved) undoNote(`${LAYOUT_NAMES[layout]} has no room for objects: ${moved === 1 ? "those of one slide are on a new slide after it" : `those of ${moved} slides are on a new slide after each`}`, { icon: "info", seconds: 7 });
   }
 
   function columnsControls(slide) {
     const count = (slide.columns || []).length;
     const widths = slide.widths;
+    // A column added is empty but for a place to type, as a new slide's are; one taken away
+    // gives what it held to the column before it.
     const setCount = (n) => { editSlide((s) => {
       s.columns ||= [];
-      while (s.columns.length < n) s.columns.push([]);
-      if (s.columns.length > n) { const extra = s.columns.splice(n).flat(); s.columns[n - 1].push(...extra); }
+      while (s.columns.length < n) s.columns.push([{ text: "" }]);
+      if (s.columns.length > n) {
+        const extra = s.columns.splice(n).flat().filter((block) => !blank(block)), last = s.columns[n - 1];
+        if (extra.length && last.every((block) => blank(block))) last.splice(0, last.length);
+        last.push(...extra);
+      }
       if (s.widths) s.widths = Array.from({ length: n }, (_, i) => s.widths[i] ?? 1);
-    }); renderInspector(); };
+    }, { label: n > count ? "Add Column" : "Remove Column" }); renderInspector(); };
     const stepper = h("div.row", {},
-      ui.button("", () => count > 1 && setCount(count - 1), { icon: "minus", small: true, disabled: count <= 1, title: "Fewer columns" }),
+      ui.button("", () => count > 1 && setCount(count - 1), { icon: "minus", small: true, disabled: count <= 1, title: "Remove Column" }),
       h("span", { style: { textAlign: "center", fontWeight: 600 } }, `${count} column${count === 1 ? "" : "s"}`),
-      ui.button("", () => count < 6 && setCount(count + 1), { icon: "plus", small: true, disabled: count >= 6, title: "More columns" }));
+      ui.button("", () => count < 6 && setCount(count + 1), { icon: "plus", small: true, disabled: count >= 6, title: "Add Column" }));
     stepper.firstChild.classList.add("fixed"); stepper.lastChild.classList.add("fixed");
     const shares = h("div.row", {}, Array.from({ length: count }, (_, i) => ui.number({ value: widths?.[i] ?? "", placeholder: "1", min: 0.1, step: 0.5, key: `widths.${i}`,
       onChange: (value) => editSlide((s) => {
@@ -6275,11 +6501,11 @@ export function mount(studio, container) {
     const mode = !background ? "" : named || String(background).startsWith("#") ? "colour" : "picture";
     const parts = [ui.segmented({ value: mode, options: [{ value: "", label: "Default" }, { value: "colour", label: "Colour" }, { value: "picture", label: "Picture" }],
       onChange: async (value) => {
-        if (value === "") editSlide((s) => { delete s.background; delete s.shade; delete s.dark; });
-        else if (value === "colour") editSlide((s) => { s.background = "accent"; delete s.shade; });
+        if (value === "") editChosen((s) => { delete s.background; delete s.shade; delete s.dark; });
+        else if (value === "colour") editChosen((s) => { s.background = "accent"; delete s.shade; });
         else {
           const path = await chooseFile({ title: "Choose a Background Picture", types: ["image"] });
-          if (path) editSlide((s) => { s.background = path; s.shade = s.shade ?? 0.35; });
+          if (path) editChosen((s) => { s.background = path; s.shade = s.shade ?? 0.35; });
         }
         renderInspector();
       } })];
@@ -6296,22 +6522,22 @@ export function mount(studio, container) {
       const colours = THEME_COLOURS.map(([name, title]) => ({ value: name, colour: filled(name), title }))
         .filter((item) => /^#[0-9a-f]{6}$/i.test(item.colour || "") && (item.value === background || !seen.has(item.colour.toLowerCase()) && seen.add(item.colour.toLowerCase())));
       parts.push(ui.swatches({ value: named ? background : String(background).toLowerCase(), colours, none: false, custom: true, key: "slide.background",
-        onChange: (value) => editSlide((s) => { s.background = value; }, { quiet: true, merge: `${state.slide}-bg` }) }));
+        onChange: (value) => editChosen((s) => { s.background = value; }, { quiet: true, merge: `${state.slide}-bg` }) }));
     }
     if (mode === "picture") {
-      parts.push(fileRow(background, ["image"], (path) => editSlide((s) => { s.background = path; }), "Picture file"));
+      parts.push(fileRow(background, ["image"], (path) => editChosen((s) => { s.background = path; }), "Picture file"));
       const shade = slide.shade ?? 0;
       const value = h("span.value", {}, `${Math.round(shade * 100)}%`);
       const range = h("input", { type: "range", min: 0, max: 0.9, step: 0.05, value: shade, oninput: () => {
         value.textContent = `${Math.round(range.value * 100)}%`;
-        editSlide((s) => setOption(s, "shade", Number(range.value), 0), { quiet: true, merge: `${state.slide}-shade` });
+        editChosen((s) => setOption(s, "shade", Number(range.value), 0), { quiet: true, merge: `${state.slide}-shade` });
       } });
       parts.push(ui.field("Darken", h("div.slider", {}, range, value)));
     }
     if (mode && allowed.has("dark")) {
       parts.push(ui.field("Text", ui.segmented({ value: slide.dark === true ? "light" : slide.dark === false ? "dark" : "", options: [
         { value: "", label: "Auto" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }],
-        onChange: (value) => editSlide((s) => setOption(s, "dark", value === "light" ? true : value === "dark" ? false : null), { quiet: true }) })));
+        onChange: (value) => editChosen((s) => setOption(s, "dark", value === "light" ? true : value === "dark" ? false : null), { quiet: true }) })));
     }
     // Apart as the inspector's fields are: the chips' rings clear of the label under them.
     return h("div", { style: { display: "grid", gap: "12px" } }, parts);
@@ -6532,7 +6758,7 @@ export function mount(studio, container) {
       case "figure": return figureForm(block, at, edit);
       case "plot":
         return [ui.field("Function", functionInput(block.plot, (value) => edit((b) => { b.plot = value; }, "plot")),
-          { hint: "file.py:function, returning a matplotlib figure. It runs inside deck.plotting(), given the deck if it takes an argument." }),
+          { hint: "A function in a Python file in the deck’s folder (file.py:function) that returns a Matplotlib figure. It is drawn in the deck’s fonts and colours, and given the deck if it takes an argument." }),
           ui.field("Aspect Ratio", ui.number({ value: block.aspect, placeholder: "Auto", min: 0.2, step: 0.1, start: 1.5, key: key("aspect"),
             current: () => { const drawn = drawnOf(at); return drawn.width && drawn.height ? drawn.width / drawn.height : null; }, onChange: set("aspect") }), { hint: "Width ÷ height" })];
       case "math": return mathForm(block, at, edit, toneSwatches, size);
@@ -6985,7 +7211,7 @@ export function mount(studio, container) {
     const write = () => edit((b) => { b.table = rows.map((row) => [...row]); }, "cells");
     // Rows or columns added (or pasted), the alignments set stay with their columns; a new
     // column's is automatic.
-    const restructure = (mutate) => {
+    const restructure = (mutate, label) => {
       // From the cells as they are now: one just typed in on the slide (the panel drawn
       // again only after this click) is kept, not written back as it was.
       const current = blocksAt(slideAt() || {}, at.region)[at.index]?.table;
@@ -6997,7 +7223,7 @@ export function mount(studio, container) {
       editBlock(at, (b) => {
         b.table = rows.map((row) => [...row]);
         if (align && align.some((value, c) => value !== fresh[c])) b.align = align; else delete b.align;
-      });
+      }, { label });
       renderInspector();
     };
     // Each column's cells set as the slide sets them: as its alignment says, else as its words do.
@@ -7081,13 +7307,14 @@ export function mount(studio, container) {
     new ResizeObserver(more).observe(grid);
     return [frame,
       h("div.row", {},
-        ui.button("Add Row", () => { restructure(() => rows.push(Array(columns).fill(""))); typeIn(rows.length - 1, 0); }, { kind: "ghost", icon: "plus", small: true }),
-        ui.button("Add Column", () => { restructure(() => rows.forEach((row) => row.push(""))); typeIn(0, columns); }, { kind: "ghost", icon: "plus", small: true }),
+        ui.button("Add Row", () => { restructure(() => rows.push(Array(columns).fill("")), "Add Row"); typeIn(rows.length - 1, 0); }, { kind: "ghost", icon: "plus", small: true }),
+        ui.button("Add Column", () => { restructure(() => rows.forEach((row) => row.push("")), "Add Column"); typeIn(0, columns); }, { kind: "ghost", icon: "plus", small: true }),
         h("span.spacer", { style: { flex: 1 } })),
-      ui.toggle({ value: header, label: "Header Row", onChange: (value) => editBlock(at, (b) => setOption(b, "header", value ? null : false)) }),
+      // (Named for what it did in the history: Show Header Row, Hide Table Outline.)
+      ui.toggle({ value: header, label: "Header Row", onChange: (value) => editBlock(at, (b) => setOption(b, "header", value ? null : false), { label: `${value ? "Show" : "Hide"} Header Row` }) }),
       // The rules above and below it, as Keynote's Table Outline: off, with no header row,
       // it is words in columns with no lines at all.
-      ui.toggle({ value: block.outline !== false, label: "Table Outline", onChange: (value) => editBlock(at, (b) => setOption(b, "outline", value ? null : false)) }),
+      ui.toggle({ value: block.outline !== false, label: "Table Outline", onChange: (value) => editBlock(at, (b) => setOption(b, "outline", value ? null : false), { label: `${value ? "Show" : "Hide"} Table Outline` }) }),
       captionField(block, at),
       size()];
   }
@@ -7131,12 +7358,15 @@ export function mount(studio, container) {
   function widthField(block, at) {
     return ui.field("Width", h("div.row", {},
       ui.number({ value: block.width, placeholder: "Auto", min: 10, step: 10, unit: "pt", start: 300, key: "block.width",
-        current: () => drawnOf(at).width, onChange: (value) => editBlock(at, (b) => setOption(b, "width", value)) }),
+        // (Stepped through, ↑↑↑, one step in the history, as the font size is.)
+        current: () => drawnOf(at).width, onChange: (value) => editBlock(at, (b) => setOption(b, "width", value), { merge: `${state.slide}-${at.region}-${at.index}-width` }) }),
       block.width != null ? ui.button("Reset Size", () => { editBlock(at, (b) => setOption(b, "width", null)); renderInspector(); }, { small: true, kind: "ghost" }) : null),
     { hint: "Or drag a corner on the slide" });
   }
 
   function galleryForm(block, at, edit, size) {
+    // (Stepped through, ↑↑↑, one step in the history, as the font size is.)
+    const merge = (name) => `${state.slide}-${at.region}-${at.index}-${name}`;
     const items = (Array.isArray(block.gallery) ? block.gallery : []).map((item) => (typeof item === "string" ? { picture: item, caption: "" } : { picture: item?.picture || "", caption: item?.caption || "" }));
     const write = () => edit((b) => { b.gallery = items.map((item) => (item.caption ? { ...item } : item.picture)); }, "gallery");
     const round = block.crop === "circle";
@@ -7153,8 +7383,8 @@ export function mount(studio, container) {
         if (path) { items.push({ picture: path, caption: "" }); write(); renderInspector(); }
       }, { kind: "ghost", icon: "plus", small: true })),
       h("div.grid2", {},
-        ui.field("Columns", ui.number({ value: block.columns, placeholder: "Auto", min: 1, step: 1, start: Math.min(4, Math.max(1, items.length)), key: "gallery.columns", onChange: (value) => editBlock(at, (b) => setOption(b, "columns", value)) })),
-        ui.field("Height", ui.number({ value: block.height, placeholder: "Auto", min: 10, step: 5, unit: "pt", start: 80, key: "gallery.height", onChange: (value) => editBlock(at, (b) => setOption(b, "height", value)) }))),
+        ui.field("Columns", ui.number({ value: block.columns, placeholder: "Auto", min: 1, step: 1, start: Math.min(4, Math.max(1, items.length)), key: "gallery.columns", onChange: (value) => editBlock(at, (b) => setOption(b, "columns", value), { merge: merge("columns") }) })),
+        ui.field("Height", ui.number({ value: block.height, placeholder: "Auto", min: 10, step: 5, unit: "pt", start: 80, key: "gallery.height", onChange: (value) => editBlock(at, (b) => setOption(b, "height", value), { merge: merge("height") }) }))),
       ui.field("Crop", ui.segmented({ value: block.crop || "", options: [{ value: "", label: "None" }, { value: "circle", label: "Circle" }, { value: "square", label: "Square" }],
         onChange: (value) => { editBlock(at, (b) => setOption(b, "crop", value)); renderInspector(); } })),
       size()];
@@ -7383,18 +7613,59 @@ export function mount(studio, container) {
     });
   }
 
+  // The functions a deck's Python files define, by file: read from the files as they are
+  // written (none is run) -- those at their top level whose names do not start with "_".
+  const pythonFunctions = () => studio.files(["python"]).then((files) => Promise.all(files.map((file) =>
+    fetch(studio.raw(file)).then((answer) => (answer.ok ? answer.text() : "")).catch(() => "")
+      .then((text) => [file, [...text.matchAll(/^(?:async\s+)?def\s+([A-Za-z]\w*)\s*\(/gm)].map((found) => found[1])]))))
+    .then((pairs) => new Map(pairs));
+
+  // As a Mac's open panel: the functions the deck's Python files define, a click choosing
+  // one, a double-click (or Return) taking it -- or one typed (file.py:function), checked
+  // against them, so a typo is said here rather than on the slide.
   function chooseFunction(title = "Choose a Python Function") {
     return new Promise((resolve) => {
-      let value = "";
-      const input = functionInput("", (text) => { value = text; });
+      let done = false, known = null;
+      const finish = (value) => { if (!done) { done = true; resolve(value); box.close(); } };
+      const problem = h("div.field-problem", { hidden: true });
+      const fine = () => { problem.hidden = true; input.classList.remove("invalid"); };
+      const said = (text) => { problem.hidden = false; clear(problem, icon("error"), h("span", {}, text)); input.classList.add("invalid"); };
+      const input = functionInput("", () => { fine(); mark(); });
       // Named as any field is; its form is what the empty field shows.
       input.placeholder = "file.py:function";
-      dialog({ title, body: [ui.field("Function", input), h("div.hint-line", {}, "In a file in the deck’s folder.")],
-        actions: [{ label: "Cancel", run: () => resolve(null) }, { label: "Choose", kind: "primary", run: () => {
-          if (!/\.py:\w+$/.test(value.trim())) { input.classList.add("invalid"); return false; }
-          resolve(value.trim());
-        } }], onClose: () => resolve(null) });
-      setTimeout(() => input.focus(), 30);
+      const list = h("div.list-rows", { role: "listbox", "aria-label": title }, h("div.empty", {}, h("div.spinner")));
+      const rows = () => [...list.querySelectorAll("[role=option]")];
+      const mark = () => rows().forEach((row) => row.setAttribute("aria-selected", String(row.dataset.target === input.value.trim())));
+      const pick = (row) => { input.value = row.dataset.target; fine(); mark(); row.focus({ preventScroll: true }); row.scrollIntoView({ block: "nearest" }); };
+      const take = () => {
+        const value = input.value.trim(), at = value.lastIndexOf(":");
+        const file = value.slice(0, at), name = value.slice(at + 1);
+        if (!/\.py:[A-Za-z_]\w*$/.test(value)) said("Name a function in a Python file, as file.py:function.");
+        else if (known && !known.has(file)) said(`There is no ${file} in the deck’s folder.`);
+        else if (known?.get(file).length && !known.get(file).includes(name)) said(`${file} has no function “${name}”.`);
+        else finish(value);
+        return false;
+      };
+      list.addEventListener("keydown", (event) => {
+        const all = rows(), at = all.indexOf(document.activeElement);
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const next = all[Math.max(0, Math.min(all.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)))];
+          if (next) pick(next);
+        }
+      });
+      const box = dialog({ title, body: [list, ui.field("Function", input), problem],
+        actions: [{ label: "Cancel", run: () => finish(null) }, { label: "Choose", kind: "primary", run: take }], onClose: () => finish(null) });
+      pythonFunctions().then((found) => {
+        known = found;
+        const made = [...found].flatMap(([file, names]) => names.map((name) => h("button.menu-item", { type: "button", role: "option", "aria-selected": "false",
+          dataset: { target: `${file}:${name}` }, onclick: (event) => pick(event.currentTarget), ondblclick: (event) => { pick(event.currentTarget); take(); } },
+        icon("code"), h("span.menu-text", {}, h("span", {}, name), h("span.menu-hint", {}, file)))));
+        clear(list, made.length ? made : h("div.empty", {}, "No Python functions in the deck’s folder"));
+        // The keys at the first, to choose with the arrows, as in a file panel.
+        if (made.length && !input.value) pick(made[0]);
+      }).catch(() => { known = null; clear(list); });
+      setTimeout(() => { if (!rows().length) input.focus(); }, 30);
     });
   }
 
@@ -7498,7 +7769,8 @@ export function mount(studio, container) {
     // The whole deck in one face, a click away -- its titles and figures too: the theme's,
     // or one of those most often wanted. The pop-ups under them set each apart.
     const families = studio.info?.fonts || {};
-    const quick = suggestedFonts(catalog.fonts || []).filter((name) => name !== "Helvetica Neue").slice(0, 7);
+    // (The theme's own face is the Theme tile's: not offered twice.)
+    const quick = suggestedFonts(catalog.fonts || []).filter((name) => name !== "Helvetica Neue" && name !== families.theme).slice(0, 7);
     const one = !deck.title_font && !deck.figure_font ? deck.font || "" : null;
     const fontTile = (name, label, face) => h(`button.font-tile${one === name ? ".on" : ""}`, { type: "button", "aria-pressed": String(one === name),
       title: name ? `Set the whole deck in ${name}` : `The theme’s fonts${families.theme ? ` (${families.theme})` : ""}`,
@@ -7528,9 +7800,9 @@ export function mount(studio, container) {
     const changed = Object.keys(changes).length;
     return [
       h("div.section", {}, h("div.section-title", {}, "Theme"),
+        // (Customise… is the button under it, not again in its menu.)
         themeField(studio, { value: deck.theme, fallback: "paper",
-          onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); },
-          onCustomise: () => themeIsFile ? openTheme(studio.folder() + deck.theme) : customiseTheme(deck) }),
+          onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); } }),
         h("div.row", {},
           themeIsFile ? ui.button("Edit Theme", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" })
             : ui.button("Customise…", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Create a theme file based on this theme to edit its colours, fonts and lines" })),
@@ -7540,7 +7812,8 @@ export function mount(studio, container) {
         fontTiles,
         fonts("font", "Body", families.theme ? `Theme’s (${families.theme})` : "Theme’s"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
       // Every arrow in the deck's figures, in one shape (a line with a head of its own keeps it).
-      h("div.section", {}, h("div.section-title", {}, "Figures"),
+      // (Not "Figures", the name of the font field just above.)
+      h("div.section", {}, h("div.section-title", {}, "Arrows"),
         ui.field("Arrowheads", ui.segmented({ value: deck.conventions?.arrowheads || "theme", key: "deck.arrowheads",
           options: [{ value: "theme", label: "Theme", title: "As the theme draws them" },
             ...[["triangle", "Triangle"], ["stealth", "Stealth"], ["latex", "LaTeX"], ["open", "Open"]].map(([value, title]) => ({ value, title, label: icon(`head-${value}`) }))],
@@ -7596,6 +7869,7 @@ export function mount(studio, container) {
   // From this slide, or from the first with ⌥ (⌥⌘↩, an ⌥-click on Present).
   function present(fromStart = Boolean(window.event?.altKey)) {
     if (!slides().length) { toast("This deck has no slides to present.", { icon: "play" }); return; }
+    if (slides().every((slide) => slide?.skip === true)) { toast("Every slide is skipped: there is nothing to present.", { icon: "play" }); return; }
     presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index) });
   }
 
@@ -7649,6 +7923,22 @@ export function mount(studio, container) {
 
   // ⌘D (and Edit › Duplicate) duplicates what is chosen: a figure's shapes, the object on
   // the slide, else the slide.
+  // A picture's file swapped for another (`path`, else one chosen), all else about it kept.
+  async function replacePicture(at, path = null) {
+    path ||= await chooseFile({ title: "Replace Picture", types: ["image"], action: "Replace" });
+    if (!path || kindOf(blocksAt(slideAt(), at.region)[at.index]) !== "image") return;
+    editBlock(at, (b) => { b.image = path; }, { label: "Replace Picture" });
+    focusBlock(at.region, at.index);
+  }
+  // An object copied after itself (its figure with an id of its own), the copy chosen.
+  function duplicateBlock(at) {
+    const block = blocksAt(slideAt(), at.region)[at.index];
+    if (!block) return;
+    const from = { region: at.region, index: at.index };
+    insertBlock(kindOf(block), copyOf(block), from, `Duplicate ${blockLabel(block)}`);
+    // Undone, the one it was copied from is chosen; redone, the copy.
+    markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
+  }
   function duplicateChosen() {
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
     if ((state.focus || allOn()) && awayFrom("duplicate objects")) return;
@@ -7667,13 +7957,7 @@ export function mount(studio, container) {
       placeChosen(); renderInspector(); reportFocus();
       return;
     }
-    const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
-    if (block) {
-      const from = { ...state.focus };
-      insertBlock(kindOf(block), copyOf(block), from, `Duplicate ${blockLabel(block)}`);
-      // Undone, the one it was copied from is chosen; redone, the copy.
-      markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
-    }
+    if (state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index]) duplicateBlock(state.focus);
     else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
     else if (slides().length) duplicateSlide(state.slide);
   }
@@ -7742,7 +8026,10 @@ export function mount(studio, container) {
     // ⌥⌘I goes to the inspector, as Keynote's shows it; Esc there comes back to the slide.
     if (mod && event.altKey && key.toLowerCase() === "i") {
       event.preventDefault();
-      const first = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")].find((node) => node.offsetParent && node.tabIndex >= 0);
+      // (A field of words is one, though its tabIndex reads -1 with none set: the slide's
+      // Title is the first, as in Keynote's inspector.)
+      const first = [...inspector.querySelectorAll("button:not(:disabled), input, select, textarea, [contenteditable=true], [tabindex='0']")]
+        .find((node) => node.offsetParent && (node.tabIndex >= 0 || (node.isContentEditable && !node.hasAttribute("tabindex"))));
       // Ringed, as the keys brought it there (a web view rings nothing focused by a shortcut).
       if (first) {
         first.focus({ focusVisible: true });
@@ -7948,6 +8235,7 @@ export function mount(studio, container) {
     return [
       ...(own ? [{ icon: "duplicate", label: `Duplicate ${shapes ? (shapes > 1 ? `${shapes} Shapes` : "Shape") : blockLabel(block)}`, also: ["Duplicate"], keys: "⌘D", run: () => duplicateChosen() }] : []),
       { icon: "duplicate", label: `Duplicate ${many}`, also: [...(own || typing ? [] : ["Duplicate"]), "Duplicate Slide"], keys: own || typing ? undefined : "⌘D", run: () => duplicateSlide(state.slide) },
+      { icon: "eye", label: `${slides()[picked[0]]?.skip === true ? "Don’t Skip" : "Skip"} ${many}`, also: ["Skip Slide", "Don’t Skip Slide"], run: () => skipSlides(picked) },
       { icon: "trash", label: `Delete ${many}`, also: ["Delete Slide"], keys: railList.contains(document.activeElement) ? "⌫" : undefined, run: () => deleteSlides(picked) },
     ];
   }
@@ -8434,6 +8722,7 @@ export function mount(studio, container) {
     lastDoc = doc();
     followSlides(was?.slides || [], slides());
     followPicked(was?.slides || [], slides(), source, who);
+    followStash(was?.slides || [], slides());
     followPlaces(was, source === "remote");
     if (source === "remote") figureKept(was, who);
     if (source === "history" || source === "remote") followChange(was, who, source === "remote");
@@ -8580,7 +8869,7 @@ export function mount(studio, container) {
     // The panel's colours drawn again when the theme's change (its palette edited in its own
     // tab): the named colours, the tones and the palette's own order, as the swatches show them.
     const key = JSON.stringify([studio.info?.palette || {}, studio.info?.tones, studio.info?.order, studio.info?.own]);
-    if (key !== lastKey) { lastKey = key; renderInspector(); } else markBlockErrors();
+    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFills(); }
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
     stage.querySelector(":scope > .deck-error")?.remove();
     if (deckError) stage.prepend(h("div.messages.deck-error", {}, messageView(deckError)));

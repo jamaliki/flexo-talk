@@ -29,6 +29,8 @@
 .thumb .badge { position: absolute; right: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; background: var(--warn); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 .thumb .badge.error { background: var(--error); }
 .thumb .badge svg { width: 10px; height: 10px; }
+.thumb.skipped .picture, .thumb.skipped .placeholder { opacity: 0.35; }
+.thumb .skip-tag { position: absolute; left: 4px; top: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
 .thumb .steps { position: absolute; left: 4px; bottom: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
 /* Who else is on a slide: in its lower corner, clear of its title. */
 .thumb .ring { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
@@ -166,6 +168,8 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .position-pad .segmented button { padding-inline: 0; min-width: 0; }
 .position-pad .segmented button { height: 28px; }
 .position-pad .stop-glyph { width: 28px; height: 18px; display: block; margin: auto; }
+/* Stops that would not move it (it fills its place): greyed, as a Mac control is. */
+.position-pad .segmented button:disabled { opacity: 0.38; cursor: default; }
 /* An object moved across in its place: the guide where it would stand (its place's left
    edge, middle or right edge), named, as Keynote's alignment guides. */
 .block-guide { position: absolute; width: 0; pointer-events: none; opacity: 0; z-index: 6; border-left: 1px dashed var(--accent); transition: opacity 0.12s; }
@@ -584,5 +588,7 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .font-tile:hover { border-color: var(--ink-3); }
 .font-tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .font-tile-sample { font-size: 21px; line-height: 1.1; }
-.font-tile-name { font-size: 10px; color: var(--ink-3); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A long name (Latin Modern Roman) on two lines rather than cut short. */
+.font-tile-name { font-size: 10px; line-height: 1.2; color: var(--ink-3); max-width: 100%; overflow: hidden; text-align: center; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .font-tile.on .font-tile-name { color: var(--ink); }
