@@ -1686,6 +1686,22 @@ def test_a_caption_and_a_build_are_written_as_a_deck_document_writes_them() -> N
     assert deck.slides[0].regions["body"].builds == {0}
 
 
+def test_a_caption_keeps_the_lines_it_was_typed_in() -> None:
+    from flexo_talk.compose import render_slide
+    from flexo_talk.document import deck_document
+
+    deck = Deck("captions")
+    with deck.slide("Cues") as slide:
+        slide.table([["Receptor", "Cue"], ["Tar", "Aspartate"]], caption="Table 1.\n**Cues**  sensed\n")
+    (block,) = deck_document(deck)["slides"][0]["body"]
+    assert block["caption"] == "Table 1.\n**Cues** sensed"
+    svg = render_slide(deck, deck.slides[0]).svg
+    caption = re.search(r'<text id="slide1\.body\.0\.caption".*?</text>', svg, re.S)
+    assert caption is not None
+    # Two lines, one under the other, as it was typed.
+    assert caption.group(0).count("<tspan x=") == 2
+
+
 def test_columns_moved_to_their_places_move_only_their_own_native_lists_tables_and_words() -> None:
     import xml.etree.ElementTree as ET
 

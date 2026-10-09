@@ -276,9 +276,12 @@ def _words(value: object, what: str) -> str:
 
 
 def _caption(value: object) -> str:
-    """A caption's words, on one line of markup ("" for none)."""
+    """A caption's words as markup ("" for none): each line's spaces one, and its lines as
+    typed -- a figure's number over its title, a name over a role."""
 
-    return "" if value is None else " ".join(_words(value, "caption").split())
+    if value is None:
+        return ""
+    return "\n".join(" ".join(line.split()) for line in _words(value, "caption").split("\n")).strip("\n")
 
 
 def _colour(value: object, what: str = "colour") -> str | None:
