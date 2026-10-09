@@ -164,7 +164,7 @@ def test_the_slides_after_one_skipped_are_numbered_as_they_are_shown(tmp_path: P
     # The slide skipped has none; the one after it is the second shown.
     assert _numbers(drawn(deck)) == ["1", None, "2"]
     # Shown again, the slides after it are drawn again with their numbers.
-    shown = {**deck, "slides": [{key: value for key, value in slide.items() if key != "skip"} for slide in deck["slides"]]}
+    shown = {**deck, "slides": [{**slide, "skip": False} for slide in deck["slides"]]}
     assert _numbers(drawn(shown)) == ["1", "2", "3"]
     svgs = sorted(kind.export(deck, tmp_path, "talk", ["svg"], into=tmp_path / "out"))
     assert [path.name for path in svgs] == ["slide-01.svg", "slide-02.svg"]
