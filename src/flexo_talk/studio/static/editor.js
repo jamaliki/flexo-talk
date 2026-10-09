@@ -205,8 +205,11 @@ const kindOf = (block) => Object.keys(block || {}).find((key) => key in BLOCKS &
   || (block && typeof block === "object" ? "unknown" : "text");
 // An object by the name of what it is to the person: a list with its marks taken away (None)
 // reads as the text it now is.
-const blockName = (block) => (kindOf(block) === "bullets" && block?.plain ? "Text" : BLOCKS[kindOf(block)]?.label || "Object");
-const blockIcon = (block) => (kindOf(block) === "bullets" && block?.plain ? BLOCKS.text.icon : BLOCKS[kindOf(block)]?.icon || "text");
+// A figure of structures alone -- one added by Insert › Structure -- is a structure, by name.
+const structures = (block) => kindOf(block) === "figure" && typeof block.figure === "object" && (block.figure?.nodes || []).length > 0
+  && block.figure.nodes.every((node) => node?.kind === "structure");
+const blockName = (block) => (kindOf(block) === "bullets" && block?.plain ? "Text" : structures(block) ? BLOCKS.structure.label : BLOCKS[kindOf(block)]?.label || "Object");
+const blockIcon = (block) => (kindOf(block) === "bullets" && block?.plain ? BLOCKS.text.icon : structures(block) ? BLOCKS.structure.icon : BLOCKS[kindOf(block)]?.icon || "text");
 // Whether an object builds in on a click when presenting: whole, or (a list) an item at a time.
 const built = (block) => Boolean(block?.build || (kindOf(block) === "bullets" && block?.reveal));
 // What builds on a slide, as its badge says: "Builds on clicks: the list, an item at a time,
@@ -249,7 +252,9 @@ function summary(block) {
     // Those given only: a new one's placeholders say nothing, as a new text's do.
     case "stats": return Array.isArray(value) ? value.map((item) => String(item?.value ?? item?.[0] ?? item ?? "").trim()).filter(Boolean).join("  ·  ") : "";
     case "gallery": { const n = Array.isArray(value) ? value.length : 0; return `${n} picture${n === 1 ? "" : "s"}`; }
-    case "figure": return typeof value === "string" ? value : count((value?.nodes || []).length, "shape");
+    // (Structures by their names, "1A8O"; another figure by its shapes.)
+    case "figure": return typeof value === "string" ? value : structures(block) ? value.nodes.map((node) => readable(String(node.label ?? ""))).filter(Boolean).join(", ") || "Structure"
+      : count((value?.nodes || []).length, "shape");
     case "image": return value || "No picture chosen";
     case "plot": return value || "No function chosen";
     case "callout": return plain(block.title) || plain(value);
@@ -2867,7 +2872,9 @@ export function mount(studio, container) {
           // In the object menu's order: what is its own, then Cut, Copy, Paste and Duplicate, then Delete.
           const own = figure.parts.menuOf(id, point), last = (label) => own.filter((item) => item?.label === label);
           const first = own.filter((item) => !["Duplicate", "Delete"].includes(item?.label));
-          menu(point, [...first, "-", ...clipItems(), ...last("Duplicate"), "-", ...last("Delete")]);
+          // (A line's menu offers no Cut or Copy: a line goes with the shapes it joins.)
+          const clips = clipItems().filter((item) => item.label === "Paste" || !item.disabled);
+          menu(point, [...first, "-", ...clips, ...last("Duplicate"), "-", ...last("Delete")]);
           return;
         }
         figure?.parts.select([]);
@@ -3047,10 +3054,13 @@ export function mount(studio, container) {
   function chooseAll() {
     if (!allBlocks().length) return;
     closeInline();
+    allChosen = null;
+    // (One object on the slide is simply chosen, as one is: never "1 Objects Selected".)
+    const picks = picksNow();
+    if (picks.length === 1) { leaveFigure(false); focusBlock(picks[0].region, picks[0].index); return; }
     leaveFigure(false);
     state.focus = null; state.field = null;
-    allChosen = null;
-    chooseMany(picksNow());
+    chooseMany(picks);
     placeChosen(); renderInspector(); reportFocus();
   }
   // Several chosen moved together, as Keynote moves them (⌥↑ ⌥↓, Arrange › Move Up and Move
@@ -3434,6 +3444,12 @@ export function mount(studio, container) {
       run: (action, options) => runFigure(action, options, own),
       // (With the studio away its parts stay where the slide's drawing has them, as its objects do.)
       away: (what) => awayFrom(what),
+      // Its shapes all deleted (a structure added on its own, deleted), the figure is.
+      emptied: ({ cut = false } = {}) => {
+        const wasCut = cut || figureCut;
+        figureCut = false;
+        if (figure === own && figureBlock()) deleteBlock({ region: own.region, index: own.index }, wasCut ? "cut" : "deleted");
+      },
       // Edited -- its first shape's words typed, sent or still on their way -- a new figure is
       // no longer one just added and left empty: Esc does not take it back (dropFresh).
       edited: () => { if (fresh && fresh.slide === own.slide && fresh.region === own.region && fresh.index === own.index) fresh = null; },
@@ -3601,7 +3617,15 @@ export function mount(studio, container) {
     // (A module made, or a group's title typed: "Make Module", "Rename “…”", as the parts say it.)
     const groupWords = action.do === "update" && [action.target, ...(action.targets || [])].filter(Boolean).every((part) => part.type === "group")
       && Object.keys(action.values || {}).every((key) => key === "label");
-    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather"].includes(action.do) || lineLook || groupWords || merge?.startsWith("as-drawn:") ? told : null;
+    // (Any other setting changed -- a shape resized or fitted to its words, a line bent, its
+    // width -- as the parts say it too, the same name as in the figure editor: but for words
+    // typed, and a table's rows (a protein's features), which the figure before and after
+    // name more nearly -- "Typing “…”", "Add Feature".)
+    const typed = action.do === "update" && Object.keys(action.values || {}).every((key) => key === "label");
+    const rows = action.do === "update" && Object.values(action.values || {}).some(Array.isArray);
+    const setting = action.do === "update" && !typed && !rows;
+    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather", "delete", "connect", "ungroup"].includes(action.do)
+      || lineLook || groupWords || setting || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
@@ -3686,19 +3710,27 @@ export function mount(studio, container) {
     figureBar.hidden = !box;
     if (!box) return;
     const words = figure.parts.hint();
-    const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: "Drag to move the figure",
+    // (Named as the object is: a figure, or a structure added on its own.)
+    const name = blockName(block);
+    const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: `Drag to move the ${name.toLowerCase()}`,
       onpointerdown: (event) => { event.stopPropagation(); pressBlock(event, { kind: "block", region: figure.region, index: figure.index }); } }, icon("grip"));
-    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the selected shapes (G)" });
+    // (Shapes to group chosen: an empty group is added from the palette's Layout.)
+    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (G)", disabled: !figure.parts.canGroup() });
+    // (A figure of one shape -- a structure added on its own -- is that shape, as a picture is:
+    // no tools of a diagram's over it. It grows into a figure from its menu's Add Shape After….)
+    const only = figure.parts.model.groups?.find((each) => each.id === figure.parts.model.root)?.children || [];
+    const alone = only.length === 1 && figure.parts.lone(only[0]);
     clear(figureBar, words ? h("span.figure-hint", {}, words) : [
       grip,
-      ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add Shape (A)", id: undefined }),
-      ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one shape to another (C)" }),
-      group,
+      ...(alone ? [] : [
+        ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add Shape (A)", id: undefined }),
+        ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one shape to another (C)" }),
+        group]),
       ui.button("", (event) => menu(event.currentTarget, exportItems(figure)),
-        { small: true, kind: "ghost", icon: "export", title: "Export figure (SVG, PDF, PNG, YAML)" }),
+        { small: true, kind: "ghost", icon: "export", title: `Export ${name} (SVG, PDF, PNG, YAML)` }),
       // (Its shapes being edited, none chosen -- one just deleted -- nothing to delete: ⌫ does nothing.)
-      figure.parts.selected.length || figure.parts.inside ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)", disabled: !figure.parts.selected.length })
-        : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: "Delete Figure (⌫)" }),
+      (figure.parts.selected.length || figure.parts.inside) && !alone ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete Selected Shapes (⌫)", disabled: !figure.parts.selected.length })
+        : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: `Delete ${name} (⌫)` }),
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
     group.classList.add("group");
@@ -4817,7 +4849,12 @@ export function mount(studio, container) {
     // A figure's shapes come back (or change): those shapes are chosen in it.
     const shapes = (block) => (block && typeof block.figure === "object" ? block.figure.nodes || [] : []);
     const prior = old.find((item) => item.region === changed.region && item.index === changed.index)?.block;
-    const back = shapes(changed.block).filter((node) => !shapes(prior).some((other) => same(other, node))).map((node) => node.id).filter(Boolean);
+    // (A group that comes back is chosen whole, as it was deleted: not the shapes it holds.)
+    const groups = (block) => (block && typeof block.figure === "object" ? block.figure.groups || [] : []);
+    const backGroups = groups(changed.block).filter((group) => group?.id && !groups(prior).some((other) => other?.id === group.id));
+    const inBack = (id) => backGroups.some((group) => (group.children || []).includes(id));
+    const back = [...backGroups.map((group) => group.id), ...shapes(changed.block).filter((node) => !shapes(prior).some((other) => same(other, node))).map((node) => node.id)]
+      .filter((id) => id && !inBack(id));
     const chosen = state.focus?.region === changed.region && state.focus?.index === changed.index;
     if (back.length && kindOf(changed.block) === "figure") focusBlock(changed.region, changed.index, () => figure?.parts.select(back));
     else if (!chosen) focusBlock(changed.region, changed.index);
@@ -5615,9 +5652,12 @@ export function mount(studio, container) {
   const typingNow = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable
     || Boolean(document.querySelector(".scrim, .present"));
   function clipOf() {
-    if (figure && figureBlock() && figure.parts.selected.length) {
+    // A figure's shapes being edited are what is copied -- and only they: lines chosen alone
+    // (copied with the shapes they join), or nothing chosen in it, copy nothing, never the
+    // whole figure in their place.
+    if (figure && figureBlock() && (figure.parts.selected.length || figure.parts.inside)) {
       const parts = figure.parts.clip();
-      if (parts) return { what: "parts", parts, label: parts.top.length > 1 ? `${parts.top.length} shapes` : "shape" };
+      return parts ? { what: "parts", parts, label: parts.top.length > 1 ? `${parts.top.length} shapes` : "shape" } : null;
     }
     const slide = slideAt();
     if (!slide) return null;
@@ -5663,15 +5703,20 @@ export function mount(studio, container) {
     else if (clip.what === "slides") deleteSlides(clip.indices, "cut");
     else deleteSlide(state.slide, "cut");
   }
+  // Lines chosen alone in a figure: why nothing was copied is said, not left to look done.
+  const uncopied = () => {
+    const why = studio.active && !typingNow() && !wordsChosen() && figure && figureBlock() ? figure.parts.uncopied() : null;
+    if (why) toast(why, { icon: "info", seconds: 3 });
+  };
   document.addEventListener("copy", (event) => {
     keyed = null;
     const clip = copyNow(event);
-    if (clip) copied(clip);
+    if (clip) copied(clip); else uncopied();
   });
   document.addEventListener("cut", (event) => {
     keyed = null;
     const clip = copyNow(event);
-    if (clip) cutAway(clip);
+    if (clip) cutAway(clip); else uncopied();
   });
   // A web view that gives no copy, cut or paste to a page with nothing to type in (a
   // Mac app's, whose Edit menu waits for a selection) still passes the keys: if no such
@@ -5690,7 +5735,7 @@ export function mount(studio, container) {
         return;
       }
       const clip = clipOf();
-      if (!clip) return;
+      if (!clip) { uncopied(); return; }
       clipboard = clip;
       navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
       if (letter === "c") copied(clip); else cutAway(clip);
@@ -8539,13 +8584,20 @@ export function mount(studio, container) {
       : fields.find((field) => field.key === `properties.${key}`);
     return found?.label ? titled(found.label) : keyTitle(key);
   }
+  // A figure's label as its words, however it is written: markup, or runs formatted each its
+  // own way (ε, x₀) by their text -- never "[object Object]".
+  const labelText = (label) => (Array.isArray(label) ? label.map((run) => run?.text ?? "").join("") : String(label ?? ""));
+  // The same words, all their lines (not only the first a name shows), in another look.
+  const sameWords = (was, now) => readable(labelText(was)).trim() === readable(labelText(now)).trim();
   // A change to a figure written in the deck: the shape it was made to, by name.
   function figureChange(a, b) {
     const byId = (list) => new Map((list || []).map((item) => [item.id, item]));
     const nodesA = byId(a.nodes), nodesB = byId(b.nodes), groupsA = byId(a.groups), groupsB = byId(b.groups);
-    // (A shape with no words by what it is -- "Shape", "Decision" -- never by its id.)
-    const named = (item, id) => quoted(item?.label || "", 24)
-      || (item && (nodesB.has(id) || nodesA.has(id)) ? { block: "Shape", terminal: "Start" }[item.kind || "block"] || catalog.figure_editor?.parts?.[item.kind]?.title || "Shape"
+    // (A shape with no words by what it is -- "Block", "Decision", as its type names it --
+    // never by its id.)
+    const kindTitle = (kind) => titled(catalog.figure_editor?.parts?.[kind || "block"]?.title || "Shape");
+    const named = (item, id) => quoted(labelText(item?.label), 24)
+      || (item && (nodesB.has(id) || nodesA.has(id)) ? { terminal: "Start" }[item.kind || "block"] || kindTitle(item.kind)
         : item?.id ? "Group" : "Shape");
     const call = (id) => named(nodesB.get(id) || nodesA.get(id) || groupsB.get(id) || groupsA.get(id), id);
     const ref = (end) => (nodesB.has(end) || nodesA.has(end) ? end : String(end).slice(0, String(end).lastIndexOf(".")) || end);
@@ -8557,7 +8609,7 @@ export function mount(studio, container) {
       added = [];
       removed = [];
     }
-    if (added.length === 1 && !removed.length) return "Add Shape";
+    if (added.length === 1 && !removed.length) return `Add ${kindTitle(nodesB.get(added[0])?.kind)}`;
     if (removed.length === 1 && !added.length) return `Delete ${call(removed[0])}`;
     if (added.length > 1 && !removed.length) return `Add ${added.length} Shapes`;
     if (removed.length > 1 && !added.length) return `Delete ${removed.length} Shapes`;
@@ -8569,8 +8621,8 @@ export function mount(studio, container) {
         // The same words in another look (a colour, code) are the label's format changed.
         // (By all their words, not the few the name shows: typing on at the end of a long
         // label is typing.)
-        if (was.label && plain(String(was.label)).trim() === plain(String(now.label ?? "")).trim()) return lookChange(was.label, now.label, `Format ${named(now, id)}`);
-        return typingName(readable(String(was.label ?? "")), readable(String(now.label ?? "")), 24);
+        if (was.label && sameWords(was.label, now.label)) return lookChange(was.label, now.label, `Format ${named(now, id)}`);
+        return typingName(readable(labelText(was.label)), readable(labelText(now.label)), 24);
       }
       if (!same(was.kind, now.kind)) return "Change Shape Type";
       const keys = differing(was.properties, now.properties);
@@ -8623,8 +8675,8 @@ export function mount(studio, container) {
     // A line's words typed in, as any words are.
     if (newEdges.length === 1 && oldEdges.length === 1 && same({ ...newEdges[0], label: null }, { ...oldEdges[0], label: null })) {
       const [now, was] = [newEdges[0].label, oldEdges[0].label];
-      if (was && plain(String(was)).trim() === plain(String(now ?? "")).trim()) return lookChange(was, now, "Format Line");
-      return typing(now ?? "", was ?? "");
+      if (was && sameWords(was, now)) return lookChange(was, now, "Format Line");
+      return typing(labelText(now), labelText(was));
     }
     // One line's setting changed, by its name in the panel ("Change Arrowhead"); its ends,
     // the line moved.
@@ -8640,8 +8692,8 @@ export function mount(studio, container) {
     const retyped = [...netsB.keys()].filter((id) => netsA.has(id) && !same(netsA.get(id), netsB.get(id)));
     if (retyped.length === 1 && same({ ...netsA.get(retyped[0]), label: null }, { ...netsB.get(retyped[0]), label: null })) {
       const [now, was] = [netsB.get(retyped[0]).label, netsA.get(retyped[0]).label];
-      if (was && plain(String(was)).trim() === plain(String(now ?? "")).trim()) return lookChange(was, now, "Format Line");
-      return typing(now ?? "", was ?? "");
+      if (was && sameWords(was, now)) return lookChange(was, now, "Format Line");
+      return typing(labelText(now), labelText(was));
     }
     // Its shapes arranged: grouped, ungrouped, or one moved in its row or to another.
     const newGroups = [...groupsB.keys()].filter((id) => !groupsA.has(id)), oldGroups = [...groupsA.keys()].filter((id) => !groupsB.has(id));
@@ -8662,7 +8714,7 @@ export function mount(studio, container) {
         return one ? `Move ${call(one)}` : `Rearrange ${call(id)}`;
       }
       // Its title typed: renamed, not laid out anew.
-      if (differing(was, group).every((key) => key === "label")) return `Rename ${quoted(String(was.label || ""), 24) || call(id)}`;
+      if (differing(was, group).every((key) => key === "label")) return `Rename ${quoted(labelText(was.label), 24) || call(id)}`;
       return id === b.groups?.[0]?.id ? "Change Figure Layout" : `Change Layout of ${call(id)}`;
     }
     return "Edit Figure";
@@ -8796,7 +8848,7 @@ export function mount(studio, container) {
         toast(`${nameOf(note.by)} deleted ${editedHere(named(block, { the: true }))}. It stays.`, { icon: "info", seconds: 6 });
       } else if (note.kept !== undefined && shaping && note.kept?.id !== undefined && String(note.kept.id) === String(figure.parts.inline.id)) {
         // A figure's shape typed in here, kept so: said here too, as an object's is.
-        const words = plain(String(note.kept.label ?? "")).trim();
+        const words = plain(labelText(note.kept.label)).trim();
         toast(`${nameOf(note.by)} deleted ${editedHere(words ? inQuotes(words) : "the shape")}. It stays.`, { icon: "info", seconds: 6 });
       } else if (note.kept !== undefined && follows([note.kept], [slide])[0] === 0) {
         toast(`${nameOf(note.by)} deleted the slide you’re editing. It stays.`, { icon: "info", seconds: 6 });
