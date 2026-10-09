@@ -166,6 +166,8 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .position-pad .segmented button { padding-inline: 0; min-width: 0; }
 .position-pad .segmented button { height: 28px; }
 .position-pad .stop-glyph { width: 28px; height: 18px; display: block; margin: auto; }
+/* Stops that would not move it (it fills its place): greyed, as a Mac control is. */
+.position-pad .segmented button:disabled { opacity: 0.38; cursor: default; }
 /* An object moved across in its place: the guide where it would stand (its place's left
    edge, middle or right edge), named, as Keynote's alignment guides. */
 .block-guide { position: absolute; width: 0; pointer-events: none; opacity: 0; z-index: 6; border-left: 1px dashed var(--accent); transition: opacity 0.12s; }

@@ -5780,6 +5780,7 @@ export function mount(studio, container) {
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
     }, { undone: undoing });
+    markFills();
   }
 
   function crumbs(slide, block) {
@@ -5817,10 +5818,20 @@ export function mount(studio, container) {
     const spare = pageNode?.querySelector(`[id="slide${state.slide + 1}.${region?.svg}"]`)?.getAttribute("data-flexo-spare");
     return spare != null && Number(spare) < 2;
   }
-  // What it fills, said beside Position: there it has nowhere to go.
-  function fillsHint(at) {
+  // What it fills, said under Position, the stops that would not move it greyed: there it
+  // has nowhere to go. (Kept to the slide as it is drawn again: a width changed.)
+  function markFills() {
+    const pad = inspectorBody.querySelector(".position-pad"), at = state.focus;
+    if (!pad || !at) return;
     const wide = fillsPlace(at), tall = fillsDown(at);
-    return wide && tall ? { hint: "Fills its place" } : wide ? { hint: "Fills its width" } : tall ? { hint: "Fills its height" } : {};
+    const [across, down] = pad.querySelectorAll(".position-row");
+    across?.querySelectorAll("button").forEach((button) => { button.disabled = wide; });
+    down?.querySelectorAll("button").forEach((button) => { button.disabled = tall; });
+    const note = pad.querySelector(".position-note");
+    note.textContent = wide && tall ? "It fills its place: there is nowhere to move it."
+      : wide ? "It fills its place’s width: there is nowhere across to move it."
+        : tall ? "It fills the height left: there is nowhere down to move it." : "";
+    note.hidden = !wide && !tall;
   }
   // An object set at a stop across its place (`across`) or down it (`down`; null, back where
   // the slide sets it), one step: written only when it is not where the slide would set it
@@ -5856,7 +5867,7 @@ export function mount(studio, container) {
       options: [{ value: "auto", label: "Auto", title: "Automatic: in line under what is before it" }, ...stops(DOWN, true)],
       onChange: (value) => placeBlock(at, { down: value === "auto" ? null : value }) });
     return h("div.position-pad", {}, h("div.position-row", {}, h("span.position-label", {}, "Across"), across),
-      h("div.position-row", {}, h("span.position-label", {}, "Down"), down));
+      h("div.position-row", {}, h("span.position-label", {}, "Down"), down), h("div.hint-line.position-note", { hidden: true }));
   }
 
   // A figure's only shape chosen -- a structure added as one -- is the object on the slide:
@@ -5864,7 +5875,7 @@ export function mount(studio, container) {
   function placedPanel(panel, slide, block) {
     const one = figure.parts.selected.length === 1 ? figure.parts.selected[0] : null;
     if (!one || !loneShape(figure.parts.model, one) || !Array.isArray(panel) || !state.focus) return panel;
-    const place = h("div.section", {}, ui.field("Position", positionPad(slide, state.focus, block), fillsHint(state.focus)));
+    const place = h("div.section", {}, ui.field("Position", positionPad(slide, state.focus, block)));
     return [panel[0], place, ...panel.slice(1)];
   }
 
@@ -5889,7 +5900,7 @@ export function mount(studio, container) {
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null,
         // Across its place, as Keynote's Arrange › Align: where it stands, chosen. (One as wide
         // as its place -- a paragraph filling it -- or as tall, has nowhere to go, and says so.)
-        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block), fillsHint(at)) : null),
+        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block)) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
       buildSection(block, at),
     ];
@@ -8529,7 +8540,7 @@ export function mount(studio, container) {
     // The panel's colours drawn again when the theme's change (its palette edited in its own
     // tab): the named colours, the tones and the palette's own order, as the swatches show them.
     const key = JSON.stringify([studio.info?.palette || {}, studio.info?.tones, studio.info?.order, studio.info?.own]);
-    if (key !== lastKey) { lastKey = key; renderInspector(); } else markBlockErrors();
+    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFills(); }
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
     stage.querySelector(":scope > .deck-error")?.remove();
     if (deckError) stage.prepend(h("div.messages.deck-error", {}, messageView(deckError)));
