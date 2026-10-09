@@ -1276,12 +1276,7 @@ export function mount(studio, container) {
       ondrop: (event) => {
         if (dragFrom === null) return;
         event.preventDefault();
-        let to = index + (node.classList.contains("drop-after") ? 1 : 0);
-        // One of several chosen: they all go there, in their order, one step.
-        const together = chosenSlides();
-        if (together.length > 1 && together.includes(dragFrom)) { moveSlides(together, to); return; }
-        if (dragFrom < to) to -= 1;
-        moveSlide(dragFrom, to);
+        dropSlide(index + (node.classList.contains("drop-after") ? 1 : 0));
       },
     },
     h("div.num", {}, index + 1),
@@ -1299,6 +1294,30 @@ export function mount(studio, container) {
     h("button.insert-after", { type: "button", tabindex: -1, title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
     return node;
   }
+
+  // The slide carried put at `to` (a place as the list is now): one of several chosen, they
+  // all go there, in their order, one step.
+  function dropSlide(to) {
+    const together = chosenSlides();
+    if (together.length > 1 && together.includes(dragFrom)) { moveSlides(together, to); return; }
+    moveSlide(dragFrom, dragFrom < to ? to - 1 : to);
+  }
+  // Carried below the last slide (or above the first), in the list's own room: the line shows
+  // it goes at the end (or the start), and there it goes.
+  railList.addEventListener("dragover", (event) => {
+    if (dragFrom === null || event.target.closest?.(".thumb")) return;
+    const thumbs = railList.querySelectorAll(":scope > .thumb");
+    if (!thumbs.length) return;
+    event.preventDefault();
+    clearSlideDrops();
+    if (event.clientY < thumbs[0].getBoundingClientRect().top) thumbs[0].classList.add("drop-before");
+    else thumbs[thumbs.length - 1].classList.add("drop-after");
+  });
+  railList.addEventListener("drop", (event) => {
+    if (dragFrom === null || event.target.closest?.(".thumb")) return;
+    event.preventDefault();
+    dropSlide(railList.querySelector(":scope > .thumb.drop-before") ? 0 : slides().length);
+  });
 
   function slideMoreButton(index) {
     const button = ui.button("", (event) => { event.stopPropagation(); slideMenu(event.currentTarget, index); }, { kind: "ghost", icon: "more", small: true, title: "Slide actions" });
