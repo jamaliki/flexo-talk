@@ -198,8 +198,11 @@ const kindOf = (block) => Object.keys(block || {}).find((key) => key in BLOCKS &
   || (block && typeof block === "object" ? "unknown" : "text");
 // An object by the name of what it is to the person: a list with its marks taken away (None)
 // reads as the text it now is.
-const blockName = (block) => (kindOf(block) === "bullets" && block?.plain ? "Text" : BLOCKS[kindOf(block)]?.label || "Object");
-const blockIcon = (block) => (kindOf(block) === "bullets" && block?.plain ? BLOCKS.text.icon : BLOCKS[kindOf(block)]?.icon || "text");
+// A figure of structures alone -- one added by Insert › Structure -- is a structure, by name.
+const structures = (block) => kindOf(block) === "figure" && typeof block.figure === "object" && (block.figure?.nodes || []).length > 0
+  && block.figure.nodes.every((node) => node?.kind === "structure");
+const blockName = (block) => (kindOf(block) === "bullets" && block?.plain ? "Text" : structures(block) ? BLOCKS.structure.label : BLOCKS[kindOf(block)]?.label || "Object");
+const blockIcon = (block) => (kindOf(block) === "bullets" && block?.plain ? BLOCKS.text.icon : structures(block) ? BLOCKS.structure.icon : BLOCKS[kindOf(block)]?.icon || "text");
 // Whether an object builds in on a click when presenting: whole, or (a list) an item at a time.
 const built = (block) => Boolean(block?.build || (kindOf(block) === "bullets" && block?.reveal));
 // What builds on a slide, as its badge says: "Builds on clicks: the list, an item at a time,
@@ -242,7 +245,9 @@ function summary(block) {
     // Those given only: a new one's placeholders say nothing, as a new text's do.
     case "stats": return Array.isArray(value) ? value.map((item) => String(item?.value ?? item?.[0] ?? item ?? "").trim()).filter(Boolean).join("  ·  ") : "";
     case "gallery": { const n = Array.isArray(value) ? value.length : 0; return `${n} picture${n === 1 ? "" : "s"}`; }
-    case "figure": return typeof value === "string" ? value : count((value?.nodes || []).length, "shape");
+    // (Structures by their names, "1A8O"; another figure by its shapes.)
+    case "figure": return typeof value === "string" ? value : structures(block) ? value.nodes.map((node) => readable(String(node.label ?? ""))).filter(Boolean).join(", ") || "Structure"
+      : count((value?.nodes || []).length, "shape");
     case "image": return value || "No picture chosen";
     case "plot": return value || "No function chosen";
     case "callout": return plain(block.title) || plain(value);
@@ -3321,6 +3326,12 @@ export function mount(studio, container) {
       run: (action, options) => runFigure(action, options, own),
       // (With the studio away its parts stay where the slide's drawing has them, as its objects do.)
       away: (what) => awayFrom(what),
+      // Its shapes all deleted (a structure added on its own, deleted), the figure is.
+      emptied: ({ cut = false } = {}) => {
+        const wasCut = cut || figureCut;
+        figureCut = false;
+        if (figure === own && figureBlock()) deleteBlock({ region: own.region, index: own.index }, wasCut ? "cut" : "deleted");
+      },
       // Edited -- its first shape's words typed, sent or still on their way -- a new figure is
       // no longer one just added and left empty: Esc does not take it back (dropFresh).
       edited: () => { if (fresh && fresh.slide === own.slide && fresh.region === own.region && fresh.index === own.index) fresh = null; },
@@ -3581,20 +3592,27 @@ export function mount(studio, container) {
     figureBar.hidden = !box;
     if (!box) return;
     const words = figure.parts.hint();
-    const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: "Drag to move the figure",
+    // (Named as the object is: a figure, or a structure added on its own.)
+    const name = blockName(block);
+    const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: `Drag to move the ${name.toLowerCase()}`,
       onpointerdown: (event) => { event.stopPropagation(); pressBlock(event, { kind: "block", region: figure.region, index: figure.index }); } }, icon("grip"));
     // (Shapes to group chosen: an empty group is added from the palette's Layout.)
     const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (G)", disabled: !figure.parts.canGroup() });
+    // (A figure of one shape -- a structure added on its own -- is that shape, as a picture is:
+    // no tools of a diagram's over it. It grows into a figure from its menu's Add Shape After….)
+    const only = figure.parts.model.groups?.find((each) => each.id === figure.parts.model.root)?.children || [];
+    const alone = only.length === 1 && figure.parts.lone(only[0]);
     clear(figureBar, words ? h("span.figure-hint", {}, words) : [
       grip,
-      ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add Shape (A)", id: undefined }),
-      ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one shape to another (C)" }),
-      group,
+      ...(alone ? [] : [
+        ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add Shape (A)", id: undefined }),
+        ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one shape to another (C)" }),
+        group]),
       ui.button("", (event) => menu(event.currentTarget, exportItems(figure)),
-        { small: true, kind: "ghost", icon: "export", title: "Export figure (SVG, PDF, PNG, YAML)" }),
+        { small: true, kind: "ghost", icon: "export", title: `Export ${name} (SVG, PDF, PNG, YAML)` }),
       // (Its shapes being edited, none chosen -- one just deleted -- nothing to delete: ⌫ does nothing.)
-      figure.parts.selected.length || figure.parts.inside ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete selected shapes (⌫)", disabled: !figure.parts.selected.length })
-        : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: "Delete Figure (⌫)" }),
+      (figure.parts.selected.length || figure.parts.inside) && !alone ? ui.button("", () => figure.parts.remove(), { small: true, kind: "ghost", icon: "trash", title: "Delete Selected Shapes (⌫)", disabled: !figure.parts.selected.length })
+        : ui.button("", () => deleteBlock({ region: figure.region, index: figure.index }), { small: true, kind: "ghost", icon: "trash", title: `Delete ${name} (⌫)` }),
     ]);
     figureBar.querySelector(".btn.primary")?.classList.add("add");
     group.classList.add("group");
