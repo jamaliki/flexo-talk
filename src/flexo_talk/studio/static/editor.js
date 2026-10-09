@@ -2751,7 +2751,9 @@ export function mount(studio, container) {
           // In the object menu's order: what is its own, then Cut, Copy, Paste and Duplicate, then Delete.
           const own = figure.parts.menuOf(id, point), last = (label) => own.filter((item) => item?.label === label);
           const first = own.filter((item) => !["Duplicate", "Delete"].includes(item?.label));
-          menu(point, [...first, "-", ...clipItems(), ...last("Duplicate"), "-", ...last("Delete")]);
+          // (A line's menu offers no Cut or Copy: a line goes with the shapes it joins.)
+          const clips = clipItems().filter((item) => item.label === "Paste" || !item.disabled);
+          menu(point, [...first, "-", ...clips, ...last("Duplicate"), "-", ...last("Delete")]);
           return;
         }
         figure?.parts.select([]);
@@ -2929,10 +2931,13 @@ export function mount(studio, container) {
   function chooseAll() {
     if (!allBlocks().length) return;
     closeInline();
+    allChosen = null;
+    // (One object on the slide is simply chosen, as one is: never "1 Objects Selected".)
+    const picks = picksNow();
+    if (picks.length === 1) { leaveFigure(false); focusBlock(picks[0].region, picks[0].index); return; }
     leaveFigure(false);
     state.focus = null; state.field = null;
-    allChosen = null;
-    chooseMany(picksNow());
+    chooseMany(picks);
     placeChosen(); renderInspector(); reportFocus();
   }
   // Several chosen moved together, as Keynote moves them (⌥↑ ⌥↓, Arrange › Move Up and Move
@@ -3570,7 +3575,8 @@ export function mount(studio, container) {
     const words = figure.parts.hint();
     const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: "Drag to move the figure",
       onpointerdown: (event) => { event.stopPropagation(); pressBlock(event, { kind: "block", region: figure.region, index: figure.index }); } }, icon("grip"));
-    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the selected shapes (G)" });
+    // (Shapes to group chosen: an empty group is added from the palette's Layout.)
+    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (G)", disabled: !figure.parts.canGroup() });
     clear(figureBar, words ? h("span.figure-hint", {}, words) : [
       grip,
       ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add Shape (A)", id: undefined }),
@@ -4603,7 +4609,12 @@ export function mount(studio, container) {
     // A figure's shapes come back (or change): those shapes are chosen in it.
     const shapes = (block) => (block && typeof block.figure === "object" ? block.figure.nodes || [] : []);
     const prior = old.find((item) => item.region === changed.region && item.index === changed.index)?.block;
-    const back = shapes(changed.block).filter((node) => !shapes(prior).some((other) => same(other, node))).map((node) => node.id).filter(Boolean);
+    // (A group that comes back is chosen whole, as it was deleted: not the shapes it holds.)
+    const groups = (block) => (block && typeof block.figure === "object" ? block.figure.groups || [] : []);
+    const backGroups = groups(changed.block).filter((group) => group?.id && !groups(prior).some((other) => other?.id === group.id));
+    const inBack = (id) => backGroups.some((group) => (group.children || []).includes(id));
+    const back = [...backGroups.map((group) => group.id), ...shapes(changed.block).filter((node) => !shapes(prior).some((other) => same(other, node))).map((node) => node.id)]
+      .filter((id) => id && !inBack(id));
     const chosen = state.focus?.region === changed.region && state.focus?.index === changed.index;
     if (back.length && kindOf(changed.block) === "figure") focusBlock(changed.region, changed.index, () => figure?.parts.select(back));
     else if (!chosen) focusBlock(changed.region, changed.index);
@@ -5329,9 +5340,12 @@ export function mount(studio, container) {
   const typingNow = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable
     || Boolean(document.querySelector(".scrim, .present"));
   function clipOf() {
-    if (figure && figureBlock() && figure.parts.selected.length) {
+    // A figure's shapes being edited are what is copied -- and only they: lines chosen alone
+    // (copied with the shapes they join), or nothing chosen in it, copy nothing, never the
+    // whole figure in their place.
+    if (figure && figureBlock() && (figure.parts.selected.length || figure.parts.inside)) {
       const parts = figure.parts.clip();
-      if (parts) return { what: "parts", parts, label: parts.top.length > 1 ? `${parts.top.length} shapes` : "shape" };
+      return parts ? { what: "parts", parts, label: parts.top.length > 1 ? `${parts.top.length} shapes` : "shape" } : null;
     }
     const slide = slideAt();
     if (!slide) return null;
@@ -5372,15 +5386,20 @@ export function mount(studio, container) {
     else if (clip.what === "slides") deleteSlides(clip.indices, "cut");
     else deleteSlide(state.slide, "cut");
   }
+  // Lines chosen alone in a figure: why nothing was copied is said, not left to look done.
+  const uncopied = () => {
+    const why = studio.active && !typingNow() && !wordsChosen() && figure && figureBlock() ? figure.parts.uncopied() : null;
+    if (why) toast(why, { icon: "info", seconds: 3 });
+  };
   document.addEventListener("copy", (event) => {
     keyed = null;
     const clip = copyNow(event);
-    if (clip) copied(clip);
+    if (clip) copied(clip); else uncopied();
   });
   document.addEventListener("cut", (event) => {
     keyed = null;
     const clip = copyNow(event);
-    if (clip) cutAway(clip);
+    if (clip) cutAway(clip); else uncopied();
   });
   // A web view that gives no copy, cut or paste to a page with nothing to type in (a
   // Mac app's, whose Edit menu waits for a selection) still passes the keys: if no such
@@ -5399,7 +5418,7 @@ export function mount(studio, container) {
         return;
       }
       const clip = clipOf();
-      if (!clip) return;
+      if (!clip) { uncopied(); return; }
       clipboard = clip;
       navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
       if (letter === "c") copied(clip); else cutAway(clip);
