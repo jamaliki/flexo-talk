@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan } from "/static/kinds/deck/slidedrop.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
@@ -690,9 +690,27 @@ export function mount(studio, container) {
     notesArea.setSelectionRange(notesArea.value.length, notesArea.value.length);
   }
   const center = h("section.deck-center", {}, stage, notes);
-  const inspectorHead = h("div.insp-head");
+  const inspectorHead = h("div.insp-head", { hidden: true });
   const inspectorBody = h("div.panel-body.scroll-thin");
   const inspector = h("aside.panel.inspector", {}, inspectorHead, inspectorBody);
+  // Format and Design, as Keynote's: the inspector shown as one or the other -- the one shown
+  // clicked again, hidden, the slide given its room.
+  let inspectorHidden = false;
+  const panelButton = (tab, label, glyph, title) => ui.button(label, () => {
+    if (state.tab === tab && !inspectorHidden) inspectorHidden = true;
+    else { inspectorHidden = false; state.tab = tab; renderInspector(); }
+    root.classList.toggle("no-inspector", inspectorHidden);
+    showPanels();
+  }, { kind: "ghost", icon: glyph, title });
+  const formatButton = panelButton("slide", "Format", "slide", "Format what is chosen, or the slide");
+  const designButton = panelButton("design", "Design", "palette", "The deck’s theme, colours, fonts and look");
+  function showPanels() {
+    const shown = !inspectorHidden;
+    formatButton.classList.toggle("on", shown && state.tab !== "design");
+    designButton.classList.toggle("on", shown && state.tab === "design");
+    formatButton.setAttribute("aria-pressed", String(shown && state.tab !== "design"));
+    designButton.setAttribute("aria-pressed", String(shown && state.tab === "design"));
+  }
   // Its buttons, swatches and cards clicked leave the keys with the slide, as Keynote's
   // inspector does; its fields take them.
   inspector.addEventListener("mousedown", (event) => {
@@ -793,20 +811,20 @@ export function mount(studio, container) {
 
   // -- the bar --
   const insertButtons = MAIN_BLOCKS.map((kind) => ui.button(BLOCKS[kind].label, () => insertBlock(kind), { kind: "ghost", icon: BLOCKS[kind].icon, title: `Add ${BLOCKS[kind].label}: ${BLOCKS[kind].hint}` }));
-  const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "chevron-down" });
-  // Its chevron after the word, as on the layout button: both open a menu.
+  const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "more" });
   moreButton.classList.add("pulldown");
-  moreButton.append(moreButton.querySelector("svg"));
-  const layoutButton = h("button.btn.ghost.layout-button", { type: "button", title: "Slide layout", onclick: (event) => layoutPopover(event.currentTarget) });
-  const newSlideButton = ui.button("Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide" });
+  const layoutButton = h("button.btn.ghost.layout-button.pulldown", { type: "button", title: "Slide layout", onclick: (event) => layoutPopover(event.currentTarget) });
+  const newSlideButton = ui.button("Add Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide (⇧⌘N)" });
   newSlideButton.classList.add("keep-label");
-  studio.tools.append(newSlideButton, layoutButton, h("span.sep"), ...insertButtons, moreButton);
+  // As Keynote's toolbar: the slide's own tools at the left, what adds to it in the middle.
+  studio.tools.append(newSlideButton, layoutButton);
+  studio.inserts.append(...insertButtons, moreButton);
   // Export lists what File › Export To does in the Mac app (`studio.exports`); each asks
   // where to save once. A deck with no slides has nothing to present or export.
   const presentButton = ui.button("Present", () => present(), { kind: "ghost", icon: "play" });
   const exportButton = ui.button("Export", (event) => menu(event.currentTarget, studio.exports.map(({ format, label, hint, icon: glyph }) =>
     ({ icon: glyph || "export", label, hint, run: () => studio.exportFiles([format]) })), { align: "end" }), { kind: "ghost", icon: "export" });
-  studio.actions.append(presentButton, exportButton);
+  studio.actions.append(presentButton, exportButton, h("span.sep"), formatButton, designButton);
   const showable = () => {
     const none = !slides().length;
     presentButton.disabled = exportButton.disabled = none;
@@ -5715,19 +5733,8 @@ export function mount(studio, container) {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
       if (state.focus && !block) state.focus = null;
-      // Format and Design: one segmented control, one stop for Tab, the arrows going from one
-      // to the other and Space or Return choosing -- the keys staying on it as it is drawn again.
-      const choose = (tab) => {
-        const keys = inspectorHead.contains(document.activeElement);
-        state.tab = tab;
-        renderInspector();
-        if (keys) inspectorHead.querySelector(".insp-tab.on")?.focus();
-      };
-      const tabs = [["slide", "Format", "slide"], ["design", "Design", "palette"]].map(([tab, label, glyph]) =>
-        h(`button.insp-tab${state.tab === tab ? ".on" : ""}`, { type: "button", role: "tab", "aria-selected": String(state.tab === tab), onclick: () => choose(tab) }, icon(glyph), label));
-      const tabBar = h("div.insp-tabs", { role: "tablist", "aria-label": "Inspector" }, tabs);
-      ui.roving(tabBar, () => tabs, "inspector.tab");
-      clear(inspectorHead, tabBar);
+      // Format and Design are the toolbar's, as Keynote's are (showPanels).
+      showPanels();
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
@@ -7305,6 +7312,16 @@ export function mount(studio, container) {
         { type: "button", onclick: () => choosePalette(name) }, strip(inUse(name, colours)), h("span", {}, paletteName(name))))), { className: "palette-menu" }) },
     strip(current === "default" ? own : inUse(current, catalog.palettes[current])), h("span", {}, current ? paletteName(current) : "Custom"), icon("chevron"));
     const fonts = (name, label, note) => ui.field(label, ui.font({ value: deck[name] || "", options: catalog.fonts, placeholder: note, key: `deck.${name}`, onChange: setDeck(name) }));
+    // The whole deck in one face, a click away -- its titles and figures too: the theme's,
+    // or one of those most often wanted. The pop-ups under them set each apart.
+    const families = studio.info?.fonts || {};
+    const quick = suggestedFonts(catalog.fonts || []).filter((name) => name !== "Helvetica Neue").slice(0, 7);
+    const one = !deck.title_font && !deck.figure_font ? deck.font || "" : null;
+    const fontTile = (name, label, face) => h(`button.font-tile${one === name ? ".on" : ""}`, { type: "button", "aria-pressed": String(one === name),
+      title: name ? `Set the whole deck in ${name}` : `The theme’s fonts${families.theme ? ` (${families.theme})` : ""}`,
+      onclick: () => { editDeck((d) => { if (name) d.font = name; else delete d.font; delete d.title_font; delete d.figure_font; }, { label: "Change Font" }); renderInspector(); } },
+    h("span.font-tile-sample", { style: { fontFamily: face ? `"${face}", var(--font)` : "inherit" } }, "Aa"), h("span.font-tile-name", {}, label));
+    const fontTiles = h("div.font-tiles", { role: "group", "aria-label": "Font" }, fontTile("", "Theme", families.theme), quick.map((name) => fontTile(name, name, name)));
     const lookStyle = catalog.looks.find((item) => item.name === look)?.style || {};
     const changes = deck.style || {};
     const styleRows = catalog.style.map((field) => {
@@ -7337,7 +7354,8 @@ export function mount(studio, container) {
         ui.field("Palette", paletteList)),
       h("div.section", {}, h("div.section-title", {}, "Look"), looks),
       h("div.section", {}, h("div.section-title", {}, "Fonts"),
-        fonts("font", "Body", "Default"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
+        fontTiles,
+        fonts("font", "Body", families.theme ? `Theme’s (${families.theme})` : "Theme’s"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
       // Every arrow in the deck's figures, in one shape (a line with a head of its own keeps it).
       h("div.section", {}, h("div.section-title", {}, "Figures"),
         ui.field("Arrowheads", ui.segmented({ value: deck.conventions?.arrowheads || "theme", key: "deck.arrowheads",
@@ -7779,7 +7797,7 @@ export function mount(studio, container) {
     ];
   }
   studio.reveal = (where, { quiet = false } = {}) => {
-    if (where?.label === "Design") { state.tab = "design"; renderInspector(); return; }
+    if (where?.label === "Design") { state.tab = "design"; inspectorHidden = false; root.classList.remove("no-inspector"); renderInspector(); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);
     // Its object chosen, where it is now (the activity list follows it) -- not while
     // following another's work, which is theirs to choose.
