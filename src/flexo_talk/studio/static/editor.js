@@ -1046,17 +1046,22 @@ export function mount(studio, container) {
     pickedLeft = null;
   }
   function pickSlide(index, event) {
+    // ⇧-click: a run from the slide it began at -- the one clicked, or ⌘-clicked, last without
+    // ⇧ -- to this one, as a Mac list extends one: a ⇧-click after it moves where it ends, not
+    // where it begins (runFrom, as ⇧↓ keeps it).
     if (event.shiftKey && slides().length) {
-      const from = Math.min(state.slide, index), to = Math.max(state.slide, index);
-      const run = Array.from({ length: to - from + 1 }, (_, n) => from + n);
+      const from = state.picked.length > 1 && runFrom !== null ? runFrom : state.slide;
+      const low = Math.min(from, index), high = Math.max(from, index);
       select(index);
-      state.picked = run;
+      state.picked = Array.from({ length: high - low + 1 }, (_, n) => low + n);
+      runFrom = from;
     } else if (event.metaKey || event.ctrlKey) {
       const now = new Set(chosenSlides());
       if (now.has(index) && now.size > 1) now.delete(index); else now.add(index);
       const shown = now.has(index) ? index : Math.min(...now);
       select(shown);
       state.picked = [...now];
+      runFrom = shown;
     } else { select(index); return; }
     railList.focus({ preventScroll: true });
     renderRail();
@@ -1409,7 +1414,7 @@ export function mount(studio, container) {
       renderRail();
     }
   });
-  let runFrom = null;  // where a run of slides chosen with ⇧↓ began
+  let runFrom = null;  // where a run of slides chosen with ⇧↓ or ⇧-click began
   // Keys go to what was chosen last: once something on the slide is chosen, not the slides.
   const offRail = () => { if (railList.contains(document.activeElement)) document.activeElement.blur(); };
 
