@@ -3488,7 +3488,15 @@ export function mount(studio, container) {
     // (A module made, or a group's title typed: "Make Module", "Rename “…”", as the parts say it.)
     const groupWords = action.do === "update" && [action.target, ...(action.targets || [])].filter(Boolean).every((part) => part.type === "group")
       && Object.keys(action.values || {}).every((key) => key === "label");
-    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather"].includes(action.do) || lineLook || groupWords || merge?.startsWith("as-drawn:") ? told : null;
+    // (Any other setting changed -- a shape resized or fitted to its words, a line bent, its
+    // width -- as the parts say it too, the same name as in the figure editor: but for words
+    // typed, and a table's rows (a protein's features), which the figure before and after
+    // name more nearly -- "Typing “…”", "Add Feature".)
+    const typed = action.do === "update" && Object.keys(action.values || {}).every((key) => key === "label");
+    const rows = action.do === "update" && Object.values(action.values || {}).some(Array.isArray);
+    const setting = action.do === "update" && !typed && !rows;
+    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather", "delete", "connect", "ungroup"].includes(action.do)
+      || lineLook || groupWords || setting || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
@@ -8047,13 +8055,20 @@ export function mount(studio, container) {
       : fields.find((field) => field.key === `properties.${key}`);
     return found?.label ? titled(found.label) : keyTitle(key);
   }
+  // A figure's label as its words, however it is written: markup, or runs formatted each its
+  // own way (ε, x₀) by their text -- never "[object Object]".
+  const labelText = (label) => (Array.isArray(label) ? label.map((run) => run?.text ?? "").join("") : String(label ?? ""));
+  // The same words, all their lines (not only the first a name shows), in another look.
+  const sameWords = (was, now) => readable(labelText(was)).trim() === readable(labelText(now)).trim();
   // A change to a figure written in the deck: the shape it was made to, by name.
   function figureChange(a, b) {
     const byId = (list) => new Map((list || []).map((item) => [item.id, item]));
     const nodesA = byId(a.nodes), nodesB = byId(b.nodes), groupsA = byId(a.groups), groupsB = byId(b.groups);
-    // (A shape with no words by what it is -- "Shape", "Decision" -- never by its id.)
-    const named = (item, id) => quoted(item?.label || "", 24)
-      || (item && (nodesB.has(id) || nodesA.has(id)) ? { block: "Shape", terminal: "Start" }[item.kind || "block"] || catalog.figure_editor?.parts?.[item.kind]?.title || "Shape"
+    // (A shape with no words by what it is -- "Block", "Decision", as its type names it --
+    // never by its id.)
+    const kindTitle = (kind) => titled(catalog.figure_editor?.parts?.[kind || "block"]?.title || "Shape");
+    const named = (item, id) => quoted(labelText(item?.label), 24)
+      || (item && (nodesB.has(id) || nodesA.has(id)) ? { terminal: "Start" }[item.kind || "block"] || kindTitle(item.kind)
         : item?.id ? "Group" : "Shape");
     const call = (id) => named(nodesB.get(id) || nodesA.get(id) || groupsB.get(id) || groupsA.get(id), id);
     const ref = (end) => (nodesB.has(end) || nodesA.has(end) ? end : String(end).slice(0, String(end).lastIndexOf(".")) || end);
@@ -8065,7 +8080,7 @@ export function mount(studio, container) {
       added = [];
       removed = [];
     }
-    if (added.length === 1 && !removed.length) return "Add Shape";
+    if (added.length === 1 && !removed.length) return `Add ${kindTitle(nodesB.get(added[0])?.kind)}`;
     if (removed.length === 1 && !added.length) return `Delete ${call(removed[0])}`;
     if (added.length > 1 && !removed.length) return `Add ${added.length} Shapes`;
     if (removed.length > 1 && !added.length) return `Delete ${removed.length} Shapes`;
@@ -8077,8 +8092,8 @@ export function mount(studio, container) {
         // The same words in another look (a colour, code) are the label's format changed.
         // (By all their words, not the few the name shows: typing on at the end of a long
         // label is typing.)
-        if (was.label && plain(String(was.label)).trim() === plain(String(now.label ?? "")).trim()) return lookChange(was.label, now.label, `Format ${named(now, id)}`);
-        return typingName(readable(String(was.label ?? "")), readable(String(now.label ?? "")), 24);
+        if (was.label && sameWords(was.label, now.label)) return lookChange(was.label, now.label, `Format ${named(now, id)}`);
+        return typingName(readable(labelText(was.label)), readable(labelText(now.label)), 24);
       }
       if (!same(was.kind, now.kind)) return "Change Shape Type";
       const keys = differing(was.properties, now.properties);
@@ -8131,8 +8146,8 @@ export function mount(studio, container) {
     // A line's words typed in, as any words are.
     if (newEdges.length === 1 && oldEdges.length === 1 && same({ ...newEdges[0], label: null }, { ...oldEdges[0], label: null })) {
       const [now, was] = [newEdges[0].label, oldEdges[0].label];
-      if (was && plain(String(was)).trim() === plain(String(now ?? "")).trim()) return lookChange(was, now, "Format Line");
-      return typing(now ?? "", was ?? "");
+      if (was && sameWords(was, now)) return lookChange(was, now, "Format Line");
+      return typing(labelText(now), labelText(was));
     }
     // One line's setting changed, by its name in the panel ("Change Arrowhead"); its ends,
     // the line moved.
@@ -8148,8 +8163,8 @@ export function mount(studio, container) {
     const retyped = [...netsB.keys()].filter((id) => netsA.has(id) && !same(netsA.get(id), netsB.get(id)));
     if (retyped.length === 1 && same({ ...netsA.get(retyped[0]), label: null }, { ...netsB.get(retyped[0]), label: null })) {
       const [now, was] = [netsB.get(retyped[0]).label, netsA.get(retyped[0]).label];
-      if (was && plain(String(was)).trim() === plain(String(now ?? "")).trim()) return lookChange(was, now, "Format Line");
-      return typing(now ?? "", was ?? "");
+      if (was && sameWords(was, now)) return lookChange(was, now, "Format Line");
+      return typing(labelText(now), labelText(was));
     }
     // Its shapes arranged: grouped, ungrouped, or one moved in its row or to another.
     const newGroups = [...groupsB.keys()].filter((id) => !groupsA.has(id)), oldGroups = [...groupsA.keys()].filter((id) => !groupsB.has(id));
@@ -8170,7 +8185,7 @@ export function mount(studio, container) {
         return one ? `Move ${call(one)}` : `Rearrange ${call(id)}`;
       }
       // Its title typed: renamed, not laid out anew.
-      if (differing(was, group).every((key) => key === "label")) return `Rename ${quoted(String(was.label || ""), 24) || call(id)}`;
+      if (differing(was, group).every((key) => key === "label")) return `Rename ${quoted(labelText(was.label), 24) || call(id)}`;
       return id === b.groups?.[0]?.id ? "Change Figure Layout" : `Change Layout of ${call(id)}`;
     }
     return "Edit Figure";
@@ -8303,7 +8318,7 @@ export function mount(studio, container) {
         toast(`${nameOf(note.by)} deleted ${editedHere(named(block, { the: true }))}. It stays.`, { icon: "info", seconds: 6 });
       } else if (note.kept !== undefined && shaping && note.kept?.id !== undefined && String(note.kept.id) === String(figure.parts.inline.id)) {
         // A figure's shape typed in here, kept so: said here too, as an object's is.
-        const words = plain(String(note.kept.label ?? "")).trim();
+        const words = plain(labelText(note.kept.label)).trim();
         toast(`${nameOf(note.by)} deleted ${editedHere(words ? inQuotes(words) : "the shape")}. It stays.`, { icon: "info", seconds: 6 });
       } else if (note.kept !== undefined && follows([note.kept], [slide])[0] === 0) {
         toast(`${nameOf(note.by)} deleted the slide you’re editing. It stays.`, { icon: "info", seconds: 6 });
