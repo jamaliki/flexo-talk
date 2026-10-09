@@ -137,7 +137,10 @@ function itemsOfHtml(html) {
   });
   const numbered = marks.length ? marks.every(Boolean) : Boolean(doc.querySelector("ol")) && !doc.querySelector("ul");
   doc.querySelectorAll("script, style, meta, link, img, svg, title, template, [style*='mso-list:ignore' i], [style*='mso-list: ignore' i]").forEach((node) => node.remove());
-  doc.querySelectorAll("a[href]").forEach((link) => { link.dataset.href = link.getAttribute("href"); });
+  // (A link to a place in the page it came from -- a citation's, "#cite_note-1" -- goes
+  // nowhere from a slide: its words come alone.)
+  doc.querySelectorAll("a[href]").forEach((link) => { if (!link.getAttribute("href").startsWith("#")) link.dataset.href = link.getAttribute("href"); });
+  raised(doc);
   // Headings bold, the way a slide marks them.
   doc.querySelectorAll("h1, h2, h3, h4, h5, h6, th").forEach((node) => { node.style.fontWeight = "700"; });
   doc.querySelectorAll("td + td, td + th, th + td, th + th").forEach((cell) => cell.prepend(" "));
@@ -204,6 +207,18 @@ function itemsOfHtml(html) {
   while (kept.length && !kept[0].markup.trim()) kept.shift();
   kept.numbered = numbered;
   return kept;
+}
+
+// Raised and lowered words in another app's HTML (x², 10⁻³, H₂O, a citation's [1]) in the
+// letters Unicode raises and lowers, where it has one for each of theirs -- as the slide has
+// no superscript of its own -- rather than set on the line.
+const RAISED = Object.fromEntries([..."0123456789+-−=()[]abcdefghijklmnoprstuvwxyz"].map((letter, n) => [letter, [..."⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ"][n]]));
+const LOWERED = Object.fromEntries([..."0123456789+-−=()[]aehijklmnoprstuvx"].map((letter, n) => [letter, [..."₀₁₂₃₄₅₆₇₈₉₊₋₋₌₍₎₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ"][n]]));
+function raised(doc) {
+  for (const node of doc.querySelectorAll("sup, sub")) {
+    const table = node.nodeName === "SUP" ? RAISED : LOWERED, words = node.textContent.trim();
+    if (words && [...words].every((letter) => table[letter])) node.replaceWith([...words].map((letter) => table[letter]).join(""));
+  }
 }
 
 // A range of cells copied from a spreadsheet (Numbers, Excel and Google Sheets put a
@@ -907,6 +922,36 @@ export function richText({ value = "", list = false, single = false, numbered = 
     changed();
   });
 
+  // A new line where the caret is: never in code or an equation, held as one (after it), nor
+  // inside a link or a colour at its edge -- before or after it, so its markup stays whole.
+  let breaking = false;
+  const lineBreak = () => {
+    const s = selection();
+    if (!s.rangeCount || !area.contains(s.anchorNode)) return;
+    const out = s.isCollapsed ? outOfEdge(s.getRangeAt(0)) : null;
+    if (out) place(out);
+    breaking = true;
+    try { document.execCommand("insertLineBreak"); } finally { breaking = false; }
+  };
+  // Where a caret at the edge of a link (or, `colours`, a colour) it is in goes to be beside it
+  // rather than in it, or out of code or an equation it is in; null if it stays.
+  const outOfEdge = (range, { colours = true } = {}) => {
+    let outer = null;
+    for (let at = range.startContainer; at && at !== area; at = at.parentNode) if (at.nodeType === Node.ELEMENT_NODE && (isLink(at) || (colours && isColour(at)))) outer = at;
+    for (const holder of [atomAt(range.startContainer), outer]) {
+      if (!holder) continue;
+      const side = (from, to) => { const part = document.createRange(); part.setStart(...from); part.setEnd(...to); return part.toString(); };
+      const here = [range.startContainer, range.startOffset];
+      const out = document.createRange();
+      if (!side([holder, 0], here)) out.setStartBefore(holder);
+      else if (!side(here, [holder, holder.childNodes.length]) || isAtom(holder)) out.setStartAfter(holder);
+      else continue;
+      out.collapse(true);
+      return out;
+    }
+    return null;
+  };
+
   // -- the format bar: over the words chosen, as a Mac text view's touch bar offers them --
   // From the keys: ⌃Tab goes to it from the words (as ⌃Tab leaves a Mac text view for the
   // next control), ← and → go along it, Space or Return presses a button, and Esc or Tab
@@ -1540,11 +1585,16 @@ export function richText({ value = "", list = false, single = false, numbered = 
     if (!s.rangeCount) return;
     const range = s.getRangeAt(0);
     range.deleteContents();
+    // At a link's edge it goes beside the link, as typing there does, not into it; in a
+    // link, a link pasted is its words: one link, never one in another.
+    const beside = range.collapsed ? outOfEdge(range, { colours: false }) : null;
+    if (beside) { range.setStart(beside.startContainer, beside.startOffset); range.collapse(true); }
     const nodes = lines.flatMap((markup, n) => [...(n ? [document.createElement("br")] : []), ...inlineNodes(markup, colours)]);
     if (!nodes.length) return;
     const fragment = document.createDocumentFragment();
     fragment.append(...nodes);
-    const last = nodes[nodes.length - 1];
+    if (outerLink(range.startContainer)) for (const link of [...fragment.querySelectorAll("a")]) link.replaceWith(...link.childNodes);
+    const last = fragment.lastChild;
     range.insertNode(fragment);
     const caret = document.createRange();
     caret.setStartAfter(last);
