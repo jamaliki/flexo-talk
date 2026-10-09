@@ -2043,8 +2043,6 @@ export function mount(studio, container) {
     if (outOfStep(true)) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     if (figureBlock() && editable(figureBlock()) && inFigure(event) && figure.parts.model) {
-      // A molecule chosen is grabbed to turn it.
-      if (figure.parts.turnable(event)) { figure.parts.pointerdown(event); return; }
       const id = figure.parts.idAt(event);
       const holder = id && figure.parts.parentOf(id);
       if (figure.parts.connecting || (id && holder && !loneShape(figure.parts.model, id))) { figure.parts.pointerdown(event); return; }
