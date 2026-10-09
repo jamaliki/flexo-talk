@@ -7383,7 +7383,7 @@ export function mount(studio, container) {
     // order the deck's tones took them, so every colour stays where it was.
     const colours = deck.palette ? (studio.info?.order?.length ? studio.info.order : Array.isArray(deck.palette) ? deck.palette : catalog.palettes?.[deck.palette]) : null;
     try {
-      const made = await createFile(name, "theme", { theme: { name: stem, base, description: `The look of ${deck.id || "this deck"}.`, ...(colours ? { palette: [...colours] } : {}) } });
+      const made = await createFile(name, "theme", { theme: { name: stem, base, description: `The look of ${studio.file.split("/").pop().replace(/\.(ya?ml|json)$/i, "")}.`, ...(colours ? { palette: [...colours] } : {}) } });
       studio.change((d) => { d.deck ||= {}; d.deck.theme = made; if (colours) delete d.deck.palette; });
       renderInspector();
       openTheme(studio.folder() + made);
