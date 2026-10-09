@@ -16,7 +16,7 @@ const BLOCKS = {
   bullets: { icon: "list", label: "List", hint: "A bulleted or numbered list" },
   figure: { icon: "figure", label: "Figure", hint: "A diagram of shapes and lines" },
   flow: { icon: "flow", label: "Flow Chart", hint: "Steps and decisions connected by arrows" },
-  structure: { icon: "structure", label: "Structure", hint: "A protein structure from a PDB or mmCIF file or a PDB ID, drawn with mol-sketch" },
+  structure: { icon: "structure", label: "Structure", hint: "A protein structure from a PDB or mmCIF file, or a PDB ID" },
   image: { icon: "image", label: "Picture", hint: "PNG, JPEG or SVG (SVG stays as vectors)" },
   table: { icon: "table", label: "Table", hint: "Rows and columns with simple rules" },
   stats: { icon: "stats", label: "Numbers", hint: "Key numbers, shown large" },
@@ -24,7 +24,7 @@ const BLOCKS = {
   callout: { icon: "callout", label: "Callout", hint: "A key point on a tinted panel" },
   code: { icon: "code", label: "Code", hint: "Code in a monospace font" },
   gallery: { icon: "gallery", label: "Gallery", hint: "A grid of logos or portraits" },
-  plot: { icon: "plot", label: "Plot", hint: "A matplotlib chart from a Python function" },
+  plot: { icon: "plot", label: "Plot", hint: "A Matplotlib chart, drawn by a Python function" },
   math: { icon: "math", label: "Equation", hint: "A LaTeX equation on its own line" },
   mechanism: { icon: "mechanism", label: "Mechanism", hint: "A reaction mechanism from SMILES, with checked curly arrows" },
   // What the file holds but Flexo does not know: shown for what it is, never offered.
@@ -6543,7 +6543,7 @@ export function mount(studio, container) {
       case "figure": return figureForm(block, at, edit);
       case "plot":
         return [ui.field("Function", functionInput(block.plot, (value) => edit((b) => { b.plot = value; }, "plot")),
-          { hint: "file.py:function, returning a matplotlib figure. It runs inside deck.plotting(), given the deck if it takes an argument." }),
+          { hint: "A function in a Python file in the deck’s folder (file.py:function) that returns a Matplotlib figure. It is drawn in the deck’s fonts and colours, and given the deck if it takes an argument." }),
           ui.field("Aspect Ratio", ui.number({ value: block.aspect, placeholder: "Auto", min: 0.2, step: 0.1, start: 1.5, key: key("aspect"),
             current: () => { const drawn = drawnOf(at); return drawn.width && drawn.height ? drawn.width / drawn.height : null; }, onChange: set("aspect") }), { hint: "Width ÷ height" })];
       case "math": return mathForm(block, at, edit, toneSwatches, size);
