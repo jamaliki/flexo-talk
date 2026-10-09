@@ -732,10 +732,13 @@ export function mount(studio, container) {
   // studio and back later, are its own: parts.js.)
   // (Kept by the field's key, as the panel is drawn again under the keys.)
   const turns = new Map(), turnOf = (target) => target.dataset?.key || target;
+  const TYPED = /^(text|search|number|email|url|tel|password)$/;
   const typingSteps = (container) => {
     const field = (event) => {
       const target = event.target;
       if (!(target?.isContentEditable || /^(INPUT|TEXTAREA)$/.test(target?.tagName || "")) || target.closest?.(".fig-inline")) return null;
+      // (A slider dragged, a colour picked, a box ticked: no words typed -- see its change below.)
+      if (target.tagName === "INPUT" && !TYPED.test(target.type || "text")) return null;
       if (figure?.parts.model && inspectorBody.contains(target) && figureBlock()) return null;
       return target.rich ? target : target.closest?.(".rich") || target;
     };
@@ -772,6 +775,12 @@ export function mount(studio, container) {
       if ((turn.last !== undefined && kind !== turn.last) || over) studio.step();
       if (turns.size > 200) turns.clear();
       turns.set(turnOf(target), { last: kind === "look" ? "edge" : kind });
+    }, true);
+    // A slider dragged, or a colour moved through in the system's picker, is one step in the
+    // history from where it was taken to where it was let go, as in Keynote: its values on
+    // the way are one run, ended when it is let go (its change), so the next drag is another.
+    container.addEventListener("change", (event) => {
+      if (event.target?.tagName === "INPUT" && !TYPED.test(event.target.type || "text")) studio.step();
     }, true);
   };
   typingSteps(center);
@@ -873,11 +882,14 @@ export function mount(studio, container) {
     // typed in: merges know slides by what they hold, the first of two alike taken for the
     // first, so this one, made later, goes later, and neither is typed in for the other.)
     while (at < slides().length && same(slides()[at], made)) at += 1;
+    const shown = slides().length ? [Math.min(state.slide, slides().length - 1)] : null;
     studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, made); }, { label: "Add Slide" });
     // (Named as what was done, where: not "Duplicate Slide", nor the place of a slide just
     // like it beside it.)
     const entry = studio.past[studio.past.length - 1];
     if (entry) Object.assign(studio.said(entry), { place: `Slide ${at + 1}`, where: at, made: { where: at, place: `Slide ${at + 1}` } });
+    // Undone, the slide shown before it is shown again; redone, the new slide is.
+    markSlides(shown, [at]);
     select(at);
     // Its first words are ready to type: the title (a blank slide has none).
     if (layout !== "agenda" && layout !== "blank") openSoon({ kind: "field", field: layout === "statement" ? "words" : "title" });
@@ -6931,12 +6943,15 @@ export function mount(studio, container) {
   function widthField(block, at) {
     return ui.field("Width", h("div.row", {},
       ui.number({ value: block.width, placeholder: "Auto", min: 10, step: 10, unit: "pt", start: 300, key: "block.width",
-        current: () => drawnOf(at).width, onChange: (value) => editBlock(at, (b) => setOption(b, "width", value)) }),
+        // (Stepped through, ↑↑↑, one step in the history, as the font size is.)
+        current: () => drawnOf(at).width, onChange: (value) => editBlock(at, (b) => setOption(b, "width", value), { merge: `${state.slide}-${at.region}-${at.index}-width` }) }),
       block.width != null ? ui.button("Reset Size", () => { editBlock(at, (b) => setOption(b, "width", null)); renderInspector(); }, { small: true, kind: "ghost" }) : null),
     { hint: "Or drag a corner on the slide" });
   }
 
   function galleryForm(block, at, edit, size) {
+    // (Stepped through, ↑↑↑, one step in the history, as the font size is.)
+    const merge = (name) => `${state.slide}-${at.region}-${at.index}-${name}`;
     const items = (Array.isArray(block.gallery) ? block.gallery : []).map((item) => (typeof item === "string" ? { picture: item, caption: "" } : { picture: item?.picture || "", caption: item?.caption || "" }));
     const write = () => edit((b) => { b.gallery = items.map((item) => (item.caption ? { ...item } : item.picture)); }, "gallery");
     const round = block.crop === "circle";
@@ -6952,8 +6967,8 @@ export function mount(studio, container) {
         if (path) { items.push({ picture: path, caption: "" }); write(); renderInspector(); }
       }, { kind: "ghost", icon: "plus", small: true })),
       h("div.grid2", {},
-        ui.field("Columns", ui.number({ value: block.columns, placeholder: "Auto", min: 1, step: 1, start: Math.min(4, Math.max(1, items.length)), key: "gallery.columns", onChange: (value) => editBlock(at, (b) => setOption(b, "columns", value)) })),
-        ui.field("Height", ui.number({ value: block.height, placeholder: "Auto", min: 10, step: 5, unit: "pt", start: 80, key: "gallery.height", onChange: (value) => editBlock(at, (b) => setOption(b, "height", value)) }))),
+        ui.field("Columns", ui.number({ value: block.columns, placeholder: "Auto", min: 1, step: 1, start: Math.min(4, Math.max(1, items.length)), key: "gallery.columns", onChange: (value) => editBlock(at, (b) => setOption(b, "columns", value), { merge: merge("columns") }) })),
+        ui.field("Height", ui.number({ value: block.height, placeholder: "Auto", min: 10, step: 5, unit: "pt", start: 80, key: "gallery.height", onChange: (value) => editBlock(at, (b) => setOption(b, "height", value), { merge: merge("height") }) }))),
       ui.field("Crop", ui.segmented({ value: block.crop || "", options: [{ value: "", label: "None" }, { value: "circle", label: "Circle" }, { value: "square", label: "Square" }],
         onChange: (value) => { editBlock(at, (b) => setOption(b, "crop", value)); renderInspector(); } })),
       size()];
