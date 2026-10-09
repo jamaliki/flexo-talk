@@ -7991,12 +7991,13 @@ export function mount(studio, container) {
 
   // ⌘B and ⌘I with words chosen, not being typed in (a text, a list, a title): all their
   // words bold (italic), or none when all are already, as Keynote does to a text box chosen.
-  function emphasiseChosen(look) {
+  // (`asking`: whether it would, for the Format menu, nothing done.)
+  function emphasiseChosen(look, { asking = false } = {}) {
     const label = look === "bold" ? "Bold" : "Italic";
     // Several chosen: the words of all those that have words, as one -- all bold, or none.
     if (allOn()) {
       const worded = allBlocks().filter(({ block }) => WORDY.has(kindOf(block)));
-      if (!worded.length) return false;
+      if (!worded.length || asking) return Boolean(worded.length);
       const linesOf = (block) => (kindOf(block) === "bullets" ? bulletsText(block.bullets).split("\n") : [String(block[kindOf(block)] ?? "")]);
       const all = worded.flatMap(({ block }) => linesOf(block).map((line) => line.trim()));
       const made = emphasised(all, look);
@@ -8022,6 +8023,7 @@ export function mount(studio, container) {
     if (block) {
       const kind = kindOf(block);
       if (!WORDY.has(kind) || !bulletsText(kind === "bullets" ? block.bullets : block[kind] ?? "").trim()) return false;
+      if (asking) return true;
       editBlock(state.focus, (b) => {
         if (kindOf(b) !== kind) return;
         if (kind !== "bullets") { b[kind] = emphasised([String(b[kind] ?? "")], look)[0]; return; }
@@ -8033,6 +8035,7 @@ export function mount(studio, container) {
     }
     const key = state.field?.field;
     if (!key || typeof slideAt()?.[key] !== "string" || !slideAt()[key].trim()) return false;
+    if (asking) return true;
     editSlide((s) => { s[key] = emphasised([s[key]], look)[0]; }, { label });
     return true;
   }
@@ -8308,18 +8311,23 @@ export function mount(studio, container) {
     ...clipCommands(),
     ...chosenCommands(),
     ...(slides().length ? slideCommands() : []),
-    // Words being typed: the Mac app's Format menu's Bold, Italic, Code and Inline Equation,
-    // and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the field's own). Link… wants words chosen, or
-    // the caret in a link.
-    ...(inline?.area?.rich ? [["bold", "Bold", "b"], ["italic", "Italic", "i"], ["code", "Code", "e"], ["math", "Inline Equation", "e", true], ["link", "Link…", "k"]].map(([name, label, key, alt = false]) => ({
+    // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
+    // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the
+    // field's own; Link… with nothing chosen links the word at the caret, or else makes a link
+    // of the address typed, as ⌘K does).
+    ...(richNow() ? [["bold", "Bold", "b"], ["italic", "Italic", "i"], ["code", "Code", "e"], ["math", "Inline Equation", "e", true], ["link", "Link…", "k"]].map(([name, label, key, alt = false]) => ({
       icon: name, label, keys: `${alt ? "⌥" : ""}⌘${key.toUpperCase()}`,
-      ...(name === "link" && !linkable() ? { disabled: true, hint: "Choose the words to link" } : {}),
       // As if its keys were pressed in the field, which knows what bold means there (a bold title).
       run: () => {
-        const mac = /Mac|iP/.test(navigator.platform);
-        inline?.area.focus();
-        inline?.area.dispatchEvent(new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, metaKey: mac, ctrlKey: !mac, altKey: alt, bubbles: true, cancelable: true }));
-      } })) : []),
+        const mac = /Mac|iP/.test(navigator.platform), area = richNow();
+        area?.focus();
+        area?.dispatchEvent(new KeyboardEvent("keydown", { key, code: `Key${key.toUpperCase()}`, metaKey: mac, ctrlKey: !mac, altKey: alt, bubbles: true, cancelable: true }));
+      } }))
+      // Not typing, with words chosen -- an object of words, several, a title: Bold and Italic
+      // make all their words so, as ⌘B and ⌘I do.
+      : !typingNow() && emphasiseChosen("bold", { asking: true }) ? [["bold", "Bold", "b"], ["italic", "Italic", "i"]].map(([name, label, key]) => ({
+        icon: name, label, keys: `⌘${key.toUpperCase()}`, run: () => emphasiseChosen(name) }))
+        : []),
     ...(state.slide < slides().length - 1 ? [{ icon: "down", label: "Go to Next Slide", run: () => select(state.slide + 1) }] : []),
     ...(state.slide > 0 ? [{ icon: "up", label: "Go to Previous Slide", run: () => select(state.slide - 1) }] : []),
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
@@ -8377,11 +8385,12 @@ export function mount(studio, container) {
       document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
     }).catch(() => toast("Paste with ⌘V: the studio may not read the clipboard here.", { icon: "paste", seconds: 3 }));
   }
-  // Words chosen in what is typed, or the caret in a link: what Link… acts on.
-  function linkable() {
-    const chosenWords = window.getSelection();
-    if (!inline?.area || !chosenWords?.rangeCount || !inline.area.contains(chosenWords.anchorNode)) return false;
-    return !chosenWords.isCollapsed || Boolean(chosenWords.anchorNode.parentElement?.closest("a"));
+  // The words being typed, as the slide shows them: on the slide, or in a field of the
+  // inspector (its title, a text's words).
+  function richNow() {
+    if (inline?.area?.rich) return inline.area;
+    const keys = document.activeElement;
+    return keys?.rich && inspectorBody.contains(keys) ? keys : null;
   }
   function chosenCommands() {
     // Several chosen: Arrange moves them all, where any can go.
