@@ -32,10 +32,15 @@ from typing import Literal
 
 import flexo
 from flexo.ir.semantic import FigureSpec, TextRun
-from flexo.markup import math_spans, parse_label
+from flexo.markup import math_spans
 from flexo.style import LayoutStyle, Palette, TypographyStyle
 from flexo.themes import resolve_palette, resolve_style, with_tone_roles
 from flexo.units import pt
+
+try:
+    from flexo.markup import parse_words
+except ImportError:  # a flexo from before running text was read word for word
+    from flexo.markup import parse_label as parse_words
 
 type Layout = Literal[
     "content", "two-columns", "columns", "figure", "title", "section", "statement", "agenda", "blank"
@@ -719,7 +724,7 @@ def inline(words: str) -> tuple[TextRun, ...]:
         elif coloured:
             pieces = tuple(replace(run, color=coloured.group(2)) for run in inline(coloured.group(1)))
         else:
-            pieces = parse_label(token)
+            pieces = parse_words(token)
         for run in pieces:
             runs.append(
                 replace(
