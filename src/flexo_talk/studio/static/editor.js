@@ -792,7 +792,19 @@ export function mount(studio, container) {
     // A slider dragged, or a colour moved through in the system's picker, is one step in the
     // history from where it was taken to where it was let go, as in Keynote: its values on
     // the way are one run, ended when it is let go (its change), so the next drag is another.
+    // A slider moved by its keys (←, →, Page Up…) is one step however many presses, as an
+    // object nudged by them is: ended as the keys leave it (leftField) or it is dragged.
+    let keyed = null;
+    container.addEventListener("keydown", (event) => {
+      const target = event.target;
+      if (target?.tagName === "INPUT" && target.type === "range" && /^(Arrow|Page|Home$|End$)/.test(event.key)) keyed = target;
+    }, true);
+    container.addEventListener("keyup", () => { keyed = null; }, true);
+    container.addEventListener("pointerdown", (event) => {
+      if (event.target?.tagName === "INPUT" && event.target.type === "range" && studio.lastMerge) studio.step();
+    }, true);
     container.addEventListener("change", (event) => {
+      if (event.target === keyed) return;
       if (event.target?.tagName === "INPUT" && !TYPED.test(event.target.type || "text")) studio.step();
     }, true);
   };
