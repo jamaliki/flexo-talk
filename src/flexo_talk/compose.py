@@ -1511,7 +1511,8 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
         return blocks
     if scale <= 0.0:
         canvas.diagnostics.append(
-            f"{canvas.slide.id}: Text does not fit, even at the smallest size. Try splitting the slide."
+            f"{canvas.slide.id}: Text does not fit, even at the smallest size. "
+            "Duplicate the slide and keep part of the text on each."
         )
         return [_sized(block, style.small_size / style.body_size, style) for block in blocks]
     if scale >= QUIET_SHRINK:
@@ -1553,7 +1554,7 @@ def _capped(canvas: _Canvas, block):
     kind, count, most, unit = what
     canvas.diagnostics.append(
         f"{canvas.slide.id}: {kind} shortened from {count:,} to {most:,} {unit}, the most a slide can show. "
-        "Try splitting it across slides."
+        "Duplicate the slide and keep part of it on each."
     )
     return kept
 
@@ -1621,7 +1622,7 @@ def _table_plan(canvas: _Canvas, block: _Table, width: float, *, said: bool = Fa
             if sum(least) > width and said:
                 canvas.diagnostics.append(
                     f"{canvas.slide.id}: A table with {columns} columns is too wide to fit, even at the smallest "
-                    "size, so words are broken across lines. Try splitting the table or shortening its cells."
+                    "size, so words are broken across lines. Shorten its cells, or move some columns to a second table."
                 )
             measured = [
                 [canvas.measure(cell, size, widths[c] - slack, weight(r), balance=False) for c, cell in enumerate(row)]
@@ -2149,7 +2150,7 @@ def _gallery(canvas: _Canvas, identifier: str, block: _Gallery, box: Box, *, dra
         if fitted < 24.0 and draw:
             canvas.diagnostics.append(
                 f"{canvas.slide.id}: The {len(block.items)} pictures in the gallery do not fit. "
-                "Try splitting the slide or using more columns."
+                "Give it more columns, or put some of the pictures on a slide of their own."
             )
         picture = max(fitted, 24.0)
     row_height = picture + under + caption
