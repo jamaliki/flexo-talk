@@ -1181,7 +1181,8 @@ export function mount(studio, container) {
     const keys = [];
     const nodes = list.map((slide, index) => {
       const page = pages[index];
-      const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note");
+      // (Python not run until the folder is trusted is said once, by the bar over the deck.)
+      const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note" && m.code !== "code.untrusted");
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = others.filter((entry) => entry.where?.page === index + 1);
       const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
@@ -1398,7 +1399,7 @@ export function mount(studio, container) {
     pageNode.querySelector(".away-title")?.replaceChildren(slideTitle(slide));
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
-    const own = messages.filter((m) => m.page === `slide${state.slide + 1}`);
+    const own = messages.filter((m) => m.page === `slide${state.slide + 1}` && m.code !== "code.untrusted");
     const here = studio.others().filter((entry) => entry.where?.page === state.slide + 1);
     if (stageWrap.parentNode !== stage) clear(stage, stageWrap);
     // The page alone is put in again: what else is beside it (a part's words being typed) stays.
