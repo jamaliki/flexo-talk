@@ -73,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.command == "convert":
             return _convert(arguments)
         deck = load_deck(arguments.deck, arguments.theme)
+        # A slide skipped (Keynote's Skip Slide) is left out, as the studio's export leaves it.
+        deck.slides = [slide for slide in deck.slides if not (getattr(slide, "source", None) or {}).get("skip")]
+        if not deck.slides:
+            raise ValueError("Every slide is skipped: there is nothing to build.")
         result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
     except KeyboardInterrupt:
         return 130

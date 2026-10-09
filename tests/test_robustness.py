@@ -954,3 +954,15 @@ def test_black_words_in_a_plot_read_on_a_dark_slide_as_black_lines_do() -> None:
     ink = deck.palette.get("ink").lower()
     words = re.search(r"<text[^>]*>(?:(?!</text>).)*black words", slide.svg, re.DOTALL)
     assert words is not None and ink in words.group(0).lower()
+
+
+def test_the_command_line_build_leaves_out_a_skipped_slide(tmp_path: Path) -> None:
+    # As the studio's export and the show leave it out (Keynote's Skip Slide).
+    (tmp_path / "talk.yaml").write_text(
+        "schema_version: 1\ndeck: {id: skips}\nslides:\n"
+        "- {title: One}\n- {title: Two, skip: true}\n- {title: Three}\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    assert main(["build", str(tmp_path / "talk.yaml"), "--formats", "svg", "-o", str(out)]) == 0
+    assert sorted(path.name for path in out.glob("*.svg")) == ["skips-01.svg", "skips-03.svg"]
