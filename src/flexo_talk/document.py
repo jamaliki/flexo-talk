@@ -159,6 +159,12 @@ class UnknownLayout(DeckDocumentError):
     all the same, every object it has in its body, and said in plain words."""
 
 
+class InvalidObject(DeckDocumentError):
+    """An object written in the deck that can't be made as written (a kind there is none
+    of, a table that is not rows): a box where it would be, the rest of its slide drawn,
+    and left empty when the deck is presented or exported."""
+
+
 class UntrustedCode(DeckDocumentError):
     """Python a deck names, in a folder the studio has not been told to trust: not run."""
 
@@ -558,7 +564,20 @@ def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object,
             if not isinstance(blocks, list):
                 raise DeckDocumentError(names[name], "A region must be a list of blocks.")
             for index, block in enumerate(blocks):
-                add_block(slide.regions[name], block, base, f"{names[name]}[{index}]", missing=missing)
+                region, count = slide.regions[name], len(slide.regions[name].blocks)
+                try:
+                    add_block(region, block, base, f"{names[name]}[{index}]", missing=missing)
+                except DeckDocumentError as error:
+                    if missing is None:
+                        raise
+                    # One object that can't be made is a box where it would be, the rest of its
+                    # slide drawn -- not a slide that is not drawn.
+                    del region.blocks[count:], region.sources[count:]
+                    missing.append(InvalidObject(error.where, error.message))
+                    kind = next((key for key in block if key in BLOCKS), None) if isinstance(block, dict) else None
+                    noun = {"bullets": "list", "image": "picture", "stats": "object", "math": "equation"}.get(
+                        kind, kind or "object")
+                    region.stand_in("object", "", said=f"This {noun} can\u2019t be drawn as it is")
     return slide
 
 
