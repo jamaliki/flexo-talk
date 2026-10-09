@@ -4112,14 +4112,19 @@ export function mount(studio, container) {
   // that follows (one step in the history, "Undo Typing" taking all of it back), not a step
   // of their own (see typingSteps).
   const typedOver = () => new CustomEvent("input", { bubbles: true, detail: { tidy: true } });
-  // How many of the slide's drawn words (not those being typed) a rect on the page covers:
-  // the format bar is put where it covers least.
+  // How much of the slide's drawn words (not those being typed) a rect on the page covers:
+  // the format bar is put where it covers least. So too of a byline's other part, shown by
+  // the words typed in place of its drawing (an author over the date typed).
   function wordsUnder(rect) {
     if (!pageNode) return 0;
-    return [...pageNode.querySelectorAll("text")].reduce((sum, text) => {
+    const drawn = [...pageNode.querySelectorAll("text")].reduce((sum, text) => {
       if (!text.textContent.trim() || getComputedStyle(text).visibility === "hidden") return sum;
       return sum + overlap(text.getBoundingClientRect(), rect);
     }, 0);
+    if (!inline?.node.classList.contains("byline-part")) return drawn;
+    const { left, top, right, bottom } = inline.node.getBoundingClientRect(), own = inline.area.getBoundingClientRect();
+    const others = [{ left, top, right, bottom: own.top }, { left, top: own.bottom, right, bottom }, { left, top, right: own.left, bottom }, { left: own.right, top, right, bottom }];
+    return drawn + others.reduce((sum, part) => sum + overlap(part, rect), 0);
   }
   // What a slide's line of words shows while it is empty, on the slide and in the panel alike.
   const fieldHint = (key, slide) => ({
