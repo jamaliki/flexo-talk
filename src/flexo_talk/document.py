@@ -106,7 +106,9 @@ DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
     "conventions", "sketch", "style",
 )
-COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade")
+COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip")
+"""The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
+and edited, but the studio neither presents nor exports it."""
 SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "title": ("title", "subtitle", "author", "date"),
     "section": ("title", "subtitle"),
@@ -449,6 +451,8 @@ def add_slide(
         ))
         data, layout = _as_content(data), "content"
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
+    if not isinstance(data.get("skip", False), bool):
+        raise DeckDocumentError(f"{where}.skip", "skip must be true or false.")
     background = data.get("background")
     # A picture file, unless it names a colour (#1b2a41, or one of the theme's: accent).
     if isinstance(background, str) and not background.startswith("#") and not named_colour(background):
