@@ -720,8 +720,18 @@ def _words_on(canvas: _Canvas) -> str:
     return "canvas" if contrast(page, field) > contrast(ink, field) else "ink"
 
 
+def _skipped(slide: Slide) -> bool:
+    """Whether a slide is skipped (Keynote's Skip Slide): kept and edited, but neither
+    presented nor exported -- nor counted among the deck's sections."""
+
+    return bool((getattr(slide, "source", None) or {}).get("skip"))
+
+
 def _section_number(slide: Slide) -> int:
-    return sum(other.layout == "section" for other in slide.deck.slides[: slide.index])
+    # (Where it is among the slides there are: an export has none of those skipped.)
+    slides = slide.deck.slides
+    upto = slides.index(slide) + 1 if slide in slides else slide.index
+    return sum(other.layout == "section" and not _skipped(other) for other in slides[:upto])
 
 
 def _heading(canvas: _Canvas, slide: Slide) -> float:
@@ -942,7 +952,7 @@ def _agenda(canvas: _Canvas, slide: Slide, body: Box) -> None:
     columns when one would run past the slide even set smaller."""
 
     style = canvas.deck.style
-    sections = [other for other in slide.deck.slides if other.layout == "section"]
+    sections = [other for other in slide.deck.slides if other.layout == "section" and not _skipped(other)]
     hinted = not sections and PLACEHOLDERS.get()
     if hinted:
         # No sections yet while editing -- an agenda is often put in before them: the rows

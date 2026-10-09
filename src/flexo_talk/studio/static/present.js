@@ -26,6 +26,7 @@ let showing = null;  // the show this window leads, while there is one
 // `done(index)` is told the slide the show ended on. A show already running is left be.
 export function present({ pages, slides = () => [], start = 0, done = () => {} }) {
   if (showing || !pages().length) return;
+  if (slides().length && slides().every((slide) => slide?.skip === true)) return;
   dress();
   const app = window.pywebview?.api || null;
   const id = Math.random().toString(36).slice(2, 10);
@@ -40,16 +41,23 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
   let full = "";  // "page" (the Fullscreen API) or "app" (the Mac window's), if this show entered it
   const hintUntil = Date.now() + 3000;
 
-  // The slides as they are now: the deck redrawn as it is edited is shown as it comes.
+  // The slides as they are now: the deck redrawn as it is edited is shown as it comes --
+  // but for those skipped (Keynote's Skip Slide), each kept with where it is in the deck (`at`).
   const current = () => {
     const now = [pages(), slides()];
     if (deck && now[0] === drawnFrom[0] && now[1] === drawnFrom[1]) return deck;
+    const was = deck?.slides[state.index]?.at;
     drawnFrom = now;
-    deck = { seq: (deck?.seq || 0) + 1, slides: now[0].map((page, index) => ({
-      svg: page?.svg || "", steps: Math.max(1, page?.steps || 1), notes: String(now[1][index]?.notes || "") })) };
+    deck = { seq: (deck?.seq || 0) + 1, slides: now[0].map((page, index) => ({ at: index,
+      svg: page?.svg || "", steps: Math.max(1, page?.steps || 1), notes: String(now[1][index]?.notes || "") }))
+      .filter((slide) => now[1][slide.at]?.skip !== true) };
+    // A slide added, skipped or taken away before the one shown: it is shown still.
+    if (was !== undefined) state.index = shownAt(was);
     if (paired) link?.send({ type: "deck", deck });
     return deck;
   };
+  // Where the deck's slide `at` is among those shown: it, or the next shown after it.
+  const shownAt = (at) => { const found = deck.slides.findIndex((slide) => slide.at >= at); return found < 0 ? deck.slides.length - 1 : found; };
   const show = () => {
     const { slides: all } = current();
     if (!all.length) { finish(); return; }
@@ -197,13 +205,14 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
     if (full === "page" && document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (full === "app") app.full_screen(false);
     root.remove();
-    done(Math.min(state.index, Math.max(0, (deck?.slides.length || 1) - 1)));
+    done(deck?.slides[Math.min(state.index, Math.max(0, deck.slides.length - 1))]?.at ?? 0);
   }
 
   const handle = { finish, press };
   showing = handle;
   document.activeElement?.blur?.();
-  state.index = Math.max(0, Math.min(start, pages().length - 1));
+  current();
+  state.index = Math.max(0, shownAt(Math.min(start, pages().length - 1)));
   root.addEventListener("mousemove", moved);
   root.addEventListener("click", clicked, true);
   window.addEventListener("keydown", keys, true);

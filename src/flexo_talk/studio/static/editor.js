@@ -968,6 +968,15 @@ export function mount(studio, container) {
     select(to);
   }
 
+  // Keynote's Skip Slide: the slides chosen kept, and edited, but neither presented nor
+  // exported -- or (Don't Skip Slide) shown again: all as the first of them is not now.
+  function skipSlides(indices) {
+    const skip = slides()[indices[0]]?.skip !== true, many = indices.length > 1 ? `${indices.length} Slides` : "Slide";
+    studio.change((d) => { for (const index of indices) if (d.slides?.[index]) setOption(d.slides[index], "skip", skip || null); },
+      { label: `${skip ? "Skip" : "Don’t Skip"} ${many}` });
+    markSlides(indices, indices);
+  }
+
   // The slides chosen moved one place up or down the list (⌥↑, ⌥↓), as an object is on its
   // slide: several, together, in their order.
   function nudgeSlides(indices, way) {
@@ -1124,6 +1133,7 @@ export function mount(studio, container) {
       "-",
       ...clipItems(),
       { icon: "duplicate", label: `Duplicate ${many}`, keys: "⌘D", run: () => (together ? duplicateSlides(together) : duplicateSlide(index)) },
+      { icon: "eye", label: `${slides()[(together || [index])[0]]?.skip === true ? "Don’t Skip" : "Skip"} ${many}`, run: () => skipSlides(together || [index]) },
       "-",
       // Greyed where it cannot go, as a Mac menu's items are, rather than left out.
       { icon: "up", label: "Move Up", keys: "⌥↑", disabled: Math.min(...(together || [index])) === 0, run: () => nudgeSlides(together || [index], -1) },
@@ -1209,7 +1219,7 @@ export function mount(studio, container) {
       const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note");
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = others.filter((entry) => entry.where?.page === index + 1);
-      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
+      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true, index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
         worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
       keys.push(key);
       // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere).
@@ -1273,7 +1283,7 @@ export function mount(studio, container) {
 
   function thumbNode(slide, index, page, own, worst, here) {
     const on = index === state.slide || (state.picked.length > 1 && state.picked.includes(index));
-    const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}`, {
+    const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}${slide?.skip === true ? ".skipped" : ""}`, {
       draggable: true, dataset: { index },
       onclick: (event) => pickSlide(index, event),
       oncontextmenu: (event) => { event.preventDefault(); slideMenu({ x: event.clientX, y: event.clientY }, index); },
@@ -1300,6 +1310,8 @@ export function mount(studio, container) {
       here.length ? h("div.ring", { style: { boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 3px ${colourOf(here[0].who)}` } }) : null,
       worst ? h(`div.badge.${worst}`, { title: own.map((m) => m.text).join("\n") }, icon(worst === "error" ? "exclaim" : "warning", { weight: "2" })) : null,
       page?.steps > 1 ? h("div.steps", { title: buildsSaid(slide) }, `${page.steps} builds`) : null,
+      // Skipped (Skip Slide): faint, and said, as Keynote's slide navigator shows one.
+      slide?.skip === true ? h("div.skip-tag", { title: "Not presented or exported" }, "Skipped") : null,
       // Two at most, and how many more there are.
       here.length ? h("div.here", { title: here.map((entry) => nameOf(entry.who)).join(", ") }, here.slice(0, 2).map((entry) => avatar(entry.who, { size: 18 })),
         here.length > 2 ? h("span.avatar.count", { style: { width: "18px", height: "18px", background: "var(--muted, #868e96)" } }, `+${here.length - 2}`) : null) : null,
@@ -7655,6 +7667,7 @@ export function mount(studio, container) {
   // From this slide, or from the first with ⌥ (⌥⌘↩, an ⌥-click on Present).
   function present(fromStart = Boolean(window.event?.altKey)) {
     if (!slides().length) { toast("This deck has no slides to present.", { icon: "play" }); return; }
+    if (slides().every((slide) => slide?.skip === true)) { toast("Every slide is skipped: there is nothing to present.", { icon: "play" }); return; }
     presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index) });
   }
 
@@ -8001,6 +8014,7 @@ export function mount(studio, container) {
     return [
       ...(own ? [{ icon: "duplicate", label: `Duplicate ${shapes ? (shapes > 1 ? `${shapes} Shapes` : "Shape") : blockLabel(block)}`, also: ["Duplicate"], keys: "⌘D", run: () => duplicateChosen() }] : []),
       { icon: "duplicate", label: `Duplicate ${many}`, also: [...(own || typing ? [] : ["Duplicate"]), "Duplicate Slide"], keys: own || typing ? undefined : "⌘D", run: () => duplicateSlide(state.slide) },
+      { icon: "eye", label: `${slides()[picked[0]]?.skip === true ? "Don’t Skip" : "Skip"} ${many}`, also: ["Skip Slide", "Don’t Skip Slide"], run: () => skipSlides(picked) },
       { icon: "trash", label: `Delete ${many}`, also: ["Delete Slide"], keys: railList.contains(document.activeElement) ? "⌫" : undefined, run: () => deleteSlides(picked) },
     ];
   }

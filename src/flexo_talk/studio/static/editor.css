@@ -29,6 +29,8 @@
 .thumb .badge { position: absolute; right: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; background: var(--warn); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 .thumb .badge.error { background: var(--error); }
 .thumb .badge svg { width: 10px; height: 10px; }
+.thumb.skipped .picture, .thumb.skipped .placeholder { opacity: 0.35; }
+.thumb .skip-tag { position: absolute; left: 4px; top: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
 .thumb .steps { position: absolute; left: 4px; bottom: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
 /* Who else is on a slide: in its lower corner, clear of its title. */
 .thumb .ring { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }

@@ -149,7 +149,7 @@ FIELD_LABELS = {
     "title": "Title", "subtitle": "Subtitle", "author": "Author", "date": "Date", "words": "Statement",
     "by": "Attribution", "notes": "Notes", "footnotes": "Footnotes", "background": "Background",
     "shade": "Background", "layout": "Layout", "columns": "Columns", "widths": "Columns", "split": "Columns",
-    "dark": "Background", "align": "Content Position",
+    "dark": "Background", "align": "Content Position", "skip": "Skip Slide",
 }
 """What the studio calls a slide's settings, where a message names one."""
 
@@ -515,9 +515,10 @@ class DeckKind:
             # A theme file edited in the studio changes every slide without changing the deck.
             "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
         })
+        # (A section skipped is not among them: compose._skipped.)
         sections = [
             (slide.get("title"), slide.get("subtitle")) for slide in slides
-            if isinstance(slide, dict) and slide.get("layout") == "section"
+            if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
         ]
         watched: set[Path] = set(_theme_files(document.get("deck") or {}, base))
         keys: list[str] = []
@@ -530,7 +531,8 @@ class DeckKind:
                 "index": index,
                 "sections": sections if layout == "agenda" else None,
                 "before": sum(
-                    1 for item in slides[:index] if isinstance(item, dict) and item.get("layout") == "section"
+                    1 for item in slides[:index]
+                    if isinstance(item, dict) and item.get("layout") == "section" and not _skipped(item)
                 ),
                 "slide": data,
                 "files": [(str(file), _stamp(file)) for file in files],
@@ -738,6 +740,14 @@ class DeckKind:
             else f"{_place(error.where, document) or 'An object'} is left empty: it can\u2019t be drawn as it is."
             for error in errors
         ]
+        # A slide skipped (Keynote's Skip Slide) is not exported, as it is not presented; the
+        # others keep their numbers, as they are shown when presented.
+        skipped = {index for index, data in enumerate(document.get("slides") or []) if _skipped(data)}
+        deck.slides = [slide for index, slide in enumerate(deck.slides) if index not in skipped]
+        if not deck.slides:
+            raise ValueError("Every slide is skipped: there is nothing to export.")
+        self.export_notes = [note for note in self.export_notes
+                             if not (found := re.match(r"Slide (\d+)\b", note)) or int(found[1]) - 1 not in skipped]
         folder = into or base / "build"
         images = folder / file_stem(deck.id) if into is not None else None
         aside = STANDING_ASIDE.set(True)
@@ -1875,6 +1885,12 @@ def _place(where: str, document: Any) -> str:
     elif re.match(r"\s+[^\s.#]+#\S", rest):
         named = BLOCK_LABELS.get("figure")  # a part of a figure, named by its id ("f#p:length")
     return f"Slide {index + 1} · {named}" if named else f"Slide {index + 1}"
+
+
+def _skipped(data: object) -> bool:
+    """Whether a slide as the document writes it is skipped (Keynote's Skip Slide)."""
+
+    return isinstance(data, dict) and data.get("skip") is True
 
 
 def _blank(deck, slide) -> str:
