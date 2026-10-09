@@ -908,8 +908,11 @@ export function mount(studio, container) {
     const made = NEW_SLIDES[layout]();
     // (After a slide just like it there -- another's new slide, made a moment ago, not yet
     // typed in: merges know slides by what they hold, the first of two alike taken for the
-    // first, so this one, made later, goes later, and neither is typed in for the other.)
-    while (at < slides().length && same(slides()[at], made)) at += 1;
+    // first, so this one, made later, goes later, and neither is typed in for the other.
+    // With no one else here there is no other's to take it for: it goes right after the
+    // slide shown, as in Keynote -- a new deck's title slide followed by it, not by its blank
+    // second slide.)
+    if (studio.others().length) while (at < slides().length && same(slides()[at], made)) at += 1;
     const shown = slides().length ? [Math.min(state.slide, slides().length - 1)] : null;
     studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, made); }, { label: "Add Slide" });
     // (Named as what was done, where: not "Duplicate Slide", nor the place of a slide just
