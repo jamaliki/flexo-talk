@@ -2377,15 +2377,20 @@ def _height(canvas: _Canvas, block, width: float) -> float:
 
 
 def _dark_slide(deck: Deck, slide: Slide) -> bool:
+    """Whether the slide's words are light: as its Text asks (Light, Dark), else (Auto) as
+    reads best on its backdrop."""
+
     if slide.dark is not None:
         return slide.dark
     backdrop = slide.backdrop
     if not backdrop:
         return False
     if backdrop.startswith("#"):
-        from flexo.colour import is_dark
+        from flexo.colour import contrast
 
-        return is_dark(backdrop)
+        # The words that read better on it -- light ones where they read about as well (within
+        # a tenth), as Keynote sets words on a theme's mid blue; dark on a yellow or a grey.
+        return contrast(LIGHT_WORDS["ink"], backdrop) >= 0.9 * contrast(DARK_WORDS["ink"], backdrop)
     shade = min(max(slide.shade, 0.0), 1.0)
     _, mean, darkest, _ = _picture(backdrop)
     if shade > 0:
@@ -2463,11 +2468,49 @@ def _lightness(source: str) -> float:
     return _picture(source)[1]
 
 
+LIGHT_WORDS = {"ink": "#f7f5f0", "muted-ink": "#d4d0c8"}
+DARK_WORDS = {"ink": "#1c1c1e", "muted-ink": "#55555a"}
+"""The words of a slide set on a backdrop of its own: light, or dark."""
+
+
+def _readable(colour: str, backdrop: str, ratio: float, light: bool) -> str:
+    """``colour`` made lighter (``light``) or darker until it reads on ``backdrop`` at
+    ``ratio`` -- as far as it goes that way: words asked to be light stay light."""
+
+    from flexo.colour import contrast, from_oklab, to_hex, to_oklab, to_rgb
+
+    lightness, a, b = to_oklab(colour)
+    result = to_hex(to_rgb(colour))
+    for _ in range(50):
+        if contrast(result, backdrop) >= ratio or not 0.0 < lightness < 1.0:
+            break
+        lightness = min(max(lightness + (0.02 if light else -0.02), 0.0), 1.0)
+        result = from_oklab((lightness, a, b))
+    return result
+
+
+def _marks_on(palette: Palette, paints: dict[str, str], backdrop: str, light: bool) -> dict[str, str]:
+    """The slide's accents (its title's rule, accented words, a figure's lines) that would not
+    be seen on its own colour -- an accent on a slide of that accent -- made to show on it."""
+
+    from flexo.colour import contrast
+
+    marks = {}
+    for role, colour in palette.paints.items():
+        if role in {"canvas", "ink", "muted-ink", "shadow"} or role.endswith(("-ink", "-fill")):
+            continue
+        now = paints.get(role, colour)
+        if contrast(now, backdrop) < 4.5:
+            marks[role] = _readable(now, backdrop, 4.5, light)
+    return marks
+
+
 def _slide_palette(deck: Deck, slide: Slide):
     """The deck's paints, or paints for words over this slide's own backdrop: light
-    words on a dark one, dark words on a light one when the deck's page is dark."""
+    words on a dark one, dark words on a light one when the deck's page is dark -- or as
+    the slide's Text asks."""
 
-    from flexo.colour import is_dark, with_contrast, with_lightness
+    from flexo.colour import is_dark, with_lightness
 
     palette = deck.palette
     page_dark = is_dark(palette.get("canvas"))
@@ -2476,15 +2519,16 @@ def _slide_palette(deck: Deck, slide: Slide):
     if not slide.backdrop and slide.dark is None:
         return palette
     if not dark and not page_dark:
-        # A light backdrop in a light deck (a mid grey): the deck's words, kept readable on it.
+        # A light backdrop in a light deck (a mid grey): the deck's words, kept readable on it
+        # -- and dark, as asked, however dark the colour.
         if colour is None:
             return palette
-        return palette.with_overrides({
-            "ink": with_contrast(palette.get("ink"), colour, 7.0),
-            "muted-ink": with_contrast(palette.get("muted-ink"), colour, 4.5),
-        })
-    light, deep = {"ink": "#f7f5f0", "muted-ink": "#d4d0c8"}, {"ink": "#1c1c1e", "muted-ink": "#55555a"}
-    paints = light if dark else deep
+        paints = {
+            "ink": _readable(palette.get("ink"), colour, 7.0, False),
+            "muted-ink": _readable(palette.get("muted-ink"), colour, 4.5, False),
+        }
+        return palette.with_overrides(paints | _marks_on(palette, paints, colour, False))
+    paints = dict(LIGHT_WORDS if dark else DARK_WORDS)
     backdrop = slide.backdrop or ""
     if backdrop.startswith("#"):
         paints["canvas"] = backdrop
@@ -2502,8 +2546,10 @@ def _slide_palette(deck: Deck, slide: Slide):
             # Accents, strokes and connectors drawn for the page read poorly over it.
             paints[role] = with_lightness(colour, 0.78 if dark else 0.45, 0.14)
     if backdrop.startswith("#"):
-        paints["ink"] = with_contrast(paints["ink"], backdrop, 7.0)
-        paints["muted-ink"] = with_contrast(paints["muted-ink"], backdrop, 4.5)
+        # As light (or dark) as it takes to read, never the other: the slide's Text is kept.
+        paints["ink"] = _readable(paints["ink"], backdrop, 7.0, dark)
+        paints["muted-ink"] = _readable(paints["muted-ink"], backdrop, 4.5, dark)
+        paints |= _marks_on(palette, paints, backdrop, dark)
     return palette.with_overrides(paints)
 
 

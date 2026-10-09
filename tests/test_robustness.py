@@ -280,6 +280,28 @@ def test_words_read_on_every_backdrop_and_panel() -> None:
         assert contrast(ink, panel) >= 7.0 and contrast(muted, panel) >= 4.5, theme
 
 
+def test_a_slides_text_light_or_dark_is_as_asked_and_its_accents_show_on_its_colour() -> None:
+    from flexo.colour import contrast, is_dark
+
+    from flexo_talk.compose import _slide_palette
+
+    deck = Deck("g")
+    # Auto: light words on the theme's mid blue (a slide of its accent), as Keynote sets them;
+    # dark on a yellow.
+    slide = deck.slide("T", background="accent")
+    accent, auto = slide.backdrop, _slide_palette(deck, slide)
+    assert not is_dark(auto.get("ink"))
+    assert is_dark(_slide_palette(deck, deck.slide("Y", background="#f2d03b")).get("ink"))
+    # Light or Dark asked is what is drawn, however the colour would have it.
+    asked = _slide_palette(deck, deck.slide("D", background="accent", dark=False))
+    assert is_dark(asked.get("ink"))
+    assert not is_dark(_slide_palette(deck, deck.slide("L", background="#f0f0f0", dark=True)).get("ink"))
+    assert is_dark(_slide_palette(deck, deck.slide("N", background="#1b2a41", dark=False)).get("ink"))
+    # The accent (the title's rule, accented words) on a slide of that accent is still seen.
+    assert contrast(deck.palette.get("tone-1-stroke"), accent) < 2.0
+    assert all(contrast(palette.get("tone-1-stroke"), accent) >= 3.0 for palette in (auto, asked))
+
+
 def test_an_accent_word_in_a_band_title_is_lifted_off_the_band() -> None:
     import re
 
