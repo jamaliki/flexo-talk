@@ -608,7 +608,7 @@ class DeckKind:
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
         return Drawing(pages, _placed(messages, document), sorted(watched),
                        {"palette": _palette(deck), "tones": _tones(deck), "order": _palette_order(deck),
-                        "own": _palette_order(deck, own=True),
+                        "own": _palette_order(deck, own=True), "fonts": _fonts(deck),
                         "unsettled": unsettled})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
@@ -1895,6 +1895,21 @@ def _palette_order(deck, *, own: bool = False) -> list[str]:
         return palette_order(deck.theme, None if own else deck.palette_name)
     except Exception:
         return []
+
+
+def _fonts(deck) -> dict[str, str]:
+    """The families the deck's words are set in, and the theme's own (for the Design tab's
+    font choices to show as they are)."""
+
+    body = deck.typography(20).family
+    try:
+        from flexo.themes import resolve_style
+
+        theme = resolve_style(deck.theme, None, None, None).typography.family
+    except Exception:
+        theme = body
+    return {"body": body, "title": deck.typography(20, title=True).family,
+            "figure": deck.figure_font or body, "theme": theme}
 
 
 def _palette(deck) -> dict[str, str]:
