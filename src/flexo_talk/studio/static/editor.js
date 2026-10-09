@@ -4871,6 +4871,17 @@ export function mount(studio, container) {
       colour: style.fill && style.fill !== "none" ? style.fill : "", anchor: text.getAttribute("text-anchor") || style.textAnchor || "start", left: first.left };
   }
   function positionInline() {
+    placeInline();
+    // Seen only where the slide is (zoomed in and scrolled, the stage shows part of it): never
+    // over the slides' list, the inspector or the toolbar. (An equation's LaTeX, typed under
+    // it, may go on over the notes: it is never out of sight below the stage.)
+    if (!inline) return;
+    const room = stage.getBoundingClientRect(), own = inline.node.getBoundingClientRect(), foot = center.getBoundingClientRect().bottom;
+    // (A side not cut keeps its ring and shadow, outside its box.)
+    const inset = [room.top - own.top, own.right - room.right, own.bottom - foot, room.left - own.left].map((n) => Math.ceil(n));
+    inline.node.style.clipPath = inset.some((n) => n > 0) ? `inset(${inset.map((n) => `${n > 0 ? n : -24}px`).join(" ")})` : "";
+  }
+  function placeInline() {
     if (!inline || !pageNode?.isConnected) return;
     const outer = center.getBoundingClientRect();
     const slide = pageNode.getBoundingClientRect();
