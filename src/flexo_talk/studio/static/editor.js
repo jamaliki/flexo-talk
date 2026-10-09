@@ -6785,10 +6785,10 @@ export function mount(studio, container) {
     });
     onRich(area, onInput);
     // A new line left empty before the words or after them goes as the field is left, as on
-    // the slide (trimTyped): one with the typing. (Not as it is drawn again under the keys:
-    // keepFocus gives them back to it, typed on in.)
+    // the slide (trimTyped): one with the typing. (Not as it is drawn again under the keys --
+    // keepFocus gives them back to it, typed on in -- nor for its format bar's link field.)
     if (!list) area.addEventListener("blur", () => setTimeout(() => {
-      if (document.activeElement?.dataset?.key === key) return;
+      if (document.activeElement?.dataset?.key === key || area.holding?.()) return;
       const ended = area.value.replace(/\n+$/, "").replace(/^([ \t]*\n)+/, "");
       if (ended === area.value || !ended.trim()) return;
       area.value = ended;
