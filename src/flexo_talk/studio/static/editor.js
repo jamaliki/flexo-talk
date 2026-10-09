@@ -512,10 +512,6 @@ export function mount(studio, container) {
   const deckStyle = (name) => doc().deck?.style?.[name]
     ?? catalog.looks.find((look) => look.name === (doc().deck?.look || "classic"))?.style?.[name] ?? styleField(name)?.default;
   const choiceName = (name, choice) => styleField(name)?.labels?.[choice] || ({ start: "Left", middle: "Centre", end: "Right" })[choice] || keyTitle(choice);
-  // How to work the slide, said under it the first few times the editor is opened, then not.
-  const opened = Number(remembered("opened", "0")) || 0;
-  remember("opened", String(opened + 1));
-  const learning = opened < 5;
   // Where this document was left -- its slide, and the panel's tab -- is where it opens again.
   const placeKey = `place-${studio.file}`;
   const leftAt = (() => { try { return JSON.parse(remembered(placeKey, "{}")) || {}; } catch { return {}; } })();
@@ -652,7 +648,7 @@ export function mount(studio, container) {
       { value: "none", label: "None" }, { value: "bulleted", label: "Bulleted" }, { value: "numbered", label: "Numbered" }],
     onChange: (style) => restyle(at, style) });
     control.dataset.keepsTyping = "";
-    return ui.field("List", control);
+    return ui.field("Bullets", control);
   };
 
   // -- the frame --
@@ -662,7 +658,7 @@ export function mount(studio, container) {
   const stage = h("div.stage.deck-stage.scroll-thin", { "data-toast-area": true });
   // (Each time it is typed in, from focusing it to leaving it, a step of its own: `notesRun`.)
   let notesRun = 0;
-  const notesArea = ui.textarea({ rows: 3, key: "notes", placeholder: "Click to add speaker notes", onInput: (text) =>
+  const notesArea = ui.textarea({ rows: 3, key: "notes", onInput: (text) =>
     editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}-${notesRun}`, hold: true }) });
   notesArea.addEventListener("focusin", () => { notesRun += 1; });
   // The notes being typed in, changed by another (or an undo): the caret stays among the words
@@ -813,11 +809,11 @@ export function mount(studio, container) {
   const insertButtons = MAIN_BLOCKS.map((kind) => ui.button(BLOCKS[kind].label, () => insertBlock(kind), { kind: "ghost", icon: BLOCKS[kind].icon, title: `Add ${BLOCKS[kind].label}: ${BLOCKS[kind].hint}` }));
   const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "more" });
   moreButton.classList.add("pulldown");
-  const layoutButton = h("button.btn.ghost.layout-button.pulldown", { type: "button", title: "Slide layout", onclick: (event) => layoutPopover(event.currentTarget) });
   const newSlideButton = ui.button("Add Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide (⇧⌘N)" });
   newSlideButton.classList.add("keep-label");
-  // As Keynote's toolbar: the slide's own tools at the left, what adds to it in the middle.
-  studio.tools.append(newSlideButton, layoutButton);
+  // As Keynote's toolbar: Add Slide at the left (its menu the layouts), what adds to a slide
+  // in the middle. A slide's own layout is changed in Format.
+  studio.tools.append(newSlideButton);
   studio.inserts.append(...insertButtons, moreButton);
   // Export lists what File › Export To does in the Mac app (`studio.exports`); each asks
   // where to save once. A deck with no slides has nothing to present or export.
@@ -842,8 +838,6 @@ export function mount(studio, container) {
 
   const renderBar = () => {
     const slide = slideAt();
-    clear(layoutButton, glyph(layoutOf(slide)), h("span.bar-label", {}, LAYOUT_NAMES[layoutOf(slide)] || "Layout"), icon("chevron-down"));
-    layoutButton.disabled = !slide;
     const room = regionsOf(slide).length > 0;
     // Greyed out, each says why: the layout has no room (a title slide, a section).
     for (const button of [...insertButtons, moreButton]) {
@@ -852,12 +846,6 @@ export function mount(studio, container) {
       button.title = room ? button.dataset.title : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects`;
     }
   };
-
-  function layoutPopover(anchor) {
-    const slide = slideAt();
-    if (!slide) return;
-    popover(anchor, [h("div.menu-title", {}, "Layout"), layoutGrid(layoutOf(slide), (name) => { closeMenu(); changeLayout(name); }, layouts, studio.info?.palette)], { className: "layout-menu" });
-  }
 
   function newSlidePopover(anchor, at = state.slide + 1) {
     const grid = layoutGrid(null, (name) => { closeMenu(); addSlide(name, at); }, layouts, studio.info?.palette);
@@ -1211,9 +1199,6 @@ export function mount(studio, container) {
       if (at === node) { at = at.nextSibling; continue; }
       railList.insertBefore(node, at);
     }
-    if (!railList.querySelector(":scope > .rail-add")) {
-      railList.append(h("button.rail-add", { type: "button", onclick: (event) => newSlidePopover(event.currentTarget, slides().length) }, icon("plus"), "New Slide"));
-    } else railList.append(railList.querySelector(":scope > .rail-add"));
   }
 
   // A slide carried in the list, under the pointer as Keynote's slide navigator shows it: a
@@ -1360,7 +1345,8 @@ export function mount(studio, container) {
       notesArea.value = slide?.notes || "";
       requestAnimationFrame(() => { notesArea.style.height = "auto"; notesArea.style.height = `${Math.max(notesArea.scrollHeight + 2, 60)}px`; });
     }
-    notesPreview.textContent = slide?.notes ? plain(slide.notes) : "Click to add speaker notes";
+    // The first words of the slide's notes beside the bar's name; none, nothing.
+    notesPreview.textContent = slide?.notes ? plain(slide.notes) : "";
     // (Not .empty: that is the studio's "nothing here" panel, padded and centred.)
     notesPreview.classList.toggle("unwritten", !slide?.notes);
     notes.hidden = !list.length;
@@ -1420,15 +1406,16 @@ export function mount(studio, container) {
       if (stageWrap.firstChild?.classList?.contains("slide-page")) stageWrap.firstChild.replaceWith(pageNode);
       else stageWrap.prepend(pageNode);
     }
+    // Under the slide only what isn't shown elsewhere: its builds, who else is on it, and that
+    // it is being drawn (which slide it is, the slide list says).
     clear(stageMeta,
-      h("span.slide-count", {}, `${state.slide + 1} / ${list.length}`),
       page?.steps > 1 ? h("span.chip", { title: buildsSaid(slideAt()) }, icon("reveal"), `${page.steps} builds`) : null,
       here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), nameOf(entry.who),
         entry.doing || entry.where?.editing ? h("span.muted", {}, ` · ${entry.doing || "editing"}`) : null)),
       h("span.spacer", { style: { flex: 1 } }),
       // With the studio away nothing is drawn: said so, not a spinner that never ends.
       pending ? (studio.state === "offline" ? h("span.stage-hint", {}, "Drawn again when the studio is back")
-        : h("span.row.drawing", {}, h("span.spinner"), "Updating…")) : learning ? h("span.stage-hint", {}, "Click to select · Drag to move · Double-click to edit text") : null);
+        : h("span.row.drawing", { title: "Updating" }, h("span.spinner"))) : null);
     clear(stageMessages, own.map((message) => messageView(message, true)));
     stageMessages.hidden = !own.length;
     fitStage();
@@ -3323,7 +3310,7 @@ export function mount(studio, container) {
       crumbs: () => h("button.crumb", { type: "button", onclick: () => { state.focus = null; renderInspector(); placeChosen(); reportFocus(); } }, `Slide ${state.slide + 1}`),
       // The shape chosen in it is shown the others, as the object is.
       focus: () => reportFocus(),
-      nothing: () => [...blockPanel(slideAt(), figureBlock()), figure.parts.howTo()],
+      nothing: () => blockPanel(slideAt(), figureBlock()),
       // Its edits are made on it wherever the page has gone since (one held while the
       // studio was away, sent once it is back).
       run: (action, options) => runFigure(action, options, own),
@@ -5838,13 +5825,13 @@ export function mount(studio, container) {
     const count = blocksAt(slide, at.region).length;
     return [
       h("div.section.block-top", {}, crumbs(slide, block),
-        // In the order they are drawn, for Tab: the icons beside the name, then Edit Text under them.
+        // In the order they are drawn, for Tab. (Its words are edited on the slide -- Return, or a
+        // double-click -- or in the field below.)
         h("div.block-actions", {},
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up", disabled: at.index === 0 }),
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down", disabled: at.index >= count - 1 }),
           ui.button("", () => { editSlide((s) => { const list = blocksAt(s, at.region); list.splice(at.index + 1, 0, structuredClone(list[at.index])); }); focusBlock(at.region, at.index + 1); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
-          ui.button("", () => deleteBlock(at), { kind: "ghost", small: true, icon: "trash", title: "Delete (⌫)" }),
-          INLINE.has(kind) ? ui.button(kind === "math" ? "Edit Equation" : kind === "code" ? "Edit Code" : "Edit Text", () => openInline({ kind: "block", ...at }), { small: true, icon: "pencil", title: "Edit on the slide (↩), or double-click it" }) : null),
+          ui.button("", () => deleteBlock(at), { kind: "ghost", small: true, icon: "trash", title: "Delete (⌫)" })),
         // A placeholder says so, at the top: it looks like an object, but no one sees it yet --
         // until something is typed in it, here or on the slide (the note goes as it is).
         h("div.hint-line.placeholder-note", { hidden: !blank(block) }, icon("info"), placeholderWords(block, true)),
@@ -5945,7 +5932,7 @@ export function mount(studio, container) {
         : ui.input({ value: slide[key] ?? "", placeholder, key: `slide.${key}`, onInput }));
     };
     const parts = [
-      h("div.section", {}, crumbs(slide, null),
+      h("div.section", {},
         layout === "statement" ? text("words", "Text", { rows: 2, placeholder: "A short statement" }) : text("title", layout === "agenda" ? "Heading" : "Title", { placeholder: layout === "agenda" ? "Outline" : "Title" }),
         text("subtitle", "Subtitle", { placeholder: "Subtitle" }),
         // Each a whole row wide: an author's name and affiliation read without being cut off.
@@ -5953,7 +5940,7 @@ export function mount(studio, container) {
           // An example, not a default: an empty date draws nothing.
           text("date", "Date", { markup: false, placeholder: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}` })] : null,
         text("by", "Attribution", { markup: false, placeholder: "Who said it" }),
-        layout === "agenda" ? h("div.hint-line", {}, "Lists the titles of the deck’s section slides automatically.") : null,
+        layout === "agenda" ? h("div.hint-line", {}, "Lists the section slides.") : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn’t show its title.") : null),
     ];
     const regions = regionsOf(slide);
@@ -5965,7 +5952,7 @@ export function mount(studio, container) {
       // others -- and the Design's own choice is offered only as that, not twice by one name
       // (unless the slide already sets it).
       allowed.has("align") ? ui.field(styleName("align"), ui.select({ value: slide.align ?? "", key: "slide.align", options: [
-        { value: "", label: `As in Design (${choiceName("align", deckStyle("align") || "auto")})` },
+        { value: "", label: choiceName("align", deckStyle("align") || "auto") },
         ...["auto", "top", "middle"].filter((value) => value !== (deckStyle("align") || "auto") || value === slide.align)
           .map((value) => ({ value, label: choiceName("align", value) }))],
         onChange: (value) => editSlide((s) => setOption(s, "align", value), { quiet: true }) })) : null));
@@ -6181,11 +6168,9 @@ export function mount(studio, container) {
         moveBlock(dragBlock, { region: region.key, index: blocks.length });
       } },
     regionsOf(slide).length > 1 ? h("div.region-head", {}, region.name) : null,
-    h("div.blocks", {}, blocks.map((block, index) => blockRow(block, region, index)),
-      // In the order of the bar's buttons and its More menu, as the Mac's Insert menu has them.
-      h("button.add-row", { type: "button", onclick: (event) => menu(event.currentTarget, [...MAIN_BLOCKS, "-", ...MORE_BLOCKS].map((kind) => (kind === "-" ? "-" : {
-        icon: BLOCKS[kind].icon, label: `${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, hint: BLOCKS[kind].hint, run: () => insertBlock(kind, null, { region: region.key, index: blocks.length - 1 }),
-      }))) }, icon("plus"), "Add Object")));
+    // Objects are added from the bar (into the column chosen, or its placeholder clicked); an
+    // empty column here is a place to drag one to.
+    h("div.blocks", {}, blocks.length ? blocks.map((block, index) => blockRow(block, region, index)) : h("div.region-empty")));
     return node;
   }
 
@@ -6193,7 +6178,7 @@ export function mount(studio, container) {
   // sample (a new mechanism), neither presented nor exported until its person changes it.
   // (Said one way wherever it is said: its row in the panel, its own panel.)
   const placeholderWords = (block) => `${block.placeholder ? "Sample" : "Empty"} — not presented or exported until edited`;
-  const rowWords = (block) => (blank(block) ? placeholderWords(block) : summary(block));
+  const rowWords = (block) => (blank(block) ? (block.placeholder ? "Sample" : "Empty") : summary(block));
   function blockRow(block, region, index) {
     const kind = kindOf(block);
     const at = { region: region.key, index };
@@ -6224,7 +6209,8 @@ export function mount(studio, container) {
       onmouseenter: () => place(hover, frameOf({ kind: "block", region: region.key, index, id: `slide${state.slide + 1}.${region.svg}.${index}` }), blockName(block)),
       onmouseleave: () => { hover.hidden = true; } },
     h("span.kind", {}, icon(blockIcon(block))),
-    h("span.summary", {}, h("span.what", {}, blockName(block)), h(`span.words${blank(block) ? ".placeholder-words" : ""}`, {}, rowWords(block))),
+    // What it holds, its icon saying what it is (and its tooltip, in words).
+    h("span.summary", { title: blockName(block) }, h(`span.words${blank(block) ? ".placeholder-words" : ""}`, {}, rowWords(block))),
     icon("chevron"));
     return node;
   }
@@ -6313,7 +6299,6 @@ export function mount(studio, container) {
       case "bullets":
         return [richField({ value: bulletsText(block.bullets), list: true, numbered: Boolean(block.numbered), plain: Boolean(block.plain), key: key("bullets"), placeholder: "Text",
           onInput: (text) => edit((b) => { if (kindOf(b) === "bullets") b.bullets = bulletsFrom(text); }, "words"), onCells }),
-        h("div.hint-line", {}, "Return starts the next item; ", h("kbd", {}, "Tab"), " and ", h("kbd", {}, "⇧Tab"), " change its level; ", h("kbd", {}, "Esc"), " then ", h("kbd", {}, "Tab"), " goes on."),
         listField(at, block),
         // Its words' colour, as a text's: the bullets and numbers keep the theme's.
         ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
@@ -6340,7 +6325,7 @@ export function mount(studio, container) {
         code.setAttribute("wrap", "off");
         // In a box with room at its right: a textarea's own padding is not kept at the end
         // of a line scrolled to, which would run into its edge.
-        return [h("div.markup.code-box", {}, code), h("div.hint-line", {}, "Shown exactly as typed. Whole-line comments are dimmed."), size()];
+        return [h("div.markup.code-box", {}, code), size()];
       }
       case "stats": return statsForm(block, at, edit, toneSwatches, size);
       case "table": return tableForm(block, at, edit, size);
@@ -6348,8 +6333,8 @@ export function mount(studio, container) {
       case "gallery": return galleryForm(block, at, edit, size);
       case "figure": return figureForm(block, at, edit);
       case "plot":
-        return [ui.field("Function", functionInput(block.plot, (value) => edit((b) => { b.plot = value; }, "plot")), { hint: "file.py:function" }),
-          h("div.hint-line", {}, "A function that returns a matplotlib figure. It runs inside ", h("code", {}, "deck.plotting()"), " and receives the deck if it takes an argument."),
+        return [ui.field("Function", functionInput(block.plot, (value) => edit((b) => { b.plot = value; }, "plot")),
+          { hint: "file.py:function, returning a matplotlib figure. It runs inside deck.plotting(), given the deck if it takes an argument." }),
           ui.field("Aspect Ratio", ui.number({ value: block.aspect, placeholder: "Auto", min: 0.2, step: 0.1, start: 1.5, key: key("aspect"),
             current: () => { const drawn = drawnOf(at); return drawn.width && drawn.height ? drawn.width / drawn.height : null; }, onChange: set("aspect") }), { hint: "Width ÷ height" })];
       case "math": return mathForm(block, at, edit, toneSwatches, size);
@@ -6391,9 +6376,8 @@ export function mount(studio, container) {
     };
     note();
     mathNotes = note;
+    area.title ||= "LaTeX: \\\\ starts a new line and & aligns lines. In text, maths goes between $ signs ($$ for a line of its own).";
     return [area, chipRow, notes,
-      h("div.hint-line", {}, "Type LaTeX. ", h("code", {}, "\\\\"), " starts a new line and ", h("code", {}, "&"),
-        " aligns lines. In text, put maths between ", h("code", {}, "$"), " signs, or ", h("code", {}, "$$"), " for maths on its own line."),
       ui.field("Colour", toneSwatches("colour", { extra: [{ value: "muted", colour: studio.info?.palette?.muted || "#999", title: "Muted" }] })),
       size()];
   }
@@ -6900,7 +6884,6 @@ export function mount(studio, container) {
         ui.button("Add Row", () => { restructure(() => rows.push(Array(columns).fill(""))); typeIn(rows.length - 1, 0); }, { kind: "ghost", icon: "plus", small: true }),
         ui.button("Add Column", () => { restructure(() => rows.forEach((row) => row.push(""))); typeIn(0, columns); }, { kind: "ghost", icon: "plus", small: true }),
         h("span.spacer", { style: { flex: 1 } })),
-      h("div.hint-line", {}, "Paste cells from a spreadsheet into any cell."),
       ui.toggle({ value: header, label: "Header Row", onChange: (value) => editBlock(at, (b) => setOption(b, "header", value ? null : false)) }),
       // The rules above and below it, as Keynote's Table Outline: off, with no header row,
       // it is words in columns with no lines at all.
@@ -6918,7 +6901,6 @@ export function mount(studio, container) {
       onerror: () => { if (preview.getAttribute("src") && tries < 4) { tries += 1; const src = preview.src.replace(/&again=\d+$/, ""); setTimeout(() => { preview.src = `${src}&again=${tries}`; }, 400 * tries); } } });
     return [preview,
       fileRow(block.image, ["image"], (path) => { editBlock(at, (b) => { b.image = path; }, {}); preview.src = studio.raw(path); preview.hidden = false; }, "picture.png"),
-      /\.svg$/i.test(block.image || "") ? h("div.hint-line", {}, "An SVG picture stays as vectors: editable shapes and text in PowerPoint.") : null,
       widthField(block, at),
       captionField(block, at),
       // As Keynote's Description: read out for whoever cannot see the picture, its lines
@@ -7053,7 +7035,7 @@ export function mount(studio, container) {
     const exports = ui.field("Export", ui.button("Export Figure…", (event) => menu(event.currentTarget, exportItems(at)), { small: true, icon: "export", title: "SVG, PDF, PNG or a Flexo figure file" }));
     if (mode === "inline") {
       parts.push(h("div.figure-card", {},
-        h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`), h("div.hint-line", {}, "Stored in the deck, using the deck’s theme"))));
+        h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`))));
       const area = ui.textarea({ value: JSON.stringify(value, null, 2), rows: 8, mono: true, indent: true, key: "figure.json", onInput: (text) => {
         try { const parsed = JSON.parse(text); area.style.borderColor = ""; edit((b) => { b.figure = parsed; }, "figure"); }
         catch { area.style.borderColor = "var(--error)"; }
@@ -7064,11 +7046,11 @@ export function mount(studio, container) {
       // Advanced, as a figure's shape keeps its name in the file.
       return [exports, widthField(block, at), turn, captionField(block, at), figureDescription(block, at), h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
-      parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"),
-        h("div.hint-line", {}, "Edit the figure on the slide. Your changes are saved to the file, and changes made to the file appear here."));
+      parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"));
     } else {
-      parts.push(functionInput(value, (text) => edit((b) => { b.figure = text; }, "figure")),
-        h("div.hint-line", {}, "A function that returns a ", h("code", {}, "flexo.Figure"), ". It runs again when its file changes."));
+      const named = functionInput(value, (text) => edit((b) => { b.figure = text; }, "figure"));
+      named.title ||= "file.py:function, returning a flexo.Figure. It runs again when its file changes.";
+      parts.push(named);
     }
     parts.push(widthField(block, at), turn, captionField(block, at), figureDescription(block, at));
     return [exports, ...parts];
@@ -7206,7 +7188,7 @@ export function mount(studio, container) {
       const input = functionInput("", (text) => { value = text; });
       // Named as any field is; its form is what the empty field shows.
       input.placeholder = "file.py:function";
-      dialog({ title, body: [ui.field("Function", input), h("div.hint-line", {}, "The file must be in the deck’s folder. The function runs each time the slide is drawn.")],
+      dialog({ title, body: [ui.field("Function", input), h("div.hint-line", {}, "In a file in the deck’s folder.")],
         actions: [{ label: "Cancel", run: () => resolve(null) }, { label: "Choose", kind: "primary", run: () => {
           if (!/\.py:\w+$/.test(value.trim())) { input.classList.add("invalid"); return false; }
           resolve(value.trim());
@@ -7287,9 +7269,9 @@ export function mount(studio, container) {
     // Words typed in a field: one run from focusing it to leaving it (leftField).
     const typeDeck = (name) => (value) => editDeck((d) => setOption(d, name, value), { quiet: true, merge: `deck-${name}`, hold: true });
     const look = deck.look || "classic";
-    const looks = tinted(h("div.looks", {}, catalog.looks.map((item) => h(`button.look${item.name === look ? ".on" : ""}`, { type: "button",
+    const looks = tinted(h("div.looks", {}, catalog.looks.map((item) => h(`button.look${item.name === look ? ".on" : ""}`, { type: "button", title: item.note || "",
       onclick: () => { editDeck((d) => setOption(d, "look", item.name, "classic")); renderInspector(); } },
-    lookArt(item.name), h("span.name", {}, lookName(item)), h("span.note", {}, item.note)))), studio.info?.palette);
+    lookArt(item.name), h("span.name", {}, lookName(item))))), studio.info?.palette);
     const themeIsFile = typeof deck.theme === "string" && /\.(ya?ml|json)$/i.test(deck.theme);
     const current = Array.isArray(deck.palette) ? "" : deck.palette || "default";
     const accents = () => Object.entries(studio.info?.palette || {}).filter(([k]) => k.startsWith("accent")).slice(0, 5).map(([, c]) => h("span", { style: { background: c } }));

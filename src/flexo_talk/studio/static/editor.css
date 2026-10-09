@@ -7,13 +7,8 @@
 .deck.no-inspector > .inspector { display: none; }
 
 /* -- the bar -- */
-.layout-button { gap: 7px; }
-/* The layout's glyph in the bar is drawn like the bar's icons: lines in the button's ink, no box. */
-.layout-button div.glyph { width: 18px; height: 13px; background: none; border: 1.4px solid currentColor; border-radius: 2.5px; }
-.layout-button div.glyph i, .layout-button div.glyph i.a { background: currentColor; opacity: 0.75; min-height: 1.4px; }
-.layout-button div.glyph i.a { opacity: 1; }
-/* A button that opens a menu has its chevron after its word (More, the layout). */
-.layout-button > svg, .btn.pulldown > svg:last-child { width: 13px; height: 13px; color: var(--ink-3); }
+/* A button that opens a menu has its chevron after its word (More). */
+.btn.pulldown > svg:last-child { width: 13px; height: 13px; color: var(--ink-3); }
 
 /* -- the rail -- */
 .rail { border-right: 1px solid var(--line); overflow: hidden; }
@@ -63,9 +58,6 @@
 .rail-list.carried .thumb:hover .more, .rail-list.carried .thumb:hover .insert-after { opacity: 0; transition: none; }
 .rail-list.carried .thumb:hover:not(.on) .frame { box-shadow: 0 0 0 1px var(--line-strong); }
 .rail-list.carried .thumb:hover .here { visibility: visible; }
-.rail-add { margin: 4px 0 0 24px; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 0 4px; aspect-ratio: 16 / 9; border-radius: 5px; border: 1.5px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font-size: 12px; white-space: nowrap; }
-.rail-add:hover { border-color: var(--accent); color: var(--accent); }
-.rail-add svg { width: 14px; height: 14px; }
 .frame.flash, .slide-page.flash { animation: flash 1.1s ease-out; }
 @keyframes flash { 0% { box-shadow: 0 0 0 4px var(--flash, #d97757), var(--shadow-page); } 100% { box-shadow: 0 0 0 1px var(--line-strong); } }
 
@@ -397,12 +389,9 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .block-row .kind { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; background: var(--sunken); color: var(--ink-2); flex: none; }
 .block-row .kind svg { width: 14px; height: 14px; }
 .block-row .summary { flex: 1; min-width: 0; display: grid; }
-.block-row .what { font: var(--text-hint); color: var(--ink-3); line-height: 1.2; }
 .block-row .words { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; }
 .block-row > svg { width: 13px; height: 13px; color: var(--ink-3); flex: none; }
-.add-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; border: 1px dashed var(--line-strong); background: transparent; color: var(--ink-3); cursor: pointer; font: var(--text-small); }
-.add-row:hover { border-color: var(--accent); color: var(--accent); }
-.add-row svg { width: 13px; height: 13px; }
+.region-empty { height: 34px; border-radius: 8px; border: 1px dashed var(--line-strong); }
 
 .deck .list-rows { display: grid; gap: 6px; }
 .list-row { display: flex; gap: 6px; align-items: center; }
