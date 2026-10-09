@@ -2376,7 +2376,7 @@ export function mount(studio, container) {
   function carryToSlide(was, index) {
     const target = slides()[index];
     const into = regionsOf(target)[0];
-    if (!into) { sendHome(was); toast(`Slide ${index + 1}'s layout has no room for objects.`, { icon: "info" }); return; }
+    if (!into) { sendHome(was); toast(`Slide ${index + 1}’s layout has no room for objects.`, { icon: "info" }); return; }
     const here = state.slide;
     const picks = [...(was.all || [was.from])];
     const first = blocksAt(slideAt(), picks[0].region)[picks[0].index];
@@ -5616,7 +5616,7 @@ export function mount(studio, container) {
     closeInline();
     const slide = slideAt();
     const regions = regionsOf(slide);
-    if (!regions.length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
+    if (!regions.length) { toast(`${noRoomSaid(slide)}.`, { icon: "info", seconds: 6 }); return; }
     const more = Array.isArray(given) ? given.slice(1) : [];
     if (Array.isArray(given)) given = given[0];
     let block = given || NEW_BLOCKS[kind]?.();
@@ -5891,7 +5891,7 @@ export function mount(studio, container) {
         h("div.block-actions", {},
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up", disabled: at.index === 0 }),
           ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down", disabled: at.index >= count - 1 }),
-          ui.button("", () => { editSlide((s) => { const list = blocksAt(s, at.region); list.splice(at.index + 1, 0, structuredClone(list[at.index])); }); focusBlock(at.region, at.index + 1); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
+          ui.button("", () => { if (!awayFrom("duplicate objects")) duplicateBlock(at); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
           ui.button("", () => deleteBlock(at), { kind: "ghost", small: true, icon: "trash", title: "Delete (⌫)" })),
         // A placeholder says so, at the top: it looks like an object, but no one sees it yet --
         // until something is typed in it, here or on the slide (the note goes as it is).
@@ -7625,6 +7625,15 @@ export function mount(studio, container) {
 
   // ⌘D (and Edit › Duplicate) duplicates what is chosen: a figure's shapes, the object on
   // the slide, else the slide.
+  // An object copied after itself (its figure with an id of its own), the copy chosen.
+  function duplicateBlock(at) {
+    const block = blocksAt(slideAt(), at.region)[at.index];
+    if (!block) return;
+    const from = { region: at.region, index: at.index };
+    insertBlock(kindOf(block), copyOf(block), from, `Duplicate ${blockLabel(block)}`);
+    // Undone, the one it was copied from is chosen; redone, the copy.
+    markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
+  }
   function duplicateChosen() {
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
     if ((state.focus || allOn()) && awayFrom("duplicate objects")) return;
@@ -7643,13 +7652,7 @@ export function mount(studio, container) {
       placeChosen(); renderInspector(); reportFocus();
       return;
     }
-    const block = state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
-    if (block) {
-      const from = { ...state.focus };
-      insertBlock(kindOf(block), copyOf(block), from, `Duplicate ${blockLabel(block)}`);
-      // Undone, the one it was copied from is chosen; redone, the copy.
-      markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
-    }
+    if (state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index]) duplicateBlock(state.focus);
     else if (chosenSlides().length > 1) duplicateSlides(chosenSlides());
     else if (slides().length) duplicateSlide(state.slide);
   }
