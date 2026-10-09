@@ -643,7 +643,7 @@ def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
     result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
     assert result["file"] == "model.yaml" and result["document"] is document
     text = (tmp_path / "model.yaml").read_text()
-    assert text.startswith("# A flexo figure") and "id: backbone" in text and "to: backbone" in text
+    assert text.startswith("# A figure: ") and "id: backbone" in text and "to: backbone" in text
 
 
 def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: Path) -> None:
