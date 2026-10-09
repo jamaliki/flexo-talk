@@ -7338,6 +7338,17 @@ export function mount(studio, container) {
       h("div.section", {}, h("div.section-title", {}, "Look"), looks),
       h("div.section", {}, h("div.section-title", {}, "Fonts"),
         fonts("font", "Body", "Default"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
+      // Every arrow in the deck's figures, in one shape (a line with a head of its own keeps it).
+      h("div.section", {}, h("div.section-title", {}, "Figures"),
+        ui.field("Arrowheads", ui.segmented({ value: deck.conventions?.arrowheads || "theme", key: "deck.arrowheads",
+          options: [{ value: "theme", label: "Theme", title: "As the theme draws them" },
+            ...[["triangle", "Triangle"], ["stealth", "Stealth"], ["latex", "LaTeX"], ["open", "Open"]].map(([value, title]) => ({ value, title, label: icon(`head-${value}`) }))],
+          onChange: (value) => { editDeck((d) => {
+            d.conventions = { ...(d.conventions || {}) };
+            if (value === "theme") delete d.conventions.arrowheads; else d.conventions.arrowheads = value;
+            if (!Object.keys(d.conventions).length) delete d.conventions;
+          }, { label: "Change Arrowheads" }); renderInspector(); } }),
+        { hint: "Every arrow without a head of its own" })),
       h("div.section", {}, h("div.section-title", {}, "Deck"),
         ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: "Group meeting · 2026", colours: false, key: "deck.footer", onInput: typeDeck("footer") })),
         ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", key: "deck.id", onInput: typeDeck("id") }), { hint: `${deck.id || "talk"}.pptx, ${deck.id || "talk"}.pdf` })),

@@ -2851,6 +2851,12 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
             spec, style=deck.theme, palette=deck.palette_name,
             font=deck.figure_font or deck.font or spec.font,
         )
+        if deck.conventions:
+            # The deck's conventions (its arrowheads, say), the figure's own over them.
+            from flexo.conventions import parse_conventions
+
+            ours = parse_conventions(deck.conventions)
+            spec = replace(spec, conventions=ours.with_updates(spec.conventions) if spec.conventions else ours)
     style = figure_style(spec)
     base = style.typography.size.points
     # A figure its person arranged by hand -- a part put under another, or on a line of its
