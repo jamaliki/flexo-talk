@@ -260,6 +260,10 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich-field .rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: var(--ink-3); opacity: 1; pointer-events: none; }
 .rich-field .rich.rt-list { padding-left: 4px; }
 .rich-field .rich .rt-line { --rt-text: 1.3em; --rt-mark-x: 0.55em; --rt-mark-y: 0.7em; --rt-gap: 2px; --rt-line: 1.4; --rt-r: 2.5px; --rt-r2: 2px; --rt-step: 1.2em; }
+/* In the dark, words in a theme's colour (a deep accent, set for a white slide) are read on
+   the panel's dark field in that colour lightened towards its ink, not dark on dark. */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .inspector .rich [data-colour] { color: color-mix(in oklab, var(--rt-colour) 50%, var(--ink)) !important; } }
+:root[data-theme="dark"] .inspector .rich [data-colour] { color: color-mix(in oklab, var(--rt-colour) 50%, var(--ink)) !important; }
 /* The format bar looks as every text's does (.rt-bar, .markup-tools: studio.css). */
 .rt-bar { position: fixed; z-index: 60; animation: pop 0.1s ease-out; }
 .rt-bar[hidden] { display: none; }

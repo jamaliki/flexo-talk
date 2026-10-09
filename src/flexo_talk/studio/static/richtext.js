@@ -7,7 +7,7 @@
 // (for a list, one item a line, two spaces a level, as bulletsText writes it), and
 // which says "input" whenever it changes, as a textarea does.
 
-import { icon } from "/static/studio/studio.js";
+import { icon, toast } from "/static/studio/studio.js";
 
 // -- markup to runs --------------------------------------------------------------------
 
@@ -291,7 +291,7 @@ function inlineNodes(words, colours, outer = { bold: false, italic: false }) {
     if (link || coloured) {
       const node = document.createElement(link ? "a" : "span");
       if (link) { node.dataset.href = link[2]; node.title = link[2]; }
-      else { node.dataset.colour = coloured[2]; node.style.color = colours(coloured[2]); }
+      else { node.dataset.colour = coloured[2]; node.style.color = colours(coloured[2]); node.style.setProperty("--rt-colour", node.style.color); }
       node.append(...inlineNodes((link || coloured)[1], colours, style));
       nodes.push(node);
     } else if (code) {
@@ -482,10 +482,21 @@ function emphasised(lines, look) {
 
 // -- the field -------------------------------------------------------------------------
 
-// `list` makes it a list (Tab and Shift-Tab change an item's level, Return starts the
-// next item, Return on an empty item moves it out a level; `numbered` numbers it, and
-// `plain` has no marks, its levels kept); `single` a line of its own
-// (Return is left to whoever holds it); else words in lines. `palette` gives the
+// A line break within a list's item, in the list's words (one item a line): the Unicode
+// line separator, which no one types.
+export const ITEM_BREAK = " ";
+
+// Whether two colours, however written ("#1a5d9b", "rgb(26, 93, 155)"), are one.
+const pen = document.createElement("canvas").getContext("2d");
+const colourAs = (colour) => { pen.fillStyle = "#010203"; pen.fillStyle = String(colour ?? ""); return pen.fillStyle; };
+const sameColour = (a, b) => Boolean(a && b) && colourAs(a) === colourAs(b) && colourAs(a) !== "#010203";
+
+// `list` makes it a list (Tab and ⇧Tab change an item's level, Return starts the next
+// item, ⇧Return a new line in the item, Return on an empty item moves it out a level;
+// `numbered` numbers it, and `plain` has no marks, its levels kept); `single` a line of its
+// own (Return is left to whoever holds it); else words in lines, Return starting a new one,
+// as in Keynote -- or, `breakWith` "shift" (a table's cell), ⇧Return or ⌥Return, Return
+// left to whoever holds it. ⌘Return is always theirs: it ends the typing. `palette` gives the
 // theme's colours by name, for [words]{accent}. `onCells` takes a spreadsheet's cells
 // pasted in it; `docked` keeps its format bar under it (a panel's field); `onEnd(kept)` goes on
 // after a list ended by Return on an empty item (`kept`: how many items stay before the
@@ -494,7 +505,10 @@ function emphasised(lines, look) {
 // `onList(items, split)` takes an outline or a list pasted in words (each item's depth, markup
 // and whether it was numbered; `split`: the words before the caret and after it, as markup --
 // so too `onCells(cells, split)`, but for a list's or one line's).
-export function richText({ value = "", list = false, single = false, numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, onCells = null, docked = false, onEnd = null, onListStart = null, onList = null } = {}) {
+// A list's `value` holds a line break within an item as ITEM_BREAK, its items being its lines.
+// `clear(rect)`: how much of what the slide shows round the words a rect over it would cover
+// (its format bar is put where it covers least).
+export function richText({ value = "", list = false, single = false, breakWith = "return", numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, clear = null, onCells = null, docked = false, onEnd = null, onListStart = null, onList = null } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}${plain ? " rt-plain" : ""}`;
   area.contentEditable = "true";
@@ -853,17 +867,23 @@ export function richText({ value = "", list = false, single = false, numbered = 
       if ((event.altKey ? asMaths() : asCode()) !== false) changed(true);
       return;
     }
-    // No underline: the slide has none to keep.
-    if (mod && !event.altKey && (event.code === "KeyU" || event.key.toLowerCase() === "u")) { event.preventDefault(); return; }
+    // No underline: the slide has none to keep -- said, not swallowed without a word.
+    if (mod && !event.altKey && (event.code === "KeyU" || event.key.toLowerCase() === "u")) {
+      event.preventDefault();
+      toast("Slides have no underline: use bold, italic or a colour to make words stand out.", { icon: "info", seconds: 3 });
+      return;
+    }
     if (mod && !event.altKey && ["b", "i"].includes(event.key.toLowerCase())) {
       event.preventDefault();
       format(event.key.toLowerCase() === "b" ? "bold" : "italic");
       return;
     }
+    // (A step of its own, named as what it did, as Pages names one: not typing.)
     if (event.key === "Tab" && list) {
       event.preventDefault();
+      const was = read();
       for (const line of chosenLines()) setLevel(line, Number(line.dataset.level) + (event.shiftKey ? -1 : 1));
-      changed();
+      if (read() !== was) changed(true, event.shiftKey ? "Outdent" : "Indent");
       return;
     }
     // Tab is no character here: in a panel's field it goes on to the next control.
@@ -1108,7 +1128,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     return out;
   };
   const plainNode = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; node.textContent = text; return node; };
-  const colourNode = (name) => { const span = document.createElement("span"); span.dataset.colour = name; span.style.color = colours(name); return span; };
+  const colourNode = (name) => { const span = document.createElement("span"); span.dataset.colour = name; span.style.color = colours(name); span.style.setProperty("--rt-colour", span.style.color); return span; };
   const linkNode = (href) => { const a = document.createElement("a"); a.dataset.href = href; a.title = href; return a; };
   // Words in one of the theme's colours, or (none) in the words' own, as they are drawn.
   const recolour = (name) => wrapChosen(name ? (words) => { const span = colourNode(name); span.append(words); return span; } : null, { strip: isColour });
@@ -1367,13 +1387,14 @@ export function richText({ value = "", list = false, single = false, numbered = 
   const plainTool = palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default", () => recolour(null), { words: true }) : "";
   const codeTool = tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code (⌘E)", asCode, { words: true });
   const mathsTool = tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX (⌥⌘E)", asMaths, { words: true });
+  const swatchTools = swatches.map(([name, title]) => [tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => recolour(name), { words: true }), name]);
   bar.append(
     boldTool,
     italicTool,
     codeTool,
     mathsTool,
     tool(icon("link"), "Link (⌘K)", () => askLink()),
-    ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => recolour(name), { words: true })),
+    ...swatchTools.map(([button]) => button),
     plainTool,
     linkInput,
     linkNote,
@@ -1429,7 +1450,13 @@ export function richText({ value = "", list = false, single = false, numbered = 
     codeTool.classList.toggle("on", atom?.nodeName === "CODE");
     mathsTool.classList.toggle("on", Boolean(atom && atom.nodeName !== "CODE"));
     for (const button of bar.querySelectorAll("[data-words]")) button.disabled = none;
-    if (plainTool) plainTool.firstElementChild.style.background = getComputedStyle(area).color || palette.ink;
+    if (plainTool) {
+      const own = getComputedStyle(area).color || palette.ink;
+      plainTool.firstElementChild.style.background = own;
+      // Words drawn in a colour of the theme's already (a number, in the accent): that
+      // colour is their Default, offered once, not as two dots alike.
+      for (const [button, name] of swatchTools) button.hidden = sameColour(palette[name], own);
+    }
     bar.hidden = false;
     if (docked) return;
     // Just over the words chosen, clear of them, as Pages' and Keynote's bar is, and under
@@ -1441,16 +1468,30 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const own = bar.getBoundingClientRect();
     const bounds = room?.() || { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
     const over = frame?.() || chosen;
-    const above = over.top - own.height - 6;
-    let top = above >= bounds.top + 4 ? above : over.bottom + 6;
     // A link's address asked for widens it to the right: it stays where it was, by the words.
-    let left = !linkInput.hidden && barLeft !== null ? barLeft : chosen.left + chosen.width / 2 - own.width / 2;
-    top = Math.max(bounds.top + 4, Math.min(top, bounds.bottom - own.height - 4));
+    const keep = !linkInput.hidden && barLeft !== null;
+    let left = keep ? barLeft : chosen.left + chosen.width / 2 - own.width / 2;
     left = Math.max(bounds.left + 8, Math.min(left, bounds.right - own.width - 8));
-    if (linkInput.hidden) barLeft = left;
+    // Over them where there is room and it covers none of the words about them -- the field's
+    // own other lines, or (`clear`) another object's, a heading's -- else over or under all
+    // the field's words, else where it covers least.
+    const within = (top) => Math.max(bounds.top + 4, Math.min(top, bounds.bottom - own.height - 4));
+    const whole = frame ? over : area.getBoundingClientRect();
+    const places = [over.top - own.height - 6, whole.top - own.height - 6, whole.bottom + 6].filter((top) => top >= bounds.top + 4 && top + own.height <= bounds.bottom - 4);
+    const all = document.createRange();
+    all.selectNodeContents(area);
+    const ownLines = [...all.getClientRects()].filter((rect) => rect.width && rect.height);
+    const covered = (top) => {
+      const rect = { left, top, right: left + own.width, bottom: top + own.height };
+      const meets = (other) => other.left < rect.right && other.right > rect.left && other.top < rect.bottom && other.bottom > rect.top;
+      return ownLines.filter(meets).length + (clear ? clear(rect) : 0);
+    };
+    const best = places.map((top) => ({ top, covers: covered(top) })).reduce((one, other) => (other.covers < one.covers ? other : one), { top: places[0] ?? over.bottom + 6, covers: Infinity });
+    const top = keep && barTop !== null ? barTop : within(best.top);
+    if (!keep) { barLeft = left; barTop = top; }
     Object.assign(bar.style, { top: `${top}px`, left: `${left}px` });
   };
-  let barLeft = null;
+  let barLeft = null, barTop = null;
   document.addEventListener("selectionchange", showBar);
   // A panel's field shows its bar while it has the keys, chosen words or not.
   if (docked) for (const name of ["focus", "blur"]) area.addEventListener(name, () => setTimeout(() => showBar(), 0));
