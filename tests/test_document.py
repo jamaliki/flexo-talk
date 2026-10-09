@@ -1502,6 +1502,27 @@ def test_an_empty_title_or_text_holds_its_place_and_shows_only_in_the_studio() -
     assert not [layout for layout in render_slide(deck, deck.slides[0]).lists if layout.id == "slide1.body.0"]
 
 
+def test_a_list_says_how_wide_its_items_run_for_the_editor_and_only_for_it() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    document = yaml.safe_load(
+        "deck: {id: wraps}\nslides:\n  - layout: two-columns\n    split: 0.3\n"
+        "    left: [{bullets: [A long item that wraps in its narrow column, Short]}]\n    right: [{text: Words}]\n"
+    )
+    deck = deck_from_document(document, Path("."))
+    exported = render_slide(deck, deck.slides[0]).svg
+    token = PLACEHOLDERS.set(True)
+    try:
+        editing = render_slide(deck, deck.slides[0])
+    finally:
+        PLACEHOLDERS.reset(token)
+    # Its items wrap at its column's width, and the editor typing them wraps them there too.
+    (wrap,) = re.findall(r'<g id="slide1\.left\.0"[^>]*data-flexo-wrap="([\d.]+)"', editing.svg)
+    (layout,) = [layout for layout in editing.lists if layout.id == "slide1.left.0"]
+    assert float(wrap) == pytest.approx(layout.width)
+    assert "data-flexo-wrap" not in re.search(r'<g id="slide1\.left\.0"[^>]*>', exported).group(0)
+
+
 def test_an_agenda_before_any_section_shows_its_rows_faintly_while_editing() -> None:
     from flexo_talk.compose import PLACEHOLDERS
 

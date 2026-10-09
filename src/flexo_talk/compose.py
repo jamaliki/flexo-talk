@@ -2518,6 +2518,9 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     style = canvas.deck.style
     size = block.size or style.body_size
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="bullets")
+    if PLACEHOLDERS.get():
+        # How wide its items may run before they wrap: the studio's editor wraps them there too.
+        group.set("data-flexo-wrap", f"{box.width:g}")
     layout = _list_layout(canvas, block, box)
     # Its words in its colour, if it has one; the bullets and numbers in the theme's.
     ink_role, ink_fill = _paint_of(block.colour, "ink")
