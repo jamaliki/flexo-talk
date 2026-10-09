@@ -965,4 +965,6 @@ def test_the_command_line_build_leaves_out_a_skipped_slide(tmp_path: Path) -> No
     )
     out = tmp_path / "out"
     assert main(["build", str(tmp_path / "talk.yaml"), "--formats", "svg", "-o", str(out)]) == 0
-    assert sorted(path.name for path in out.glob("*.svg")) == ["skips-01.svg", "skips-03.svg"]
+    # Numbered as they are shown, as the numbers drawn on them are: no gap where one was skipped.
+    assert sorted(path.name for path in out.glob("*.svg")) == ["skips-01.svg", "skips-02.svg"]
+    assert "Three" in (out / "skips-02.svg").read_text(encoding="utf-8")
