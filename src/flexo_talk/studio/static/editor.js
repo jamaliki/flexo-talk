@@ -7505,7 +7505,7 @@ export function mount(studio, container) {
   function fileRow(value, types, onChoose, placeholder) {
     const input = ui.input({ value: value || "", placeholder, mono: true, onChange: (text) => text && onChoose(text) });
     return h("div.list-row", {}, input,
-      ui.button("Choose…", async () => { const path = await chooseFile({ title: "Choose a File", types }); if (path) { input.value = path; onChoose(path); } }, { icon: "folder", small: true, title: "Choose a file" }));
+      ui.button("Choose…", async () => { const path = await chooseFile({ title: "Choose a File", types }); if (path) { input.value = path; onChoose(path); } }, { icon: "folder", small: true, title: "Choose a File" }));
   }
 
   function functionInput(value, onInput) {

@@ -40,8 +40,9 @@ from flexo_talk.document import (
     save_document,
 )
 
-LOOK_LABELS = {"keynote": "Centred"}
-"""A look's name as the studio shows it, where its id is not that name."""
+LOOK_LABELS = {"classic": "Rule", "keynote": "Centred"}
+"""A look's name as the studio shows it, where its id is not that name (the classic look, a
+rule under each title, apart from the Classic theme)."""
 
 LOOK_NOTES = {
     "classic": "Short accent rule under titles, centred title slide",

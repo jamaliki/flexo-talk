@@ -660,8 +660,11 @@ def _held_back(canvas: _Canvas, slide: Slide) -> None:
                 reference.resolve()
             except UntrustedCode as error:
                 canvas.held.append(error.message)
+                # Named as the person wrote it, not as a reference ("spread from plots.py").
+                file, _, function = str(reference.target).rpartition(":")
+                named = f"*{function}* from {file}" if file and function else f"*{reference.target}*"
                 region.blocks[index] = _Words(
-                    inline(f"*{reference.target}* will appear when you trust this folder"),
+                    inline(f"{named} will appear when you trust this folder"),
                     align="middle", muted=True,
                 )
             except Exception as error:
