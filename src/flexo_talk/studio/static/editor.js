@@ -4984,6 +4984,9 @@ export function mount(studio, container) {
     // them: in the accent (the ink, words in the accent), not bolder.
     const strong = element?.getAttribute("data-flexo-strong") || (Number(look?.weight) >= 600 ? studio.info?.palette?.accent : "");
     inline.area.classList.toggle("rt-heavy", Boolean(strong));
+    // Light words (on a band of the accent, a dark slide) are chosen in a light tint of their
+    // own: the system's blue is lost on a blue band.
+    inline.area.classList.toggle("rt-light", lightInk(look?.colour));
     if (strong) { inline.area.style.setProperty("--rt-strong", strong); inline.area.style.setProperty("--rt-plain", look?.colour || "inherit"); }
     bylinePart(look, size, centred);
     codeOnLines(element, box, slide);
@@ -5021,6 +5024,16 @@ export function mount(studio, container) {
     Object.assign(area.style, { lineHeight: `${pitch}px`, paddingLeft: `${x - holder.left}px`, paddingTop: `${first.top - (pitch - first.height) / 2 - holder.top}px` });
     // A line longer than the panel widens the box, to the slide's edge at most.
     if (area.scrollWidth > area.clientWidth) inline.node.style.width = `${Math.min(area.scrollWidth + 6, slide.right - holder.left - 12)}px`;
+  }
+  // Whether words drawn in `colour` are light ones, for a dark paper.
+  function lightInk(colour) {
+    if (!colour) return false;
+    inkPen.fillStyle = "#000";
+    inkPen.fillStyle = colour;
+    const hex = /^#([0-9a-f]{6})$/i.exec(inkPen.fillStyle)?.[1];
+    if (!hex) return false;
+    const [r, g, b] = [0, 2, 4].map((at) => parseInt(hex.slice(at, at + 2), 16) / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.6;
   }
   // A title slide's author and date are drawn as one line, its byline: the one not being
   // typed stays in view beside the one that is, where the slide draws it. (A statement's

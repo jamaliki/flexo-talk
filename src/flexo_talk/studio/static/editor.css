@@ -218,6 +218,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
    bullets and levels; the measures come from the drawn words (positionInline). */
 .inline-editor.in-place .rich { position: relative; padding: 5px; outline: none; line-height: var(--rt-line, 1.22); caret-color: var(--accent); white-space: pre-wrap; overflow-wrap: break-word; cursor: text; min-height: 1.2em; }
 .rich { position: relative; }
+/* Light words (on a band of the accent, a dark slide) chosen in a light tint, their letters
+   kept: the system's blue is lost on a blue band. */
+.inline-editor.in-place .rich.rt-light::selection, .inline-editor.in-place .rich.rt-light *::selection { background: rgb(255 255 255 / 0.3); color: inherit; }
 /* Words typed on the slide are set as the slide sets them, at their true widths (not hinted
    to the pixel), so they lie on the drawn ones and nothing moves when the typing is done. */
 .inline-editor.in-place .rich, .inline-editor.in-place .textarea { text-rendering: geometricPrecision; }
