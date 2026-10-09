@@ -1211,7 +1211,11 @@ export function mount(studio, container) {
       if (at === node) { at = at.nextSibling; continue; }
       railList.insertBefore(node, at);
     }
+    // Slides chosen together, or no longer: the panel says so, with what applies to them all.
+    if (pickedKey() !== pickedShown && !state.focus) renderInspector();
   }
+  let pickedShown = "";
+  const pickedKey = () => (state.picked.length > 1 ? [...state.picked].sort((a, b) => a - b).join() : "");
 
   // A slide carried in the list, under the pointer as Keynote's slide navigator shows it: a
   // copy of its thumbnail (several chosen: the one held, with how many), not the browser's
@@ -5725,6 +5729,7 @@ export function mount(studio, container) {
   let lastWho = null;
   function renderInspector() {
     remember(placeKey, JSON.stringify({ slide: state.slide, tab: state.tab }));
+    pickedShown = pickedKey();
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
     if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
@@ -5739,6 +5744,7 @@ export function mount(studio, container) {
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else if (allOn()) clear(inspectorBody, manyPanel(slide));
+      else if (chosenSlides().length > 1) clear(inspectorBody, slidesPanel(slide));
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
     }, { undone: undoing });
@@ -5932,6 +5938,33 @@ export function mount(studio, container) {
         onChange: (value) => { editBlock(at, (b) => { if (value === "items") { b.reveal = true; delete b.build; } else { delete b.reveal; b.build = true; } }); renderInspector(); } })) : null);
   }
 
+  // An edit to each slide chosen in the slide list, in one step -- else to the slide shown.
+  const editChosen = (mutate, options = {}) => {
+    const picked = chosenSlides();
+    if (picked.length < 2) { editSlide(mutate, options); return; }
+    studio.change((d) => { for (const index of picked) { const slide = (d.slides || [])[index]; if (slide) mutate(slide, d); } }, options);
+    // (Undone or redone, they are chosen again.)
+    markSlides(picked, picked);
+  };
+  // Several slides chosen in the slide list: said so, with what applies to them all, as in
+  // Keynote -- a layout, a background, where their objects stand -- each given to every one
+  // of them in one step. (Their words are each their own: chosen one at a time.)
+  function slidesPanel(slide) {
+    const picked = chosenSlides(), chosenNow = picked.map((index) => slides()[index]).filter(Boolean);
+    const layoutsNow = new Set(chosenNow.map(layoutOf));
+    const allowed = new Set(catalog.slide_keys[layoutOf(slide)].filter((key) => chosenNow.every((each) => catalog.slide_keys[layoutOf(each)].includes(key))));
+    const numbers = picked.map((index) => index + 1);
+    const listed = `${numbers.slice(0, -1).join(", ")} and ${numbers[numbers.length - 1]}`;
+    return [
+      h("div.section.block-top", {},
+        h("div.insp-title", {}, icon("layout"), h("div.insp-words", {}, h("div.insp-name", {}, `${chosenNow.length} Slides Selected`),
+          h("div.insp-hint", {}, `Slides ${listed}`)))),
+      h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layoutsNow.size === 1 ? [...layoutsNow][0] : null, (name) => changeLayout(name), layouts, studio.info?.palette),
+        allowed.has("align") ? alignControl(slide, chosenNow) : null),
+      h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)),
+    ];
+  }
+
   function slidePanel(slide) {
     const layout = layoutOf(slide);
     const allowed = new Set(catalog.slide_keys[layout]);
@@ -5960,17 +5993,22 @@ export function mount(studio, container) {
     parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts, studio.info?.palette),
       layout === "two-columns" ? splitControl(slide) : null,
       layout === "columns" ? columnsControls(slide) : null,
-      // Unset, the slide follows the deck's Design: said, so it is not taken for one of the
-      // others -- and the Design's own choice is offered only as that, not twice by one name
-      // (unless the slide already sets it).
-      allowed.has("align") ? ui.field(styleName("align"), ui.select({ value: slide.align ?? "", key: "slide.align", options: [
-        { value: "", label: choiceName("align", deckStyle("align") || "auto") },
-        ...["auto", "top", "middle"].filter((value) => value !== (deckStyle("align") || "auto") || value === slide.align)
-          .map((value) => ({ value, label: choiceName("align", value) }))],
-        onChange: (value) => editSlide((s) => setOption(s, "align", value), { quiet: true }) })) : null));
+      allowed.has("align") ? alignControl(slide, [slide]) : null));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Footnotes"), footnotesControls(slide)));
     return parts;
+  }
+
+  // Where a slide's objects stand down it. Unset, the slide follows the deck's Design: said,
+  // so it is not taken for one of the others -- and the Design's own choice is offered only
+  // as that, not twice by one name (unless a slide chosen already sets it).
+  function alignControl(slide, chosenNow) {
+    const value = chosenNow.every((each) => (each.align ?? "") === (slide.align ?? "")) ? slide.align ?? "" : "";
+    return ui.field(styleName("align"), ui.select({ value, key: "slide.align", options: [
+      { value: "", label: choiceName("align", deckStyle("align") || "auto") },
+      ...["auto", "top", "middle"].filter((each) => each !== (deckStyle("align") || "auto") || chosenNow.some((other) => other.align === each))
+        .map((each) => ({ value: each, label: choiceName("align", each) }))],
+      onChange: (choice) => editChosen((s) => setOption(s, "align", choice), { quiet: true }) }));
   }
 
   function splitControl(slide) {
@@ -5986,22 +6024,30 @@ export function mount(studio, container) {
   // A layout tried and left keeps what it could not show: going back to the layout before
   // gives the slide back as it was there (if it was not changed in between), and objects
   // a layout without room for them set aside come back with the next layout that has room.
+  // Words it has no place for (a title slide's author and date) are kept with the slide as
+  // it is typed in since (followStash): they come back with a layout that has their place.
   const layoutStash = new Map();
-  function changeLayout(layout) {
-    const current = slideAt();
-    if (!current || (layoutOf(current) === layout && !unknownLayout(current))) return;
-    if (awayFrom("change the layout")) return;
-    const earlier = layoutStash.get(JSON.stringify(current));
-    if (earlier && layoutOf(earlier) === layout) {
-      editSlide((slide) => { for (const key of Object.keys(slide)) delete slide[key]; Object.assign(slide, structuredClone(earlier)); });
-      layoutStash.set(JSON.stringify(slideAt()), current);
-      state.focus = null;
-      renderInspector();
-      renderBar();
-      return;
+  function followStash(before, after) {
+    if (!layoutStash.size || before === after) return;
+    const was = before.map((slide) => JSON.stringify(slide)), now = after.map((slide) => JSON.stringify(slide));
+    let map = null;
+    for (const [key, stashed] of [...layoutStash]) {
+      const at = was.indexOf(key);
+      if (at < 0 || now.includes(key)) continue;
+      const to = (map ||= follow(before, after))[at];
+      layoutStash.delete(key);
+      if (to >= 0 && now[to]) layoutStash.set(now[to], { ...stashed, edited: true });
     }
+  }
+  // The words of a slide's own that a layout shows, and what each is called in a note.
+  const LAYOUT_WORDS = { subtitle: "subtitle", author: "author", date: "date", by: "attribution" };
+  // `current` in `layout`: the slide as it will be, the slide after it its objects go to if the
+  // layout has no room for them (or null), those objects, and the words it has no place for.
+  function relaid(current, layout) {
+    const stashed = layoutStash.get(JSON.stringify(current));
+    const earlier = stashed?.slide;
     // What the slide had: from before a layout without room, if it came from one.
-    const before = earlier && !regionsOf(current).length ? earlier : current;
+    const before = earlier && !stashed.edited && !regionsOf(current).length ? earlier : current;
     // Of a layout there is none of, every object it has, wherever it was written.
     const blocks = unknownLayout(before) ? [before.body, before.left, before.right, ...(before.columns || [])].filter(Array.isArray)
       : regionsOf(before).map((region) => blocksAt(before, region.key));
@@ -6018,46 +6064,116 @@ export function mount(studio, container) {
       ...Object.fromEntries(["body", "left", "right", "split", "widths", "align"].filter((key) => key in before).map((key) => [key, ownOnly(before[key])])),
       ...(Array.isArray(before.columns) ? { columns: before.columns.map(ownOnly) } : {}),
     } : null;
+    const slide = structuredClone(current);
+    for (const [key, value] of Object.entries(before)) if (!(key in slide) && !["layout", "body", "left", "right", "columns"].includes(key)) slide[key] = structuredClone(value);
+    const all = structuredClone(blocks.flat());
+    const words = layoutOf(slide) === "statement" ? slide.words : slide.title;
+    for (const key of ["body", "left", "right", "columns", "split", "widths"]) delete slide[key];
+    if (layout === "content") delete slide.layout; else slide.layout = layout;
+    if (layout === "statement") { if (words) slide.words = words; delete slide.title; }
+    else if (words) { slide.title = words; delete slide.words; }
+    // One body made two columns, its objects kept in their order: words on the left and
+    // what is drawn on the right where the words come first, as a slide with both is set
+    // out; else the first half on the left and the rest on the right.
+    const drawn = (block) => VISUAL.has(kindOf(block));
+    const first = all.findIndex(drawn);
+    if (layout === "two-columns" && blocks.length === 1 && first > 0 && all.slice(first).every(drawn)) {
+      slide.left = all.slice(0, first);
+      slide.right = all.slice(first);
+    } else if (layout === "two-columns" && blocks.length === 1 && all.length > 1) {
+      const half = Math.ceil(all.length / 2);
+      slide.left = all.slice(0, half);
+      slide.right = all.slice(half);
+    } else if (layout === "two-columns") { slide.left = structuredClone(blocks[0] || []); slide.right = structuredClone(blocks.slice(1).flat()); }
+    else if (layout === "columns" && blocks.length === 1 && all.length > 1) {
+      const count = Math.min(all.length, 3), size = Math.ceil(all.length / count);
+      slide.columns = Array.from({ length: count }, (_, index) => all.slice(index * size, (index + 1) * size));
+    } else if (layout === "columns") slide.columns = blocks.length > 1 ? structuredClone(blocks) : [all, [], []];
+    else if (!WORDLESS.has(layout)) slide.body = all;
+    // Words set aside with the slide (an author, a date) come back where the layout has a
+    // place for them, typed in since or not.
+    const allowed = new Set([...catalog.slide_keys[layout], "layout"]);
+    for (const [key, value] of Object.entries(earlier || {})) if (key in LAYOUT_WORDS && allowed.has(key) && !(key in slide)) slide[key] = structuredClone(value);
+    // What is still empty shows the layout's placeholders, as a new slide of it does: its
+    // title and subtitle, and a place to type in each column -- not a column of nothing.
+    const fresh = NEW_SLIDES[layout]();
+    for (const key of ["title", "subtitle", "words"]) if (key in fresh && !(key in slide)) slide[key] = fresh[key];
+    for (const region of regionsOf(slide)) {
+      if (blocksAt(slide, region.key).length) continue;
+      const sample = blocksAt(fresh, region.key).length ? blocksAt(fresh, region.key) : blocksAt(fresh, regionsOf(fresh)[0]?.key || "body");
+      blocksAt(slide, region.key, true).push(...structuredClone(sample));
+    }
+    for (const key of Object.keys(slide)) if (!allowed.has(key)) delete slide[key];
+    // Words it now has no place for, said: they are kept for the layout that has.
+    const hidden = Object.keys(LAYOUT_WORDS).filter((key) => plain(String(before[key] ?? "")).trim() && !(key in slide));
+    return { slide, kept, real, hidden, from: layoutOf(before) };
+  }
+  // The note for words a layout has no place for: "Content has no place for the author and
+  // date: they come back with Title".
+  const hiddenSaid = (layout, made) => {
+    const names = made.hidden.map((key) => LAYOUT_WORDS[key]);
+    const listed = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+    return `${LAYOUT_NAMES[layout]} has no place for the ${listed}: ${names.length > 1 ? "they come" : "it comes"} back with ${LAYOUT_NAMES[made.from] || "the layout before"}`;
+  };
+  function changeLayout(layout) {
+    // Several slides chosen in the slide list: each takes the layout, as in Keynote.
+    if (chosenSlides().length > 1) { changeLayouts(chosenSlides(), layout); return; }
+    const current = slideAt();
+    if (!current || (layoutOf(current) === layout && !unknownLayout(current))) return;
+    if (awayFrom("change the layout")) return;
+    const stashed = layoutStash.get(JSON.stringify(current));
+    if (stashed && !stashed.edited && layoutOf(stashed.slide) === layout) {
+      const earlier = stashed.slide;
+      editSlide((slide) => { for (const key of Object.keys(slide)) delete slide[key]; Object.assign(slide, structuredClone(earlier)); });
+      layoutStash.set(JSON.stringify(slideAt()), { slide: current });
+      state.focus = null;
+      renderInspector();
+      renderBar();
+      return;
+    }
+    const made = relaid(current, layout);
     editSlide((slide, d) => {
-      for (const [key, value] of Object.entries(before)) if (!(key in slide) && !["layout", "body", "left", "right", "columns"].includes(key)) slide[key] = structuredClone(value);
-      const all = blocks.flat();
-      const words = layoutOf(slide) === "statement" ? slide.words : slide.title;
-      for (const key of ["body", "left", "right", "columns", "split", "widths"]) delete slide[key];
-      if (layout === "content") delete slide.layout; else slide.layout = layout;
-      if (layout === "statement") { if (words) slide.words = words; delete slide.title; }
-      else if (words) { slide.title = words; delete slide.words; }
-      // One body made two columns, its objects kept in their order: words on the left and
-      // what is drawn on the right where the words come first, as a slide with both is set
-      // out; else the first half on the left and the rest on the right.
-      const drawn = (block) => VISUAL.has(kindOf(block));
-      const first = all.findIndex(drawn);
-      if (layout === "two-columns" && blocks.length === 1 && first > 0 && all.slice(first).every(drawn)) {
-        slide.left = all.slice(0, first);
-        slide.right = all.slice(first);
-      } else if (layout === "two-columns" && blocks.length === 1 && all.length > 1) {
-        const half = Math.ceil(all.length / 2);
-        slide.left = all.slice(0, half);
-        slide.right = all.slice(half);
-      } else if (layout === "two-columns") { slide.left = blocks[0] || []; slide.right = blocks.slice(1).flat(); }
-      else if (layout === "columns" && blocks.length === 1 && all.length > 1) {
-        const count = Math.min(all.length, 3), size = Math.ceil(all.length / count);
-        slide.columns = Array.from({ length: count }, (_, index) => all.slice(index * size, (index + 1) * size));
-      } else if (layout === "columns") slide.columns = blocks.length > 1 ? blocks : [all, [], []];
-      else if (!WORDLESS.has(layout)) slide.body = all;
-      const allowed = new Set([...catalog.slide_keys[layout], "layout"]);
-      for (const key of Object.keys(slide)) if (!allowed.has(key)) delete slide[key];
-      if (kept) d.slides.splice(state.slide + 1, 0, kept);
-    }, kept ? { label: "Change Layout" } : {});
+      for (const key of Object.keys(slide)) delete slide[key];
+      Object.assign(slide, made.slide);
+      if (made.kept) d.slides.splice(state.slide + 1, 0, made.kept);
+    }, made.kept ? { label: "Change Layout" } : {});
     // Objects kept on the next slide are there, not set aside to come back here too.
-    if (!kept) layoutStash.set(JSON.stringify(slideAt()), current);
+    if (!made.kept) layoutStash.set(JSON.stringify(slideAt()), { slide: current });
     state.focus = null;
     renderRail();
     renderInspector();
     renderBar();
-    if (lost) {
-      const count = real.length, what = count === 1 ? blockLabel(real[0]) : `${count} objects`;
+    if (made.kept) {
+      const count = made.real.length, what = count === 1 ? blockLabel(made.real[0]) : `${count} objects`;
       undoNote(`${LAYOUT_NAMES[layout]} has no room for objects: ${count === 1 ? `the ${what.toLowerCase()} is` : `${what} are`} on a new slide after this one`, { icon: "info", seconds: 7 });
-    }
+    } else if (made.hidden.length) undoNote(hiddenSaid(layout, made), { icon: "info", seconds: 7 });
+  }
+  // Several slides given one layout, in one step: those with objects it has no room for
+  // keep them on a new slide after each, as one slide does; still chosen after.
+  function changeLayouts(indices, layout) {
+    const sorted = [...indices].sort((a, b) => a - b).filter((index) => slides()[index]);
+    const changing = sorted.filter((index) => layoutOf(slides()[index]) !== layout || unknownLayout(slides()[index]));
+    if (!changing.length || awayFrom("change the layout")) return;
+    const made = new Map(changing.map((index) => [index, relaid(slides()[index], layout)]));
+    const olds = new Map(changing.map((index) => [index, structuredClone(slides()[index])]));
+    studio.change((d) => {
+      for (const index of [...changing].reverse()) {
+        d.slides[index] = made.get(index).slide;
+        if (made.get(index).kept) d.slides.splice(index + 1, 0, made.get(index).kept);
+      }
+    }, { label: `Change Layout of ${changing.length === 1 ? "Slide" : `${changing.length} Slides`}` });
+    // Where each chosen slide is now, those kept on new slides before it counted.
+    const after = sorted.map((index) => index + changing.filter((other) => other < index && made.get(other).kept).length);
+    markSlides(sorted, after);
+    for (const index of changing) if (!made.get(index).kept) layoutStash.set(JSON.stringify(slides()[after[sorted.indexOf(index)]]), { slide: olds.get(index) });
+    state.slide = after[Math.max(sorted.indexOf(state.slide), 0)];
+    state.picked = after;
+    state.focus = null;
+    renderRail();
+    renderInspector();
+    renderBar();
+    const moved = changing.filter((index) => made.get(index).kept).length;
+    if (moved) undoNote(`${LAYOUT_NAMES[layout]} has no room for objects: ${moved === 1 ? "those of one slide are on a new slide after it" : `those of ${moved} slides are on a new slide after each`}`, { icon: "info", seconds: 7 });
   }
 
   function columnsControls(slide) {
@@ -6091,11 +6207,11 @@ export function mount(studio, container) {
     const mode = !background ? "" : named || String(background).startsWith("#") ? "colour" : "picture";
     const parts = [ui.segmented({ value: mode, options: [{ value: "", label: "Default" }, { value: "colour", label: "Colour" }, { value: "picture", label: "Picture" }],
       onChange: async (value) => {
-        if (value === "") editSlide((s) => { delete s.background; delete s.shade; delete s.dark; });
-        else if (value === "colour") editSlide((s) => { s.background = "accent"; delete s.shade; });
+        if (value === "") editChosen((s) => { delete s.background; delete s.shade; delete s.dark; });
+        else if (value === "colour") editChosen((s) => { s.background = "accent"; delete s.shade; });
         else {
           const path = await chooseFile({ title: "Choose a Background Picture", types: ["image"] });
-          if (path) editSlide((s) => { s.background = path; s.shade = s.shade ?? 0.35; });
+          if (path) editChosen((s) => { s.background = path; s.shade = s.shade ?? 0.35; });
         }
         renderInspector();
       } })];
@@ -6112,22 +6228,22 @@ export function mount(studio, container) {
       const colours = THEME_COLOURS.map(([name, title]) => ({ value: name, colour: filled(name), title }))
         .filter((item) => /^#[0-9a-f]{6}$/i.test(item.colour || "") && (item.value === background || !seen.has(item.colour.toLowerCase()) && seen.add(item.colour.toLowerCase())));
       parts.push(ui.swatches({ value: named ? background : String(background).toLowerCase(), colours, none: false, custom: true, key: "slide.background",
-        onChange: (value) => editSlide((s) => { s.background = value; }, { quiet: true, merge: `${state.slide}-bg` }) }));
+        onChange: (value) => editChosen((s) => { s.background = value; }, { quiet: true, merge: `${state.slide}-bg` }) }));
     }
     if (mode === "picture") {
-      parts.push(fileRow(background, ["image"], (path) => editSlide((s) => { s.background = path; }), "Picture file"));
+      parts.push(fileRow(background, ["image"], (path) => editChosen((s) => { s.background = path; }), "Picture file"));
       const shade = slide.shade ?? 0;
       const value = h("span.value", {}, `${Math.round(shade * 100)}%`);
       const range = h("input", { type: "range", min: 0, max: 0.9, step: 0.05, value: shade, oninput: () => {
         value.textContent = `${Math.round(range.value * 100)}%`;
-        editSlide((s) => setOption(s, "shade", Number(range.value), 0), { quiet: true, merge: `${state.slide}-shade` });
+        editChosen((s) => setOption(s, "shade", Number(range.value), 0), { quiet: true, merge: `${state.slide}-shade` });
       } });
       parts.push(ui.field("Darken", h("div.slider", {}, range, value)));
     }
     if (mode && allowed.has("dark")) {
       parts.push(ui.field("Text", ui.segmented({ value: slide.dark === true ? "light" : slide.dark === false ? "dark" : "", options: [
         { value: "", label: "Auto" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }],
-        onChange: (value) => editSlide((s) => setOption(s, "dark", value === "light" ? true : value === "dark" ? false : null), { quiet: true }) })));
+        onChange: (value) => editChosen((s) => setOption(s, "dark", value === "light" ? true : value === "dark" ? false : null), { quiet: true }) })));
     }
     // Apart as the inspector's fields are: the chips' rings clear of the label under them.
     return h("div", { style: { display: "grid", gap: "12px" } }, parts);
@@ -8227,6 +8343,7 @@ export function mount(studio, container) {
     lastDoc = doc();
     followSlides(was?.slides || [], slides());
     followPicked(was?.slides || [], slides(), source, who);
+    followStash(was?.slides || [], slides());
     followPlaces(was, source === "remote");
     if (source === "remote") figureKept(was, who);
     if (source === "history" || source === "remote") followChange(was, who, source === "remote");
