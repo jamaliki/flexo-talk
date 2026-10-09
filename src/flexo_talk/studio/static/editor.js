@@ -6226,16 +6226,22 @@ export function mount(studio, container) {
   function columnsControls(slide) {
     const count = (slide.columns || []).length;
     const widths = slide.widths;
+    // A column added is empty but for a place to type, as a new slide's are; one taken away
+    // gives what it held to the column before it.
     const setCount = (n) => { editSlide((s) => {
       s.columns ||= [];
-      while (s.columns.length < n) s.columns.push([]);
-      if (s.columns.length > n) { const extra = s.columns.splice(n).flat(); s.columns[n - 1].push(...extra); }
+      while (s.columns.length < n) s.columns.push([{ text: "" }]);
+      if (s.columns.length > n) {
+        const extra = s.columns.splice(n).flat().filter((block) => !blank(block)), last = s.columns[n - 1];
+        if (extra.length && last.every((block) => blank(block))) last.splice(0, last.length);
+        last.push(...extra);
+      }
       if (s.widths) s.widths = Array.from({ length: n }, (_, i) => s.widths[i] ?? 1);
-    }); renderInspector(); };
+    }, { label: n > count ? "Add Column" : "Remove Column" }); renderInspector(); };
     const stepper = h("div.row", {},
-      ui.button("", () => count > 1 && setCount(count - 1), { icon: "minus", small: true, disabled: count <= 1, title: "Fewer columns" }),
+      ui.button("", () => count > 1 && setCount(count - 1), { icon: "minus", small: true, disabled: count <= 1, title: "Remove Column" }),
       h("span", { style: { textAlign: "center", fontWeight: 600 } }, `${count} column${count === 1 ? "" : "s"}`),
-      ui.button("", () => count < 6 && setCount(count + 1), { icon: "plus", small: true, disabled: count >= 6, title: "More columns" }));
+      ui.button("", () => count < 6 && setCount(count + 1), { icon: "plus", small: true, disabled: count >= 6, title: "Add Column" }));
     stepper.firstChild.classList.add("fixed"); stepper.lastChild.classList.add("fixed");
     const shares = h("div.row", {}, Array.from({ length: count }, (_, i) => ui.number({ value: widths?.[i] ?? "", placeholder: "1", min: 0.1, step: 0.5, key: `widths.${i}`,
       onChange: (value) => editSlide((s) => {
@@ -6961,7 +6967,7 @@ export function mount(studio, container) {
     const write = () => edit((b) => { b.table = rows.map((row) => [...row]); }, "cells");
     // Rows or columns added (or pasted), the alignments set stay with their columns; a new
     // column's is automatic.
-    const restructure = (mutate) => {
+    const restructure = (mutate, label) => {
       // From the cells as they are now: one just typed in on the slide (the panel drawn
       // again only after this click) is kept, not written back as it was.
       const current = blocksAt(slideAt() || {}, at.region)[at.index]?.table;
@@ -6973,7 +6979,7 @@ export function mount(studio, container) {
       editBlock(at, (b) => {
         b.table = rows.map((row) => [...row]);
         if (align && align.some((value, c) => value !== fresh[c])) b.align = align; else delete b.align;
-      });
+      }, { label });
       renderInspector();
     };
     // Each column's cells set as the slide sets them: as its alignment says, else as its words do.
@@ -7056,13 +7062,14 @@ export function mount(studio, container) {
     new ResizeObserver(more).observe(grid);
     return [frame,
       h("div.row", {},
-        ui.button("Add Row", () => { restructure(() => rows.push(Array(columns).fill(""))); typeIn(rows.length - 1, 0); }, { kind: "ghost", icon: "plus", small: true }),
-        ui.button("Add Column", () => { restructure(() => rows.forEach((row) => row.push(""))); typeIn(0, columns); }, { kind: "ghost", icon: "plus", small: true }),
+        ui.button("Add Row", () => { restructure(() => rows.push(Array(columns).fill("")), "Add Row"); typeIn(rows.length - 1, 0); }, { kind: "ghost", icon: "plus", small: true }),
+        ui.button("Add Column", () => { restructure(() => rows.forEach((row) => row.push("")), "Add Column"); typeIn(0, columns); }, { kind: "ghost", icon: "plus", small: true }),
         h("span.spacer", { style: { flex: 1 } })),
-      ui.toggle({ value: header, label: "Header Row", onChange: (value) => editBlock(at, (b) => setOption(b, "header", value ? null : false)) }),
+      // (Named for what it did in the history: Show Header Row, Hide Table Outline.)
+      ui.toggle({ value: header, label: "Header Row", onChange: (value) => editBlock(at, (b) => setOption(b, "header", value ? null : false), { label: `${value ? "Show" : "Hide"} Header Row` }) }),
       // The rules above and below it, as Keynote's Table Outline: off, with no header row,
       // it is words in columns with no lines at all.
-      ui.toggle({ value: block.outline !== false, label: "Table Outline", onChange: (value) => editBlock(at, (b) => setOption(b, "outline", value ? null : false)) }),
+      ui.toggle({ value: block.outline !== false, label: "Table Outline", onChange: (value) => editBlock(at, (b) => setOption(b, "outline", value ? null : false), { label: `${value ? "Show" : "Hide"} Table Outline` }) }),
       captionField(block, at),
       size()];
   }
