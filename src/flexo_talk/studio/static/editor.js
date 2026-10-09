@@ -5481,8 +5481,9 @@ export function mount(studio, container) {
       }
     }
     // So does a new line left empty at the end of the words (or of a list's item): a Return
-    // that waited for words that never came.
-    const ended = inline.bullets ? area.value.split("\n").map((line) => line.replace(TRAILING_BREAKS, "")).join("\n") : area.value.replace(/\n+$/, "");
+    // that waited for words that never came -- and one left empty before them, which the
+    // slide does not draw.
+    const ended = inline.bullets ? area.value.split("\n").map((line) => line.replace(TRAILING_BREAKS, "")).join("\n") : area.value.replace(/\n+$/, "").replace(/^([ \t]*\n)+/, "");
     if (ended !== area.value && ended.trim()) {
       area.value = ended;
       tidied();
@@ -6762,6 +6763,16 @@ export function mount(studio, container) {
       if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.isComposing)) { event.stopPropagation(); area.blur(); }
     });
     onRich(area, onInput);
+    // A new line left empty before the words or after them goes as the field is left, as on
+    // the slide (trimTyped): one with the typing. (Not as it is drawn again under the keys:
+    // keepFocus gives them back to it, typed on in.)
+    if (!list) area.addEventListener("blur", () => setTimeout(() => {
+      if (document.activeElement?.dataset?.key === key) return;
+      const ended = area.value.replace(/\n+$/, "").replace(/^([ \t]*\n)+/, "");
+      if (ended === area.value || !ended.trim()) return;
+      area.value = ended;
+      area.dispatchEvent(new CustomEvent("input", { bubbles: true, detail: { tidy: true } }));
+    }, 0));
     return h(`div.rich-field${short ? ".single" : ""}`, {}, area);
   }
 
