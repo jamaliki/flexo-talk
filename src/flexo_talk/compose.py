@@ -457,18 +457,19 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                     if own in empty:
                         del empty[f"{own}.{attribute}"]
     try:
-        # A figure that fails as it is laid out for its place (what flexo did not foresee)
-        # is a box where it would be, as one that can't be read is: the slide is drawn, and
-        # why is said under it.
+        # A figure that fails as it is laid out for its place (what flexo did not foresee),
+        # or any object that fails as it is drawn (a plot whose Python fails), is a box where
+        # it would be, as one that can't be read is: the slide is drawn, and why is said
+        # under it, naming the object where it is (``left.0``).
         failed: list[str] = []
         for _ in range(sum(len(region.blocks) for region in slide.regions.values()) + 1):
             try:
                 rendered = _render_slide(deck, slide, empty)
             except _FigureFailed as failure:
-                swapped = _swap_failed(slide, failure, kept)
-                if not swapped:
+                place = _swap_failed(slide, failure)
+                if place is None:
                     raise failure.error from None
-                failed.append(failure.diagnostic)
+                failed.append(f"{slide.id} {place}: {failure.diagnostic}")
                 continue
             rendered.diagnostics.extend(failed)
             return rendered
@@ -478,31 +479,58 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
             setattr(owner, attribute, value)
 
 
-FIGURE_FAILED = "This figure can\u2019t be drawn as it is"
-"""How a figure that failed as it was laid out for its slide is said (the export's note
-finds it by these words)."""
+STANDING_ASIDE = contextvars.ContextVar("flexo_talk_standing_aside", default=False)
+"""Whether an object that fails as it is drawn -- a plot whose Python fails -- stands aside,
+as the studio has it (a box while editing, nothing presented or exported, and said), or
+stops the build, as on the command line. (A figure flexo fails to lay out always stands
+aside: it is no fault of the deck's.)"""
+
+CANT_DRAW = "can\u2019t be drawn as it is"
+FIGURE_FAILED = f"This figure {CANT_DRAW}"
+"""How an object that failed as it was drawn for its slide is said ("This plot can't be
+drawn as it is"): the export's note finds it by these words."""
+
+_NOUNS = {
+    _Bullets: "list", _Words: "text", _Figure: "figure", _Image: "picture", _Plot: "plot", _Table: "table",
+    _Gallery: "gallery", _Code: "code", _Quote: "quote", _Callout: "callout", _Math: "equation",
+}
+"""What a person calls each object, in what is said of one that can't be drawn."""
 
 
 class _FigureFailed(Exception):
-    """A figure that failed as it was laid out (``error``): what its box says, and what is
-    said under the slide (``diagnostic``)."""
+    """An object -- a figure, most often -- that failed as it was laid out (``error``):
+    what its box says, and what is said under the slide (``diagnostic``)."""
 
     def __init__(self, block: object, error: BaseException, said: str, diagnostic: str) -> None:
         super().__init__(said)
         self.block, self.error, self.said, self.diagnostic = block, error, said, diagnostic
 
 
-def _swap_failed(slide: Slide, failure: _FigureFailed, kept: list) -> bool:
-    """The failed figure's place given to a box saying why, until the slide is drawn."""
+def _object_failed(block: object, error: BaseException) -> _FigureFailed:
+    """An object that failed as it was made or drawn (a plot whose Python fails, a picture
+    that does not read): its box says so, and why is said under the slide."""
+
+    from flexo.studio.plain import explain
+
+    from flexo_talk.document import DeckDocumentError
+
+    said = f"This {_NOUNS.get(type(block), 'object')} {CANT_DRAW}"
+    why = error.message if isinstance(error, DeckDocumentError) else explain(error)
+    return _FigureFailed(block, error, said, f"{said}: {why}")
+
+
+def _swap_failed(slide: Slide, failure: _FigureFailed) -> str | None:
+    """The failed object's place given to a box saying so -- for good: drawn again (as it is
+    presented), it would only fail again, as slowly (a plot stopped after its time) -- and
+    where it is (``left.0``), or None should it be in none."""
 
     for region in slide.regions.values():
         for index, block in enumerate(region.blocks):
             if block is failure.block:
-                kept.append((region, "blocks", list(region.blocks)))
                 region.blocks = [*region.blocks[:index], _Missing("figure", "", said=failure.said),
                                  *region.blocks[index + 1:]]
-                return True
-    return False
+                return f"{region.name}.{index}"
+    return None
 
 
 STAT_HINT = (TextRun("93%"),)
@@ -636,6 +664,15 @@ def _held_back(canvas: _Canvas, slide: Slide) -> None:
                     inline(f"*{reference.target}* will appear when you trust this folder"),
                     align="middle", muted=True,
                 )
+            except Exception as error:
+                # Python that fails (a function there is none of) stands aside in its place, as
+                # an object that fails as it is drawn does (render_slide) -- not run again as the
+                # slide is drawn again -- or stops the build where nothing can stand aside.
+                if not STANDING_ASIDE.get():
+                    raise
+                failure = _object_failed(block, error)
+                canvas.diagnostics.append(f"{slide.id} {region.name}.{index}: {failure.diagnostic}")
+                region.blocks[index] = _Missing("figure", "", said=failure.said)
 
 
 def _paint_rect(canvas: _Canvas, identifier: str, box: Box, role: str | None, *, opacity: float = 1.0) -> None:
@@ -1297,56 +1334,16 @@ def _region(
         canvas.place = region.across.get(index)
         # (What it draws, for it to be moved down its place after: see _stand.)
         marks.append((index, len(canvas.layer), len(canvas.lists), len(canvas.tables), len(canvas.worded)))
-        # Asked to stand across its place, an object narrower than it is set in a box as wide
-        # as it is, there (a figure, picture or table moves in its own place: _across).
-        left, wide = box.x, box.width
-        asked = canvas.place is not None and not isinstance(block, PLACED)
-        natural = _natural(canvas, block, box.width, share) if asked else None
-        if natural is not None and natural < box.width - 0.5:
-            wide = natural + 0.01
-            left = box.x + (box.width - wide) * canvas.place
-        if isinstance(block, _Bullets):
-            top += _bullets(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Words):
-            size = block.size or style.body_size
-            role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
-            # Words under a picture (its caption) are centred under it, unless set otherwise.
-            given = index < len(region.sources) and "align" in region.sources[index]
-            align = "middle" if placing == "captioned" and not given else block.align
-            top += canvas.words(
-                identifier, block.runs, Box(left, top, wide, 0.0), size=size,
-                align=align, role=role, fill=fill,
-            )
-            if align != block.align and (drawn := _drawn(canvas, identifier)) is not None:
-                # What is drawn, for an editor to say so.
-                drawn.set("data-flexo-align", align)
-        elif isinstance(block, _Gallery):
-            top += _gallery(canvas, identifier, block, Box(left, top, wide, max(share, 40.0)))
-        elif isinstance(block, _Figure):
-            scale = scales[index]
-            height = prepared[index].height * scale
-            top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
-        elif isinstance(block, _Image):
-            top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
-        elif isinstance(block, _Plot):
-            top += _plot(canvas, identifier, block, Box(left, top, wide, max(share, 60.0)))
-        elif isinstance(block, _Missing):
-            top += _missing(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
-        elif isinstance(block, _Table):
-            top += _table(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
-        elif isinstance(block, _Code):
-            top += _code(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Quote):
-            top += _quote(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Stats):
-            top += _stats(canvas, identifier, block, Box(left, top, wide, 0.0))
-        elif isinstance(block, _Callout):
-            least = panel if index == 0 else 0.0
-            top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=least)
-        elif isinstance(block, _Math):
-            top += _equation(canvas, identifier, block, Box(left, top, wide, 0.0))
-        if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
-            top += _caption(canvas, identifier, block.caption, box, top)
+        try:
+            top = _block(canvas, region, index, block, identifier, box, top, placing, prepared, scales, share, panel)
+        except _FigureFailed:
+            raise
+        except Exception as error:
+            # One object that fails as it is drawn is a box where it would be, not a slide
+            # that is not drawn (render_slide) -- where it can stand aside.
+            if not STANDING_ASIDE.get():
+                raise
+            raise _object_failed(region.blocks[index], error) from error
         built = index in region.builds and index not in aside and not getattr(block, "reveal", False)
         if built and (drawn := _drawn(canvas, identifier)) is not None:
             # It appears on a click of its own, after what is on the slide before it.
@@ -1363,6 +1360,66 @@ def _region(
         # It fills its place: the slide sets it where it is, moving it no further.
         return max(box.height, used)
     return used
+
+
+def _block(
+    canvas: _Canvas, region: Region, index: int, block: object, identifier: str, box: Box, top: float,
+    placing: str, prepared: dict, scales: dict, share: float, panel: float,
+) -> float:
+    """One of a region's blocks drawn from ``top`` down: where the next starts."""
+
+    style = canvas.deck.style
+    # Asked to stand across its place, an object narrower than it is set in a box as wide
+    # as it is, there (a figure, picture or table moves in its own place: _across).
+    left, wide = box.x, box.width
+    asked = canvas.place is not None and not isinstance(block, PLACED)
+    natural = _natural(canvas, block, box.width, share) if asked else None
+    if natural is not None and natural < box.width - 0.5:
+        wide = natural + 0.01
+        left = box.x + (box.width - wide) * canvas.place
+    if isinstance(block, _Bullets):
+        top += _bullets(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Words):
+        size = block.size or style.body_size
+        role, fill = _paint_of(block.colour, "muted-ink" if block.muted else "ink")
+        # Words under a picture (its caption) are centred under it, unless set otherwise.
+        given = index < len(region.sources) and "align" in region.sources[index]
+        align = "middle" if placing == "captioned" and not given else block.align
+        top += canvas.words(
+            identifier, block.runs, Box(left, top, wide, 0.0), size=size,
+            align=align, role=role, fill=fill,
+        )
+        if align != block.align and (drawn := _drawn(canvas, identifier)) is not None:
+            # What is drawn, for an editor to say so.
+            drawn.set("data-flexo-align", align)
+    elif isinstance(block, _Gallery):
+        top += _gallery(canvas, identifier, block, Box(left, top, wide, max(share, 40.0)))
+    elif isinstance(block, _Figure):
+        scale = scales[index]
+        height = prepared[index].height * scale
+        top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
+    elif isinstance(block, _Image):
+        top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
+    elif isinstance(block, _Plot):
+        top += _plot(canvas, identifier, block, Box(left, top, wide, max(share, 60.0)))
+    elif isinstance(block, _Missing):
+        top += _missing(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
+    elif isinstance(block, _Table):
+        top += _table(canvas, identifier, block, Box(box.x, top, box.width, 0.0))
+    elif isinstance(block, _Code):
+        top += _code(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Quote):
+        top += _quote(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Stats):
+        top += _stats(canvas, identifier, block, Box(left, top, wide, 0.0))
+    elif isinstance(block, _Callout):
+        least = panel if index == 0 else 0.0
+        top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=least)
+    elif isinstance(block, _Math):
+        top += _equation(canvas, identifier, block, Box(left, top, wide, 0.0))
+    if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
+        top += _caption(canvas, identifier, block.caption, box, top)
+    return top
 
 
 def _stand(canvas: _Canvas, region: Region, marks: list, shown: list[int], spare: float) -> None:
@@ -2767,10 +2824,16 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
     except Exception as error:
         from flexo.studio.plain import explain
 
-        from flexo_talk.document import DeckDocumentError
+        from flexo_talk.document import DeckDocumentError, UntrustedCode
 
+        if isinstance(error, UntrustedCode):
+            raise  # (Python not yet trusted: said in its place, as the folder waits)
         if isinstance(error, DeckDocumentError):
-            raise  # (the deck's own: Python not yet trusted, a file that is not there)
+            # Made by the deck's Python, which failed (a function there is none of): it stands
+            # aside where it can (the studio), and stops the build where it can't.
+            if not STANDING_ASIDE.get():
+                raise
+            raise _FigureFailed(block, error, FIGURE_FAILED, f"{FIGURE_FAILED}: {error.message}") from error
         spec = getattr(block.figure, "spec", block.figure)
         # Only some of its shapes at fault (a plasmid of -5 bp, a tree whose Newick does not
         # read): those drawn as plain boxes of their words, the rest as written -- each said,
@@ -2790,8 +2853,7 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
                 continue
             canvas.diagnostics.extend(f"{canvas.slide.id} {spec.id}{text}" for text in told)
             return prepared
-        said = f"{FIGURE_FAILED}: {_named(spec, explain(error))}"
-        raise _FigureFailed(block, error, said, f"{canvas.slide.id} {getattr(spec, 'id', 'figure')}: {said}") from error
+        raise _FigureFailed(block, error, FIGURE_FAILED, f"{FIGURE_FAILED}: {_named(spec, explain(error))}") from error
 
 
 def _stood_in(spec: object, error: BaseException) -> tuple[object, list[str]] | None:
@@ -4048,9 +4110,10 @@ def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> flo
     height = min(box.height, max(box.width * 0.6, 40.0))
     canvas.span = (box.x, box.width)
     ink = canvas.palette.get("muted-ink")
-    # A figure that can't be drawn keeps its place, presented and exported, but shows nothing
-    # there -- not a box of nothing: why is said on the editing stage alone, not to the audience.
-    quiet = block.said is not None and not PLACEHOLDERS.get()
+    # An object that can't be drawn, or whose file is not there, keeps its place, presented
+    # and exported, but shows nothing there -- not a box of nothing: why is said on the
+    # editing stage alone, not to the audience.
+    quiet = not PLACEHOLDERS.get()
     group = element(
         canvas.layer, "g", id=identifier, data__flexo__talk="invalid" if block.said is not None else "missing"
     )
