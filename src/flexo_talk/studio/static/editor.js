@@ -104,6 +104,8 @@ const WORDY = new Set(["text", "bullets", "quote", "callout"]);
 const FIELD_NAMES = { title: "Title", subtitle: "Subtitle", author: "Author", date: "Date", words: "Text", by: "Attribution", footer: "Footer" };
 const FOOT = /^(footnote\d+|footer)$/;
 const fieldName = (key) => FIELD_NAMES[key] || (FOOT.test(key) ? "Footnote" : "Text");
+// An example of a footer, shown while it is empty, on the slide and in Design alike.
+const FOOTER_HINT = "Group meeting · 2026";
 // The lines of words an object has of its own besides its words, typed on the slide too, and
 // what each shows while empty: a quote's attribution, a callout's heading, a caption.
 const OWN_LINES = { quote: { by: "Who said it" }, callout: { title: "Heading" },
@@ -3989,7 +3991,7 @@ export function mount(studio, container) {
   }
   // What a slide's line of words shows while it is empty, on the slide and in the panel alike.
   const fieldHint = (key, slide) => ({
-    title: layoutOf(slide) === "agenda" ? "Outline" : "Title", subtitle: "Subtitle", words: "Text", by: "Who said it", author: "Your name", footer: "Footer",
+    title: layoutOf(slide) === "agenda" ? "Outline" : "Title", subtitle: "Subtitle", words: "Text", by: "Who said it", author: "Your name", footer: FOOTER_HINT,
     // An example, not a default: an empty date draws nothing.
     date: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`,
   })[key] || (FOOT.test(key) ? "Footnote" : "");
@@ -7549,7 +7551,8 @@ export function mount(studio, container) {
           }, { label: "Change Arrowheads" }); renderInspector(); } }),
         { hint: "Every arrow without a head of its own" })),
       h("div.section", {}, h("div.section-title", {}, "Deck"),
-        ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: "Group meeting · 2026", colours: false, key: "deck.footer", onInput: typeDeck("footer") })),
+        // (Its lines as typed, as on the slide: Return starts a new one, ⌘Return is done.)
+        ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: FOOTER_HINT, colours: false, lines: true, key: "deck.footer", onInput: typeDeck("footer") })),
         ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", key: "deck.id", onInput: typeDeck("id") }), { hint: `${deck.id || "talk"}.pptx, ${deck.id || "talk"}.pdf` })),
       h("div.section", {}, h("details.more", { open: changed > 0 }, h("summary", {}, icon("chevron"), `Proportions${changed ? ` (${changed} changed)` : ""}`),
         h("div.inner", {}, styleRows))),
