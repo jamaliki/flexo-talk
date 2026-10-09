@@ -6026,11 +6026,12 @@ export function mount(studio, container) {
     placeChosen();
   }
 
-  function deleteBlock(at, done = "deleted") {
+  // (`merge`: the typing that emptied it -- a figure's only Text -- one step with its going.)
+  function deleteBlock(at, done = "deleted", { merge = null } = {}) {
     if (awayFrom(`${done === "cut" ? "cut" : "delete"} objects`)) return;
     const block = blocksAt(slideAt(), at.region)[at.index];
     const label = block ? blockName(block) : "Object";
-    editSlide((s) => { blocksAt(s, at.region).splice(at.index, 1); }, { label: done === "cut" ? `Cut ${label}` : null });
+    editSlide((s) => { blocksAt(s, at.region).splice(at.index, 1); }, { label: done === "cut" ? `Cut ${label}` : null, ...(merge ? { merge, hold: true } : {}) });
     if (block) {
       const gone = { block: structuredClone(block), label: named(block), at: Date.now(), entry: studio.past[studio.past.length - 1] };
       objectsDeleted = [...objectsDeleted.filter((item) => Date.now() - item.at < 60000), gone];
