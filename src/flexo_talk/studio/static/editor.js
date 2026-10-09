@@ -7395,18 +7395,59 @@ export function mount(studio, container) {
     });
   }
 
+  // The functions a deck's Python files define, by file: read from the files as they are
+  // written (none is run) -- those at their top level whose names do not start with "_".
+  const pythonFunctions = () => studio.files(["python"]).then((files) => Promise.all(files.map((file) =>
+    fetch(studio.raw(file)).then((answer) => (answer.ok ? answer.text() : "")).catch(() => "")
+      .then((text) => [file, [...text.matchAll(/^(?:async\s+)?def\s+([A-Za-z]\w*)\s*\(/gm)].map((found) => found[1])]))))
+    .then((pairs) => new Map(pairs));
+
+  // As a Mac's open panel: the functions the deck's Python files define, a click choosing
+  // one, a double-click (or Return) taking it -- or one typed (file.py:function), checked
+  // against them, so a typo is said here rather than on the slide.
   function chooseFunction(title = "Choose a Python Function") {
     return new Promise((resolve) => {
-      let value = "";
-      const input = functionInput("", (text) => { value = text; });
+      let done = false, known = null;
+      const finish = (value) => { if (!done) { done = true; resolve(value); box.close(); } };
+      const problem = h("div.field-problem", { hidden: true });
+      const fine = () => { problem.hidden = true; input.classList.remove("invalid"); };
+      const said = (text) => { problem.hidden = false; clear(problem, icon("error"), h("span", {}, text)); input.classList.add("invalid"); };
+      const input = functionInput("", () => { fine(); mark(); });
       // Named as any field is; its form is what the empty field shows.
       input.placeholder = "file.py:function";
-      dialog({ title, body: [ui.field("Function", input), h("div.hint-line", {}, "In a file in the deck’s folder.")],
-        actions: [{ label: "Cancel", run: () => resolve(null) }, { label: "Choose", kind: "primary", run: () => {
-          if (!/\.py:\w+$/.test(value.trim())) { input.classList.add("invalid"); return false; }
-          resolve(value.trim());
-        } }], onClose: () => resolve(null) });
-      setTimeout(() => input.focus(), 30);
+      const list = h("div.list-rows", { role: "listbox", "aria-label": title }, h("div.empty", {}, h("div.spinner")));
+      const rows = () => [...list.querySelectorAll("[role=option]")];
+      const mark = () => rows().forEach((row) => row.setAttribute("aria-selected", String(row.dataset.target === input.value.trim())));
+      const pick = (row) => { input.value = row.dataset.target; fine(); mark(); row.focus({ preventScroll: true }); row.scrollIntoView({ block: "nearest" }); };
+      const take = () => {
+        const value = input.value.trim(), at = value.lastIndexOf(":");
+        const file = value.slice(0, at), name = value.slice(at + 1);
+        if (!/\.py:[A-Za-z_]\w*$/.test(value)) said("Name a function in a Python file, as file.py:function.");
+        else if (known && !known.has(file)) said(`There is no ${file} in the deck’s folder.`);
+        else if (known?.get(file).length && !known.get(file).includes(name)) said(`${file} has no function “${name}”.`);
+        else finish(value);
+        return false;
+      };
+      list.addEventListener("keydown", (event) => {
+        const all = rows(), at = all.indexOf(document.activeElement);
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          const next = all[Math.max(0, Math.min(all.length - 1, at + (event.key === "ArrowDown" ? 1 : -1)))];
+          if (next) pick(next);
+        }
+      });
+      const box = dialog({ title, body: [list, ui.field("Function", input), problem],
+        actions: [{ label: "Cancel", run: () => finish(null) }, { label: "Choose", kind: "primary", run: take }], onClose: () => finish(null) });
+      pythonFunctions().then((found) => {
+        known = found;
+        const made = [...found].flatMap(([file, names]) => names.map((name) => h("button.menu-item", { type: "button", role: "option", "aria-selected": "false",
+          dataset: { target: `${file}:${name}` }, onclick: (event) => pick(event.currentTarget), ondblclick: (event) => { pick(event.currentTarget); take(); } },
+        icon("code"), h("span.menu-text", {}, h("span", {}, name), h("span.menu-hint", {}, file)))));
+        clear(list, made.length ? made : h("div.empty", {}, "No Python functions in the deck’s folder"));
+        // The keys at the first, to choose with the arrows, as in a file panel.
+        if (made.length && !input.value) pick(made[0]);
+      }).catch(() => { known = null; clear(list); });
+      setTimeout(() => { if (!rows().length) input.focus(); }, 30);
     });
   }
 
