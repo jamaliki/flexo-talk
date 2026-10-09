@@ -99,8 +99,11 @@ const LAYOUT_ORDER = ["content", "two-columns", "columns", "figure", "title", "s
 const WORDLESS = new Set(["title", "section", "statement", "agenda"]);
 // Objects that are words, which typing over (once chosen) replaces.
 const WORDY = new Set(["text", "bullets", "quote", "callout"]);
-// A slide's lines of words by name, as its frame and its menu name them.
-const FIELD_NAMES = { title: "Title", subtitle: "Subtitle", author: "Author", date: "Date", words: "Text", by: "Attribution" };
+// A slide's lines of words by name, as its frame and its menu name them: its own, and those at
+// its foot -- its footnotes ("footnote0"...), and the deck's footer.
+const FIELD_NAMES = { title: "Title", subtitle: "Subtitle", author: "Author", date: "Date", words: "Text", by: "Attribution", footer: "Footer" };
+const FOOT = /^(footnote\d+|footer)$/;
+const fieldName = (key) => FIELD_NAMES[key] || (FOOT.test(key) ? "Footnote" : "Text");
 // The lines of words an object has of its own besides its words, typed on the slide too, and
 // what each shows while empty: a quote's attribution, a callout's heading, a caption.
 const OWN_LINES = { quote: { by: "Who said it" }, callout: { title: "Heading" },
@@ -1763,7 +1766,7 @@ export function mount(studio, container) {
   }
 
   const PART = /^slide(\d+)\.(body|left|right|column(\d+))\.(\d+)(?:\.|$)/;
-  const WORDS = /^slide(\d+)\.(title|subtitle|byline)$/;
+  const WORDS = /^slide(\d+)\.(title|subtitle|byline|footer|footnote\d+)$/;
   const BLOCK_ID = /^slide\d+\.(body|left|right|column\d+)\.\d+$/;
 
   function partOf(target) {
@@ -1932,7 +1935,7 @@ export function mount(studio, container) {
   }
 
   function labelOf(part) {
-    if (part.kind === "field") return { title: "Title", subtitle: "Subtitle", byline: "Byline" }[part.field] || "Text";
+    if (part.kind === "field") return { title: "Title", subtitle: "Subtitle", byline: "Byline", footer: "Footer" }[part.field] || (FOOT.test(part.field) ? "Footnote" : "Text");
     const block = blocksAt(slideAt() || {}, part.region)[part.index];
     return block ? blockName(block) : "";
   }
@@ -2721,7 +2724,7 @@ export function mount(studio, container) {
   // (`point`).
   const fieldOf = (drawn, point = null) => {
     const statement = layoutOf(slideAt()) === "statement";
-    return drawn === "byline" ? (statement ? "by" : bylineAt(point)) : statement ? "words" : drawn;
+    return drawn === "byline" ? (statement ? "by" : bylineAt(point)) : statement && drawn === "title" ? "words" : drawn;
   };
 
   function onEdit(event) {
@@ -2897,7 +2900,7 @@ export function mount(studio, container) {
     const index = state.slide, room = regionsOf(slideAt()).length > 0;
     const field = part?.kind === "field" ? part.field : null;
     return [
-      field ? { icon: "pencil", label: `Edit ${FIELD_NAMES[state.field?.field || fieldOf(field)] || "Text"}`, run: () => openInline({ kind: "field", field: state.field?.field || fieldOf(field) }) } : null,
+      field ? { icon: "pencil", label: `Edit ${fieldName(state.field?.field || fieldOf(field))}`, run: () => openInline({ kind: "field", field: state.field?.field || fieldOf(field) }) } : null,
       // What the toolbar adds, in its order.
       ...MAIN_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `Add ${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, disabled: !room, run: () => insertBlock(kind) })),
       // Then the slide's, as its thumbnail's menu has them. On the slide itself its list has
@@ -2918,7 +2921,7 @@ export function mount(studio, container) {
     placeAll();
     if (sizing) return;  // its frame follows it as it is sized
     if (!focus && state.field && pageNode && !inline && !moving && !landing) {
-      place(chosen, frameOf({ kind: "field", id: state.field.id }), FIELD_NAMES[state.field.field] || "Text");
+      place(chosen, frameOf({ kind: "field", id: state.field.id }), fieldName(state.field.field));
       chosen.classList.remove("sizable", "holder");
       return;
     }
@@ -3688,7 +3691,21 @@ export function mount(studio, container) {
     };
     // (`had`: an own line's words as it is opened -- none, emptied, or written.)
     let editor, idOf, at = null, bullets = false, read = () => undefined, mirror = null, had;
-    if (target.kind === "field") {
+    if (target.kind === "field" && FOOT.test(target.field)) {
+      // A footnote, or the deck's footer (the same on every slide), typed where it is drawn,
+      // as the slide's other words are.
+      const key = target.field, note = /^footnote(\d+)$/.exec(key), n = note ? Number(note[1]) : -1;
+      if (note && notesOf(slide)[n] === undefined) return;
+      read = (d) => (note ? (slideNow(d) ? notesOf(slideNow(d))[n] : undefined) : String(d?.deck?.footer ?? ""));
+      mirror = note ? `footnote.${n}` : "deck.footer";
+      state.field = { field: key, id: fieldId(key) };
+      if (state.focus) { state.focus = null; leaveFigure(false); renderInspector(); reportFocus(); }
+      const merge = note ? `${state.slide}-fn-${n}-${session}` : `deck-footer-${session}`;
+      editor = rich(read(doc()) ?? "", { placeholder: fieldHint(key, slide) }, (text) => (note
+        ? editSlide((s) => { const notes = notesOf(s); if (notes[n] === undefined) return; notes[n] = text; s.footnotes = notes; }, { quiet: true, merge, hold: true })
+        : studio.change((d) => { d.deck ||= {}; setOption(d.deck, "footer", text); }, { quiet: true, merge, hold: true })));
+      idOf = () => fieldId(key);
+    } else if (target.kind === "field") {
       const key = target.field;
       if (!catalog.slide_keys[layoutOf(slide)].includes(key)) return;
       read = (d) => slideNow(d)?.[key] ?? "";
@@ -3972,10 +3989,10 @@ export function mount(studio, container) {
   }
   // What a slide's line of words shows while it is empty, on the slide and in the panel alike.
   const fieldHint = (key, slide) => ({
-    title: layoutOf(slide) === "agenda" ? "Outline" : "Title", subtitle: "Subtitle", words: "Text", by: "Who said it", author: "Your name",
+    title: layoutOf(slide) === "agenda" ? "Outline" : "Title", subtitle: "Subtitle", words: "Text", by: "Who said it", author: "Your name", footer: "Footer",
     // An example, not a default: an empty date draws nothing.
     date: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`,
-  })[key] || "";
+  })[key] || (FOOT.test(key) ? "Footnote" : "");
   // From a gallery's caption typed in on to the next picture's (`back`: the one before), and
   // past the last (or the first) on round the slide (tabOn).
   function nextPicture(target, back) {
@@ -3998,13 +4015,17 @@ export function mount(studio, container) {
       // empty) -- never one the layout shows nowhere, put there empty only to be passed through.
       ...["title", "words", "subtitle", "author", "date", "by"].filter((key) => catalog.slide_keys[layoutOf(slide)].includes(key)
         && !(layoutOf(slide) === "blank" && (key === "title" || key === "subtitle"))
-        && (String(slide[key] ?? "").trim() || keptEmpty(key) || (key in slide && ["title", "subtitle", "words"].includes(key)))).map((field) => ({ field })),
+        && (String(slide[key] ?? "").trim() || keptEmpty(key) || (key in slide && ["title", "subtitle", "words"].includes(key))
+          // (A title slide's author and date, emptied or never written, typed where they go.)
+          || (layoutOf(slide) === "title" && (key === "author" || key === "date")))).map((field) => ({ field })),
       // Each object, its own lines in their places among its words (a callout's heading
       // before them, a quote's attribution after them, a caption under its picture).
       ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).flatMap((block, index) => {
         const own = ownLines(block).map((part) => ({ region: region.key, index, part }));
         return kindOf(block) === "callout" ? [...own, { region: region.key, index }] : [{ region: region.key, index }, ...own];
       })),
+      // Its footnotes, at its foot.
+      ...notesOf(slide).map((_, n) => ({ field: `footnote${n}` })),
     ];
     const now = stops.findIndex((stop) => (stop.field ? stop.field === from.field
       : from.kind === "block" && stop.region === from.region && stop.index === from.index && (stop.part || null) === (from.part || null)));
@@ -4890,7 +4911,9 @@ export function mount(studio, container) {
     // again with its placeholder) is typed where it will be: under the words above it.
     const guess = element ? null : inline.field ? belowField(inline.field) : inline.part ? ownLine(inline.at, inline.part)
       : inline.picture !== null ? underPicture(inline.at, inline.picture) : inline.at && !inline.cell ? belowBlock(inline.at) : null;
-    const box = boxOf(inline.id) || guess?.box || null;
+    // (Words emptied and drawn no more -- the footer -- are typed on where they were.)
+    const box = boxOf(inline.id) || guess?.box || inline.box || null;
+    if (box) inline.box = box;
     const look = wordsLook(element) || inline.look || guess?.look || (inline.cell ? cellLook(inline.id) : null);
     if (look && !guess) inline.look = look;
     if (inline.under) {
@@ -7650,6 +7673,8 @@ export function mount(studio, container) {
   const slideStops = (slide) => (!slide ? [] : [
     ...["title", "words", "subtitle", "author", "date", "by"].filter((name) => (slide[name] || name in slide) && catalog.slide_keys[layoutOf(slide)].includes(name)).map((name) => ({ field: name })),
     ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => ({ region: region.key, index }))),
+    // (Its footnotes last, at its foot.)
+    ...notesOf(slide).map((_, n) => ({ field: `footnote${n}` })),
   ]);
   const chooseStop = (stop) => {
     if (!stop.field) { focusBlock(stop.region, stop.index); return; }
