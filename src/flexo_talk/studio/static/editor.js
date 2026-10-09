@@ -5703,9 +5703,10 @@ export function mount(studio, container) {
     else if (clip.what === "slides") deleteSlides(clip.indices, "cut");
     else deleteSlide(state.slide, "cut");
   }
-  // Lines chosen alone in a figure: why nothing was copied is said, not left to look done.
-  const uncopied = () => {
-    const why = studio.active && !typingNow() && !wordsChosen() && figure && figureBlock() ? figure.parts.uncopied() : null;
+  // Lines chosen alone in a figure: why nothing was copied (`cut`, cut) is said, not left to
+  // look done.
+  const uncopied = (cut = false) => {
+    const why = studio.active && !typingNow() && !wordsChosen() && figure && figureBlock() ? figure.parts.uncopied(cut) : null;
     if (why) toast(why, { icon: "info", seconds: 3 });
   };
   document.addEventListener("copy", (event) => {
@@ -5716,7 +5717,7 @@ export function mount(studio, container) {
   document.addEventListener("cut", (event) => {
     keyed = null;
     const clip = copyNow(event);
-    if (clip) cutAway(clip); else uncopied();
+    if (clip) cutAway(clip); else uncopied(true);
   });
   // A web view that gives no copy, cut or paste to a page with nothing to type in (a
   // Mac app's, whose Edit menu waits for a selection) still passes the keys: if no such
@@ -5735,7 +5736,7 @@ export function mount(studio, container) {
         return;
       }
       const clip = clipOf();
-      if (!clip) { uncopied(); return; }
+      if (!clip) { uncopied(letter === "x"); return; }
       clipboard = clip;
       navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
       if (letter === "c") copied(clip); else cutAway(clip);
