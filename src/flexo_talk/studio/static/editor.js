@@ -845,6 +845,9 @@ export function mount(studio, container) {
     if (note && block) note.hidden = !blank(block);
   });
 
+  // A slide whose layout has no room for objects (a title slide, a section): what it is, and
+  // what to do, said where an object would be added -- a greyed button, a file dropped.
+  const noRoomSaid = (slide) => `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, such as a logo, choose a layout with room, such as Content`;
   const renderBar = () => {
     const slide = slideAt();
     const room = regionsOf(slide).length > 0;
@@ -852,7 +855,7 @@ export function mount(studio, container) {
     for (const button of [...insertButtons, moreButton]) {
       button.dataset.title ||= button.title || "More objects";
       button.disabled = !room;
-      button.title = room ? button.dataset.title : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects`;
+      button.title = room ? button.dataset.title : noRoomSaid(slide);
     }
   };
 
@@ -5307,9 +5310,15 @@ export function mount(studio, container) {
   // to the next.
   let dropNote = null;
   stage.addEventListener("dragover", (event) => {
-    if (![...(event.dataTransfer?.types || [])].includes("Files") || !regionsOf(slideAt()).length) return;
+    if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+    // (Never opened in place of the deck, as a browser opens a file dropped where none is taken.)
     event.preventDefault();
-    if (!dropNote) { dropNote = h("div.drop-note", {}, "Drop pictures or structure files (PDB, mmCIF) to add them to the slide"); center.append(dropNote); }
+    const room = regionsOf(slideAt()).length > 0;
+    if (!room) event.dataTransfer.dropEffect = "none";
+    const said = room ? "Drop pictures or structure files (PDB, mmCIF) to add them to the slide"
+      : `The ${LAYOUT_NAMES[layoutOf(slideAt())]} layout has no room for pictures: choose one with room, such as Content`;
+    if (dropNote?.textContent !== said) { dropNote?.remove(); dropNote = h("div.drop-note", {}, said); center.append(dropNote); }
+    if (!room) return;
     // Where structures would go: after the figure's part under the pointer, into the
     // figure, or a figure of their own. (Pictures always come as pictures.)
     const pictures = [...(event.dataTransfer?.items || [])].every((item) => item.type.startsWith("image/") || item.type === "application/pdf");
@@ -5326,7 +5335,11 @@ export function mount(studio, container) {
   stage.addEventListener("drop", async (event) => {
     dropNote?.remove(); dropNote = null;
     hover.hidden = true;
-    if (await addFiles([...(event.dataTransfer?.files || [])], partAt(event), event)) event.preventDefault();
+    const files = [...(event.dataTransfer?.files || [])];
+    // Taken now, before anything is waited for: later, the browser would have opened the file.
+    if (files.length) event.preventDefault();
+    if (files.length && !regionsOf(slideAt()).length) { toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return; }
+    await addFiles(files, partAt(event), event);
   });
 
   // Files added to the slide, dropped or pasted: pictures, and structures into the figure
@@ -6007,6 +6020,8 @@ export function mount(studio, container) {
           text("date", "Date", { markup: false, placeholder: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}` })] : null,
         text("by", "Attribution", { markup: false, placeholder: "Who said it" }),
         layout === "agenda" ? h("div.hint-line", {}, "Lists the section slides.") : null,
+        // (Said once here, where the slide's objects would be listed: the toolbar's are greyed.)
+        WORDLESS.has(layout) ? h("div.hint-line", {}, `${noRoomSaid(slide).replace(/^The \S+ layout/, "This layout")}.`) : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn’t show its title.") : null),
     ];
     const regions = regionsOf(slide);
