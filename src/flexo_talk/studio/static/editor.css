@@ -236,6 +236,12 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .inline-editor.in-place.byline-part[data-before]:not([data-before=""]) .rich { padding-left: 0; }
 .inline-editor.in-place.byline-part[data-after]:not([data-after=""])::after { content: attr(data-after); white-space: pre; padding: 5px 5px 5px 0; line-height: var(--rt-line, 1.22); }
 .inline-editor.in-place.byline-part[data-after]:not([data-after=""]) .rich { padding-right: 0; }
+/* An author of several lines: the date on a line of its own under it, as the slide draws it. */
+.inline-editor.in-place.byline-part.stacked { flex-direction: column; }
+.inline-editor.in-place.byline-part.stacked[data-before]:not([data-before=""])::before { padding: 5px 5px 0; }
+.inline-editor.in-place.byline-part.stacked[data-before]:not([data-before=""]) .rich { padding: 0 5px 5px; }
+.inline-editor.in-place.byline-part.stacked[data-after]:not([data-after=""])::after { padding: 0 5px 5px; }
+.inline-editor.in-place.byline-part.stacked[data-after]:not([data-after=""]) .rich { padding: 5px 5px 0; }
 /* A placeholder in the words' own colour, faint: it reads on a dark band as on the page. */
 .rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: currentColor; opacity: 0.4; pointer-events: none; }
 /* An empty list's placeholder sits where its first item's words start. */

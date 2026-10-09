@@ -1899,13 +1899,24 @@ export function mount(studio, container) {
     return best ? best.item : null;
   }
   // Which of a title slide's author and date -- drawn as one line, its byline -- is under a
-  // point: the date from the dot between them on.
+  // point: the date from the dot between them on, or, under an author of several lines,
+  // from the line it starts.
   function bylineAt(point) {
     const slide = slideAt() || {};
     const said = (words) => readable(String(words ?? "")).replace(/\s+/g, " ").trim();
     const author = said(slide.author), date = said(slide.date);
     if (!author || !date || !point) return author || !date ? "author" : "date";
     const element = pageNode?.querySelector(`[id="${CSS.escape(fieldId("author"))}"]`);
+    if (String(slide.author).trim().includes("\n")) {
+      // (Its letters counted back from the end, as its lines drop the spaces they break at.)
+      const text = element ? wordsIn(element).at(-1) : null, words = text?.textContent || "";
+      let at = words.length;
+      for (let left = date.replace(/\s/g, "").length; at > 0 && left > 0; at -= 1) if (/\S/.test(words[at - 1])) left -= 1;
+      const ctm = text?.getScreenCTM();
+      if (!ctm || at >= words.length) return "author";
+      const box = text.getExtentOfChar(at);
+      return point.y >= new DOMPoint(box.x, box.y).matrixTransform(ctm).y ? "date" : "author";
+    }
     let before = 0;
     for (const text of element ? wordsIn(element) : []) {
       const words = text.textContent || "";
@@ -5175,17 +5186,30 @@ export function mount(studio, container) {
     const node = inline.node;
     if (key !== "author" && key !== "date" && key !== "by") return;
     const slide = slideAt() || {};
-    const other = key === "by" ? "" : plain(slide[key === "author" ? "date" : "author"] ?? "").trim();
+    // (All its lines: an author of several shows them all over the date.)
+    const other = key === "by" ? "" : readable(String(slide[key === "author" ? "date" : "author"] ?? "")).trim();
+    // An author of several lines has the date on a line of its own under it (deck.py's
+    // title): so too as it is typed, from the Return that starts its second line.
+    const area = inline.area;
+    const stacking = () => key !== "by" && Boolean(other) && /\S[^]*\n/.test(key === "author" ? (area.rich ? area.letters() : area.value) : String(slide.author ?? "").trim());
+    const stacked = stacking();
     // A dash, not a middle dot, in a right-to-left byline (deck.py's title).
     const between = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/.test(`${slide.author ?? ""}${slide.date ?? ""}`) ? " \u2013 " : " \u00b7 ";
     node.classList.add("byline-part");
-    node.dataset.before = key === "by" ? "\u2014 " : key === "date" && other ? `${other}${between}` : "";
-    node.dataset.after = key === "author" && other ? `${between}${other}` : "";
+    node.classList.toggle("stacked", stacked);
+    node.dataset.before = key === "by" ? "\u2014 " : key === "date" && other ? `${other}${stacked ? "" : between}` : "";
+    node.dataset.after = key === "author" && other ? `${stacked ? "" : between}${other}` : "";
     // Empty, as wide as its placeholder ("Date"), which it shows.
     inkPen.font = `${look?.weight || 400} ${size}px ${look?.family || "sans-serif"}`;
     inline.area.style.minWidth = `${Math.ceil(inkPen.measureText(inline.area.dataset.placeholder || "").width) + 10}px`;
+    const side = centred ? "center" : look?.anchor === "end" ? "flex-end" : "flex-start";
     Object.assign(node.style, { fontSize: `${size}px`, fontFamily: look?.family || "", fontWeight: look?.weight || "", color: look?.colour || "",
-      justifyContent: centred ? "center" : look?.anchor === "end" ? "flex-end" : "flex-start" });
+      justifyContent: stacked ? "" : side, alignItems: stacked ? side : "", textAlign: centred ? "center" : "" });
+    // (Typed, a line more or fewer in the author moves the date: under it, or beside it.)
+    if (key === "author" && !area.restacks) {
+      area.restacks = true;
+      area.addEventListener("input", () => { if (inline?.area === area && node.classList.contains("stacked") !== stacking()) positionInline(); });
+    }
   }
   // Where an object not yet drawn (a text just added) will be: under the one before it, in
   // its words' look.

@@ -648,6 +648,15 @@ def test_a_date_is_written_as_a_document_writes_one() -> None:
     assert DeckKind().parse("title: yes\ndate: 2026-10-01\n") == {"title": "yes", "date": "2026-10-01"}
 
 
+def test_an_author_of_several_lines_has_the_date_on_a_line_of_its_own() -> None:
+    # Not after the author's last line (a place under a name), as one byline line would.
+    deck = Deck("d")
+    one = deck.title("T", author="Ada Lovelace", date="2026")
+    several = deck.title("T", author="Ada Lovelace\nUniversity College London", date="2026")
+    assert "".join(run.text for run in one.byline_runs) == "Ada Lovelace · 2026"
+    assert "".join(run.text for run in several.byline_runs) == "Ada Lovelace\nUniversity College London\n2026"
+
+
 def test_a_document_nested_past_any_deck_is_refused_in_words(tmp_path: Path) -> None:
     deep: list = ["x"]
     for _ in range(3000):
