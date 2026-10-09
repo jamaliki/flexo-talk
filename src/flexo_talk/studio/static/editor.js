@@ -5330,6 +5330,7 @@ export function mount(studio, container) {
     else inline.area.setSelectionRange(...caret);
   }
 
+  const TRAILING_BREAKS = new RegExp(`${ITEM_BREAK}+$`);
   // The spaces typed last, at the end of a line, waited for a word that never came: they go
   // as the editor closes, the same step as the typing.
   function trimTyped() {
@@ -5346,6 +5347,13 @@ export function mount(studio, container) {
         area.value = lines.join("\n");
         tidied();
       }
+    }
+    // So does a new line left empty at the end of the words (or of a list's item): a Return
+    // that waited for words that never came.
+    const ended = inline.bullets ? area.value.split("\n").map((line) => line.replace(TRAILING_BREAKS, "")).join("\n") : area.value.replace(/\n+$/, "");
+    if (ended !== area.value && ended.trim()) {
+      area.value = ended;
+      tidied();
     }
     // A list's items left empty go (the document keeps none), one with the typing.
     if (inline.bullets && area.value.split("\n").some((line) => !line.trim()) && area.value.trim()) {
@@ -8197,9 +8205,10 @@ export function mount(studio, container) {
       if (kind === "table") return tableChange(a.table, b.table);
       const items = (block) => (Array.isArray(block.bullets) ? block.bullets.flat(Infinity) : [block.bullets]);
       if (kind === "bullets" && items(b).length !== items(a).length) {
-        // Items typed (Return, and words in the new item): typing, as any words are.
-        const typed = items(b).length > items(a).length ? typing(bulletsText(b.bullets), bulletsText(a.bullets)) : null;
-        if (typed && typed !== "Typing") return typed;
+        // Items typed (Return, and words in the new item), or a list typed over: typing, as
+        // any words are.
+        const typed = typing(bulletsText(b.bullets), bulletsText(a.bullets));
+        if (typed && (items(b).length > items(a).length ? typed !== "Typing" : typed.startsWith("Typing “"))) return typed;
         return items(b).length > items(a).length ? "Add Item" : "Delete Item";
       }
       // The same words in another look (bold, a colour, a link): their format changed.

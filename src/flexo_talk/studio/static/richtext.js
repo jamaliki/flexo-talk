@@ -491,7 +491,7 @@ function emphasised(lines, look) {
 
 // A line break within a list's item, in the list's words (one item a line): the Unicode
 // line separator, which no one types.
-export const ITEM_BREAK = " ";
+export const ITEM_BREAK = "\u2028";
 
 // Whether two colours, however written ("#1a5d9b", "rgb(26, 93, 155)"), are one.
 const pen = document.createElement("canvas").getContext("2d");
