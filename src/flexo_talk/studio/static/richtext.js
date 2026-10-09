@@ -964,7 +964,23 @@ export function richText({ value = "", list = false, single = false, breakWith =
     const s = selection();
     if (!s.rangeCount || !area.contains(s.anchorNode)) return;
     const out = s.isCollapsed ? outOfEdge(s.getRangeAt(0)) : null;
-    if (out) place(out);
+    if (out) {
+      // Beside it, the new line is put there by hand, as typing at a link's end is: the
+      // browser's would go back into it (and its placeholder with it), and the first letter
+      // typed after would be the link's. At the words' end, a second stands for the empty
+      // line the caret goes to, as the browser's does (the typing's end takes it away).
+      const node = document.createTextNode("\n");
+      out.insertNode(node);
+      const rest = document.createRange();
+      rest.setStartAfter(node);
+      rest.setEnd(area, area.childNodes.length);
+      if (!rest.toString()) node.appendData("\n");
+      const caret = document.createRange();
+      caret.setStart(node, 1);
+      place(caret);
+      area.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertLineBreak" }));
+      return;
+    }
     breaking = true;
     try { document.execCommand("insertLineBreak"); } finally { breaking = false; }
   };

@@ -6375,6 +6375,19 @@ export function mount(studio, container) {
   }
   // The words of a slide's own that a layout shows, and what each is called in a note.
   const LAYOUT_WORDS = { subtitle: "subtitle", author: "author", date: "date", by: "attribution" };
+  // What a slide leaving its layout is kept as: itself, and the words set aside by a layout
+  // before it, carried on (an author and date kept through Content, then Statement, come back
+  // with Title).
+  function stashOf(current) {
+    const before = layoutStash.get(JSON.stringify(current));
+    const words = {};
+    for (const key of Object.keys(LAYOUT_WORDS)) {
+      if (key in current) continue;
+      const kept = before?.words?.[key] ?? before?.slide?.[key];
+      if (kept !== undefined) words[key] = structuredClone(kept);
+    }
+    return { slide: current, words };
+  }
   // `current` in `layout`: the slide as it will be, the slide after it its objects go to if the
   // layout has no room for them (or null), those objects, and the words it has no place for.
   function relaid(current, layout) {
@@ -6428,6 +6441,7 @@ export function mount(studio, container) {
     // place for them, typed in since or not.
     const allowed = new Set([...catalog.slide_keys[layout], "layout"]);
     for (const [key, value] of Object.entries(earlier || {})) if (key in LAYOUT_WORDS && allowed.has(key) && !(key in slide)) slide[key] = structuredClone(value);
+    for (const [key, value] of Object.entries(stashed?.words || {})) if (allowed.has(key) && !(key in slide)) slide[key] = structuredClone(value);
     // What is still empty shows the layout's placeholders, as a new slide of it does: its
     // title and subtitle, and a place to type in each column -- not a column of nothing.
     const fresh = NEW_SLIDES[layout]();
@@ -6456,10 +6470,11 @@ export function mount(studio, container) {
     if (!current || (layoutOf(current) === layout && !unknownLayout(current))) return;
     if (awayFrom("change the layout")) return;
     const stashed = layoutStash.get(JSON.stringify(current));
+    const leaving = stashOf(current);
     if (stashed && !stashed.edited && layoutOf(stashed.slide) === layout) {
       const earlier = stashed.slide;
       editSlide((slide) => { for (const key of Object.keys(slide)) delete slide[key]; Object.assign(slide, structuredClone(earlier)); });
-      layoutStash.set(JSON.stringify(slideAt()), { slide: current });
+      layoutStash.set(JSON.stringify(slideAt()), leaving);
       state.focus = null;
       renderInspector();
       renderBar();
@@ -6472,7 +6487,7 @@ export function mount(studio, container) {
       if (made.kept) d.slides.splice(state.slide + 1, 0, made.kept);
     }, made.kept ? { label: "Change Layout" } : {});
     // Objects kept on the next slide are there, not set aside to come back here too.
-    if (!made.kept) layoutStash.set(JSON.stringify(slideAt()), { slide: current });
+    if (!made.kept) layoutStash.set(JSON.stringify(slideAt()), leaving);
     state.focus = null;
     renderRail();
     renderInspector();
@@ -6489,7 +6504,7 @@ export function mount(studio, container) {
     const changing = sorted.filter((index) => layoutOf(slides()[index]) !== layout || unknownLayout(slides()[index]));
     if (!changing.length || awayFrom("change the layout")) return;
     const made = new Map(changing.map((index) => [index, relaid(slides()[index], layout)]));
-    const olds = new Map(changing.map((index) => [index, structuredClone(slides()[index])]));
+    const olds = new Map(changing.map((index) => [index, stashOf(structuredClone(slides()[index]))]));
     studio.change((d) => {
       for (const index of [...changing].reverse()) {
         d.slides[index] = made.get(index).slide;
@@ -6499,7 +6514,7 @@ export function mount(studio, container) {
     // Where each chosen slide is now, those kept on new slides before it counted.
     const after = sorted.map((index) => index + changing.filter((other) => other < index && made.get(other).kept).length);
     markSlides(sorted, after);
-    for (const index of changing) if (!made.get(index).kept) layoutStash.set(JSON.stringify(slides()[after[sorted.indexOf(index)]]), { slide: olds.get(index) });
+    for (const index of changing) if (!made.get(index).kept) layoutStash.set(JSON.stringify(slides()[after[sorted.indexOf(index)]]), olds.get(index));
     state.slide = after[Math.max(sorted.indexOf(state.slide), 0)];
     state.picked = after;
     state.focus = null;
