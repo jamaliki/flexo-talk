@@ -968,6 +968,16 @@ export function mount(studio, container) {
     select(to);
   }
 
+  // The slides chosen moved one place up or down the list (⌥↑, ⌥↓), as an object is on its
+  // slide: several, together, in their order.
+  function nudgeSlides(indices, way) {
+    const sorted = [...indices].sort((a, b) => a - b);
+    if (way < 0 ? sorted[0] <= 0 : sorted[sorted.length - 1] >= slides().length - 1) return;
+    if (sorted.length === 1) moveSlide(sorted[0], sorted[0] + way);
+    else moveSlides(sorted, way < 0 ? sorted[0] - 1 : sorted[sorted.length - 1] + 2);
+    railList.focus({ preventScroll: true });
+  }
+
   function duplicateSlide(index) {
     if (chosenSlides().length > 1 && chosenSlides().includes(index)) { duplicateSlides(chosenSlides()); return; }
     studio.change((d) => { d.slides.splice(index + 1, 0, copyOf(d.slides[index])); }, { label: "Duplicate Slide" });
@@ -1116,8 +1126,8 @@ export function mount(studio, container) {
       { icon: "duplicate", label: `Duplicate ${many}`, keys: "⌘D", run: () => (together ? duplicateSlides(together) : duplicateSlide(index)) },
       "-",
       // Greyed where it cannot go, as a Mac menu's items are, rather than left out.
-      ...(!together ? [{ icon: "up", label: "Move Up", disabled: index === 0, run: () => moveSlide(index, index - 1) },
-        { icon: "down", label: "Move Down", disabled: index >= count - 1, run: () => moveSlide(index, index + 1) }] : []),
+      { icon: "up", label: "Move Up", keys: "⌥↑", disabled: Math.min(...(together || [index])) === 0, run: () => nudgeSlides(together || [index], -1) },
+      { icon: "down", label: "Move Down", keys: "⌥↓", disabled: Math.max(...(together || [index])) >= count - 1, run: () => nudgeSlides(together || [index], 1) },
       "-",
       { icon: "trash", label: `Delete ${many}`, keys: "⌫", danger: true, run: () => deleteSlides(together || [index]) },
     ]);
@@ -1341,6 +1351,12 @@ export function mount(studio, container) {
       event.stopPropagation();
       state.picked = slides().map((_, n) => n);
       renderRail();
+    }
+    // ⌥↑ and ⌥↓ move the slides chosen up or down the list, as they move an object on its slide.
+    else if (event.altKey && !event.shiftKey && !event.metaKey && !event.ctrlKey && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      event.stopPropagation();
+      nudgeSlides(chosenSlides(), event.key === "ArrowUp" ? -1 : 1);
     }
     // ⇧↓ and ⇧↑ choose a run of slides from the one first chosen, as a Mac list does.
     else if (event.shiftKey && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
@@ -5889,8 +5905,8 @@ export function mount(studio, container) {
         // In the order they are drawn, for Tab. (Its words are edited on the slide -- Return, or a
         // double-click -- or in the field below.)
         h("div.block-actions", {},
-          ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up", disabled: at.index === 0 }),
-          ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down", disabled: at.index >= count - 1 }),
+          ui.button("", () => moveBlock(at, { region: at.region, index: at.index - 1 }), { kind: "ghost", small: true, icon: "up", title: "Move Up (⌥↑)", disabled: at.index === 0 }),
+          ui.button("", () => moveBlock(at, { region: at.region, index: at.index + 2 }), { kind: "ghost", small: true, icon: "down", title: "Move Down (⌥↓)", disabled: at.index >= count - 1 }),
           ui.button("", () => { if (!awayFrom("duplicate objects")) duplicateBlock(at); }, { kind: "ghost", small: true, icon: "duplicate", title: "Duplicate (⌘D)" }),
           ui.button("", () => deleteBlock(at), { kind: "ghost", small: true, icon: "trash", title: "Delete (⌫)" })),
         // A placeholder says so, at the top: it looks like an object, but no one sees it yet --
