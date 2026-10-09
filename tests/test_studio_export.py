@@ -136,3 +136,36 @@ def test_a_skipped_slide_is_kept_but_neither_exported_nor_counted_among_the_sect
     assert _pages(pdf) == 3
     with pytest.raises(DeckDocumentError, match="skip must be true or false"):
         deck_from_document({**DECK, "slides": [{"title": "T", "skip": "yes"}]}, tmp_path)
+
+
+def _numbers(svgs: list[str]) -> list[str | None]:
+    import re
+
+    found = (re.search(r'id="slide\d+\.number"[^>]*><tspan[^>]*>(\d+)<', svg) for svg in svgs)
+    return [match and match[1] for match in found]
+
+
+def test_the_slides_after_one_skipped_are_numbered_as_they_are_shown(tmp_path: Path) -> None:
+    # As Keynote numbers them: the show counts the slides it shows, and the numbers drawn on
+    # them, the PDF's and the PowerPoint's agree with it -- no gap where one was skipped.
+    deck = {**DECK, "slides": [
+        {"title": "One", "body": [{"text": "a"}]},
+        {"title": "Two", "skip": True, "body": [{"text": "b"}]},
+        {"title": "Three", "body": [{"text": "c"}]},
+    ]}
+    kind = DeckKind()
+
+    def drawn(document: dict) -> list[str]:
+        drawing = kind.draw(document, tmp_path, {"settle": True})
+        while drawing.unfinished:
+            drawing = kind.draw(document, tmp_path, {"settle": True})
+        return [page.svg for page in drawing.pages]
+
+    # The slide skipped has none; the one after it is the second shown.
+    assert _numbers(drawn(deck)) == ["1", None, "2"]
+    # Shown again, the slides after it are drawn again with their numbers.
+    shown = {**deck, "slides": [{key: value for key, value in slide.items() if key != "skip"} for slide in deck["slides"]]}
+    assert _numbers(drawn(shown)) == ["1", "2", "3"]
+    svgs = sorted(kind.export(deck, tmp_path, "talk", ["svg"], into=tmp_path / "out"))
+    assert [path.name for path in svgs] == ["slide-01.svg", "slide-02.svg"]
+    assert _numbers([path.read_text(encoding="utf-8") for path in svgs]) == ["1", "2"]

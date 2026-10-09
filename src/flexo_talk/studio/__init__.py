@@ -535,6 +535,9 @@ class DeckKind:
                     1 for item in slides[:index]
                     if isinstance(item, dict) and item.get("layout") == "section" and not _skipped(item)
                 ),
+                # Its number counts the slides shown before it (compose._slide_number): one
+                # skipped there or shown again redraws it.
+                "shown": sum(1 for item in slides[:index] if not _skipped(item)),
                 "slide": data,
                 "files": [(str(file), _stamp(file)) for file in files],
             }))
@@ -742,7 +745,8 @@ class DeckKind:
             for error in errors
         ]
         # A slide skipped (Keynote's Skip Slide) is not exported, as it is not presented; the
-        # others keep their numbers, as they are shown when presented.
+        # others are numbered as they are shown when presented, one after another
+        # (compose._slide_number).
         skipped = {index for index, data in enumerate(document.get("slides") or []) if _skipped(data)}
         deck.slides = [slide for index, slide in enumerate(deck.slides) if index not in skipped]
         if not deck.slides:
