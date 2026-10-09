@@ -3442,11 +3442,12 @@ export function mount(studio, container) {
       run: (action, options) => runFigure(action, options, own),
       // (With the studio away its parts stay where the slide's drawing has them, as its objects do.)
       away: (what) => awayFrom(what),
-      // Its shapes all deleted (a structure added on its own, deleted), the figure is.
-      emptied: ({ cut = false } = {}) => {
+      // Its shapes all deleted (a structure added on its own, deleted), the figure is -- one
+      // step with the typing that emptied its only Text (`merge`).
+      emptied: ({ cut = false, merge = null } = {}) => {
         const wasCut = cut || figureCut;
         figureCut = false;
-        if (figure === own && figureBlock()) deleteBlock({ region: own.region, index: own.index }, wasCut ? "cut" : "deleted");
+        if (figure === own && figureBlock()) deleteBlock({ region: own.region, index: own.index }, wasCut ? "cut" : "deleted", { merge });
       },
       // Edited -- its first shape's words typed, sent or still on their way -- a new figure is
       // no longer one just added and left empty: Esc does not take it back (dropFresh).
