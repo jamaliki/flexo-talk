@@ -5438,7 +5438,12 @@ export function mount(studio, container) {
     event.clipboardData?.setData("text/plain", plainOf(clip));
     return clip;
   }
-  const copied = (clip) => toast(`${clip.label.charAt(0).toUpperCase()}${clip.label.slice(1)} copied`, { icon: "copy", seconds: 1.5 });
+  // (Copied again, the note says so again in its place: notes do not pile up.)
+  let copiedNote = null;
+  const copied = (clip) => {
+    copiedNote?.remove();
+    copiedNote = toast(`${clip.label.charAt(0).toUpperCase()}${clip.label.slice(1)} copied`, { icon: "copy", seconds: 1.5 });
+  };
   // The object cut last, as it was cut: pasted, it is moved (see pasteClip).
   let cutLast = null;
   function cutAway(clip) {
