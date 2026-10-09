@@ -5958,10 +5958,12 @@ export function mount(studio, container) {
   }
 
   // An edit to each slide chosen in the slide list, in one step -- else to the slide shown.
-  const editChosen = (mutate, options = {}) => {
+  // (`name`: what is done, for the history -- "Change Background of 3 Slides".)
+  const editChosen = (mutate, options = {}, name = "Change Background") => {
     const picked = chosenSlides();
     if (picked.length < 2) { editSlide(mutate, options); return; }
-    studio.change((d) => { for (const index of picked) { const slide = (d.slides || [])[index]; if (slide) mutate(slide, d); } }, options);
+    studio.change((d) => { for (const index of picked) { const slide = (d.slides || [])[index]; if (slide) mutate(slide, d); } },
+      { label: `${name} of ${picked.length} Slides`, ...options });
     // (Undone or redone, they are chosen again.)
     markSlides(picked, picked);
   };
@@ -6027,7 +6029,7 @@ export function mount(studio, container) {
       { value: "", label: choiceName("align", deckStyle("align") || "auto") },
       ...["auto", "top", "middle"].filter((each) => each !== (deckStyle("align") || "auto") || chosenNow.some((other) => other.align === each))
         .map((each) => ({ value: each, label: choiceName("align", each) }))],
-      onChange: (choice) => editChosen((s) => setOption(s, "align", choice), { quiet: true }) }));
+      onChange: (choice) => editChosen((s) => setOption(s, "align", choice), { quiet: true }, `Change ${styleName("align")}`) }));
   }
 
   function splitControl(slide) {
