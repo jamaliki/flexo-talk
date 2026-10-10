@@ -600,7 +600,8 @@ const SIZERS = { text: textSizer, bullets: listSizer, quote: quoteSizer, callout
 // left edge and its width (points) returning how much taller it is; null where it is not.
 // `span` is where it stands across now ({ x, width }); `options` what a kind needs besides.
 export function sizer(element, kind, span, options = {}) {
-  const make = SIZERS[kind];
+  // (A text that is one equation displayed is drawn as an equation.)
+  const make = SIZERS[element?.getAttribute?.("data-flexo-talk") === "math" ? "math" : kind];
   if (!make || !element) return null;
   try { return make(element, span, options); } catch { return null; }
 }
