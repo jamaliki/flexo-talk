@@ -3273,6 +3273,8 @@ export function mount(studio, container) {
       return;
     }
     if (mod && !["Meta", "Control", "Shift", "Alt"].includes(key)) { cropApply(); return; }
+    // Another slide gone to keeps the crop first, as a click elsewhere does.
+    if (["PageUp", "PageDown", "Home", "End"].includes(key)) { cropApply(); return; }
     if (!mod && (key.length === 1 || ["Delete", "Backspace", "Tab"].includes(key))) { event.preventDefault(); event.stopPropagation(); }
   }
   // A press anywhere but the crop keeps it, and goes on to do what it does there.
