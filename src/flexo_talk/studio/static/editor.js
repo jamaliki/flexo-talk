@@ -2637,8 +2637,9 @@ export function mount(studio, container) {
 
   // -- a figure, mechanism or picture, sized by its corners --
   // The chosen figure, mechanism or picture has a handle at each corner. Dragged, it grows or
-  // shrinks about the point the slide keeps still as it does -- its middle across; its
-  // top, or nearer its middle when it stands alone -- no larger than its place allows.
+  // shrinks from the edge not dragged, as a side's handle sizes words (standFor) -- standing
+  // centred, about its middle -- and down from its top, or nearer its middle when it stands
+  // alone, as the slide stands it: no larger than its place allows.
   // Let go, it is drawn that wide: an edit like any other, ⌘Z undoes it. A handle
   // double-clicked sizes it to its place again.
   const SIZED = new Set(["figure", "image", "mechanism"]);
@@ -2655,11 +2656,12 @@ export function mount(studio, container) {
   })));
   const sizeTip = h("div.size-tip", { hidden: true });
 
-  // Where the slide draws the part at `scale` times its size: centred across its place,
-  // and down it as the slide aligns its places (compose.py's `_region_row`): parts with
-  // words among them from the top; pictures alone a little above the middle of the body;
-  // pictures beside words centred against them while they are the shorter.
-  function placerOf(region, regions, box) {
+  // Where the slide draws the part at `scale` times its size: across its place where it
+  // stands (`share` of the room to spare on its left: compose.py's `_across` -- under words at
+  // their edge, else centred), and down it as the slide aligns its places (`_region_row`):
+  // parts with words among them from the top; pictures alone a little above the middle of the
+  // body; pictures beside words centred against them while they are the shorter.
+  function placerOf(region, regions, box, share = 0.5) {
     const slide = slideAt();
     const standing = (item) => item.blocks.length && blocksAt(slide, item.key).every((block) => STANDING.has(kindOf(block)));
     const extent = (item) => {
@@ -2673,7 +2675,7 @@ export function mount(studio, container) {
     const tallest = (list, from) => Math.max(0, ...list.map((item) => { const e = extent(item); return e ? e.bottom - from(item, e) : 0; }));
     const words = tallest(others.filter((item) => !standing(item)), (item) => item.room.top);
     const pictures = tallest(others.filter(standing), (_, e) => e.top);
-    const height = room.bottom - room.top, centre = (room.left + room.right) / 2;
+    const height = room.bottom - room.top;
     const alone = standing(region) && align !== "top";
     return (scale) => {
       const width = box.width * scale, tall = box.height * scale, now = used - box.height + tall;
@@ -2683,8 +2685,30 @@ export function mount(studio, container) {
         const band = Math.max(now, words, pictures);
         top = room.top + (align === "middle" ? Math.max(height - band, 0) / 2 : 0) + (band - now) / 2;
       }
-      return { left: centre - width / 2, top: top + below, width, height: tall };
+      return { left: room.left + (room.right - room.left - width) * share, top: top + below, width, height: tall };
     };
+  }
+
+  // Where an object sized by its `side` ("w" or "e") stands across its place's `room`
+  // ({ x, width }) at `width`, from where it stood (`span`, { x, width }, with `share` of the
+  // room to spare on its left): the edge not dragged where it was -- as far as its place lets
+  // it, against whose side it then grows -- or, standing centred, centred. `near`: how far a
+  // share catches at one it might be (where it stood, an end, a quarter, the middle). In any
+  // one unit; { left, stand } (stand: the share it then has).
+  function standFor(span, room, share, side, width, near = 1.5) {
+    const centred = Math.abs(share - 0.5) < 0.001;
+    const right = span.x + span.width, middle = room.x + room.width / 2;
+    let left = centred ? middle - width / 2 : side === "e" ? span.x : right - width;
+    left = Math.min(Math.max(left, room.x), room.x + room.width - width);
+    let stand = room.width - width > 0.5 ? (left - room.x) / (room.width - width) : share;
+    if (!centred && room.width - width > 0.5) {
+      // (Standing where it stood, or at an end or the middle, rather than a hair from it.)
+      for (const stop of [share, 0, 0.25, 0.5, 0.75, 1]) {
+        if (Math.abs((stop - stand) * (room.width - width)) < near) { stand = stop; break; }
+      }
+      left = room.x + (room.width - width) * stand;
+    }
+    return { left, stand };
   }
 
   function sizeStart(event, corner) {
@@ -2717,7 +2741,17 @@ export function mount(studio, container) {
     const least = Math.min(1, 24 / Math.min(box.width, box.height));
     // Its width as the slide sets it (its ink, not the box round all it draws), in points.
     const points = Number(element.getAttribute("data-flexo-width")) || box.width / unit;
-    sizing = { at: { ...focus }, block, wrap, box, corner, most, least, across, unit, points, place: placerOf(region, regions, box),
+    // Across, the edge not dragged stays where the slide drew it, as a side's handle keeps it
+    // (standFor): the share it then stands at is written with its width.
+    const share = attribute(element, "data-flexo-share") ?? 0.5;
+    const placed = placerOf(region, regions, box, share), room = { x: region.room.left, width: across };
+    // (From where its share stands it, not where its ink starts: a hair apart is not moved.)
+    const span = { x: room.x + (across - box.width) * share, width: box.width };
+    const place = (scale) => {
+      const at = placed(scale);
+      return { ...at, ...standFor(span, room, share, corner.endsWith("w") ? "w" : "e", at.width, 1.5 * unit) };
+    };
+    sizing = { at: { ...focus }, block, wrap, box, corner, most, least, across, unit, points, place, share, stand: share,
       scale: 1, moved: false, start: { x: event.clientX, y: event.clientY }, column: regions.length > 1 ? "column" : "slide" };
     pageNode.classList.add("block-sizing");
     if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
@@ -2761,6 +2795,7 @@ export function mount(studio, container) {
     if (!event.metaKey && Math.abs(scale - 1) * box.width < 4) scale = 1;
     sizing.scale = scale;
     const at = sizing.place(scale), k = scaleOf(sizing.wrap);
+    sizing.stand = at.stand;
     sizing.wrap.style.transform = `translate(${(at.left - box.left) * k}px, ${(at.top - box.top) * k}px) scale(${scale})`;
     const id = `slide${state.slide + 1}.${regionsOf(slideAt()).find((r) => r.key === sizing.at.region).svg}.${sizing.at.index}`;
     place(chosen, boxOf(id));
@@ -2788,8 +2823,12 @@ export function mount(studio, container) {
     const was = sizeFinish();
     if (!was) return;
     const width = Math.round(was.points * was.scale);
-    if (!was.moved || Math.abs(was.scale - 1) < 0.005 || width === was.block.width) { sizeCancelled(was); return; }
-    resized(was.at, [was.wrap], (b) => setOption(b, "width", width));
+    const moved = Math.abs(was.stand - was.share) > 0.0005, stand = Math.round(was.stand * 1000) / 1000;
+    if (!was.moved || ((Math.abs(was.scale - 1) < 0.005 || width === was.block.width) && !moved)) { sizeCancelled(was); return; }
+    resized(was.at, [was.wrap], (b) => {
+      setOption(b, "width", width);
+      if (moved) b.horizontal = shareWritten(stand, ACROSS_NAMES);
+    }, `Resize ${objectName(was.block)}`);
   }
 
   // The parts of its place glide to where the slide is drawn with it sized (any drawing held
@@ -3395,23 +3434,8 @@ export function mount(studio, container) {
     }
     return { width, ...standAt(width), caught: caught?.[0] || null };
   }
-  // Where it stands at `width`: the edge not dragged where it was -- as far as its place lets
-  // it, against whose side it then grows -- or, standing centred, centred.
-  function standAt(width) {
-    const { span, room, side } = resizing;
-    const right = span.x + span.width, middle = room.x + room.width / 2;
-    let left = resizing.centred ? middle - width / 2 : side === "e" ? span.x : right - width;
-    left = Math.min(Math.max(left, room.x), room.x + room.width - width);
-    let stand = room.width - width > 0.5 ? (left - room.x) / (room.width - width) : resizing.share;
-    if (!resizing.centred && room.width - width > 0.5) {
-      // (Standing where it stood, or at an end or the middle, rather than a hair from it.)
-      for (const stop of [resizing.share, 0, 0.25, 0.5, 0.75, 1]) {
-        if (Math.abs((stop - stand) * (room.width - width)) < 1.5) { stand = stop; break; }
-      }
-      left = room.x + (room.width - width) * stand;
-    }
-    return { left, stand };
-  }
+  // Where it stands at `width` (standFor).
+  const standAt = (width) => standFor(resizing.span, resizing.room, resizing.share, resizing.side, width);
 
   function resizeMove(event) {
     const it = resizing;

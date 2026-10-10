@@ -177,6 +177,23 @@ def test_a_plot_given_a_width_is_drawn_that_wide_its_height_in_proportion() -> N
     assert half[0] / half[1] == pytest.approx(whole[0] / whole[1], rel=0.01)
 
 
+def test_a_picture_or_figure_says_where_it_stands_across_its_place(tmp_path: Path) -> None:
+    """For an editor sizing it by a corner to keep it where the slide stands it: under words at
+    their edge, alone centred, or where it was asked to stand."""
+
+    def share(body: list[dict]) -> float:
+        deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)
+        found = re.search(rf'id="slide1\.body\.{len(body) - 1}"[^>]*?data-flexo-share="([\d.]+)"', _editing(deck))
+        assert found
+        return float(found.group(1))
+
+    picture = {"image": _picture(tmp_path), "width": 200}
+    assert share([{"text": "Words above it."}, picture]) == 0.0
+    assert share([picture]) == 0.5
+    assert share([{"text": "Words above it."}, {**picture, "horizontal": "end"}]) == 1.0
+    assert share([{"text": "Words above it."}, _blocks(tmp_path)[-1]]) == 0.0
+
+
 def test_a_width_is_written_and_read_back_and_said_when_it_is_wrong(tmp_path: Path) -> None:
     body = [{**block, "width": 300} for block in _blocks(tmp_path)]
     deck = deck_from_document({"deck": {}, "slides": [{"title": "T", "body": body}]}, tmp_path)

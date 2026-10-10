@@ -1701,6 +1701,13 @@ def _block(
         top += _caption(canvas, identifier, block.caption, box, top)
     if PLACEHOLDERS.get() and not isinstance(block, _Figure | _Image | _Missing):
         _sizing(canvas, identifier, block, box, (left, wide), share, stand)
+    elif PLACEHOLDERS.get() and isinstance(block, _Figure | _Image):
+        # Where it stands across its place (_across): for an editor sizing it by a corner to
+        # show it where the slide will draw it, under words at their edge, else centred.
+        drawn = _drawn(canvas, identifier)
+        stood = canvas.place if canvas.place is not None else 0.5 if canvas.centred else 0.0
+        if drawn is not None:
+            drawn.set("data-flexo-share", number(stood))
     return top
 
 
