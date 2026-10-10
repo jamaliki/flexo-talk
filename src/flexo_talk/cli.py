@@ -145,7 +145,8 @@ def _convert(arguments: argparse.Namespace) -> int:
         path.write_text(svg, encoding="utf-8")
         saved.append(path)
         print(f"{where}: Saved the matplotlib plot as {path.name} and added it as an image.")
-        return {"image": str(path)}  # named beside the document, as every file is, below
+        # (Named beside the document, as every file is, below; as wide as the plot was given.)
+        return {"image": str(path), **({"width": block.width} if block.width is not None else {})}
 
     document = deck_document(deck, plots=plot)
     _relocate(document, Path.cwd(), target.parent)

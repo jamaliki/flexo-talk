@@ -235,3 +235,20 @@ def test_the_studio_s_drawing_says_what_sizing_an_object_needs(tmp_path: Path) -
     assert re.search(r'id="slide1\.body\.3"[^>]*data-flexo-cells="2 ', svg)
     exported = render_slide(deck, deck.slides[0]).svg
     assert "data-flexo-span" not in exported and "data-flexo-least" not in exported
+
+
+def test_a_plot_given_a_width_is_converted_to_a_picture_that_wide(tmp_path: Path) -> None:
+    import yaml
+
+    from flexo_talk.cli import main
+
+    source = tmp_path / "talk.py"
+    source.write_text(
+        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\nfrom flexo_talk import Deck\n\n"
+        "def talk():\n    deck = Deck('plotted')\n    figure, axes = plt.subplots()\n    axes.plot([0, 1], [1, 0])\n"
+        "    with deck.slide('Plot') as slide:\n        slide.plot(figure, width=400)\n    return deck\n"
+    )
+    target = tmp_path / "talk.yaml"
+    assert main(["convert", str(source), "-o", str(target)]) == 0
+    (block,) = yaml.safe_load(target.read_text())["slides"][0]["body"]
+    assert block["width"] == 400.0 and block["image"].endswith(".svg")
