@@ -3168,6 +3168,16 @@ export function mount(studio, container) {
     if (document.querySelector(".scrim, .menu") && !mod) return;
     // Typing in a field (the caption, say), only Esc is the crop's.
     if (document.activeElement?.matches?.("input:not([type=range]), textarea, [contenteditable=true]") && key !== "Escape") return;
+    // Esc in a drag takes back the drag alone, as Keynote's does; the next leaves the crop.
+    if (key === "Escape" && cropping.drag) {
+      event.preventDefault();
+      event.stopPropagation();
+      Object.assign(cropping, { keep: { ...cropping.drag.keep }, whole: { ...cropping.drag.whole } });
+      cropping.drag.moved = true;
+      cropRelease();
+      placeCrop();
+      return;
+    }
     if (key === "Escape" || (mod && key.toLowerCase() === "z")) { event.preventDefault(); event.stopPropagation(); cropCancel(); return; }
     if (key === "Enter" && !mod) { event.preventDefault(); event.stopPropagation(); cropApply(); return; }
     if (key.startsWith("Arrow") && !mod) {
