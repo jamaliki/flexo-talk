@@ -4220,18 +4220,25 @@ def _across(canvas: _Canvas, box: Box, width: float) -> float:
 
 def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
     art = load_artwork(identifier, block.source)
-    natural_w = art.width or box.width
-    natural_h = art.height or box.height
+    # Cropped, it is the part kept: its size and proportions are that part's.
+    left, top, kept_w, kept_h = block.crop or (0.0, 0.0, 1.0, 1.0)
+    natural_w = (art.width or box.width) * kept_w
+    natural_h = (art.height or box.height) * kept_h
     # A width asked for is the most it takes: never wider than its place.
     scale = min(min(block.width or box.width, box.width) / natural_w, box.height / natural_h)
     width, height = natural_w * scale, natural_h * scale
     canvas.span = (_across(canvas, box, width), width)
+    if block.crop is not None or block.mask is not None:
+        _cropped_image(canvas, identifier, block, art, Box(_across(canvas, box, width), box.y, width, height),
+                       (left, top, kept_w, kept_h))
+        return height
     if art.format == "svg" and _drawable(art.markup):
         # Vectors the drawing reader draws exactly: placed as shapes and text.
         view = [float(v) for v in re.split(r"[ ,]+", ET.fromstring(art.markup).get("viewBox", "").strip()) if v]
         units = (natural_w / view[2]) if len(view) == 4 and view[2] else 1.0
         _place_svg(canvas, identifier, art.markup, _across(canvas, box, width), box.y, scale * units, width)
         _described(canvas.layer[-1], block.description)
+        _whole(canvas.layer[-1], Box(_across(canvas, box, width), box.y, width, height))
         return height
     if art.format == "svg":
         import base64
@@ -4244,7 +4251,54 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         width=width, height=height, href=href, data__flexo__width=number(width),
     )
     _described(picture, block.description)
+    _whole(picture, Box(_across(canvas, box, width), box.y, width, height))
     return height
+
+
+def _cropped_image(
+    canvas: _Canvas, identifier: str, block: _Image, art: Any, kept: Box, crop: tuple[float, float, float, float]
+) -> None:
+    """A picture cropped, as Keynote masks one: the part of it kept, a rectangle (or an oval,
+    drawn round) filled with the whole picture placed so that part shows -- clipped, never
+    stretched. The slide draws only what is kept, and an editor finds it the size of that
+    part; the rest is there still, to be shown again (a native crop in a slide program). An
+    SVG is drawn as a picture of its vectors, which a slide program crops as it does a photograph."""
+
+    import base64
+
+    left, top, kept_w, kept_h = crop
+    whole_w, whole_h = kept.width / kept_w, kept.height / kept_h
+    if art.format == "svg":
+        href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+    else:
+        href = picture_href(art)
+    # One tile, as large as the picture: drawn once, where the crop puts it.
+    pattern = element(
+        canvas.layer, "pattern", id=f"{identifier}.crop", patternUnits="userSpaceOnUse",
+        x=kept.x - left * whole_w, y=kept.y - top * whole_h, width=whole_w, height=whole_h,
+    )
+    element(pattern, "image", width=whole_w, height=whole_h, href=href)
+    filled = f"url(#{identifier}.crop)"
+    if block.mask == "circle":
+        picture = element(
+            canvas.layer, "ellipse", id=identifier, cx=kept.x + kept.width / 2.0, cy=kept.y + kept.height / 2.0,
+            rx=kept.width / 2.0, ry=kept.height / 2.0, fill=filled, data__flexo__width=number(kept.width),
+        )
+    else:
+        picture = element(
+            canvas.layer, "rect", id=identifier, x=kept.x, y=kept.y, width=kept.width, height=kept.height,
+            fill=filled, data__flexo__width=number(kept.width),
+        )
+    _described(picture, block.description)
+    _whole(picture, Box(kept.x - left * whole_w, kept.y - top * whole_h, whole_w, whole_h))
+
+
+def _whole(picture: ET.Element, box: Box) -> None:
+    """Where the whole of a picture is drawn, cropped or not (``x y width height``, in the
+    units it is placed in): for an editor to show it whole as it is cropped, and to know
+    its proportions."""
+
+    picture.set("data-flexo-whole", " ".join(number(value) for value in (box.x, box.y, box.width, box.height)))
 
 
 def _described(picture: ET.Element, description: str) -> None:

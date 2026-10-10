@@ -168,8 +168,11 @@ PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
 `plot(matplotlib_figure)`, `table(rows)`, `gallery(pictures)` (logos or people in a
 grid, captions under them, `crop="circle"` for photographs), `code(source)` (a monospace listing
-on a tinted panel, comment lines muted), `image(path, description=)` (`description` says what it
-shows, for screen readers and PowerPoint's alt text), `quote(words, by=)` (set large,
+on a tinted panel, comment lines muted), `image(path, description=, crop=, mask=)` (`description` says what it
+shows, for screen readers and PowerPoint's alt text; `crop=[x, y, width, height]` keeps a part of
+it, as fractions of the whole picture -- `[0.1, 0, 0.8, 1]` the middle 80% across -- which is then
+the picture, its size and proportions, a native crop in PowerPoint; `mask="circle"` draws it
+round), `quote(words, by=)` (set large,
 an accent quotation mark hung in the margin), `stats(("93%", "accuracy"), ("4x", "faster"))`
 (numbers to remember, very large in the accent, labels under them), and
 `callout(words, title=, colour="accent2")` (a key point on a panel tinted in a tone). Words take the

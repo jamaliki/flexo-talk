@@ -253,6 +253,33 @@ def _size(value: object, what: str = "size") -> float | None:
     return None if value is None else _number(value, what, 4.0, 400.0, "20 (points)")
 
 
+def _crop(value: object) -> tuple[float, float, float, float] | None:
+    """The part of a picture kept, ``[x, y, width, height]`` as fractions of the whole
+    picture -- where its left edge and its top are, from the picture's, and how much of its
+    width and height it takes -- or None for all of it."""
+
+    import math
+
+    if value is None:
+        return None
+    said = ("crop must be the part of the picture kept, [x, y, width, height] as fractions of it, "
+            "such as [0.1, 0, 0.8, 1] (the middle 80% across)")
+    if isinstance(value, str) or not isinstance(value, Sequence) or len(value) != 4 or any(
+        isinstance(item, bool) or not isinstance(item, int | float) or not math.isfinite(item) for item in value
+    ):
+        # A gallery's crop is a shape: a picture's is the part of it kept, drawn round by its mask.
+        hint = (" To draw a picture round, keep a square of it and add mask: circle."
+                if value in ("circle", "square") else "")
+        raise SettingError("crop", f"{said}, not {value!r}.{hint}")
+    x, y, width, height = (float(item) for item in value)
+    if x < 0.0 or y < 0.0 or width < 0.01 or height < 0.01 or x + width > 1.0 + 1e-6 or y + height > 1.0 + 1e-6:
+        raise SettingError(
+            "crop", f"{said}: x and y from 0, width and height from 0.01, and x + width and y + height "
+            f"no more than 1, not [{', '.join(_said(item) for item in value)}].",
+        )
+    return x, y, min(width, 1.0 - x), min(height, 1.0 - y)
+
+
 def _flag(value: object, what: str) -> bool:
     if not isinstance(value, bool):
         raise SettingError(what, f"{what} must be true or false, not {value!r}.")
@@ -407,12 +434,18 @@ class _Figure:
 class _Image:
     source: str
     width: float | None = None
+    """The width the part of it kept is drawn at (points); ``None`` sizes it to its place."""
     description: str = ""
     """What the picture shows, in words, for whoever cannot see it: its alt text."""
     caption: tuple[TextRun, ...] = ()
     """Words set under it, centred, a size smaller: its caption, part of it."""
     caption_held: bool = False
     """Its caption put there empty, to be written: its placeholder drawn while editing."""
+    crop: tuple[float, float, float, float] | None = None
+    """The part of it kept, ``(x, y, width, height)`` as fractions of the whole picture
+    (Keynote's mask): its size and proportions are that part's. ``None`` keeps it whole."""
+    mask: str | None = None
+    """``circle``: what is kept drawn round -- a circle, kept square; an oval, else."""
 
 
 @dataclass(slots=True)
@@ -1143,18 +1176,29 @@ class Region:
 
     def image(
         self, source: str | Path, *, width: float | None = None, description: str | None = None,
-        caption: str | None = None,
+        caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | None = None,
     ) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture.
         ``description`` says what it shows, for whoever cannot see it (a screen reader,
-        PowerPoint's alt text); ``caption`` is set under it, centred, a size smaller."""
+        PowerPoint's alt text); ``caption`` is set under it, centred, a size smaller.
+
+        ``crop`` keeps part of it, as Keynote's mask does: ``[x, y, width, height]`` as
+        fractions of the whole picture (``[0.1, 0, 0.8, 1]`` keeps the middle 80% across).
+        The part kept is the picture then -- its size, its proportions, what ``width``
+        sizes -- the rest is there still, to be shown again (a native crop in PowerPoint;
+        a cropped SVG is drawn as a picture, not as shapes). ``mask="circle"`` draws it
+        round: a circle where what is kept is square, an oval where it is not."""
 
         width = _width(width)
         description = " ".join(str(description).split()) if description is not None else ""
         held, caption = caption == "", _caption(caption)
-        self.blocks.append(_Image(str(source), width, description, inline(caption), held))
-        self._record("image", str(source), width=width, description=description or None, caption=caption or None)
+        crop = _crop(crop)
+        mask = None if mask is None else _choice(mask, "mask", ("circle",))
+        self.blocks.append(_Image(str(source), width, description, inline(caption), held, crop, mask))
+        kept = [int(item) if item.is_integer() else item for item in crop] if crop else None
+        self._record("image", str(source), width=width, crop=kept, mask=mask, description=description or None,
+                     caption=caption or None)
         return self
 
     def build_in(self) -> Region:
@@ -1476,9 +1520,11 @@ class Slide:
 
     def image(
         self, source: str | Path, *, width: float | None = None, description: str | None = None,
-        caption: str | None = None,
+        caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | None = None,
     ) -> Slide:
-        next(iter(self.regions.values())).image(source, width=width, description=description, caption=caption)
+        next(iter(self.regions.values())).image(
+            source, width=width, description=description, caption=caption, crop=crop, mask=mask
+        )
         return self
 
     def build_in(self) -> Slide:

@@ -2634,3 +2634,51 @@ def test_a_figure_of_one_molecule_is_described_once_in_powerpoint(tmp_path: Path
     # Its description on the figure; the molecule's picture in it says the same, so it is
     # marked decorative -- a screen reader says it once.
     assert described == [("Figure", "A dimeric beta-barrel", False), ("Structure E2 domain", None, True)]
+
+
+def test_a_picture_is_cropped_to_the_part_kept_and_drawn_round_by_its_mask(tmp_path: Path) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (400, 200), "#2b4c9b").save(tmp_path / "wide.png")
+    document = yaml.safe_load(
+        "deck: {id: crop}\nslides:\n"
+        "  - title: Cropped\n    body:\n"
+        "      - {image: wide.png, crop: [0.25, 0, 0.5, 1], width: 200}\n"
+        "  - title: Round\n    body:\n"
+        "      - {image: wide.png, crop: [0.25, 0, 0.5, 1], mask: circle}\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+    svg = render_slide(deck, deck.slides[0]).svg
+    # The part kept is the picture: a square, 200 points wide as asked -- the whole of it,
+    # twice as wide, filling it from where the crop puts it.
+    kept = re.search(r'<rect id="slide1\.body\.0" x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" '
+                     r'fill="url\(#slide1\.body\.0\.crop\)"', svg)
+    assert kept and float(kept[3]) == float(kept[4]) == 200.0
+    pattern = re.search(r'<pattern id="slide1\.body\.0\.crop" patternUnits="userSpaceOnUse" x="([\d.]+)" y="([\d.]+)" '
+                        r'width="([\d.]+)" height="([\d.]+)"', svg)
+    assert pattern and float(pattern[3]) == 400.0 and float(pattern[1]) == float(kept[1]) - 100.0
+    round_svg = render_slide(deck, deck.slides[1]).svg
+    assert re.search(r'<ellipse id="slide2\.body\.0"[^>]*fill="url\(#slide2\.body\.0\.crop\)"', round_svg)
+    # Written back as it was read.
+    slides = deck_document(deck)["slides"]
+    assert slides[0]["body"][0] == {"image": "wide.png", "width": 200, "crop": [0.25, 0, 0.5, 1]}
+    assert slides[1]["body"][0]["mask"] == "circle"
+
+
+@pytest.mark.parametrize(("crop", "said"), [
+    ("circle", "To draw a picture round, keep a square of it and add mask: circle"),
+    ([0.5, 0, 0.8, 1], r"x \+ width and y \+ height no more than 1, not \[0.5, 0, 0.8, 1\]"),
+    ([0, 0, 1], r"\[x, y, width, height\] as fractions of it"),
+    ([0, 0, 0, 1], "width and height from 0.01"),
+])
+def test_a_crop_that_keeps_no_part_of_the_picture_says_what_a_crop_is(tmp_path: Path, crop: object, said: str) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (40, 20), "#2b4c9b").save(tmp_path / "wide.png")
+    document = {"deck": {"id": "crop"}, "slides": [{"title": "A", "body": [{"image": "wide.png", "crop": crop}]}]}
+    with pytest.raises(DeckDocumentError, match=r"slides\[0\]\.body\[0\] \(image\): crop must be") as caught:
+        deck_from_document(document, tmp_path)
+    assert re.search(said, str(caught.value))
+    document["slides"][0]["body"][0] = {"image": "wide.png", "mask": "oval"}
+    with pytest.raises(DeckDocumentError, match="mask must be one of circle, not 'oval'"):
+        deck_from_document(document, tmp_path)
