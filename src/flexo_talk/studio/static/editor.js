@@ -3660,7 +3660,14 @@ export function mount(studio, container) {
       menu(point, [...clipItems(), { icon: "duplicate", label: `Duplicate ${count} Objects`, keys: "⌘D", run: () => duplicateChosen() }, "-", ...chosenCommands()]);
       return;
     }
-    if (part?.kind === "logo") { chooseLogo(part.index); menu(point, logoItems(part.index)); return; }
+    if (part?.kind === "logo") {
+      chooseLogo(part.index);
+      // Its own commands, then Cut, Copy and Paste as any object's menu has them, then the rest.
+      const items = logoItems(part.index);
+      items.splice(2, 0, ...clipItems(), "-");
+      menu(point, items);
+      return;
+    }
     if (part?.kind !== "block") {
       leaveFigure(false);
       state.focus = null;
@@ -3710,7 +3717,7 @@ export function mount(studio, container) {
     if (cut) cutAway(clip); else copied(clip);
   }
   // What is copied, by name, for a command: "Table", "2 Shapes", "Slide".
-  const clipName = (clip) => (clip.what === "block" ? blockLabel(clip.block) : clip.label.replace(/(^|\s)\p{L}/gu, (first) => first.toUpperCase()));
+  const clipName = (clip) => (clip.what === "block" ? (clip.logo !== undefined ? "Logo" : blockLabel(clip.block)) : clip.label.replace(/(^|\s)\p{L}/gu, (first) => first.toUpperCase()));
   function blockMenu(point, at, cell = null) {
     const slide = slideAt(), block = blocksAt(slide, at.region)[at.index];
     if (!block) return;
@@ -6489,9 +6496,13 @@ export function mount(studio, container) {
       if (!pictures.length) { if (all.length) toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return all.length > 0; }
       const row = at?.clientX !== undefined ? logoRow() : [];
       const where = row.length ? row.filter((item) => (item.box.left + item.box.right) / 2 < at.clientX).length : null;
+      // (A picture no logo can be -- a GIF, say -- is said so, not put in the deck's folder.)
+      const fit = pictures.filter((file) => logoFile(file.name));
+      if (fit.length < pictures.length) notLogo(pictures.find((file) => !logoFile(file.name)).name);
       const paths = [];
-      for (const file of pictures) paths.push(await studio.upload(file));
-      await addLogos(paths, where);
+      for (const file of fit) paths.push(await studio.upload(file));
+      // (Pasted, with no place in the row: said as pasted.)
+      if (paths.length) await addLogos(paths, where, { pasted: !at });
       return true;
     }
     if (!pictures.length && !structures.length) {
@@ -6716,7 +6727,7 @@ export function mount(studio, container) {
       studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, copyOf(clip.slide)); }, { label: "Paste Slide" });
       select(at);
     } else if (clip.what === "block") {
-      if (logoRoom(slideAt()) && kindOf(clip.block) === "image" && clip.block.image) { addLogos([clip.block.image]); return; }
+      if (logoRoom(slideAt()) && kindOf(clip.block) === "image" && clip.block.image) { addLogos([clip.block.image], null, { pasted: true }); return; }
       if (!regionsOf(slideAt()).length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
       // Cut here, and back since -- kept for another typing in it as it was cut -- the paste
       // is a move: it is taken from where it came back, with their words, and put here; one
@@ -9029,8 +9040,10 @@ export function mount(studio, container) {
     placeChosen(); renderInspector(); reportFocus();
   }
   // Pictures added as logos (`paths`; else one chosen), at `at` in the row (else after the
-  // logo chosen, or at its end) -- said so (`said`) where what was asked for was a picture.
-  async function addLogos(paths = null, at = null, { said = true } = {}) {
+  // logo chosen, or at its end) -- said so (`said`) where what was asked for was a picture,
+  // pasted (`pasted`) or added. A deck with no title slide shows them on every slide: there,
+  // they would show nowhere -- said so.
+  async function addLogos(paths = null, at = null, { said = true, pasted = false } = {}) {
     if (awayFrom("add logos")) return;
     if (!paths) {
       const path = await chooseFile({ title: "Add Logo", types: ["image"], action: "Add" });
@@ -9038,14 +9051,23 @@ export function mount(studio, container) {
       paths = [path];
     }
     const wrong = paths.filter((path) => !logoFile(path));
-    if (wrong.length) toast(`A logo is a PNG, JPEG, SVG or PDF picture: ${logoName(wrong[0])} is none of these.`, { icon: "info", seconds: 5 });
+    if (wrong.length) notLogo(wrong[0]);
     paths = paths.filter(logoFile);
     if (!paths.length) return;
     const count = logosOf().length;
     const where = at ?? (logoChosen() ? state.logo + 1 : count);
-    editLogos((list) => list.splice(where, 0, ...paths), paths.length === 1 ? "Add Logo" : `Add ${paths.length} Logos`, { chosen: where + paths.length - 1 });
-    if (said) toast(paths.length === 1 ? "Added as a logo" : `${paths.length} pictures added as logos`, { icon: "image" });
+    const everywhere = doc().deck?.logos_on !== "every" && !slides().some((slide) => layoutOf(slide) === "title");
+    const verb = pasted ? "Paste" : "Add";
+    editLogos((list, deck) => {
+      list.splice(where, 0, ...paths);
+      if (everywhere) deck.logos_on = "every";
+    }, paths.length === 1 ? `${verb} Logo` : `${verb} ${paths.length} Logos`, { chosen: where + paths.length - 1 });
+    const done = pasted ? "pasted" : "added";
+    if (everywhere) toast(`${paths.length === 1 ? "Logo" : `${paths.length} logos`} ${done}, shown on every slide: this deck has no title slide.`, { icon: "image", seconds: 5 });
+    else if (said) toast(paths.length === 1 ? `${pasted ? "Pasted" : "Added"} as a logo` : `${paths.length} pictures ${done} as logos`, { icon: "image" });
   }
+  // A file that is no logo, said so.
+  const notLogo = (path) => toast(`A logo is a PNG, JPEG, SVG or PDF picture: ${logoName(path)} is none of these.`, { icon: "info", seconds: 5 });
   function deleteLogo(index, label = "Delete Logo") {
     if (awayFrom("delete logos") || index >= logosOf().length) return;
     editLogos((list) => list.splice(index, 1), label, { chosen: null, was: index });
@@ -9060,7 +9082,7 @@ export function mount(studio, container) {
   }
   async function replaceLogo(index) {
     const path = await chooseFile({ title: "Replace Logo", types: ["image"], action: "Replace" });
-    if (!path || !logoFile(path) || index >= logosOf().length) { if (path && !logoFile(path)) toast(`A logo is a PNG, JPEG, SVG or PDF picture: ${logoName(path)} is none of these.`, { icon: "info", seconds: 5 }); return; }
+    if (!path || !logoFile(path) || index >= logosOf().length) { if (path && !logoFile(path)) notLogo(path); return; }
     editLogos((list) => { list[index] = path; }, "Replace Logo", { chosen: index, was: index });
   }
   // Every logo as tall as `height` points (null: the deck's default), one step.
@@ -9352,7 +9374,13 @@ export function mount(studio, container) {
             moveLogo(index, index + (event.key === "ArrowUp" ? -1 : 1));
           } else if ((event.key === "Enter" || event.key === " ") && logosShown()) { event.preventDefault(); chooseLogo(index); }
           // ⌫ takes it out of the list, as Remove does.
-          else if ((event.key === "Backspace" || event.key === "Delete") && !event.metaKey && !event.ctrlKey) { event.preventDefault(); deleteLogo(index, "Remove Logo"); }
+          else if ((event.key === "Backspace" || event.key === "Delete") && !event.metaKey && !event.ctrlKey) {
+            event.preventDefault();
+            deleteLogo(index, "Remove Logo");
+            // The keys stay in the list: on the logo after it (or before it), or on Add Logo… once none is left.
+            const left = inspectorBody.querySelectorAll(".logo-row");
+            (left[Math.min(index, left.length - 1)] || inspectorBody.querySelector('[data-key="logos.add"]'))?.focus({ preventScroll: true });
+          }
         },
         ondragstart: (event) => { logoDragged = index; row.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", logoName(path)); },
         ondragend: () => { logoDragged = null; row.classList.remove("dragging"); },
@@ -9378,23 +9406,33 @@ export function mount(studio, container) {
       ui.button("", () => deleteLogo(index, "Remove Logo"), { kind: "ghost", icon: "trash", small: true, title: "Remove" }));
       return row;
     });
+    // (A deck with no title slide shows them in every slide's footer once they are added.)
+    const titled = slides().some((slide) => layoutOf(slide) === "title");
+    // (Found again by its key once the list is drawn again: the keys stay on it.)
+    const adder = () => {
+      const button = ui.button("Add Logo…", () => addLogos(null, null, { said: false }), { kind: "ghost", icon: "plus", small: true });
+      button.dataset.key = "logos.add";
+      return button;
+    };
     // (Where they show, and how tall, once there are some.)
     if (!list.length) {
-      return [h("div.hint-line", {}, "Your institution’s and funders’ logos, along the foot of the title slide."),
-        h("div", {}, ui.button("Add Logo…", () => addLogos(null, null, { said: false }), { kind: "ghost", icon: "plus", small: true }))];
+      return [h("div.hint-line", {}, titled ? "Your institution’s and funders’ logos, along the foot of the title slide." : "Your institution’s and funders’ logos, small in every slide’s footer."),
+        h("div", {}, adder())];
     }
     return [
       h("div.list-rows.logo-rows", {}, rows),
-      h("div", {}, ui.button("Add Logo…", () => addLogos(null, null, { said: false }), { kind: "ghost", icon: "plus", small: true })),
+      h("div", {}, adder()),
       ui.field("Show On", ui.segmented({ value: deck.logos_on === "every" ? "every" : "title", key: "deck.logos_on",
         options: [{ value: "title", label: "Title Slide" }, { value: "every", label: "Every Slide" }],
         onChange: (value) => {
           studio.change((d) => { d.deck ||= {}; setOption(d.deck, "logos_on", value, "title"); }, { label: value === "every" ? "Show Logos on Every Slide" : "Show Logos on Title Slide" });
           renderInspector();
         } })),
+      // (Shown on no slide, that is said under the choice: a field's hint in words is only its tooltip.)
+      deck.logos_on !== "every" && !titled ? h("div.hint-line", {}, "This deck has no title slide: choose Every Slide to show them.") : null,
       ui.field("Size", h("div.row", {},
         ui.number({ value: deck.logo_height ?? null, placeholder: String(LOGO_DEFAULT), min: LOGO_LEAST, max: LOGO_MOST, step: 2, unit: "pt", key: "deck.logo_height",
-          onChange: (value) => sizeLogos(value, "Change Logo Size") }),
+          onChange: (value) => sizeLogos(value) }),
         deck.logo_height != null ? ui.button("Reset Size", () => resetLogoSize(), { small: true, kind: "ghost" }) : null),
       { hint: `How tall they stand on the title slide; in a footer, ${Math.round((catalog.logos?.footer ?? 0.5) * 100)}% of that. Or drag a logo’s corner on the slide` }),
     ];
@@ -9749,6 +9787,8 @@ export function mount(studio, container) {
         { icon: "trash", label: `Delete ${count} Objects`, keys: "⌫", run: () => deleteAll() },
       ];
     }
+    // A logo chosen: its menu's commands.
+    if (logoChosen() && !typingNow()) return logoItems(state.logo).filter((item) => item !== "-" && !item.disabled);
     const at = state.focus, block = at && !typingNow() ? blocksAt(slideAt(), at.region)[at.index] : null;
     if (!block) return [];
     const kind = kindOf(block), name = blockLabel(block), count = blocksAt(slideAt(), at.region).length;
@@ -9763,6 +9803,7 @@ export function mount(studio, container) {
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "text") }] : []),
       ...(kind === "image" && pictureAspect(at) ? [{ icon: "crop", label: "Crop Picture…", hint: name, run: () => startCrop(at) }] : []),
       ...(kind === "image" && (block.crop != null || block.mask != null) ? [{ icon: "refresh", label: "Reset Crop", hint: name, run: () => resetCrop(at) }] : []),
+      ...((SIZED.has(kind) || SIDEWAYS.has(kind) || CORNERED.has(kind)) && block.width != null ? [{ icon: "refresh", label: "Reset Size", hint: name, run: () => sizeFit() }] : []),
       // As the Mac app's Arrange menu names them; the hint says what they move.
       ...(at.index > 0 ? [{ icon: "up", label: "Move Up", keys: "⌥↑", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
       ...(at.index < count - 1 ? [{ icon: "down", label: "Move Down", keys: "⌥↓", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) }] : []),
@@ -9929,6 +9970,8 @@ export function mount(studio, container) {
     // Customise…: the theme made a file of its own, the deck's palette taken into it.
     if (keys.includes("theme") && keys.every((key) => key === "theme" || key === "palette")) return typeof b.theme === "string" && /\.(ya?ml|json)$/i.test(b.theme) ? "Customise Theme" : "Change Theme";
     if (keys.length === 1 && TYPED_FIELDS.has(keys[0])) return typing(b[keys[0]], a[keys[0]]);
+    // (As the logos' corners and Size name it.)
+    if (keys.length === 1 && keys[0] === "logo_height") return b.logo_height == null ? "Reset Logo Size" : "Resize Logos";
     return keys.length === 1 ? `Change ${DECK_NAMES[keys[0]] || keyTitle(keys[0])}` : "Change Design";
   }
   const SLIDE_WORDS = [["title", "Title"], ["subtitle", "Subtitle"], ["words", "Text"], ["by", "Attribution"], ["author", "Author"], ["date", "Date"]];

@@ -470,7 +470,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   is: ⌫ deletes it, ⌥← ⌥→ or a drag along the row move it, and a corner sizes every
   logo at once (they share one height; it catches at the default, and a double-click
   on a corner goes back to it). **Design › Logos** lists them (drag to reorder),
-  adds them, and says where they show and how tall.
+  adds them, and says where they show and how tall; added to a deck with no title
+  slide, they show on every slide.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
   being edited is drawn first; the others follow.
