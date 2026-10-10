@@ -193,8 +193,10 @@ function wrapped(units, room, balance) {
   return fill(units, high);
 }
 
+// Its paragraphs' words, measured once (not again at every move of the pointer).
+const unitsOf = (words) => (words.units ||= words.paragraphs.map(tokensOf));
 // How many lines words take wrapped at `room` points.
-const linesIn = (words, room) => words.paragraphs.reduce((sum, pieces) => sum + wrapped(tokensOf(pieces), room, words.balance).length, 0);
+const linesIn = (words, room) => unitsOf(words).reduce((sum, units) => sum + wrapped(units, room, words.balance).length, 0);
 
 // Pieces of words in one look, a tspan each: the first starting a line where `x` says.
 function spansOf(tokens, words, x, dy) {
@@ -221,7 +223,7 @@ function spansOf(tokens, words, x, dy) {
 // The words of `element` set again in `room` points, their lines where `x` says (as their
 // anchor sets them) from the first baseline `y` down; returns how many lines they take.
 function setWords(element, words, room, x, y = words.y) {
-  const lines = words.paragraphs.flatMap((pieces) => wrapped(tokensOf(pieces), room, words.balance));
+  const lines = unitsOf(words).flatMap((units) => wrapped(units, room, words.balance));
   if (words.drawn === "formulas") return setFormulaWords(element, words, lines, x, y);
   while (element.firstChild) element.firstChild.remove();
   element.setAttribute("x", String(x));
