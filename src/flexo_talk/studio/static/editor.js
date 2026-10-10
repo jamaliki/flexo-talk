@@ -3091,6 +3091,8 @@ export function mount(studio, container) {
     const box = drawnBox(was.element), frame = cropFrameBox(was);
     if (box && frame) {
       const k = scaleOf(wrap);
+      // (There at once: not gliding there.)
+      wrap.classList.add("block-sized");
       Object.assign(wrap.style, { transformBox: "fill-box", transformOrigin: "0 0",
         transform: `translate(${(frame.left - box.left) * k}px, ${(frame.top - box.top) * k}px) scale(${frame.width / box.width}, ${frame.height / box.height})` });
     }
