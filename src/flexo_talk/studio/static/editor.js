@@ -2945,7 +2945,7 @@ export function mount(studio, container) {
     // A caption typed on the slide, under it: one it has none of put there to be written.
     if (OWN_LINES[kind]?.caption) items.push({ icon: "text", label: block.caption != null ? "Edit Caption" : "Add Caption", run: () => openInline({ kind: "block", ...at, part: "caption" }) });
     if (cell) items.push("-", ...tableItems(at, cell));
-    if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", keys: "A", run: () => whenFigure(() => figure.parts.addPalette(point)) });
+    if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", run: () => whenFigure(() => figure.parts.addPalette(point)) });
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
     // Another picture in its place, as Keynote's Replace: its size, caption and place kept.
@@ -3746,7 +3746,7 @@ export function mount(studio, container) {
     const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: `Drag to move the ${name.toLowerCase()}`,
       onpointerdown: (event) => { event.stopPropagation(); pressBlock(event, { kind: "block", region: figure.region, index: figure.index }); } }, icon("grip"));
     // (Shapes to group chosen: an empty group is added from the palette's Layout.)
-    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (G)", disabled: !figure.parts.canGroup() });
+    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (⌥⌘G)", disabled: !figure.parts.canGroup() });
     // (A figure of one shape -- a structure added on its own -- is that shape, as a picture is:
     // no tools of a diagram's over it. It grows into a figure from its menu's Add Shape After….)
     const only = figure.parts.model.groups?.find((each) => each.id === figure.parts.model.root)?.children || [];
@@ -3754,8 +3754,8 @@ export function mount(studio, container) {
     clear(figureBar, words ? h("span.figure-hint", {}, words) : [
       grip,
       ...(alone ? [] : [
-        ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add Shape (A)", id: undefined }),
-        ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a line from one shape to another (C)" }),
+        ui.button("Add Shape", (event) => figure.parts.addPalette(event.currentTarget), { small: true, icon: "plus", kind: "primary", title: "Add a Shape", id: undefined }),
+        ui.button("Connect", () => figure.parts.toggleConnect(), { small: true, kind: "ghost", icon: "right", title: "Draw a Line from One Shape to Another" }),
         group]),
       ui.button("", (event) => menu(event.currentTarget, exportItems(figure)),
         { small: true, kind: "ghost", icon: "export", title: `Export ${name} (SVG, PDF, PNG, YAML)` }),

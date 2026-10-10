@@ -400,7 +400,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   another group where it is drawn (a figure's only part -- a structure added with
   **Structure** -- moves the figure on the slide instead, and has **Position** in
   its panel), as in flexo's figure editor: a bar above the
-  figure adds parts (A) and draws lines (C), a **+** beside the part chosen adds
+  figure adds parts and draws lines, typing on a part chosen types over its words, a
+  **+** beside the part chosen adds
   the next step, joined to it, its words typed at once, and the inspector shows
   the part chosen. A part added after one whose single line runs on to the next
   goes into that line, as a step into a flow chart. A chosen molecule turns as
