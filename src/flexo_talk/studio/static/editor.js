@@ -2655,6 +2655,16 @@ export function mount(studio, container) {
     ondblclick: (event) => { event.stopPropagation(); sizeFit(); },
   })));
   const sizeTip = h("div.size-tip", { hidden: true });
+  // The size said beside the pointer (at `x`, `y` in the window): below it to its right -- or,
+  // where the stage would cut it off there, to its left, or above it.
+  function tipAt(text, x, y) {
+    sizeTip.textContent = text;
+    sizeTip.hidden = false;
+    const outer = pageNode.getBoundingClientRect(), seen = stage.getBoundingClientRect();
+    const left = x + 14 + sizeTip.offsetWidth > seen.right - 8 ? x - 14 - sizeTip.offsetWidth : x + 14;
+    const top = y + 16 + sizeTip.offsetHeight > seen.bottom - 8 ? y - 12 - sizeTip.offsetHeight : y + 16;
+    Object.assign(sizeTip.style, { left: `${left - outer.left}px`, top: `${top - outer.top}px` });
+  }
 
   // Where the slide draws the part at `scale` times its size: across its place where it
   // stands (`share` of the room to spare on its left: compose.py's `_across` -- under words at
@@ -2800,10 +2810,7 @@ export function mount(studio, container) {
     const id = `slide${state.slide + 1}.${regionsOf(slideAt()).find((r) => r.key === sizing.at.region).svg}.${sizing.at.index}`;
     place(chosen, boxOf(id));
     const share = Math.round((100 * scale * sizing.points * sizing.unit) / across);
-    sizeTip.textContent = scale === full ? `Full ${sizing.column} width` : scale === most ? "Maximum size" : `${share}% of ${sizing.column} width`;
-    const outer = pageNode.getBoundingClientRect();
-    Object.assign(sizeTip.style, { left: `${event.clientX - outer.left + 14}px`, top: `${event.clientY - outer.top + 16}px` });
-    sizeTip.hidden = false;
+    tipAt(scale === full ? `Full ${sizing.column} width` : scale === most ? "Maximum size" : `${share}% of ${sizing.column} width`, event.clientX, event.clientY);
   }
 
   function sizeFinish() {
@@ -3475,9 +3482,7 @@ export function mount(studio, container) {
     const left = it.matrix.e + at.left * it.unit - outer.left, wide = at.width * it.unit;
     const pad = CORNERED.has(it.kind) ? 5 : 8;
     if (inked) place(chosen, { left: left - pad, top: inked.top - outer.top - pad, width: wide + 2 * pad, height: inked.height + 2 * pad });
-    sizeTip.textContent = at.caught === "full" ? `Full ${it.column} width` : at.caught === "natural" ? naturalSaid(it.kind) : `${points(it, at.width)} pt wide`;
-    Object.assign(sizeTip.style, { left: `${x - outer.left + 14}px`, top: `${y - outer.top + 16}px` });
-    sizeTip.hidden = false;
+    tipAt(at.caught === "full" ? `Full ${it.column} width` : at.caught === "natural" ? naturalSaid(it.kind) : `${points(it, at.width)} pt wide`, x, y);
   }
   // A width in whole points, as it is written: never less than its least (a hair less, its
   // words would not fit).
@@ -9181,7 +9186,9 @@ export function mount(studio, container) {
     const far = { x: corner.endsWith("w") ? own.x + own.width : own.x, y: corner.startsWith("n") ? own.y + own.height : own.y };
     closeInline();
     hover.hidden = true;
-    logoSizing = { elements, anchor: { x: across, y: down }, handle, far, inverse: matrix.inverse(), height: logoHeight(), now: logoHeight(),
+    // (In a footer they stand a share of the height the deck gives them, which a title slide's show.)
+    const footer = title ? 1 : catalog.logos?.footer ?? 0.5;
+    logoSizing = { elements, anchor: { x: across, y: down }, handle, far, footer, inverse: matrix.inverse(), height: logoHeight(), now: logoHeight(),
       pixels: own.height * matrix.a / logoHeight(), start: { x: event.clientX, y: event.clientY }, moved: false };
     pageNode.classList.add("block-sizing");
     if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
@@ -9209,10 +9216,9 @@ export function mount(studio, container) {
     const k = height / sizing.height;
     for (const element of sizing.elements) element.setAttribute("transform", `translate(${anchor.x} ${anchor.y}) scale(${k}) translate(${-anchor.x} ${-anchor.y})`);
     place(logoFrame, boxOf(logoId(state.logo)));
-    sizeTip.textContent = height === LOGO_DEFAULT ? `${height} pt · Default Size` : `${height} pt`;
-    const outer = pageNode.getBoundingClientRect();
-    Object.assign(sizeTip.style, { left: `${event.clientX - outer.left + 14}px`, top: `${event.clientY - outer.top + 16}px` });
-    sizeTip.hidden = false;
+    // Said as tall as they are drawn here: in a footer, how tall they are there.
+    const shown = sizing.footer === 1 ? `${height} pt` : `${Math.round(height * sizing.footer)} pt in the footer`;
+    tipAt(height === LOGO_DEFAULT ? `${shown} · Default Size` : shown, event.clientX, event.clientY);
   }
   function logoSizeFinish() {
     const was = logoSizing;
