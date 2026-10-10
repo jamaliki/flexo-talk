@@ -182,6 +182,11 @@ with English words, numbers, and maths inside it kept in order.
   (960x540 pt is 16:9; 720x540 is 4:3). `from flexo_talk import DeckStyle`.
 - **Type by role**: `Deck(font=, title_font=, figure_font=)`; each falls back to
   `font`, then to the theme's family.
+- **Logos** (an institution's, its funders'): `Deck(logos=["logos/institute.png",
+  "logos/funder.svg"], logos_on="title", logo_height=40)` -- PNG, JPEG, SVG or PDF
+  files, in order. On a title slide: a row along its foot, the words above making room;
+  `logos_on="every"` puts them small in every other slide's footer too. In a document:
+  `deck: {logos: [logos/institute.png], logos_on: every}`.
 - **A theme file can carry the slides' look**: beside `theme:`, a `slides:`
   section gives the deck's `look`, `style` (any `DeckStyle` field), `background`
   (a colour, or a picture such as a paper texture under every slide), and fonts

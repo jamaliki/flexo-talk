@@ -160,6 +160,17 @@ Any slide (title and section slides too) can take `background=`: a colour
 (a native crop in PowerPoint), with `shade=0.4` to darken it. On a dark
 background the slide's words and accents are set light (`dark=` overrides).
 
+A deck's **logos** -- an institution's, its funders' -- are the deck's, not a slide's:
+`Deck(logos=["logos/institute.png", "logos/funder.svg"])`, PNG, JPEG, SVG or PDF
+pictures in the order they stand. On a title slide they stand in a row along its
+foot, centred and evenly spaced, each `logo_height` points tall (40 unless set) in its
+own proportions -- a very wide one narrowed until the row fits -- and the title, subtitle
+and byline make room above them. With `logos_on="every"` the other slides carry them
+too, small (half that height) in the footer, clear of its words and the slide's number.
+A logo is drawn as it is, never recoloured, on light and dark slides alike, and is a
+native picture in the PowerPoint. In a document:
+`deck: {logos: [logos/institute.png, logos/funder.svg], logos_on: every, logo_height: 36}`.
+
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below; `numbered=True` numbers every level in its tier (1., a., i.), natively in PowerPoint;
 `plain=True` draws no bullets or numbers, each item at its level's indent (Keynote's None);

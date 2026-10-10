@@ -1753,3 +1753,114 @@ def test_tables_side_by_side_share_one_top() -> None:
     # Columns of pictures or tables line up at the top, as Keynote's do, however tall each is.
     left, right = rendered.tables
     assert left.y == pytest.approx(right.y)
+
+
+def _logo(path: Path, width: int, height: int, colour: tuple[int, int, int, int] = (20, 60, 120, 255)) -> Path:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    Image.new("RGBA", (width, height), colour).save(path)
+    return path
+
+
+def _pictures(svg: str, pattern: str = r"slide\d+\.logo\d+") -> list[tuple[float, float, float, float]]:
+    """The ``(x, y, width, height)`` of every picture whose id matches ``pattern``, in order."""
+
+    import xml.etree.ElementTree as ET
+
+    return [tuple(float(item.get(key, 0)) for key in ("x", "y", "width", "height"))  # type: ignore[misc]
+            for item in ET.fromstring(svg).iter()
+            if item.tag.endswith("image") and re.fullmatch(pattern, item.get("id", ""))]
+
+
+def test_logos_stand_in_a_row_along_the_title_slide_s_foot_and_its_words_make_room(tmp_path: Path) -> None:
+    from flexo_talk import compose
+
+    wide, square = _logo(tmp_path / "institute.png", 400, 100), _logo(tmp_path / "crest.png", 60, 60)
+    plain = Deck("plain")
+    plain.title("Folding proteins", subtitle="With diffusion", author="Ada")
+    deck = Deck("logos", logos=[wide, square])
+    deck.title("Folding proteins", subtitle="With diffusion", author="Ada")
+    with deck.slide("Not here") as slide:
+        slide.bullets("A point")
+    svg = compose.render_slide(deck, deck.slides[0]).svg
+    first, second = _pictures(svg)
+    style = deck.style
+    # One height, each in its proportions, along the foot, centred, evenly spaced.
+    assert first[3] == second[3] == 40.0 and first[2] == 160.0 and second[2] == 40.0
+    assert first[1] + first[3] == pytest.approx(style.height - style.margin * 0.8)
+    assert (first[0] + second[0] + second[2]) / 2 == pytest.approx(style.width / 2)
+    assert second[0] - first[0] - first[2] == pytest.approx(40.0 * compose.LOGO_GAP)
+    # The title's words moved up to make room, and end above the row.
+    def lowest(markup: str) -> float:
+        return max(y for _, y in _texts(markup, r"slide1\.(title|subtitle|byline)$"))
+
+    assert lowest(svg) < lowest(compose.render_slide(plain, plain.slides[0]).svg) < first[1]
+    # A logo is a picture as it is: never repainted for the slide.
+    assert 'data-flexo-talk="logo"' in svg and "logo" not in compose.render_slide(deck, deck.slides[1]).svg
+    result = deck.build(tmp_path, formats=("pptx",))
+    title = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    pictures = re.findall(r'<p:pic>.*?</p:pic>', title, re.S)
+    assert len(pictures) == 2 and all('name="Logo"' in picture for picture in pictures)
+    # Native pictures where the slide draws them, passed over by a screen reader.
+    assert '<a:off x="4622800" y="5862320"/>' in pictures[0] and "decorative" in pictures[0]
+    # Not grouped with the byline: each a shape of its own on the slide.
+    assert "<p:grpSp>" not in title
+
+
+def test_logos_on_every_slide_stand_small_in_the_footer_clear_of_its_words_and_number(tmp_path: Path) -> None:
+    from flexo_talk import compose
+
+    logos = [_logo(tmp_path / "a.png", 300, 100), _logo(tmp_path / "b.png", 100, 100)]
+    footer = "A long footer that runs a good way along the foot of every slide in the deck"
+    deck = Deck("every", logos=logos, logos_on="every", logo_height=48, footer=footer)
+    deck.title("A talk")
+    deck.section("A part")
+    with deck.slide("Words") as slide:
+        slide.bullets("A point")
+    title, section, content = (compose.render_slide(deck, slide).svg for slide in deck.slides)
+    assert [box[3] for box in _pictures(title)] == [48.0, 48.0]
+    row = _pictures(content)
+    assert [box[3] for box in row] == [24.0, 24.0]
+    # Centred on the footer's line, clear of its words and of the slide's number.
+    import xml.etree.ElementTree as ET
+
+    texts = {item.get("id"): item for item in ET.fromstring(content).iter() if item.tag.endswith("text")}
+    words = compose._Canvas(deck, deck.slides[2]).measure(compose.inline(footer), deck.style.small_size * 0.8, 480)
+    assert row[0][0] >= deck.style.margin + words.width + compose.LOGO_ROOM - 0.01
+    number = float(texts["slide3.number"].get("x", 0))
+    assert row[-1][0] + row[-1][2] <= number - compose.LOGO_ROOM
+    # The body ends above them: its room stops short of the logos.
+    body = next(item for item in ET.fromstring(content).iter() if item.get("id") == "slide3.body")
+    _, y, _, height = (float(value) for value in body.get("data-flexo-box", "").split())
+    assert y + height <= row[0][1] - compose.LOGO_ROOM / 2 + 0.01
+    assert len(_pictures(section)) == 2
+
+
+def test_a_very_wide_logo_is_narrowed_so_the_row_fits(tmp_path: Path) -> None:
+    from flexo_talk import compose
+
+    banner = _logo(tmp_path / "banner.png", 2800, 100)
+    squares = [_logo(tmp_path / f"s{n}.png", 50, 50) for n in range(3)]
+    deck = Deck("wide", logos=[banner, *squares])
+    deck.title("A talk")
+    row = _pictures(compose.render_slide(deck, deck.slides[0]).svg)
+    style = deck.style
+    assert row[0][0] >= style.margin - 0.01 and row[-1][0] + row[-1][2] <= style.width - style.margin + 0.01
+    # The squares keep the row's height; the banner, narrowed, stands shorter, in its proportions.
+    assert [box[3] for box in row[1:]] == [40.0, 40.0, 40.0]
+    assert row[0][3] < 40.0 and row[0][2] / row[0][3] == pytest.approx(28.0)
+    assert row[0][1] + row[0][3] / 2 == pytest.approx(row[1][1] + 20.0)
+
+
+def test_an_svg_logo_is_a_picture_in_the_powerpoint_and_the_pdf(tmp_path: Path) -> None:
+    logo = tmp_path / "mark.svg"
+    logo.write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100" width="300" height="100">'
+                    '<rect width="300" height="100" fill="#e4572e"/></svg>')
+    deck = Deck("vector", logos=[logo])
+    deck.title("A talk")
+    result = deck.build(tmp_path, formats=("pptx", "pdf", "png"))
+    slide = _slides(result.pptx)[0]  # type: ignore[arg-type]
+    # A native picture, its vectors kept beside a PNG for programs that draw none.
+    assert slide.count("<p:pic>") == 1 and "svgBlip" in slide
+    assert result.pdf is not None and b"/Subtype /Image" in result.pdf.read_bytes()

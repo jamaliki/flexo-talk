@@ -70,6 +70,7 @@ from flexo_talk.deck import (
     ACROSS,
     DOWN,
     LAYOUTS,
+    LOGO_HEIGHT,
     Deck,
     DeckStyle,
     Reference,
@@ -104,7 +105,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
-    "conventions", "sketch", "style",
+    "conventions", "sketch", "style", "logos", "logos_on", "logo_height",
 )
 COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip")
 """The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
@@ -355,7 +356,7 @@ def deck_from_document(
             "schema_version", f"Unsupported schema_version {version!r}. This version of flexo-talk reads "
             f"version {SCHEMA_VERSION}."
         )
-    deck = make_deck(document.get("deck") or {}, base)
+    deck = make_deck(document.get("deck") or {}, base, missing=errors)
     slides = document.get("slides") or []
     if not isinstance(slides, list):
         raise DeckDocumentError("slides", "slides must be a list.")
@@ -382,8 +383,10 @@ def _stand_in(deck: Deck, index: int) -> None:
     deck.slide(layout="blank")
 
 
-def make_deck(data: dict[str, Any], base: Path) -> Deck:
-    """The ``Deck`` the ``deck`` mapping of a document describes."""
+def make_deck(data: dict[str, Any], base: Path, *, missing: list[DeckDocumentError] | None = None) -> Deck:
+    """The ``Deck`` the ``deck`` mapping of a document describes. With ``missing`` given, a
+    logo whose file is not there is said there, and keeps its place in the row (the slide
+    shows where it was, while editing); without it, it is an error."""
 
     if not isinstance(data, dict):
         raise DeckDocumentError("deck", "deck must be a mapping of deck settings.")
@@ -403,6 +406,7 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
         if isinstance(background, str) and background and not background.startswith("#"):
             # A picture behind every slide is found beside the document, as a slide's is.
             background = str(_file(base, background, "deck.background"))
+        logos = _logos(base, data.get("logos"), missing)
         deck = Deck(
             data.get("id") if data.get("id") is not None else "talk",
             theme=theme,
@@ -415,6 +419,9 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
             background=background,
             footer=data.get("footer"),
             look=data.get("look"),
+            logos=logos,
+            logos_on=data.get("logos_on") or "title",
+            logo_height=LOGO_HEIGHT if data.get("logo_height") is None else data["logo_height"],
         )
         # The document's proportions are changes to what the look and theme set.
         try:
@@ -429,6 +436,28 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
         raise DeckDocumentError("deck", str(error)) from error
     deck.source = {**deck.source, **{key: value for key, value in data.items() if key != "style"}}
     return deck
+
+
+def _logos(base: Path, value: object, missing: list[DeckDocumentError] | None) -> object:
+    """The logos a deck names, each found beside the document; anything but a list of names
+    is left for the deck to say what it should be."""
+
+    if value is None:
+        return []
+    names = [value] if isinstance(value, str) else value
+    if not isinstance(names, list) or not all(isinstance(name, str) and name for name in names):
+        return value
+    found = []
+    for index, name in enumerate(names):
+        try:
+            found.append(str(_file(base, name, f"deck.logos[{index}]")))
+        except MissingFile as error:
+            if missing is None:
+                raise
+            # Kept where it stands in the row, its file not there: the slide shows where.
+            missing.append(error)
+            found.append(str(base / name))
+    return found
 
 
 def add_slide(
@@ -1232,10 +1261,15 @@ def deck_document(deck: Deck, *, plots: Callable[[_Plot, str], dict[str, Any]] |
 def _deck_data(deck: Deck) -> dict[str, Any]:
     given = deck.source
     data: dict[str, Any] = {"id": deck.id}
-    defaults = {"theme": "paper", "palette": "default", "background": True, "footer": "", "look": None}
+    defaults = {"theme": "paper", "palette": "default", "background": True, "footer": "", "look": None,
+                "logos": [], "logos_on": "title", "logo_height": LOGO_HEIGHT}
     for key in ("theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
-                "conventions", "sketch"):
+                "conventions", "sketch", "logos", "logos_on", "logo_height"):
         value = given.get(key)
+        if key == "logos" and isinstance(value, str | PurePath):
+            value = [value]
+        if key == "logos" and isinstance(value, list | tuple):
+            value = [str(logo) for logo in value]
         if value is None or value == defaults.get(key):
             continue
         data[key] = value

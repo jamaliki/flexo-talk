@@ -20,10 +20,11 @@ from typing import Any, get_args
 from flexo.studio import Drawing, Message, Page
 from flexo.studio.plain import explain
 
-from flexo_talk.deck import LAYOUTS, LOOKS, DeckStyle
+from flexo_talk.deck import FOOTER_LOGOS, LAYOUTS, LOGO_HEIGHT, LOGO_HEIGHTS, LOGO_SUFFIXES, LOOKS, DeckStyle
 from flexo_talk.document import (
     BLOCKS,
     COMMON_KEYS,
+    DECK_KEYS,
     SCHEMA_VERSION,
     SLIDE_KEYS,
     DeckDocumentError,
@@ -151,6 +152,7 @@ FIELD_LABELS = {
     "by": "Attribution", "notes": "Notes", "footnotes": "Footnotes", "background": "Background",
     "shade": "Background", "layout": "Layout", "columns": "Columns", "widths": "Columns", "split": "Columns",
     "dark": "Background", "align": "Content Position", "skip": "Skip Slide",
+    "logos": "Logos", "logos_on": "Logos", "logo_height": "Logos",
 }
 """What the studio calls a slide's settings, where a message names one."""
 
@@ -280,6 +282,9 @@ class DeckKind:
             "A flexo-talk deck document.\n" + (module.__doc__ or "")
             + f"\nEvery slide may also take: {', '.join(COMMON_KEYS)}.\nLayouts and their keys:\n{layouts}"
             + f"\nBlocks:\n{blocks}\n"
+            + f"Deck settings: {', '.join(DECK_KEYS)}. logos: picture files (an institution's, its funders'), "
+            "in their order, in a row along the title slide's foot; logos_on: title, or every (small in every "
+            "slide's footer too); logo_height: how tall on the title slide, in points (40).\n"
             + f"Looks: {', '.join(LOOKS)}. Colours for words and panels: accent, accent2, ..., muted, #rrggbb.\n"
             "Slide words are markup: **strong**, *emphasis*, $maths$, `code`, [link](url), [words]{accent}.\n"
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
@@ -337,6 +342,7 @@ class DeckKind:
             words = {
                 "look": "the look", "theme": "the theme", "palette": "the palette", "footer": "the footer",
                 "font": "the type", "title_font": "the type", "figure_font": "the type", "style": "the proportions",
+                "logos": "the logos", "logos_on": "the logos", "logo_height": "the logos",
             }
             said = list(dict.fromkeys(words.get(key, "the deck's settings") for key in changed))
             notes.append({"text": "changed " + " and ".join(said[:2]), "where": {"label": "Design"}})
@@ -480,6 +486,10 @@ class DeckKind:
                         for name in LAYOUTS],
             "slide_keys": {layout: [*COMMON_KEYS, *keys] for layout, keys in SLIDE_KEYS.items()},
             "blocks": {kind: list(options) for kind, options in BLOCKS.items()},
+            # A deck's logos: how tall they stand on a title slide, unless it says (and the
+            # least and most), how tall in a footer as a share of that, and the files they may be.
+            "logos": {"height": LOGO_HEIGHT, "heights": list(LOGO_HEIGHTS), "footer": FOOTER_LOGOS,
+                      "types": list(LOGO_SUFFIXES)},
             # What the figure editor offers, for figures edited on their slides.
             "figure_editor": _figure_editor(),
         }
@@ -515,13 +525,15 @@ class DeckKind:
             "deck": deck_data, "base": str(base), "count": len(slides), "trusted": code_allowed.get(),
             # A theme file edited in the studio changes every slide without changing the deck.
             "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
+            # So does a logo's file, put there or changed (one missing is watched for).
+            "logos": [(str(path), _stamp(path)) for path in _logo_files(deck_data, base)],
         })
         # (A section skipped is not among them: compose._skipped.)
         sections = [
             (slide.get("title"), slide.get("subtitle")) for slide in slides
             if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
         ]
-        watched: set[Path] = set(_theme_files(document.get("deck") or {}, base))
+        watched: set[Path] = set(_theme_files(deck_data, base)) | set(_logo_files(deck_data, base))
         keys: list[str] = []
         for index, data in enumerate(slides):
             files = sorted(_files(data, base))
@@ -581,6 +593,11 @@ class DeckKind:
             self._slides.popitem(last=False)
         pages: list[Page] = []
         messages: list[Message] = []
+        # A logo whose file is not there is said on the first slide that shows the logos, once.
+        shows = next((slide.id for slide in deck.slides if deck.shows_logos(slide)), "")
+        for error in absent:
+            if error.where.startswith("deck.logos"):
+                messages.append(Message(_plain_message(error), "error", error.where, shows, "deck.missing"))
         for index, (slide, data) in enumerate(zip(deck.slides, slides, strict=True)):
             identifier = slide.id
             done = self._slides.get(keys[index])
@@ -1790,6 +1807,14 @@ def _files(data: object, base: Path) -> set[Path]:
     return found
 
 
+def _logo_files(deck: dict[str, Any], base: Path) -> list[Path]:
+    """The files a deck's logos are, there or not."""
+
+    logos = deck.get("logos")
+    names = [logos] if isinstance(logos, str) else logos if isinstance(logos, list) else []
+    return [(base / name).resolve() for name in names if isinstance(name, str) and name]
+
+
 def _theme_files(deck: dict[str, Any], base: Path) -> list[Path]:
     found = []
     for key in ("theme", "palette"):
@@ -1866,7 +1891,7 @@ def _place(where: str, document: Any) -> str:
     if not found:
         if not (where or "").startswith("deck"):
             return ""
-        key = where.split(".")[-1]
+        key = re.sub(r"\[\d+\]$", "", where.split(".")[-1])
         named = STYLE_LABELS.get(key) or FIELD_LABELS.get(key)
         return f"Design · {named}" if named and key != "deck" else "Design"
     index, rest = int(found.group(1)), found.group(2)
