@@ -440,7 +440,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   in place of the slides. A click or → goes on; a slide's number then Return goes to
   it; B and W blank the screen black or white; Esc ends. **Export** makes a PDF (a
   page per slide, or per stage of its builds), a PowerPoint, or a PNG or SVG of each
-  slide, saved where you say (downloaded, in a browser). Saving is automatic; ⌘Z undoes your own last change, and the
+  slide (a PNG 1280, 1920 or 3840 pixels wide, as last chosen), saved where you say
+  (downloaded, in a browser). Saving is automatic; ⌘Z undoes your own last change, and the
   history beside it (⌥⌘Z) lists every change by name -- "Rename “Model” to
   “Encoder” · Slide 2" -- to go back, or forward, to any of them, the deck going
   to the slide each was made on. Saving writes the document back as YAML

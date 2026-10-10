@@ -1,13 +1,15 @@
 """The studio's exports of a deck, as Keynote's Export To makes them: a PDF with a
 page per slide (each stage of its builds only when asked), and an image of each slide
-in a folder of the deck's name, made aside for the page to hand over; the CLI's build/
-is as it was."""
+in a folder of the deck's name and theirs, made aside for the page to hand over, a PNG
+as wide as chosen; the CLI's build/ is as it was."""
 
 from __future__ import annotations
 
 import re
 import zlib
 from pathlib import Path
+
+import pytest
 
 from flexo_talk.studio import DeckKind
 
@@ -51,8 +53,10 @@ def test_each_stage_of_builds_is_a_page_when_asked(tmp_path: Path) -> None:
 
 def test_images_made_aside_are_a_folder_of_the_deck_s_name(tmp_path: Path) -> None:
     written = DeckKind().export(DECK, tmp_path, "talk", ["png", "svg"], into=tmp_path / "out")
+    # (Named for what they are, too: a folder of PNGs is told apart from one of SVGs.)
+    folder = "My Talk \u2013 PNG 1920 px \u2013 SVG"
     assert sorted(path.relative_to(tmp_path / "out").as_posix() for path in written) == [
-        "My Talk/slide-01.png", "My Talk/slide-01.svg", "My Talk/slide-02.png", "My Talk/slide-02.svg",
+        f"{folder}/slide-01.png", f"{folder}/slide-01.svg", f"{folder}/slide-02.png", f"{folder}/slide-02.svg",
     ]
     assert not (tmp_path / "build").exists()
 
@@ -183,6 +187,24 @@ def test_the_slides_after_one_skipped_are_numbered_as_they_are_shown(tmp_path: P
     svgs = sorted(kind.export(deck, tmp_path, "talk", ["svg"], into=tmp_path / "out"))
     assert [path.name for path in svgs] == ["slide-01.svg", "slide-02.svg"]
     assert _numbers([path.read_text(encoding="utf-8") for path in svgs]) == ["1", "2"]
+
+
+def test_a_png_is_as_wide_as_chosen_and_named_apart_from_an_svg(tmp_path: Path) -> None:
+    from PIL import Image
+
+    pngs = DeckKind().export(DECK, tmp_path, "talk", ["png"], into=tmp_path / "png", png_width=1280)
+    assert {path.parent.name for path in pngs} == {"My Talk \u2013 PNG 1280 px"}
+    assert {Image.open(path).size for path in pngs} == {(1280, 720)}
+    (wide,) = DeckKind().export({**DECK, "slides": DECK["slides"][:1]}, tmp_path, "talk", ["png"],
+                                into=tmp_path / "big", png_width=3840)
+    assert Image.open(wide).size == (3840, 2160)
+    # Not chosen, 1920 pixels across, as the CLI's build draws a 16:9 slide.
+    (plain,) = DeckKind().export({**DECK, "slides": DECK["slides"][:1]}, tmp_path, "talk", ["png"], into=tmp_path / "x")
+    assert Image.open(plain).size == (1920, 1080) and plain.parent.name == "My Talk \u2013 PNG 1920 px"
+    svgs = DeckKind().export(DECK, tmp_path, "talk", ["svg"], into=tmp_path / "svg")
+    assert {path.parent.name for path in svgs} == {"My Talk \u2013 SVG"}
+    with pytest.raises(ValueError, match="A PNG is 1280, 1920 or 3840 pixels wide, not 1000"):
+        DeckKind().export(DECK, tmp_path, "talk", ["png"], into=tmp_path / "bad", png_width=1000)
 
 
 def test_a_cropped_picture_is_cropped_natively_in_the_powerpoint_and_its_pdf_shows_only_the_part_kept(

@@ -156,6 +156,8 @@ FIELD_LABELS = {
 
 CACHE_SIZE = 600
 CACHE_BYTES = 200_000_000
+PNG_WIDTHS = (1280, 1920, 3840)
+"""How wide the Export sheet makes a slide's PNG, in pixels: the second unless chosen."""
 BUDGET = 0.4
 """Seconds a drawing spends on slides beyond the first before it returns what it has."""
 
@@ -708,12 +710,15 @@ class DeckKind:
         *,
         into: Path | None = None,
         steps: bool = False,
+        png_width: int | None = None,
     ) -> list[Path]:
         """The deck's files, in ``build/`` beside it, named after the deck (talk.pdf,
         talk-01.png), or ``into`` a folder of the page's, where each slide's pictures go in
-        a folder named after the deck, as slide-01.png. The PDF has a page per slide,
-        showing it whole, as Keynote's does; with ``steps``, a page per stage of each list
-        a slide reveals."""
+        a folder named after the deck and what they are ("showcase \u2013 PNG 1920 px", as
+        slide-01.png). The PDF has a page per slide, showing it whole, as Keynote's does;
+        with ``steps``, a page per stage of each list a slide reveals. A PNG is
+        ``png_width`` pixels wide (1280, 1920 or 3840), as tall as the slide's proportions
+        make it."""
 
         from flexo_talk.compose import CANT_DRAW, STANDING_ASIDE
         from flexo_talk.export import build_deck, file_stem
@@ -753,11 +758,20 @@ class DeckKind:
             raise ValueError("Every slide is skipped: there is nothing to export.")
         self.export_notes = [note for note in self.export_notes
                              if not (found := re.match(r"Slide (\d+)\b", note)) or int(found[1]) - 1 not in skipped]
+        if png_width is not None and (isinstance(png_width, bool) or png_width not in PNG_WIDTHS):
+            raise ValueError(f"A PNG is {', '.join(map(str, PNG_WIDTHS[:-1]))} or {PNG_WIDTHS[-1]} pixels wide, "
+                             f"not {png_width!r}.")
         folder = into or base / "build"
-        images = folder / file_stem(deck.id) if into is not None else None
+        images = None
+        if into is not None:
+            # Named for what they are, so a PNG export and an SVG one are told apart.
+            kinds = [f"PNG {png_width or PNG_WIDTHS[1]} px" if kind == "png" else kind.upper()
+                     for kind in formats if kind in {"png", "svg"}]
+            images = folder / " \u2013 ".join([file_stem(deck.id), *kinds])
         aside = STANDING_ASIDE.set(True)
         try:
-            result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images)
+            result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images,
+                                png_width=png_width or (PNG_WIDTHS[1] if into is not None else None))
         finally:
             STANDING_ASIDE.reset(aside)
         # (One that failed only as it was drawn for its slide is left empty too, and said.)

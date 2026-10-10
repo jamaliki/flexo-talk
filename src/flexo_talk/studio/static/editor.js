@@ -32,6 +32,8 @@ const BLOCKS = {
 };
 // Flow charts and structures are figures: they are offered by name, and made as figures.
 const MAIN_BLOCKS = ["text", "bullets", "figure", "flow", "structure", "image", "table"];
+// How wide a slide's PNG is exported, in pixels (the studio's PNG_WIDTHS).
+const PNG_WIDTHS = [1280, 1920, 3840];
 // Those that ask for a file or function first.
 const CHOOSE = new Set(["structure", "image", "gallery", "plot"]);
 const MORE_BLOCKS = ["math", "mechanism", "stats", "quote", "callout", "code", "gallery", "plot"];
@@ -8790,7 +8792,16 @@ export function mount(studio, container) {
         return builds() ? [{ name: "steps", label: "Include each stage of builds", value: remembered(key, "0") === "1", onChange: (value) => remember(key, value ? "1" : "0") }] : [];
       } },
     { format: "pptx", get label() { return `PowerPoint${asks() ? "…" : ""}`; }, hint: "Editable shapes and text" },
-    { format: "png", label: "Images…", icon: "image", hint: "A PNG or SVG image of each slide", choose: [{ format: "png", label: "PNG" }, { format: "svg", label: "SVG" }] },
+    { format: "png", label: "Images…", icon: "image", hint: "A PNG or SVG image of each slide", choose: [{ format: "png", label: "PNG" }, { format: "svg", label: "SVG" }],
+      // A PNG's size, as the person last chose it: its pixels across, and down as the slide's
+      // proportions make them.
+      get options() {
+        const view = pageNode?.querySelector("svg")?.viewBox?.baseVal, tall = view?.width ? view.height / view.width : 9 / 16;
+        const width = Number(remembered("png-width", "1920"));
+        return [{ name: "png_width", label: "Size", formats: ["png"], hint: "In pixels", value: PNG_WIDTHS.includes(width) ? width : 1920,
+          choices: PNG_WIDTHS.map((across) => ({ value: across, label: `${across} × ${Math.round(across * tall)}` })),
+          onChange: (value) => remember("png-width", String(value)) }];
+      } },
   ];
   studio.present = () => present();
   studio.commands = () => [
