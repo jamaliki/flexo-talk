@@ -427,9 +427,15 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   or its document as a flexo figure file (YAML).
 - **Format shows what is selected**: an object's own settings, or, with nothing
   selected, the slide's title, its parts in order (drag to reorder), its layout,
-  background, and footnotes. **Design** holds the look, theme, palette, type, and
-  proportions; **Customise…** starts a theme file from the deck's theme and opens it
+  background, and footnotes. **Design** holds the look, theme, palette, type, logos
+  and proportions; **Customise…** starts a theme file from the deck's theme and opens it
   in the theme editor, and the deck redraws as the theme changes.
+- **Logos**: on a title slide **Picture** (or a picture dropped on it) adds a logo,
+  in the row along its foot. A logo on a slide is chosen by a click, as any object
+  is: ⌫ deletes it, ⌥← ⌥→ or a drag along the row move it, and a corner sizes every
+  logo at once (they share one height; it catches at the default, and a double-click
+  on a corner goes back to it). **Design › Logos** lists them (drag to reorder),
+  adds them, and says where they show and how tall.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
   being edited is drawn first; the others follow.
