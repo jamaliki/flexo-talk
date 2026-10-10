@@ -7,7 +7,7 @@
 // (for a list, one item a line, two spaces a level, as bulletsText writes it), and
 // which says "input" whenever it changes, as a textarea does.
 
-import { icon } from "/static/studio/studio.js";
+import { icon, toast } from "/static/studio/studio.js";
 
 // -- markup to runs --------------------------------------------------------------------
 
@@ -137,7 +137,10 @@ function itemsOfHtml(html) {
   });
   const numbered = marks.length ? marks.every(Boolean) : Boolean(doc.querySelector("ol")) && !doc.querySelector("ul");
   doc.querySelectorAll("script, style, meta, link, img, svg, title, template, [style*='mso-list:ignore' i], [style*='mso-list: ignore' i]").forEach((node) => node.remove());
-  doc.querySelectorAll("a[href]").forEach((link) => { link.dataset.href = link.getAttribute("href"); });
+  // (A link to a place in the page it came from -- a citation's, "#cite_note-1" -- goes
+  // nowhere from a slide: its words come alone.)
+  doc.querySelectorAll("a[href]").forEach((link) => { if (!link.getAttribute("href").startsWith("#")) link.dataset.href = link.getAttribute("href"); });
+  raised(doc);
   // Headings bold, the way a slide marks them.
   doc.querySelectorAll("h1, h2, h3, h4, h5, h6, th").forEach((node) => { node.style.fontWeight = "700"; });
   doc.querySelectorAll("td + td, td + th, th + td, th + th").forEach((cell) => cell.prepend(" "));
@@ -204,6 +207,18 @@ function itemsOfHtml(html) {
   while (kept.length && !kept[0].markup.trim()) kept.shift();
   kept.numbered = numbered;
   return kept;
+}
+
+// Raised and lowered words in another app's HTML (x², 10⁻³, H₂O, a citation's [1]) in the
+// letters Unicode raises and lowers, where it has one for each of theirs -- as the slide has
+// no superscript of its own -- rather than set on the line.
+const RAISED = Object.fromEntries([..."0123456789+-−=()[]abcdefghijklmnoprstuvwxyz"].map((letter, n) => [letter, [..."⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ"][n]]));
+const LOWERED = Object.fromEntries([..."0123456789+-−=()[]aehijklmnoprstuvx"].map((letter, n) => [letter, [..."₀₁₂₃₄₅₆₇₈₉₊₋₋₌₍₎₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ"][n]]));
+function raised(doc) {
+  for (const node of doc.querySelectorAll("sup, sub")) {
+    const table = node.nodeName === "SUP" ? RAISED : LOWERED, words = node.textContent.trim();
+    if (words && [...words].every((letter) => table[letter])) node.replaceWith([...words].map((letter) => table[letter]).join(""));
+  }
 }
 
 // A range of cells copied from a spreadsheet (Numbers, Excel and Google Sheets put a
@@ -276,7 +291,7 @@ function inlineNodes(words, colours, outer = { bold: false, italic: false }) {
     if (link || coloured) {
       const node = document.createElement(link ? "a" : "span");
       if (link) { node.dataset.href = link[2]; node.title = link[2]; }
-      else { node.dataset.colour = coloured[2]; node.style.color = colours(coloured[2]); }
+      else { node.dataset.colour = coloured[2]; node.style.color = colours(coloured[2]); node.style.setProperty("--rt-colour", node.style.color); }
       node.append(...inlineNodes((link || coloured)[1], colours, style));
       nodes.push(node);
     } else if (code) {
@@ -425,11 +440,18 @@ function markupOf(runs) {
   return out + closeAll() + pending;
 }
 
-// An element as copies of it a line each, and the line ends ("\n") between them.
+// An element as copies of it a line each, and the line ends ("\n") between them: its line
+// breaks, and the "\n" a field that keeps its spaces types for one (a Return at a colour's
+// or a link's edge, typed in it).
 function byLine(element) {
-  if (!element.querySelector("br")) return [element];
+  const own = element.cloneNode(true);
+  const typed = [];
+  const walker = document.createTreeWalker(own, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) if (text.data.includes("\n")) typed.push(text);
+  for (const text of typed) text.replaceWith(...text.data.split("\n").flatMap((part, n) => [...(n ? [document.createElement("br")] : []), ...(part ? [document.createTextNode(part)] : [])]));
+  if (!own.querySelector("br")) return [element];
   const parts = [];
-  const rest = element.cloneNode(true);
+  const rest = own;
   for (let end = rest.querySelector("br"); end; end = rest.querySelector("br")) {
     const before = document.createRange();
     before.setStart(rest, 0);
@@ -467,10 +489,21 @@ function emphasised(lines, look) {
 
 // -- the field -------------------------------------------------------------------------
 
-// `list` makes it a list (Tab and Shift-Tab change an item's level, Return starts the
-// next item, Return on an empty item moves it out a level; `numbered` numbers it, and
-// `plain` has no marks, its levels kept); `single` a line of its own
-// (Return is left to whoever holds it); else words in lines. `palette` gives the
+// A line break within a list's item, in the list's words (one item a line): the Unicode
+// line separator, which no one types.
+export const ITEM_BREAK = "\u2028";
+
+// Whether two colours, however written ("#1a5d9b", "rgb(26, 93, 155)"), are one.
+const pen = document.createElement("canvas").getContext("2d");
+const colourAs = (colour) => { pen.fillStyle = "#010203"; pen.fillStyle = String(colour ?? ""); return pen.fillStyle; };
+const sameColour = (a, b) => Boolean(a && b) && colourAs(a) === colourAs(b) && colourAs(a) !== "#010203";
+
+// `list` makes it a list (Tab and ⇧Tab change an item's level, Return starts the next
+// item, ⇧Return a new line in the item, Return on an empty item moves it out a level;
+// `numbered` numbers it, and `plain` has no marks, its levels kept); `single` a line of its
+// own (Return is left to whoever holds it); else words in lines, Return starting a new one,
+// as in Keynote -- or, `breakWith` "shift" (a table's cell), ⇧Return or ⌥Return, Return
+// left to whoever holds it. ⌘Return is always theirs: it ends the typing. `palette` gives the
 // theme's colours by name, for [words]{accent}. `onCells` takes a spreadsheet's cells
 // pasted in it; `docked` keeps its format bar under it (a panel's field); `onEnd(kept)` goes on
 // after a list ended by Return on an empty item (`kept`: how many items stay before the
@@ -479,7 +512,15 @@ function emphasised(lines, look) {
 // `onList(items, split)` takes an outline or a list pasted in words (each item's depth, markup
 // and whether it was numbered; `split`: the words before the caret and after it, as markup --
 // so too `onCells(cells, split)`, but for a list's or one line's).
-export function richText({ value = "", list = false, single = false, numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, onCells = null, docked = false, onEnd = null, onListStart = null, onList = null } = {}) {
+// A list's `value` holds a line break within an item as ITEM_BREAK, its items being its lines.
+// `clear(rect)`: how much of what the slide shows round the words a rect over it would cover,
+// as an area (its format bar is put where it covers least: see `overlap`).
+// How much of `one` (a box: left, top, right, bottom) `other` covers, as an area.
+export function overlap(one, other) {
+  return Math.max(0, Math.min(one.right, other.right) - Math.max(one.left, other.left)) * Math.max(0, Math.min(one.bottom, other.bottom) - Math.max(one.top, other.top));
+}
+
+export function richText({ value = "", list = false, single = false, breakWith = "return", numbered = false, plain = false, palette = {}, placeholder = "", spelling = true, leaveOnTab = false, frame = null, room = null, clear = null, onCells = null, docked = false, onEnd = null, onListStart = null, onList = null } = {}) {
   const area = document.createElement("div");
   area.className = `rich${list ? " rt-list" : ""}${numbered ? " rt-numbered" : ""}${plain ? " rt-plain" : ""}`;
   area.contentEditable = "true";
@@ -494,7 +535,10 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const line = document.createElement("div");
     line.className = "rt-line";
     line.dataset.level = String(level);
-    line.append(...inlineNodes(words, colours));
+    line.append(...inlineNodes(words.replaceAll(ITEM_BREAK, "\n"), colours));
+    // A line break in an item is the "\n" ⇧Return types in it, as the field keeps its
+    // spaces: its letters counted as typed ones are (a <br> in an item only holds its place).
+    for (const end of line.querySelectorAll("br")) end.replaceWith("\n");
     if (!line.childNodes.length) line.append(document.createElement("br"));
     return line;
   };
@@ -517,7 +561,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
   const read = () => {
     tidy();
     const strip = (text) => text.replace(/\n$/, "");
-    if (list) return lines().map((line) => "  ".repeat(Number(line.dataset.level) || 0) + strip(serialise(line, undefined, names)).replace(/\n/g, " ")).join("\n");
+    if (list) return lines().map((line) => "  ".repeat(Number(line.dataset.level) || 0) + strip(serialise(line, undefined, names)).replace(/\n/g, ITEM_BREAK)).join("\n");
     const text = strip(serialise(area, undefined, names));
     return single ? text.replace(/\n/g, " ") : text;
   };
@@ -618,9 +662,10 @@ export function richText({ value = "", list = false, single = false, numbered = 
   // (a menu's or the system's), which saving would drop.
   area.addEventListener("beforeinput", (event) => {
     if (/^format/.test(event.inputType) && !["formatBold", "formatItalic"].includes(event.inputType)) event.preventDefault();
-    // A line of its own takes no second line, however asked for (⌃O, a menu).
+    // A line of its own takes no second line, however asked for (⌃O, a menu); a list's item
+    // one only as ⇧Return makes it (lineBreak), not as the browser would.
     if (single && /^insert(LineBreak|Paragraph)$/.test(event.inputType)) event.preventDefault();
-    if (list && event.inputType === "insertLineBreak") event.preventDefault();
+    if (list && event.inputType === "insertLineBreak" && !breaking) event.preventDefault();
     if (overAtoms(event)) return;
     // Typing at a link's end goes on after it, as in Pages and Keynote: a link ends where it
     // ends (the caret in its last letters or just past it, where the browser would type in it);
@@ -838,17 +883,23 @@ export function richText({ value = "", list = false, single = false, numbered = 
       if ((event.altKey ? asMaths() : asCode()) !== false) changed(true);
       return;
     }
-    // No underline: the slide has none to keep.
-    if (mod && !event.altKey && (event.code === "KeyU" || event.key.toLowerCase() === "u")) { event.preventDefault(); return; }
+    // No underline: the slide has none to keep -- said, not swallowed without a word.
+    if (mod && !event.altKey && (event.code === "KeyU" || event.key.toLowerCase() === "u")) {
+      event.preventDefault();
+      toast("Slides have no underline: use bold, italic or a colour to make words stand out.", { icon: "info", seconds: 3 });
+      return;
+    }
     if (mod && !event.altKey && ["b", "i"].includes(event.key.toLowerCase())) {
       event.preventDefault();
       format(event.key.toLowerCase() === "b" ? "bold" : "italic");
       return;
     }
+    // (A step of its own, named as what it did, as Pages names one: not typing.)
     if (event.key === "Tab" && list) {
       event.preventDefault();
+      const was = read();
       for (const line of chosenLines()) setLevel(line, Number(line.dataset.level) + (event.shiftKey ? -1 : 1));
-      changed();
+      if (read() !== was) changed(true, event.shiftKey ? "Outdent" : "Indent");
       return;
     }
     // Tab is no character here: in a panel's field it goes on to the next control.
@@ -866,12 +917,16 @@ export function richText({ value = "", list = false, single = false, numbered = 
       return;
     }
     if (event.key !== "Enter" || event.isComposing) return;
-    // One line (a title, a cell): no line break, which it would not keep.
+    // ⌘Return ends the typing, wherever it is: whoever holds the field ends it.
+    if (mod) { event.preventDefault(); return; }
+    // One line (a number): no line break, which it would not keep.
     if (single) { event.preventDefault(); return; }
+    // ⇧Return (or ⌥Return) is a new line in a list's item, or a table's cell, whose Return
+    // is another's: the next item, the cell below.
+    const within = event.shiftKey || event.altKey;
+    if (breakWith === "shift" && !within) return;
     event.preventDefault();
-    // (A list's item is one line, as the deck writes it: ⇧Return breaks no line in it.)
-    if (list && event.shiftKey) return;
-    if (!list) { document.execCommand("insertLineBreak"); return; }
+    if (!list || within) { lineBreak(); return; }
     // Return ends an item and starts the next at its level; on an empty item, it moves out a level.
     const s = selection();
     if (!s.rangeCount) return;
@@ -906,6 +961,52 @@ export function richText({ value = "", list = false, single = false, numbered = 
     place(caret);
     changed();
   });
+
+  // A new line where the caret is: never in code or an equation, held as one (after it), nor
+  // inside a link or a colour at its edge -- before or after it, so its markup stays whole.
+  let breaking = false;
+  const lineBreak = () => {
+    const s = selection();
+    if (!s.rangeCount || !area.contains(s.anchorNode)) return;
+    const out = s.isCollapsed ? outOfEdge(s.getRangeAt(0)) : null;
+    if (out) {
+      // Beside it, the new line is put there by hand, as typing at a link's end is: the
+      // browser's would go back into it (and its placeholder with it), and the first letter
+      // typed after would be the link's. At the words' end, a second stands for the empty
+      // line the caret goes to, as the browser's does (the typing's end takes it away).
+      const node = document.createTextNode("\n");
+      out.insertNode(node);
+      const rest = document.createRange();
+      rest.setStartAfter(node);
+      rest.setEnd(area, area.childNodes.length);
+      if (!rest.toString()) node.appendData("\n");
+      const caret = document.createRange();
+      caret.setStart(node, 1);
+      place(caret);
+      area.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertLineBreak" }));
+      return;
+    }
+    breaking = true;
+    try { document.execCommand("insertLineBreak"); } finally { breaking = false; }
+  };
+  // Where a caret at the edge of a link (or, `colours`, a colour) it is in goes to be beside it
+  // rather than in it, or out of code or an equation it is in; null if it stays.
+  const outOfEdge = (range, { colours = true } = {}) => {
+    let outer = null;
+    for (let at = range.startContainer; at && at !== area; at = at.parentNode) if (at.nodeType === Node.ELEMENT_NODE && (isLink(at) || (colours && isColour(at)))) outer = at;
+    for (const holder of [atomAt(range.startContainer), outer]) {
+      if (!holder) continue;
+      const side = (from, to) => { const part = document.createRange(); part.setStart(...from); part.setEnd(...to); return part.toString(); };
+      const here = [range.startContainer, range.startOffset];
+      const out = document.createRange();
+      if (!side([holder, 0], here)) out.setStartBefore(holder);
+      else if (!side(here, [holder, holder.childNodes.length]) || isAtom(holder)) out.setStartAfter(holder);
+      else continue;
+      out.collapse(true);
+      return out;
+    }
+    return null;
+  };
 
   // -- the format bar: over the words chosen, as a Mac text view's touch bar offers them --
   // From the keys: ⌃Tab goes to it from the words (as ⌃Tab leaves a Mac text view for the
@@ -1063,7 +1164,7 @@ export function richText({ value = "", list = false, single = false, numbered = 
     return out;
   };
   const plainNode = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; node.textContent = text; return node; };
-  const colourNode = (name) => { const span = document.createElement("span"); span.dataset.colour = name; span.style.color = colours(name); return span; };
+  const colourNode = (name) => { const span = document.createElement("span"); span.dataset.colour = name; span.style.color = colours(name); span.style.setProperty("--rt-colour", span.style.color); return span; };
   const linkNode = (href) => { const a = document.createElement("a"); a.dataset.href = href; a.title = href; return a; };
   // Words in one of the theme's colours, or (none) in the words' own, as they are drawn.
   const recolour = (name) => wrapChosen(name ? (words) => { const span = colourNode(name); span.append(words); return span; } : null, { strip: isColour });
@@ -1322,13 +1423,14 @@ export function richText({ value = "", list = false, single = false, numbered = 
   const plainTool = palette.ink ? tool(`<span class="rt-swatch" style="background:${palette.ink}"></span>`, "Default", () => recolour(null), { words: true }) : "";
   const codeTool = tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code (⌘E)", asCode, { words: true });
   const mathsTool = tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX (⌥⌘E)", asMaths, { words: true });
+  const swatchTools = swatches.map(([name, title]) => [tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => recolour(name), { words: true }), name]);
   bar.append(
     boldTool,
     italicTool,
     codeTool,
     mathsTool,
     tool(icon("link"), "Link (⌘K)", () => askLink()),
-    ...swatches.map(([name, title]) => tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => recolour(name), { words: true })),
+    ...swatchTools.map(([button]) => button),
     plainTool,
     linkInput,
     linkNote,
@@ -1384,7 +1486,13 @@ export function richText({ value = "", list = false, single = false, numbered = 
     codeTool.classList.toggle("on", atom?.nodeName === "CODE");
     mathsTool.classList.toggle("on", Boolean(atom && atom.nodeName !== "CODE"));
     for (const button of bar.querySelectorAll("[data-words]")) button.disabled = none;
-    if (plainTool) plainTool.firstElementChild.style.background = getComputedStyle(area).color || palette.ink;
+    if (plainTool) {
+      const own = getComputedStyle(area).color || palette.ink;
+      plainTool.firstElementChild.style.background = own;
+      // Words drawn in a colour of the theme's already (a number, in the accent): that
+      // colour is their Default, offered once, not as two dots alike.
+      for (const [button, name] of swatchTools) button.hidden = sameColour(palette[name], own);
+    }
     bar.hidden = false;
     if (docked) return;
     // Just over the words chosen, clear of them, as Pages' and Keynote's bar is, and under
@@ -1396,16 +1504,38 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const own = bar.getBoundingClientRect();
     const bounds = room?.() || { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
     const over = frame?.() || chosen;
-    const above = over.top - own.height - 6;
-    let top = above >= bounds.top + 4 ? above : over.bottom + 6;
     // A link's address asked for widens it to the right: it stays where it was, by the words.
-    let left = !linkInput.hidden && barLeft !== null ? barLeft : chosen.left + chosen.width / 2 - own.width / 2;
-    top = Math.max(bounds.top + 4, Math.min(top, bounds.bottom - own.height - 4));
+    const keep = !linkInput.hidden && barLeft !== null;
+    let left = keep ? barLeft : chosen.left + chosen.width / 2 - own.width / 2;
     left = Math.max(bounds.left + 8, Math.min(left, bounds.right - own.width - 8));
-    if (linkInput.hidden) barLeft = left;
+    // Over them where there is room and it covers none of the words about them -- the field's
+    // own other lines, or (`clear`) another object's, a heading's -- else over or under all
+    // the field's words, else where it covers least.
+    const within = (top) => Math.max(bounds.top + 4, Math.min(top, bounds.bottom - own.height - 4));
+    const whole = frame ? over : area.getBoundingClientRect();
+    const places = [over.top - own.height - 6, whole.top - own.height - 6, whole.bottom + 6].filter((top) => top >= bounds.top + 4 && top + own.height <= bounds.bottom - 4);
+    const all = document.createRange();
+    all.selectNodeContents(area);
+    const ownLines = [...all.getClientRects()].filter((rect) => rect.width && rect.height);
+    // (How much of them: a bar over a title's line and one grazing a byline cover one line
+    // each, and it goes where it hides least of the words.)
+    const covered = (top) => {
+      const rect = { left, top, right: left + own.width, bottom: top + own.height };
+      return ownLines.reduce((sum, line) => sum + overlap(line, rect), 0) + (clear ? clear(rect) : 0);
+    };
+    let best = places.map((top) => ({ top, covers: covered(top) })).reduce((one, other) => (other.covers < one.covers ? other : one), { top: places[0] ?? over.bottom + 6, covers: Infinity });
+    // Covering some either way (a title over the subtitle chosen, a byline under it): the
+    // nearest place clear of them all, over the field's words or under them, if it is near
+    // enough to be theirs.
+    for (let step = 4; best.covers > 0 && step <= own.height * 3; step += 4) {
+      const near = [whole.top - own.height - 6 - step, whole.bottom + 6 + step].find((top) => top >= bounds.top + 4 && top + own.height <= bounds.bottom - 4 && !covered(top));
+      if (near !== undefined) best = { top: near, covers: 0 };
+    }
+    const top = keep && barTop !== null ? barTop : within(best.top);
+    if (!keep) { barLeft = left; barTop = top; }
     Object.assign(bar.style, { top: `${top}px`, left: `${left}px` });
   };
-  let barLeft = null;
+  let barLeft = null, barTop = null;
   document.addEventListener("selectionchange", showBar);
   // A panel's field shows its bar while it has the keys, chosen words or not.
   if (docked) for (const name of ["focus", "blur"]) area.addEventListener(name, () => setTimeout(() => showBar(), 0));
@@ -1473,7 +1603,8 @@ export function richText({ value = "", list = false, single = false, numbered = 
     const holder = document.createElement("div");
     holder.append(onWords(s.getRangeAt(0)).cloneContents());
     const items = list && holder.querySelector(".rt-line")
-      ? [...holder.children].filter((line) => line.classList?.contains("rt-line")).map((line) => ({ level: Number(line.dataset.level) || 0, markup: serialise(line, undefined, names).replace(/\n/g, " "), text: line.textContent }))
+      // (A line break in an item kept in its HTML; in plain words, one item a line, a space.)
+      ? [...holder.children].filter((line) => line.classList?.contains("rt-line")).map((line) => ({ level: Number(line.dataset.level) || 0, markup: serialise(line, undefined, names).replace(/\n$/, ""), text: line.textContent.replace(/\n/g, " ") }))
       : null;
     let html, text;
     if (items) {
@@ -1540,11 +1671,16 @@ export function richText({ value = "", list = false, single = false, numbered = 
     if (!s.rangeCount) return;
     const range = s.getRangeAt(0);
     range.deleteContents();
+    // At a link's edge it goes beside the link, as typing there does, not into it; in a
+    // link, a link pasted is its words: one link, never one in another.
+    const beside = range.collapsed ? outOfEdge(range, { colours: false }) : null;
+    if (beside) { range.setStart(beside.startContainer, beside.startOffset); range.collapse(true); }
     const nodes = lines.flatMap((markup, n) => [...(n ? [document.createElement("br")] : []), ...inlineNodes(markup, colours)]);
     if (!nodes.length) return;
     const fragment = document.createDocumentFragment();
     fragment.append(...nodes);
-    const last = nodes[nodes.length - 1];
+    if (outerLink(range.startContainer)) for (const link of [...fragment.querySelectorAll("a")]) link.replaceWith(...link.childNodes);
+    const last = fragment.lastChild;
     range.insertNode(fragment);
     const caret = document.createRange();
     caret.setStartAfter(last);

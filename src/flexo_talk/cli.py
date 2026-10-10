@@ -73,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.command == "convert":
             return _convert(arguments)
         deck = load_deck(arguments.deck, arguments.theme)
+        # A slide skipped (Keynote's Skip Slide) is left out, as the studio's export leaves it.
+        deck.slides = [slide for slide in deck.slides if not (getattr(slide, "source", None) or {}).get("skip")]
+        if not deck.slides:
+            raise ValueError("Every slide is skipped: there is nothing to build.")
         result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
     except KeyboardInterrupt:
         return 130
@@ -141,7 +145,8 @@ def _convert(arguments: argparse.Namespace) -> int:
         path.write_text(svg, encoding="utf-8")
         saved.append(path)
         print(f"{where}: Saved the matplotlib plot as {path.name} and added it as an image.")
-        return {"image": str(path)}  # named beside the document, as every file is, below
+        # (Named beside the document, as every file is, below; as wide as the plot was given.)
+        return {"image": str(path), **({"width": block.width} if block.width is not None else {})}
 
     document = deck_document(deck, plots=plot)
     _relocate(document, Path.cwd(), target.parent)

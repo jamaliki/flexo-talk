@@ -29,6 +29,8 @@
 .thumb .badge { position: absolute; right: 4px; top: 4px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; background: var(--warn); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 .thumb .badge.error { background: var(--error); }
 .thumb .badge svg { width: 10px; height: 10px; }
+.thumb.skipped .picture, .thumb.skipped .placeholder { opacity: 0.35; }
+.thumb .skip-tag { position: absolute; left: 4px; top: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
 .thumb .steps { position: absolute; left: 4px; bottom: 4px; font-size: 9.5px; font-weight: 650; background: rgba(0,0,0,0.55); color: #fff; border-radius: 3px; padding: 0 4px; }
 /* Who else is on a slide: in its lower corner, clear of its title. */
 .thumb .ring { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; }
@@ -119,17 +121,47 @@
    slide under them is the slide's own colour). */
 .size-handle { display: none; position: absolute; width: 8px; height: 8px; box-sizing: border-box; background: #ffffff; border: 1px solid var(--accent); border-radius: 1.5px; box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.18); pointer-events: auto; touch-action: none; }
 .size-handle::before { content: ""; position: absolute; inset: -6px; }
-.hit.selected.sizable .size-handle { display: block; }
+.hit.selected.sizable .size-handle:not(.side) { display: block; }
+/* Words have a handle at each side, as a Keynote text box has: their width alone. */
+.hit.selected.sideways .size-handle.side { display: block; }
 /* With a part of the figure chosen, only the part's own handles show (one set, not two). */
 .hit.selected.sizable.holder .size-handle { display: none; }
 .size-handle.nw { left: -6px; top: -6px; cursor: nwse-resize; }
 .size-handle.ne { right: -6px; top: -6px; cursor: nesw-resize; }
 .size-handle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
 .size-handle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.size-handle.w { left: -6px; top: calc(50% - 4px); cursor: ew-resize; }
+.size-handle.e { right: -6px; top: calc(50% - 4px); cursor: ew-resize; }
 .size-handle:hover { background: var(--accent); }
 .slide-page.block-sizing .hit { transition: none; }
 .slide-page.block-sizing .hit.hover, .slide-page.block-sizing .fig-marks, .slide-page.block-sizing .figure-bar { visibility: hidden; }
 .size-tip { position: absolute; z-index: 30; pointer-events: none; white-space: nowrap; font: 600 11px/18px var(--font); color: var(--accent-ink); background: var(--accent); padding: 0 8px; border-radius: 99px; box-shadow: var(--shadow-2); }
+/* A picture being cropped, as Keynote masks one: the whole of it faint round the part kept,
+   a frame with a handle at each corner and side, a bar under it. The faint picture runs past
+   the slide's edges, as Keynote's does. */
+.crop-picture { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 3; }
+.crop-faint { opacity: 0.35; pointer-events: all; cursor: grab; }
+.crop-kept { pointer-events: none; }
+.crop-oval { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.crop-frame { position: absolute; z-index: 4; box-sizing: border-box; border: 1.5px solid var(--accent); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.9); cursor: move; pointer-events: auto; touch-action: none; }
+.crop-frame.round { border: 1px dashed var(--accent); box-shadow: none; }
+.crop-handle { position: absolute; width: 8px; height: 8px; box-sizing: border-box; background: #ffffff; border: 1px solid var(--accent); border-radius: 1.5px; box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.18); }
+.crop-handle::before { content: ""; position: absolute; inset: -6px; }
+.crop-handle:hover { background: var(--accent); }
+.crop-handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.crop-handle.n { left: calc(50% - 4px); top: -5px; cursor: ns-resize; }
+.crop-handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.crop-handle.e { right: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+.crop-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.crop-handle.s { left: calc(50% - 4px); bottom: -5px; cursor: ns-resize; }
+.crop-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.crop-handle.w { left: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+.slide-page.cropping-drag .crop-faint { cursor: grabbing; }
+.crop-bar { position: absolute; z-index: 12; display: flex; align-items: center; gap: 6px; padding: 3px 3px 3px 10px; border-radius: 9px; background: var(--raised); border: 1px solid var(--line-strong); box-shadow: var(--shadow-2); line-height: normal; white-space: nowrap; }
+.crop-zoom { width: 108px; margin: 0; accent-color: var(--accent); }
+.crop-scale { display: inline-flex; color: var(--ink-3); }
+.crop-scale svg { width: 15px; height: 15px; }
+.crop-scale.small svg { width: 11px; height: 11px; }
 /* The slide's parts, dragged on it: lifted, the others stepping aside, a frame or a line where it goes. */
 .figure-grip { cursor: grab; }
 .block-mover { transition: transform 0.2s cubic-bezier(.2, .8, .2, 1); }
@@ -166,6 +198,8 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .position-pad .segmented button { padding-inline: 0; min-width: 0; }
 .position-pad .segmented button { height: 28px; }
 .position-pad .stop-glyph { width: 28px; height: 18px; display: block; margin: auto; }
+/* Stops that would not move it (it fills its place): greyed, as a Mac control is. */
+.position-pad .segmented button:disabled { opacity: 0.38; cursor: default; }
 /* An object moved across in its place: the guide where it would stand (its place's left
    edge, middle or right edge), named, as Keynote's alignment guides. */
 .block-guide { position: absolute; width: 0; pointer-events: none; opacity: 0; z-index: 6; border-left: 1px dashed var(--accent); transition: opacity 0.12s; }
@@ -218,6 +252,9 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
    bullets and levels; the measures come from the drawn words (positionInline). */
 .inline-editor.in-place .rich { position: relative; padding: 5px; outline: none; line-height: var(--rt-line, 1.22); caret-color: var(--accent); white-space: pre-wrap; overflow-wrap: break-word; cursor: text; min-height: 1.2em; }
 .rich { position: relative; }
+/* Light words (on a band of the accent, a dark slide) chosen in a light tint, their letters
+   kept: the system's blue is lost on a blue band. */
+.inline-editor.in-place .rich.rt-light::selection, .inline-editor.in-place .rich.rt-light *::selection { background: rgb(255 255 255 / 0.3); color: inherit; }
 /* Words typed on the slide are set as the slide sets them, at their true widths (not hinted
    to the pixel), so they lie on the drawn ones and nothing moves when the typing is done. */
 .inline-editor.in-place .rich, .inline-editor.in-place .textarea { text-rendering: geometricPrecision; }
@@ -229,6 +266,12 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .inline-editor.in-place.byline-part[data-before]:not([data-before=""]) .rich { padding-left: 0; }
 .inline-editor.in-place.byline-part[data-after]:not([data-after=""])::after { content: attr(data-after); white-space: pre; padding: 5px 5px 5px 0; line-height: var(--rt-line, 1.22); }
 .inline-editor.in-place.byline-part[data-after]:not([data-after=""]) .rich { padding-right: 0; }
+/* An author of several lines: the date on a line of its own under it, as the slide draws it. */
+.inline-editor.in-place.byline-part.stacked { flex-direction: column; }
+.inline-editor.in-place.byline-part.stacked[data-before]:not([data-before=""])::before { padding: 5px 5px 0; }
+.inline-editor.in-place.byline-part.stacked[data-before]:not([data-before=""]) .rich { padding: 0 5px 5px; }
+.inline-editor.in-place.byline-part.stacked[data-after]:not([data-after=""])::after { padding: 0 5px 5px; }
+.inline-editor.in-place.byline-part.stacked[data-after]:not([data-after=""]) .rich { padding: 5px 5px 0; }
 /* A placeholder in the words' own colour, faint: it reads on a dark band as on the page. */
 .rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: currentColor; opacity: 0.4; pointer-events: none; }
 /* An empty list's placeholder sits where its first item's words start. */
@@ -260,6 +303,10 @@ body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-s
 .rich-field .rich.rt-empty:not(.rt-list)::before { content: attr(data-placeholder); position: absolute; inset: 0 0 auto 0; padding: inherit; text-align: inherit; color: var(--ink-3); opacity: 1; pointer-events: none; }
 .rich-field .rich.rt-list { padding-left: 4px; }
 .rich-field .rich .rt-line { --rt-text: 1.3em; --rt-mark-x: 0.55em; --rt-mark-y: 0.7em; --rt-gap: 2px; --rt-line: 1.4; --rt-r: 2.5px; --rt-r2: 2px; --rt-step: 1.2em; }
+/* In the dark, words in a theme's colour (a deep accent, set for a white slide) are read on
+   the panel's dark field in that colour lightened towards its ink, not dark on dark. */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .inspector .rich [data-colour] { color: color-mix(in oklab, var(--rt-colour) 50%, var(--ink)) !important; } }
+:root[data-theme="dark"] .inspector .rich [data-colour] { color: color-mix(in oklab, var(--rt-colour) 50%, var(--ink)) !important; }
 /* The format bar looks as every text's does (.rt-bar, .markup-tools: studio.css). */
 .rt-bar { position: fixed; z-index: 60; animation: pop 0.1s ease-out; }
 .rt-bar[hidden] { display: none; }
@@ -399,9 +446,24 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .list-row:has(> .rich-field) { align-items: flex-start; }
 .list-row:has(> .rich-field) > button { margin-top: 3px; }
 .list-add { scroll-margin-bottom: 16px; }
-.list-row > .input { flex: 1; }
+.list-row > .input, .list-row > .rich-field { flex: 1; min-width: 0; }
 .list-row .pic, .menu-item .pic { width: 34px; height: 34px; border-radius: 5px; background: var(--sunken); border: 1px solid var(--line); object-fit: cover; flex: none; }
 .list-row .pic.round { border-radius: 50%; }
+/* A deck's logos, listed: each on a light card of its own, as most are drawn for one -- a dark
+   logo with no background of its own reads in a dark window too. */
+.logo-row { padding: 4px 6px 4px 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: grab; transition: border-color 0.12s; }
+.logo-row:hover { border-color: var(--accent-line); }
+.logo-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.logo-row.chosen { border-color: var(--accent); background: var(--accent-soft); }
+.logo-row.dragging { opacity: 0.4; }
+.logo-row.drop-before { box-shadow: 0 -3px 0 -1px var(--accent); }
+.logo-row.drop-after { box-shadow: 0 3px 0 -1px var(--accent); }
+.logo-row .logo-pic { width: 64px; height: 30px; padding: 3px; box-sizing: border-box; object-fit: contain; background: #fbfbfa; border-color: rgba(0, 0, 0, 0.08); border-radius: 4px; }
+.logo-row .logo-pic.gone { display: grid; place-items: center; color: var(--error); }
+.logo-row .logo-pic.gone svg { width: 15px; height: 15px; }
+.logo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font: 400 12px/1.3 var(--font); }
+.slide-page.logo-dragging, .slide-page.logo-dragging * { cursor: grabbing; }
+.slide-page.logo-dragging .hit { opacity: 0; }
 .figure-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); }
 .figure-card b { font-weight: 600; }
 
@@ -455,6 +517,13 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .table-edit .corner .row-pick:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
 
 .preview-pic { width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); }
+/* A picture cropped, previewed as the slide shows it: the part kept, round if it is. */
+.preview-crop { display: grid; place-items: center; height: 140px; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); }
+.preview-crop > div { position: relative; overflow: hidden; aspect-ratio: var(--kept); width: min(100% - 16px, (140px - 16px) * var(--kept)); }
+.preview-crop.round > div { border-radius: 50%; }
+.preview-kept { position: absolute; max-width: none; }
+.crop-field { display: grid; gap: 6px; justify-items: start; }
+.crop-field .segmented { width: 100%; }
 .math-notes { display: grid; gap: 6px; }
 .math-notes:empty { display: none; }
 .math-chips { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -577,5 +646,7 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .font-tile:hover { border-color: var(--ink-3); }
 .font-tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .font-tile-sample { font-size: 21px; line-height: 1.1; }
-.font-tile-name { font-size: 10px; color: var(--ink-3); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A long name (Latin Modern Roman) on two lines rather than cut short. */
+.font-tile-name { font-size: 10px; line-height: 1.2; color: var(--ink-3); max-width: 100%; overflow: hidden; text-align: center; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .font-tile.on .font-tile-name { color: var(--ink); }

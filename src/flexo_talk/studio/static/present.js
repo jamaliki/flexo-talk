@@ -6,7 +6,8 @@
 // the slides. Keys: → Space Return PageDown go on, ← PageUp Backspace go back, Home and
 // End, a slide's number then Return goes to it, B a black screen and W a white one (any
 // key comes back), Esc ends. A click goes on. After the last slide a black screen says
-// the show has ended, and a click ends it.
+// the show has ended, and a click ends it. The presenter's timer pauses when it is clicked,
+// and Reset sets it back to nothing.
 //
 // The window the show is started from leads (`present`): it keeps where the show is and
 // draws its own view. The second window (`follow`, presenter.html) draws the other view
@@ -25,11 +26,13 @@ let showing = null;  // the show this window leads, while there is one
 // `done(index)` is told the slide the show ended on. A show already running is left be.
 export function present({ pages, slides = () => [], start = 0, done = () => {} }) {
   if (showing || !pages().length) return;
+  if (slides().length && slides().every((slide) => slide?.skip === true)) return;
   dress();
   const app = window.pywebview?.api || null;
   const id = Math.random().toString(36).slice(2, 10);
   const root = el("div", "present ss-root");
-  const state = { index: 0, step: 1, blank: "", ended: false, swapped: false, typed: "", started: Date.now(), seq: 0 };
+  // (`paused`: when the presenter's timer was paused, or null while it runs.)
+  const state = { index: 0, step: 1, blank: "", ended: false, swapped: false, typed: "", started: Date.now(), paused: null, seq: 0 };
   let deck = null;
   let drawnFrom = [];
   let link = null;
@@ -38,16 +41,23 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
   let full = "";  // "page" (the Fullscreen API) or "app" (the Mac window's), if this show entered it
   const hintUntil = Date.now() + 3000;
 
-  // The slides as they are now: the deck redrawn as it is edited is shown as it comes.
+  // The slides as they are now: the deck redrawn as it is edited is shown as it comes --
+  // but for those skipped (Keynote's Skip Slide), each kept with where it is in the deck (`at`).
   const current = () => {
     const now = [pages(), slides()];
     if (deck && now[0] === drawnFrom[0] && now[1] === drawnFrom[1]) return deck;
+    const was = deck?.slides[state.index]?.at;
     drawnFrom = now;
-    deck = { seq: (deck?.seq || 0) + 1, slides: now[0].map((page, index) => ({
-      svg: page?.svg || "", steps: Math.max(1, page?.steps || 1), notes: String(now[1][index]?.notes || "") })) };
+    deck = { seq: (deck?.seq || 0) + 1, slides: now[0].map((page, index) => ({ at: index,
+      svg: page?.svg || "", steps: Math.max(1, page?.steps || 1), notes: String(now[1][index]?.notes || "") }))
+      .filter((slide) => now[1][slide.at]?.skip !== true) };
+    // A slide added, skipped or taken away before the one shown: it is shown still.
+    if (was !== undefined) state.index = shownAt(was);
     if (paired) link?.send({ type: "deck", deck });
     return deck;
   };
+  // Where the deck's slide `at` is among those shown: it, or the next shown after it.
+  const shownAt = (at) => { const found = deck.slides.findIndex((slide) => slide.at >= at); return found < 0 ? deck.slides.length - 1 : found; };
   const show = () => {
     const { slides: all } = current();
     if (!all.length) { finish(); return; }
@@ -76,9 +86,17 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
     else if (state.index > 0) Object.assign(state, { index: state.index - 1, step: deck.slides[state.index - 1].steps });
     show();
   };
-  // A key pressed in either window, or "click".
+  // A key pressed in either window, or "click" -- or the presenter's timer clicked: paused
+  // or going on ("timer"), or set back to nothing ("timer-reset"), as Keynote's.
   function press(key) {
     if (!deck) return;
+    if (key === "timer") {
+      if (state.paused === null) state.paused = Date.now();
+      else Object.assign(state, { started: state.started + Date.now() - state.paused, paused: null });
+      show();
+      return;
+    }
+    if (key === "timer-reset") { Object.assign(state, { started: Date.now(), paused: state.paused === null ? null : Date.now() }); show(); return; }
     if (/^[0-9]$/.test(key)) { state.typed = (state.typed + key).slice(-4); show(); return; }
     if (state.typed && ["Enter", "Backspace", "Escape"].includes(key)) {
       const typed = state.typed;
@@ -187,13 +205,14 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
     if (full === "page" && document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (full === "app") app.full_screen(false);
     root.remove();
-    done(Math.min(state.index, Math.max(0, (deck?.slides.length || 1) - 1)));
+    done(deck?.slides[Math.min(state.index, Math.max(0, deck.slides.length - 1))]?.at ?? 0);
   }
 
   const handle = { finish, press };
   showing = handle;
   document.activeElement?.blur?.();
-  state.index = Math.max(0, Math.min(start, pages().length - 1));
+  current();
+  state.index = Math.max(0, shownAt(Math.min(start, pages().length - 1)));
   root.addEventListener("mousemove", moved);
   root.addEventListener("click", clicked, true);
   window.addEventListener("keydown", keys, true);
@@ -300,7 +319,7 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
     el("div", "ss-bar",
       el("div", "ss-count", state.ended ? "End of slide show"
         : `Slide ${state.index + 1} of ${deck.slides.length}${slide.steps > 1 ? ` · Build ${state.step} of ${slide.steps}` : ""}`),
-      el("div", "ss-elapsed", elapsed(state)),
+      timerOf(state, press),
       el("div", "ss-clock", clock())),
     el("div", "ss-main",
       el("div", "ss-current", el("div", "ss-label", "Current"), shown),
@@ -341,6 +360,20 @@ function fitPresenter(root) {
   root.ssFit.observe(main);
 }
 
+// The time since the show began, as Keynote's presenter display shows it: clicked, it
+// pauses (and goes on again); beside it, Reset sets it back to nothing.
+function timerOf(state, press) {
+  const time = el("button", `ss-elapsed${state.paused !== null ? " paused" : ""}`, elapsed(state));
+  time.type = "button";
+  time.title = state.paused !== null ? "Resume Timer" : "Pause Timer";
+  time.onclick = () => press("timer");
+  const reset = el("button", "ss-reset", "Reset");
+  reset.type = "button";
+  reset.title = "Reset Timer";
+  reset.onclick = () => press("timer-reset");
+  return el("div", "ss-timer", time, state.paused !== null ? el("span", "ss-paused", "Paused") : null, reset);
+}
+
 // The clocks, kept going between draws.
 function tick(root, state) {
   const shown = root.querySelector(".ss-elapsed");
@@ -350,7 +383,7 @@ function tick(root, state) {
 }
 
 function elapsed(state) {
-  const seconds = Math.max(0, Math.floor((Date.now() - state.started) / 1000));
+  const seconds = Math.max(0, Math.floor(((state.paused ?? Date.now()) - state.started) / 1000));
   const [h, m, s] = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60];
   return `${h ? `${h}:${String(m).padStart(2, "0")}` : m}:${String(s).padStart(2, "0")}`;
 }
@@ -414,7 +447,13 @@ function dress() {
 .present.ss-root.ss-presenter { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 14px; padding: 18px 22px 12px; background: #161616; }
 .ss-bar { display: flex; align-items: baseline; gap: 24px; }
 .ss-count { font-size: 19px; color: #e6e6e6; }
-.ss-elapsed { margin-left: auto; font-size: 34px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.ss-timer { margin-left: auto; display: flex; align-items: baseline; gap: 10px; }
+.ss-elapsed { font: inherit; font-size: 34px; font-weight: 500; font-variant-numeric: tabular-nums; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.ss-elapsed.paused { color: #8d8d8d; }
+.ss-paused { font-size: 13px; font-weight: 600; color: #8d8d8d; }
+.ss-reset { font: 12.5px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #ddd; padding: 4px 9px; border-radius: 6px;
+  background: #2a2a2a; border: 1px solid #3a3a3a; cursor: pointer; }
+.ss-reset:hover, .ss-elapsed:hover { filter: brightness(1.2); }
 .ss-clock { font-size: 19px; color: #9a9a9a; font-variant-numeric: tabular-nums; }
 /* The slide being shown, large; beside it the next, smaller, over the notes, which take the
    room left and are set large enough to read at a glance. */

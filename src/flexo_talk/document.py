@@ -37,7 +37,10 @@ block is a mapping named by its kind (``bullets``, ``text``, ``figure``,
 document. A figure is a flexo figure file, a flexo figure document written
 inline, or ``file.py:function`` (a function returning a flexo figure); a plot is
 ``file.py:function`` returning a matplotlib figure, called inside
-``deck.plotting()`` (and given the deck, if it takes an argument).
+``deck.plotting()`` (and given the deck, if it takes an argument). A picture
+(``image``) may be cropped: ``crop: [x, y, width, height]``, the part kept as
+fractions of the whole picture (``[0.1, 0, 0.8, 1]`` keeps the middle 80% across),
+and drawn round with ``mask: circle``.
 
 ``read_deck`` makes a ``Deck`` from a file, ``deck_from_document`` from a parsed
 document, and ``deck_document`` writes any deck -- one made in Python too --
@@ -70,6 +73,7 @@ from flexo_talk.deck import (
     ACROSS,
     DOWN,
     LAYOUTS,
+    LOGO_HEIGHT,
     Deck,
     DeckStyle,
     Reference,
@@ -86,27 +90,30 @@ from flexo_talk.deck import (
 SCHEMA_VERSION = 1
 
 BLOCKS: dict[str, tuple[str, ...]] = {
-    "bullets": ("size", "numbered", "reveal", "colour", "plain"),
-    "text": ("size", "align", "muted", "colour"),
+    "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
+    "text": ("size", "align", "muted", "colour", "width"),
     "figure": ("turn", "width", "description", "caption"),
-    "image": ("width", "description", "caption"),
-    "plot": ("aspect",),
-    "table": ("header", "align", "size", "caption", "outline"),
-    "gallery": ("columns", "height", "crop", "size", "align"),
-    "code": ("size",),
-    "quote": ("by", "size"),
-    "stats": ("colour", "size"),
-    "callout": ("title", "colour", "size"),
-    "math": ("size", "align", "colour"),
-    "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour"),
+    "image": ("width", "crop", "mask", "description", "caption"),
+    "plot": ("aspect", "width"),
+    "table": ("header", "align", "size", "caption", "outline", "width"),
+    "gallery": ("columns", "height", "crop", "size", "align", "width"),
+    "code": ("size", "width"),
+    "quote": ("by", "size", "width"),
+    "stats": ("colour", "size", "width"),
+    "callout": ("title", "colour", "size", "width"),
+    "math": ("size", "align", "colour", "width"),
+    "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour", "width"),
 }
-"""Each block kind and the options it takes beside its value."""
+"""Each block kind and the options it takes beside its value. Every kind takes ``width``
+(points): the most it takes across its place, set there as its place sets it."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
-    "conventions", "sketch", "style",
+    "conventions", "sketch", "style", "logos", "logos_on", "logo_height",
 )
-COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade")
+COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip")
+"""The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
+and edited, but the studio neither presents nor exports it."""
 SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "title": ("title", "subtitle", "author", "date"),
     "section": ("title", "subtitle"),
@@ -157,6 +164,12 @@ class InvalidFigure(DeckDocumentError):
 class UnknownLayout(DeckDocumentError):
     """A slide of a layout there is none of (a typo, ``layout: quote``): drawn as Content
     all the same, every object it has in its body, and said in plain words."""
+
+
+class InvalidObject(DeckDocumentError):
+    """An object written in the deck that can't be made as written (a kind there is none
+    of, a table that is not rows): a box where it would be, the rest of its slide drawn,
+    and left empty when the deck is presented or exported."""
 
 
 class UntrustedCode(DeckDocumentError):
@@ -347,7 +360,7 @@ def deck_from_document(
             "schema_version", f"Unsupported schema_version {version!r}. This version of flexo-talk reads "
             f"version {SCHEMA_VERSION}."
         )
-    deck = make_deck(document.get("deck") or {}, base)
+    deck = make_deck(document.get("deck") or {}, base, missing=errors)
     slides = document.get("slides") or []
     if not isinstance(slides, list):
         raise DeckDocumentError("slides", "slides must be a list.")
@@ -374,8 +387,10 @@ def _stand_in(deck: Deck, index: int) -> None:
     deck.slide(layout="blank")
 
 
-def make_deck(data: dict[str, Any], base: Path) -> Deck:
-    """The ``Deck`` the ``deck`` mapping of a document describes."""
+def make_deck(data: dict[str, Any], base: Path, *, missing: list[DeckDocumentError] | None = None) -> Deck:
+    """The ``Deck`` the ``deck`` mapping of a document describes. With ``missing`` given, a
+    logo whose file is not there is said there, and keeps its place in the row (the slide
+    shows where it was, while editing); without it, it is an error."""
 
     if not isinstance(data, dict):
         raise DeckDocumentError("deck", "deck must be a mapping of deck settings.")
@@ -395,6 +410,7 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
         if isinstance(background, str) and background and not background.startswith("#"):
             # A picture behind every slide is found beside the document, as a slide's is.
             background = str(_file(base, background, "deck.background"))
+        logos = _logos(base, data.get("logos"), missing)
         deck = Deck(
             data.get("id") if data.get("id") is not None else "talk",
             theme=theme,
@@ -407,6 +423,9 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
             background=background,
             footer=data.get("footer"),
             look=data.get("look"),
+            logos=logos,
+            logos_on=data.get("logos_on") or "title",
+            logo_height=LOGO_HEIGHT if data.get("logo_height") is None else data["logo_height"],
         )
         # The document's proportions are changes to what the look and theme set.
         try:
@@ -421,6 +440,28 @@ def make_deck(data: dict[str, Any], base: Path) -> Deck:
         raise DeckDocumentError("deck", str(error)) from error
     deck.source = {**deck.source, **{key: value for key, value in data.items() if key != "style"}}
     return deck
+
+
+def _logos(base: Path, value: object, missing: list[DeckDocumentError] | None) -> object:
+    """The logos a deck names, each found beside the document; anything but a list of names
+    is left for the deck to say what it should be."""
+
+    if value is None:
+        return []
+    names = [value] if isinstance(value, str) else value
+    if not isinstance(names, list) or not all(isinstance(name, str) and name for name in names):
+        return value
+    found = []
+    for index, name in enumerate(names):
+        try:
+            found.append(str(_file(base, name, f"deck.logos[{index}]")))
+        except MissingFile as error:
+            if missing is None:
+                raise
+            # Kept where it stands in the row, its file not there: the slide shows where.
+            missing.append(error)
+            found.append(str(base / name))
+    return found
 
 
 def add_slide(
@@ -443,6 +484,8 @@ def add_slide(
         ))
         data, layout = _as_content(data), "content"
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
+    if not isinstance(data.get("skip", False), bool):
+        raise DeckDocumentError(f"{where}.skip", "skip must be true or false.")
     background = data.get("background")
     # A picture file, unless it names a colour (#1b2a41, or one of the theme's: accent).
     if isinstance(background, str) and not background.startswith("#") and not named_colour(background):
@@ -558,7 +601,20 @@ def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object,
             if not isinstance(blocks, list):
                 raise DeckDocumentError(names[name], "A region must be a list of blocks.")
             for index, block in enumerate(blocks):
-                add_block(slide.regions[name], block, base, f"{names[name]}[{index}]", missing=missing)
+                region, count = slide.regions[name], len(slide.regions[name].blocks)
+                try:
+                    add_block(region, block, base, f"{names[name]}[{index}]", missing=missing)
+                except DeckDocumentError as error:
+                    if missing is None:
+                        raise
+                    # One object that can't be made is a box where it would be, the rest of its
+                    # slide drawn -- not a slide that is not drawn.
+                    del region.blocks[count:], region.sources[count:]
+                    missing.append(InvalidObject(error.where, error.message))
+                    kind = next((key for key in block if key in BLOCKS), None) if isinstance(block, dict) else None
+                    noun = {"bullets": "list", "image": "picture", "stats": "object", "math": "equation"}.get(
+                        kind, kind or "object")
+                    region.stand_in("object", "", said=f"This {noun} can\u2019t be drawn as it is")
     return slide
 
 
@@ -980,7 +1036,7 @@ def _maker(
 
         if not code_allowed.get():
             raise UntrustedCode(
-                where, f"{target} was not run. Python code in this folder runs only after you trust the folder."
+                where, f"{file} hasn\u2019t been run: Python in this folder runs once you trust the folder."
             )
         root = worker.root()
         if root is not None:
@@ -1209,10 +1265,15 @@ def deck_document(deck: Deck, *, plots: Callable[[_Plot, str], dict[str, Any]] |
 def _deck_data(deck: Deck) -> dict[str, Any]:
     given = deck.source
     data: dict[str, Any] = {"id": deck.id}
-    defaults = {"theme": "paper", "palette": "default", "background": True, "footer": "", "look": None}
+    defaults = {"theme": "paper", "palette": "default", "background": True, "footer": "", "look": None,
+                "logos": [], "logos_on": "title", "logo_height": LOGO_HEIGHT}
     for key in ("theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
-                "conventions", "sketch"):
+                "conventions", "sketch", "logos", "logos_on", "logo_height"):
         value = given.get(key)
+        if key == "logos" and isinstance(value, str | PurePath):
+            value = [value]
+        if key == "logos" and isinstance(value, list | tuple):
+            value = [str(logo) for logo in value]
         if value is None or value == defaults.get(key):
             continue
         data[key] = value
