@@ -1446,6 +1446,9 @@ export function mount(studio, container) {
   let notesFor = null;
   let wasOffline = false;
   let drawingHeld = false;
+  // A logo dragged along its row, or sized by a corner (below): declared here, for the stage
+  // drawn before them to hold back a drawing while they are.
+  let logoDrag = null, logoSizing = null;
   studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
   function renderStage() {
     const list = slides();
@@ -1474,9 +1477,10 @@ export function mount(studio, container) {
     const away = !page?.svg && studio.state === "offline";
     const shows = page?.svg ? `${state.slide}:${page.hash}` : away ? `away:${state.slide}` : "";
     let before = null, moved = null, renewed = false;
-    // An object being sized keeps the drawing it is sized on: one arriving meanwhile (another's
-    // change) is put in once it is let go of -- or, sized, the drawing of it sized.
-    if ((sizing || resizing) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
+    // An object being sized keeps the drawing it is sized on, as a logo being sized or dragged
+    // along its row does: one arriving meanwhile (another's change) is put in once it is let go
+    // of -- or, changed, the drawing of it changed.
+    if ((sizing || resizing || logoSizing || logoDrag?.started) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
     else if (!pageNode || pageNode.dataset.shows !== shows) {
       renewed = true;
       // A figure's parts just moved on this slide: they land from where they were.
@@ -9072,8 +9076,7 @@ export function mount(studio, container) {
   }).filter((item) => item?.box);
 
   // A logo pressed and dragged along its row goes where it is let go, the others making room
-  // for it as it passes them; Esc sends it back.
-  let logoDrag = null;
+  // for it as it passes them; Esc sends it back. (logoDrag: declared with the stage.)
   function pressLogo(event, part) {
     if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || logoDrag || logoSizing || carry) return;
     const row = logoRow();
@@ -9142,12 +9145,15 @@ export function mount(studio, container) {
     if (!was) return;
     const me = was.row[was.from];
     if (was.to === was.from) { logoDragBack(was); return; }
+    drawingHeld = false;
     // It glides the rest of the way to its place, and stays there until the slide is drawn so.
     me.element.style.transition = "transform 160ms cubic-bezier(.2,.8,.2,1)";
     me.element.style.transform = `translate(${(was.slot ?? 0) * scaleOf(me.element)}px, 0px)`;
     moveLogo(me.index, was.row[was.to].index);
   }
   function logoDragBack(was) {
+    // (A drawing held back meanwhile is put in: the logos are where they were in it.)
+    if (drawingHeld) { putHeld(); placeChosen(); return; }
     for (const item of was.row) { item.element.style.transition = "transform 160ms cubic-bezier(.2,.8,.2,1)"; item.element.style.transform = ""; }
     setTimeout(placeChosen, 180);
   }
@@ -9163,8 +9169,7 @@ export function mount(studio, container) {
   // every logo grows or shrinks with it, shown about the point the slide keeps still as they
   // do -- the foot of a title slide's row, its middle across; the middle of a footer's --
   // catching at the deck's default height (⌘ drags freely). Let go, they are drawn that
-  // tall: one step, "Resize Logos". Esc puts them back.
-  let logoSizing = null;
+  // tall: one step, "Resize Logos". Esc puts them back. (logoSizing: declared with the stage.)
   function logoSizeStart(event, corner) {
     if (event.button !== 0 || logoSizing || logoDrag || !logoChosen()) return;
     event.preventDefault();
@@ -9237,11 +9242,13 @@ export function mount(studio, container) {
     if (!was) return;
     // (Drawn so until the slide is drawn again that size.)
     if (!was.moved || was.now === was.height) { logoSizeBack(was); return; }
+    drawingHeld = false;
     sizeLogos(was.now);
   }
   function logoSizeBack(was) {
     for (const element of was.elements) element.removeAttribute("transform");
     placeChosen();
+    putHeld();
   }
   function logoSizeCancel() { const was = logoSizeFinish(); if (was) logoSizeBack(was); }
   function logoSizeKey(event) {
