@@ -4861,6 +4861,7 @@ export function mount(studio, container) {
       leaveFigure(false);
       state.focus = null; state.field = null; allChosen = null;
       state.logo = Number.isInteger(at) && at < logosOf().length ? at : null;
+      logosRedrawn = pageNode;
       return;
     }
     // Several chosen together and changed so (deleted, moved, pasted): undone or redone, they
@@ -8156,7 +8157,11 @@ export function mount(studio, container) {
   const logoFile = (path) => (catalog.logos?.types ?? [".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai"]).some((suffix) => String(path).toLowerCase().endsWith(suffix));
   // The deck's logos changed, as one step named `label`; `chosen`: the logo chosen after it,
   // and before it (undone, the one chosen then is chosen again: chooseChanged).
+  // (Until the slide is drawn again with the change, the drawing's logos are the old row's: the
+  // frame waits for the new one rather than frame the logo now at the place it is chosen by.)
+  let logosRedrawn = null;
   function editLogos(mutate, label, { chosen = undefined, was = state.logo } = {}) {
+    logosRedrawn = pageNode;
     studio.change((d) => {
       d.deck ||= {};
       const list = logosOf(d).slice();
@@ -8193,14 +8198,16 @@ export function mount(studio, container) {
     if (!paths.length) return;
     const count = logosOf().length;
     const where = at ?? (logoChosen() ? state.logo + 1 : count);
-    editLogos((list) => list.splice(where, 0, ...paths), paths.length === 1 ? "Add Logo" : `Add ${paths.length} Logos`, { chosen: where + paths.length - 1, was: null });
+    editLogos((list) => list.splice(where, 0, ...paths), paths.length === 1 ? "Add Logo" : `Add ${paths.length} Logos`, { chosen: where + paths.length - 1 });
     // (A picture asked for on a title slide: what it became is said.)
     toast(paths.length === 1 ? "Added as a logo" : `${paths.length} pictures added as logos`, { icon: "image" });
   }
   function deleteLogo(index, label = "Delete Logo") {
     if (awayFrom("delete logos") || index >= logosOf().length) return;
     editLogos((list) => list.splice(index, 1), label, { chosen: null, was: index });
-    undoNote("Logo deleted", { icon: "trash" });
+    // Said as it was done: "Logo deleted", "Logo cut", "Logo removed".
+    const done = { "Cut Logo": "cut", "Remove Logo": "removed" }[label] || "deleted";
+    undoNote(`Logo ${done}`, { icon: done === "cut" ? "cut" : "trash" });
   }
   function moveLogo(index, to) {
     const count = logosOf().length;
@@ -8236,7 +8243,8 @@ export function mount(studio, container) {
     if (!pageNode) return;
     if (logoFrame.parentNode !== pageNode) pageNode.append(logoFrame);
     if (logoSizing) return;  // its frame follows it as it is sized
-    const shown = logoChosen() && !inline && !logoDrag?.started ? boxOf(logoId(state.logo)) : null;
+    if (logosRedrawn && logosRedrawn !== pageNode) logosRedrawn = null;
+    const shown = logoChosen() && !inline && !logoDrag?.started && !logosRedrawn ? boxOf(logoId(state.logo)) : null;
     place(logoFrame, shown, "Logo");
   }
   // The logos drawn on the slide, in their order: [{ index, element, box }] (box: the window's pixels).
@@ -8277,9 +8285,11 @@ export function mount(studio, container) {
     const { row, from } = drag, me = row[from];
     // Along the row only, no further than its ends.
     const shift = Math.min(Math.max(dx, row[0].box.left - me.box.left), row[row.length - 1].box.right - me.box.right);
-    const middle = (me.box.left + me.box.right) / 2 + shift;
+    // It passes another once its leading edge is past that one's middle (a wide logo passes
+    // a narrow one, as a narrow one passes a wide one).
     const others = row.filter((item) => item !== me);
-    drag.to = others.filter((item) => (item.box.left + item.box.right) / 2 < middle).length;
+    const middle = (item) => (item.box.left + item.box.right) / 2;
+    drag.to = others.filter((item, k) => (k < from ? me.box.left + shift > middle(item) : me.box.right + shift > middle(item))).length;
     // The others where they will stand with it there: the row's spacing is even, so they are
     // where the slide will draw them.
     const gap = row.length > 1 ? (row[row.length - 1].box.right - row[0].box.left - row.reduce((sum, item) => sum + item.box.width, 0)) / (row.length - 1) : 0;
@@ -8331,10 +8341,11 @@ export function mount(studio, container) {
     logoDragCancel();
   }
 
-  // A corner of the chosen logo dragged: every logo grows or shrinks together, about the
-  // point the slide keeps still as they do -- the foot of a title slide's row, its middle
-  // across; the middle of a footer's -- catching at the deck's default height (⌘ drags
-  // freely). Let go, they are drawn that tall: one step, "Resize Logos". Esc puts them back.
+  // A corner of the chosen logo dragged: it is sized as by itself, about its far corner, and
+  // every logo grows or shrinks with it, shown about the point the slide keeps still as they
+  // do -- the foot of a title slide's row, its middle across; the middle of a footer's --
+  // catching at the deck's default height (⌘ drags freely). Let go, they are drawn that
+  // tall: one step, "Resize Logos". Esc puts them back.
   let logoSizing = null;
   function logoSizeStart(event, corner) {
     if (event.button !== 0 || logoSizing || logoDrag || !logoChosen()) return;
@@ -8354,9 +8365,10 @@ export function mount(studio, container) {
     const down = title ? Math.max(...boxes.map((b) => b.y + b.height)) : boxes.reduce((sum, b) => sum + b.y + b.height / 2, 0) / boxes.length;
     const own = mine.getBBox();
     const handle = { x: corner.endsWith("w") ? own.x : own.x + own.width, y: corner.startsWith("n") ? own.y : own.y + own.height };
+    const far = { x: corner.endsWith("w") ? own.x + own.width : own.x, y: corner.startsWith("n") ? own.y + own.height : own.y };
     closeInline();
     hover.hidden = true;
-    logoSizing = { elements, anchor: { x: across, y: down }, handle, inverse: matrix.inverse(), height: logoHeight(), now: logoHeight(),
+    logoSizing = { elements, anchor: { x: across, y: down }, handle, far, inverse: matrix.inverse(), height: logoHeight(), now: logoHeight(),
       pixels: own.height * matrix.a / logoHeight(), start: { x: event.clientX, y: event.clientY }, moved: false };
     pageNode.classList.add("block-sizing");
     if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
@@ -8370,12 +8382,12 @@ export function mount(studio, container) {
     if (!sizing) return;
     if (!sizing.moved && Math.hypot(event.clientX - sizing.start.x, event.clientY - sizing.start.y) < 3) return;
     sizing.moved = true;
-    // The size that puts the corner held nearest the pointer, along the line from the point kept still.
+    // The size that puts the corner held nearest the pointer, the logo sized about its far corner.
     const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(sizing.inverse);
-    const { anchor, handle } = sizing;
-    const ax = handle.x - anchor.x, ay = handle.y - anchor.y;
+    const { anchor, handle, far } = sizing;
+    const ax = handle.x - far.x, ay = handle.y - far.y;
     const reach = ax * ax + ay * ay;
-    const scale = reach > 0 ? ((point.x - anchor.x) * ax + (point.y - anchor.y) * ay) / reach : 1;
+    const scale = reach > 0 ? Math.max(((point.x - far.x) * ax + (point.y - far.y) * ay) / reach, 0) : 1;
     let height = Math.round(Math.min(LOGO_MOST, Math.max(LOGO_LEAST, sizing.height * scale)));
     // It catches at the deck's default (a few pixels either side of it), unless ⌘ is held.
     const snapped = !(event.metaKey || event.ctrlKey) && Math.abs(height - LOGO_DEFAULT) * sizing.pixels < 6;
@@ -8430,7 +8442,14 @@ export function mount(studio, container) {
       else if (to >= 0 && to < count) chooseLogo(to);
       return true;
     }
-    if (key === "ArrowUp" || key === "ArrowDown") return true;
+    if (key === "ArrowUp" || key === "ArrowDown") {
+      // As from any of the slide's things: the one before it, or after it.
+      if (event.altKey) return true;
+      const stops = slideStops(slideAt()), now = stops.findIndex((stop) => stop.logo === at);
+      const next = stops[now + (key === "ArrowUp" ? -1 : 1)];
+      if (next) chooseStop(next);
+      return true;
+    }
     if (key === "Delete" || key === "Backspace") { deleteLogo(at); return true; }
     if (key === "Escape") { state.logo = null; placeChosen(); renderInspector(); reportFocus(); return true; }
     return false;
@@ -8455,11 +8474,12 @@ export function mount(studio, container) {
   let logoDragged = null;
   // The logos whose file is not there, as the last drawing said, by their files: their rows
   // drawn again when that changes (a file put there, one renamed away).
-  let goneLogos = new Set();
+  // (Their pictures are asked for once the first drawing has said which are there.)
+  let goneLogos = null;
   studio.on("drawn", (result) => {
     const list = logosOf();
     const gone = new Set((result.messages || []).map((message) => list[Number(/^deck\.logos\[(\d+)\]$/.exec(message.where || "")?.[1])]).filter(Boolean));
-    if (same([...gone].sort(), [...goneLogos].sort())) return;
+    if (goneLogos && same([...gone].sort(), [...goneLogos].sort())) return;
     goneLogos = gone;
     if (inspectorBody.querySelector(".logo-rows")) setTimeout(renderInspector, 0);
   });
@@ -8502,13 +8522,18 @@ export function mount(studio, container) {
           moveLogo(from, place > from ? place - 1 : place);
         },
       },
-      goneLogos.has(path) ? missing() : h("img.pic.logo-pic", { src: studio.raw(path), alt: "", draggable: false, onerror: (event) => event.currentTarget.replaceWith(missing()) }),
+      !goneLogos ? h("span.pic.logo-pic") : goneLogos.has(path) ? missing() : h("img.pic.logo-pic", { src: studio.raw(path), alt: "", draggable: false, onerror: (event) => event.currentTarget.replaceWith(missing()) }),
       h("span.logo-name", {}, logoName(path)),
       ui.button("", () => deleteLogo(index, "Remove Logo"), { kind: "ghost", icon: "trash", small: true, title: "Remove" }));
       return row;
     });
+    // (Where they show, and how tall, once there are some.)
+    if (!list.length) {
+      return [h("div.hint-line", {}, "Your institution’s and funders’ logos, along the foot of the title slide."),
+        h("div", {}, ui.button("Add Logo…", () => addLogos(), { kind: "ghost", icon: "plus", small: true }))];
+    }
     return [
-      list.length ? h("div.list-rows.logo-rows", {}, rows) : h("div.hint-line", {}, "Your institution’s and funders’ logos, along the foot of the title slide."),
+      h("div.list-rows.logo-rows", {}, rows),
       h("div", {}, ui.button("Add Logo…", () => addLogos(), { kind: "ghost", icon: "plus", small: true })),
       ui.field("Show On", ui.segmented({ value: deck.logos_on === "every" ? "every" : "title", key: "deck.logos_on",
         options: [{ value: "title", label: "Title Slide" }, { value: "every", label: "Every Slide" }],
@@ -8544,10 +8569,12 @@ export function mount(studio, container) {
   const slideStops = (slide) => (!slide ? [] : [
     ...["title", "words", "subtitle", "author", "date", "by"].filter((name) => (slide[name] || name in slide) && catalog.slide_keys[layoutOf(slide)].includes(name)).map((name) => ({ field: name })),
     ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => ({ region: region.key, index }))),
-    // (Its footnotes last, at its foot.)
+    // (Its footnotes last, at its foot -- and the deck's logos, the foot's own.)
     ...notesOf(slide).map((_, n) => ({ field: `footnote${n}` })),
+    ...(logosShown(slide) ? logosOf().map((_, logo) => ({ logo })) : []),
   ]);
   const chooseStop = (stop) => {
+    if (stop.logo !== undefined) { chooseLogo(stop.logo); return; }
     if (!stop.field) { focusBlock(stop.region, stop.index); return; }
     leaveFigure(false);
     state.focus = null; state.field = { field: stop.field, id: fieldId(stop.field) };
@@ -8693,7 +8720,8 @@ export function mount(studio, container) {
       toured = null;
       const stops = slideStops(slideAt());
       if (!stops.length) return;
-      const now = stops.findIndex((stop) => (stop.field ? state.field?.field === stop.field : state.focus?.region === stop.region && state.focus?.index === stop.index));
+      const now = stops.findIndex((stop) => (stop.logo !== undefined ? logoChosen() && state.logo === stop.logo
+        : stop.field ? state.field?.field === stop.field : state.focus?.region === stop.region && state.focus?.index === stop.index));
       chooseStop(stops[(now + (event.shiftKey ? -1 : 1) + stops.length + (now < 0 && event.shiftKey ? 1 : 0)) % stops.length]);
     }
     else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }
