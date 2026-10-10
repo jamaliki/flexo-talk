@@ -1864,3 +1864,12 @@ def test_an_svg_logo_is_a_picture_in_the_powerpoint_and_the_pdf(tmp_path: Path) 
     # A native picture, its vectors kept beside a PNG for programs that draw none.
     assert slide.count("<p:pic>") == 1 and "svgBlip" in slide
     assert result.pdf is not None and b"/Subtype /Image" in result.pdf.read_bytes()
+
+
+def test_a_logo_that_is_not_there_stops_the_build_saying_so(tmp_path: Path) -> None:
+    from flexo.diagnostics import FlexoError
+
+    deck = Deck("gone", logos=[tmp_path / "gone.png"])
+    deck.title("A talk")
+    with pytest.raises(FlexoError, match="Cannot read the artwork file"):
+        deck.build(tmp_path, formats=("svg",))

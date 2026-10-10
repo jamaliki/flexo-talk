@@ -1320,7 +1320,7 @@ def _logo_picture(canvas: _Canvas, slide: Slide, source: str) -> tuple[Any, floa
     from flexo.diagnostics import FlexoError
 
     name = Path(source).name
-    if not Path(source).is_file():
+    if not Path(source).is_file() and STANDING_ASIDE.get():
         return None, None, f"Missing logo: {name}"
     try:
         art = load_artwork("logo", source)
