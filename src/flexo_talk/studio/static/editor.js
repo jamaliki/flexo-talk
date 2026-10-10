@@ -4535,6 +4535,8 @@ export function mount(studio, container) {
       onpointerdown: (event) => { event.stopPropagation(); pressBlock(event, { kind: "block", region: figure.region, index: figure.index }); } }, icon("grip"));
     // (Shapes to group chosen: an empty group is added from the palette's Layout.)
     const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (⌥⌘G)", disabled: !figure.parts.canGroup() });
+    // (Where its menu opens from ⌥⌘G, or Arrange › Group…, too: groupAnchor.)
+    group.classList.add("group");
     // (A figure of one shape -- a structure added on its own -- is that shape, as a picture is:
     // no tools of a diagram's over it. It grows into a figure from its menu's Add Shape After….)
     const only = figure.parts.model.groups?.find((each) => each.id === figure.parts.model.root)?.children || [];
@@ -9750,7 +9752,13 @@ export function mount(studio, container) {
     const at = state.focus, block = at && !typingNow() ? blocksAt(slideAt(), at.region)[at.index] : null;
     if (!block) return [];
     const kind = kindOf(block), name = blockLabel(block), count = blocksAt(slideAt(), at.region).length;
+    // A figure's shapes chosen: Group… and Ungroup, as the Mac app's Arrange menu runs them by
+    // name (⌥⌘G and ⇧⌥⌘G, the figure's own keys).
+    const parts = figure && figureBlock() && editable(block) ? figure.parts : null;
+    const one = parts?.selected.length === 1 ? parts.selected[0] : null;
     return [
+      ...(parts?.selected.length && parts.canGroup() ? [{ icon: "layout", label: "Group…", keys: "⌥⌘G", run: () => parts.groupMenu(figureBar.querySelector(".group") || figureBar) }] : []),
+      ...(one && parts.groupOf(one) && one !== parts.model?.root ? [{ icon: "layout", label: "Ungroup", keys: "⇧⌥⌘G", run: () => parts.act({ do: "ungroup", id: one }) }] : []),
       ...(kind === "text" ? [{ icon: "list", label: "Convert to List", run: () => restyle(at, "bulleted") }] : []),
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "text") }] : []),
       ...(kind === "image" && pictureAspect(at) ? [{ icon: "crop", label: "Crop Picture…", hint: name, run: () => startCrop(at) }] : []),
