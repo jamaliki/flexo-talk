@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from flexo_talk import Deck
-from flexo_talk.compose import PLACEHOLDERS, render_slide
+from flexo_talk.compose import PLACEHOLDERS, PLOT_WIDEST, render_slide
 from flexo_talk.document import BLOCKS, DeckDocumentError, deck_document, deck_from_document
 
 PARAGRAPH = "A paragraph of words long enough to wrap across a few lines when it is given a width of its own."
@@ -152,29 +152,69 @@ def test_a_table_given_a_width_shares_it_among_its_columns(tmp_path: Path) -> No
         assert table.room == (table.x, sum(table.widths))
 
 
-def test_a_plot_given_a_width_is_drawn_that_wide_its_height_in_proportion() -> None:
+def _plotted(width: float | None, *, columns: bool = False, aspect: float | None = None) -> tuple[float, float]:
+    """How large a plot given ``width`` is drawn: across a slide, or in a column of two."""
+
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    def drawn(width: float | None) -> tuple[float, float]:
-        deck = Deck(f"plot{width}")
-        figure, axes = plt.subplots()
-        axes.plot([0, 1], [0, 1])
-        with deck.slide("Plot") as slide:
-            slide.plot(figure, width=width)
-        render_slide(deck, deck.slides[0])
-        plt.close(figure)
-        # (As it was drawn: the SVG it was laid out as, at its size.)
-        drawn = deck.slides[0].body.blocks[0].drawn
-        found = re.search(r'<svg[^>]*?width="([\d.]+)pt" height="([\d.]+)pt"', drawn)
-        assert found
-        return float(found.group(1)), float(found.group(2))
+    deck = Deck(f"plot{width}")
+    figure, axes = plt.subplots()
+    axes.plot([0, 1], [0, 1])
+    with deck.slide("Plot", layout="two-columns" if columns else "content") as slide:
+        (slide.right if columns else slide).plot(figure, width=width, aspect=aspect)
+    render_slide(deck, deck.slides[0])
+    plt.close(figure)
+    # (As it was drawn: the SVG it was laid out as, at its size.)
+    region = deck.slides[0].regions["right" if columns else "body"]
+    found = re.search(r'<svg[^>]*?width="([\d.]+)pt" height="([\d.]+)pt"', region.blocks[0].drawn)
+    assert found
+    return float(found.group(1)), float(found.group(2))
 
-    whole, half = drawn(None), drawn(400.0)
-    assert half[0] == pytest.approx(400.0, abs=1.0)
-    assert half[0] / half[1] == pytest.approx(whole[0] / whole[1], rel=0.01)
+
+def test_a_plot_given_a_width_is_drawn_that_wide_its_height_in_proportion() -> None:
+    """In its place's proportions -- but no wider than 3:2 where its place is wider still: its
+    words keep their size, and a plot flatter than that leaves its axes no room."""
+
+    # A slide's place is wider than 3:2: given a width, the plot is 3:2.
+    whole, narrower = _plotted(None), _plotted(400.0)
+    assert whole[0] / whole[1] > PLOT_WIDEST
+    assert narrower[0] == pytest.approx(400.0, abs=1.0)
+    assert narrower[0] / narrower[1] == pytest.approx(PLOT_WIDEST, rel=0.01)
+    # No taller than its place: as wide as it nearly, it is as tall as it.
+    assert _plotted(whole[0] - 2.0)[1] == pytest.approx(whole[1], abs=0.5)
+    # A column's place is narrower than 3:2: the plot keeps its proportions.
+    column, half = _plotted(None, columns=True), _plotted(200.0, columns=True)
+    assert column[0] / column[1] < PLOT_WIDEST
+    assert half[0] == pytest.approx(200.0, abs=1.0)
+    assert half[0] / half[1] == pytest.approx(column[0] / column[1], rel=0.01)
+    # A plot's own aspect is kept.
+    own = _plotted(300.0, aspect=2.5)
+    assert own[0] / own[1] == pytest.approx(2.5, rel=0.01)
+
+
+def test_the_studio_is_told_how_tall_a_plot_is_drawn_and_how_narrow_it_may_be() -> None:
+    """While edited, a plot says the height its place has for it, which with its width and its
+    place's says how tall it is drawn; and its least width keeps its words room."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    deck = Deck("plotted")
+    figure, axes = plt.subplots()
+    axes.plot([0, 1], [0, 1])
+    with deck.slide("Plot") as slide:
+        slide.plot(figure)
+    svg = _editing(deck)
+    plt.close(figure)
+    tag = re.search(r'<g id="slide1\.body\.0"[^>]*>', svg).group(0)
+    tall = float(re.search(r'data-flexo-tall="([\d.]+)"', tag).group(1))
+    assert tall == pytest.approx(_plotted(None)[1], abs=0.5)
+    assert float(re.search(r'data-flexo-least="([\d.]+)"', tag).group(1)) >= 14 * deck.style.figure_size
 
 
 def test_a_picture_or_figure_says_where_it_stands_across_its_place(tmp_path: Path) -> None:

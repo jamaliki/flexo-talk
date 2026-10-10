@@ -143,7 +143,8 @@ stands it -- words, a list, a quotation, a callout or a listing at the side thei
 are set against (centred words centred), an equation as it is aligned, a plot, gallery or
 table where a picture stands -- or where `horizontal` asks. Words wrap in it (a listing
 is set smaller, then wrapped, as in a place too narrow for it); numbers share it; an
-equation is set smaller to fit it; a plot is drawn that wide, its height in proportion; a
+equation is set smaller to fit it; a plot is drawn that wide, its height in proportion (its
+`aspect`, else its place's, but no wider than 3:2: its words keep their size); a
 gallery's cells and pictures shrink with it; a table's columns share it (wider than its
 words, each in proportion to them; narrower, each its longest word at least). With no
 width an object is drawn as it always was: words, lists, quotations, callouts, numbers,
@@ -413,7 +414,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   a listing, numbers, an equation) a handle at each side, which sets their width, the
   words wrapping again as it is dragged, where the slide will wrap them; a figure,
   picture, mechanism, plot, gallery or table a handle at each corner, which sizes it in
-  proportion (a table's columns sharing its width). The edge dragged follows the pointer
+  proportion (a table's columns sharing its width; a plot no flatter than 3:2, its words
+  keeping their size). The edge dragged follows the pointer
   and the other stays (an object standing centred stays centred); it catches at the
   width of its place, the width it takes of itself and the width it was -- ⌘ drags it
   free of them -- and is never narrower than its longest word, a column's, or a

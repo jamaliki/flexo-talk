@@ -3336,6 +3336,8 @@ export function mount(studio, container) {
   // a handle double-clicked gives it no width of its own again.
   const SIDEWAYS = new Set(["text", "bullets", "quote", "callout", "code", "stats", "math"]);
   const CORNERED = new Set(["plot", "gallery", "table"]);
+  // The widest a plot given a width is drawn where its place is wider (compose.py's PLOT_WIDEST).
+  const PLOT_WIDEST = 1.5;
   // Those as wide as their place with no width of their own: filling it again is having none.
   // (A table, a listing and an equation are as wide as they are of themselves: that is none.)
   const FILLING = new Set(["text", "bullets", "quote", "callout", "stats", "plot", "gallery"]);
@@ -3372,11 +3374,17 @@ export function mount(studio, container) {
     // How much larger it is set than it is drawn now when given room (a listing or an
     // equation set smaller to fit its width), for it to be drawn so again as it is given more.
     const grow = attribute(element, "data-flexo-grow") ?? 1;
+    // How much taller (or shorter) than it is it is drawn at a width: in proportion -- but a
+    // plot, as tall as the slide draws it then (compose.py's _plot_tall): its own aspect, else
+    // its place's but no wider than PLOT_WIDEST, as tall as its place has room for (`tall`).
+    const tall = kind === "plot" ? attribute(element, "data-flexo-tall") : null;
+    const tallAt = (wide) => Math.min(tall, wide / (Number(block.aspect) || Math.min(room.width / tall, PLOT_WIDEST)));
+    const higher = (wide) => (tall ? tallAt(wide) / tallAt(span.width) : wide / span.width);
     const wrap = mover(element);
     wrap.classList.add("block-sized");
     Object.assign(wrap.style, { transformBox: "fill-box", transformOrigin: "0 0", transform: "" });
     const kept = element.cloneNode(true);
-    const set = sizer(element, kind, span, { natural: kind === "code" ? natural : undefined, grow, share });
+    const set = sizer(element, kind, span, { natural: kind === "code" ? natural : undefined, grow, share, higher });
     // What follows it in its place moves down (or up) as it grows taller (or shorter).
     const count = blocksAt(slide, focus.region).length;
     const after = Array.from({ length: count - focus.index - 1 }, (_, n) => blockElement(focus.region, focus.index + 1 + n)).filter(Boolean).map(mover);
@@ -3386,7 +3394,7 @@ export function mount(studio, container) {
     const drawn = regions.find((item) => item.key === focus.region);
     const place = CORNERED.has(kind) && box && drawn?.room ? placerOf(drawn, regions, box) : null;
     const side = handle.endsWith("w") ? "w" : "e";
-    resizing = { at: { ...focus }, block, kind, element, wrap, kept, set, after, span, room, share, natural, most, least, box, place, side,
+    resizing = { at: { ...focus }, block, kind, element, wrap, kept, set, after, span, room, share, natural, most, least, box, place, side, higher,
       corner: handle.length === 2 ? handle : null, centred: Math.abs(share - 0.5) < 0.001, matrix, unit: matrix.a,
       start: { x: event.clientX, y: event.clientY }, moved: false, pointer: null, width: span.width, left: span.x, stand: share, caught: null,
       column: regions.length > 1 ? "column" : "slide" };
@@ -3410,8 +3418,8 @@ export function mount(studio, container) {
       // A corner of a plot or a gallery, in proportion: the size that puts it nearest the
       // pointer, as the slide will stand it.
       const miss = (wide) => {
-        const at = standAt(wide), tall = it.box.height * wide / span.width;
-        const top = it.place ? it.place(wide / span.width).top : it.box.top;
+        const at = standAt(wide), tall = it.box.height * it.higher(wide);
+        const top = it.place ? it.place(it.higher(wide)).top : it.box.top;
         const cx = it.matrix.e + (at.left + (side === "e" ? wide : 0)) * unit, cy = top + (it.corner.startsWith("n") ? 0 : tall);
         return Math.hypot(clientX - cx, clientY - cy);
       };

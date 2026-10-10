@@ -476,8 +476,8 @@ class _Plot:
     drawn: str = ""
     """The SVG it was last drawn as, at the size of its place (what ``convert`` saves)."""
     width: float | None = None
-    """The width it is drawn at (points), as its place allows, its height in proportion;
-    ``None`` as wide as its place."""
+    """The width it is drawn at (points), as its place allows, its height in proportion (its
+    ``aspect``, else its place's, no wider than 3:2); ``None`` as wide as its place."""
 
 
 @dataclass(slots=True)
@@ -1414,7 +1414,8 @@ class Region:
         scaled; its text is set in the deck's font and stays text. Make it inside
         ``with deck.plotting():`` for the deck's colours as well. ``width`` (points)
         draws it that wide, as its place allows, its height in proportion (its
-        ``aspect``, else its place's).
+        ``aspect``, else its place's -- no wider than 3:2, for its words, which keep
+        their size, to leave its axes room).
         """
 
         aspect = None if aspect is None else _number(aspect, "aspect", 0.1, 10.0, "1.6 (width over height)")

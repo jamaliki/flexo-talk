@@ -1679,8 +1679,7 @@ def _block(
     elif isinstance(block, _Plot):
         tall = max(share, 60.0)
         if own is not None and not block.aspect:
-            # Given a width and no shape of its own, it keeps its place's: as much shorter.
-            tall *= wide / box.width
+            tall = _plot_tall(wide, box.width, tall)
         top += _plot(canvas, identifier, block, Box(left, top, wide, tall))
     elif isinstance(block, _Missing):
         top += _missing(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
@@ -1709,6 +1708,21 @@ def _block(
         if drawn is not None:
             drawn.set("data-flexo-share", number(stood))
     return top
+
+
+PLOT_WIDEST = 1.5
+"""The widest a plot given a width, and no aspect of its own, is drawn (its width over its
+height) where its place is wider still: its words keep their size, and a plot flatter
+than this leaves its axes too little of its height."""
+
+
+def _plot_tall(width: float, room: float, tall: float) -> float:
+    """How tall a plot ``width`` wide is drawn, given that width and no aspect of its own, in
+    a place ``room`` wide that has ``tall`` of height for it: in its place's proportions, but
+    no wider than PLOT_WIDEST -- as tall as its place allows. (As wide as its place, it is as
+    tall as it.)"""
+
+    return min(tall, width / min(room / tall, PLOT_WIDEST))
 
 
 def _own_width(block: object, width: float) -> float:
@@ -1754,7 +1768,8 @@ def _sizing(
     across (``data-flexo-span``, its left edge and width, and ``data-flexo-share``, the share
     of its place's room to spare on its left), the width it takes of itself
     (``data-flexo-natural``, where it has one narrower than its place) and the least it can
-    be (``data-flexo-least``: its longest word, a column's, a picture's least) -- in points."""
+    be (``data-flexo-least``: its longest word, a column's, a plot's or a picture's least) --
+    in points; a plot, the height its place has for it (``data-flexo-tall``)."""
 
     drawn = _drawn(canvas, identifier)
     if drawn is None:
@@ -1766,6 +1781,10 @@ def _sizing(
         stand = (left - box.x) / (box.width - wide)
     drawn.set("data-flexo-span", f"{number(left)} {number(wide)}")
     drawn.set("data-flexo-share", number(min(max(stand, 0.0), 1.0)))
+    if isinstance(block, _Plot):
+        # The height its place has for it: for an editor to draw it as tall as the slide will
+        # at another width (_plot_tall).
+        drawn.set("data-flexo-tall", number(max(share, 60.0)))
     if isinstance(block, _Table):
         natural = _table_natural(canvas, block)
     elif isinstance(block, _Gallery):
@@ -1866,8 +1885,13 @@ def _least(canvas: _Canvas, block: object, width: float) -> float | None:
         words = max((_longest_word(canvas, runs, size, None) for _, runs in block.items), default=0.0)
         return columns * max(24.0, words) + style.column_gap * 0.6 * (columns - 1)
     if isinstance(block, _Plot):
-        return PICTURE_LEAST
+        # Its words keep their size (deck.plot_style's): narrower, they leave its axes no room.
+        return max(PICTURE_LEAST, PLOT_LEAST * style.figure_size * 1.15)
     return None
+
+
+PLOT_LEAST = 14.0
+"""The least width a plot can be given, in its words' size (ems)."""
 
 
 def _table_columns(canvas: _Canvas, block: _Table, size: float) -> tuple[list[float], list[float]]:

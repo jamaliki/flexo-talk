@@ -577,9 +577,10 @@ function gallerySizer(element, span) {
   };
 }
 
-// A drawn thing (a plot, a gallery of drawings) shown at another size, in proportion, about
-// its top left -- its height with its width.
-function scaledSizer(element, span) {
+// A drawn thing (a plot, a gallery of drawings) shown at another size about its top left --
+// its height with its width, in proportion, or `higher` times as tall at a width (a plot's,
+// drawn as tall as its place lets it: the slide sets its words again, at their size, in it).
+function scaledSizer(element, span, { higher = null } = {}) {
   let local;
   try { local = element.getBBox(); } catch { return null; }
   if (!local || !local.width) return null;
@@ -589,9 +590,9 @@ function scaledSizer(element, span) {
   const matrix = element.transform?.baseVal?.consolidate?.()?.matrix;
   const box = matrix ? { x: local.x * matrix.a + matrix.e, y: local.y * matrix.d + matrix.f, height: local.height * matrix.d } : local;
   return (left, width) => {
-    const scale = width / span.width;
-    element.setAttribute("transform", `translate(${left + (box.x - span.x) * scale} ${box.y}) scale(${scale}) translate(${-box.x} ${-box.y}) ${own}`.trim());
-    return box.height * (scale - 1);
+    const scale = width / span.width, tall = higher ? higher(width) : scale;
+    element.setAttribute("transform", `translate(${left + (box.x - span.x) * scale} ${box.y}) scale(${scale} ${tall}) translate(${-box.x} ${-box.y}) ${own}`.trim());
+    return box.height * (tall - 1);
   };
 }
 
