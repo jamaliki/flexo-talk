@@ -10,6 +10,7 @@ import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan } from "
 import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
 import { follows, merge3 } from "/static/studio/merge.js";
+import { sizer } from "/static/kinds/deck/resize.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -1436,6 +1437,7 @@ export function mount(studio, container) {
 
   let notesFor = null;
   let wasOffline = false;
+  let drawingHeld = false;
   studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
   function renderStage() {
     const list = slides();
@@ -1464,7 +1466,10 @@ export function mount(studio, container) {
     const away = !page?.svg && studio.state === "offline";
     const shows = page?.svg ? `${state.slide}:${page.hash}` : away ? `away:${state.slide}` : "";
     let before = null, moved = null;
-    if (!pageNode || pageNode.dataset.shows !== shows) {
+    // An object being sized keeps the drawing it is sized on: one arriving meanwhile (another's
+    // change) is put in once it is let go of -- or, sized, the drawing of it sized.
+    if ((sizing || resizing) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
+    else if (!pageNode || pageNode.dataset.shows !== shows) {
       // A figure's parts just moved on this slide: they land from where they were.
       before = figureBlock() ? figure.parts.landing() : null;
       // So do the slide's own parts, just moved or swapped.
@@ -2611,18 +2616,22 @@ export function mount(studio, container) {
     Promise.all(glides).then(() => { if (landing === mine) { landing = null; placeChosen(); } });
   }
 
-  // -- a figure or picture, sized by its corners --
-  // The chosen figure or picture has a handle at each corner. Dragged, it grows or
+  // -- a figure, mechanism or picture, sized by its corners --
+  // The chosen figure, mechanism or picture has a handle at each corner. Dragged, it grows or
   // shrinks about the point the slide keeps still as it does -- its middle across; its
   // top, or nearer its middle when it stands alone -- no larger than its place allows.
   // Let go, it is drawn that wide: an edit like any other, ⌘Z undoes it. A handle
   // double-clicked sizes it to its place again.
-  const SIZED = new Set(["figure", "image"]);
+  const SIZED = new Set(["figure", "image", "mechanism"]);
   const STANDING = new Set(["figure", "mechanism", "image", "plot", "gallery", "quote", "table", "code", "stats"]);
   let sizing = null;
   chosen.append(...["nw", "ne", "sw", "se"].map((corner) => h(`span.size-handle.${corner}`, {
     title: "Drag to resize · Double-click to reset size",
     onpointerdown: (event) => sizeStart(event, corner),
+    ondblclick: (event) => { event.stopPropagation(); sizeFit(); },
+  })), ...["w", "e"].map((side) => h(`span.size-handle.side.${side}`, {
+    title: "Drag to resize · Double-click to reset size",
+    onpointerdown: (event) => resizeStart(event, side),
     ondblclick: (event) => { event.stopPropagation(); sizeFit(); },
   })));
   const sizeTip = h("div.size-tip", { hidden: true });
@@ -2660,11 +2669,13 @@ export function mount(studio, container) {
   }
 
   function sizeStart(event, corner) {
-    if (event.button !== 0 || sizing || carry) return;
-    event.preventDefault();
-    event.stopPropagation();
+    if (event.button !== 0 || sizing || resizing || carry) return;
     const focus = state.focus;
     const block = focus && blocksAt(slideAt() || {}, focus.region)[focus.index];
+    // (A plot, a gallery or a table is set again at its new width as it is dragged: below.)
+    if (block && CORNERED.has(kindOf(block))) { resizeStart(event, corner); return; }
+    event.preventDefault();
+    event.stopPropagation();
     if (!block || !SIZED.has(kindOf(block))) return;
     const element = blockElement(focus.region, focus.index);
     const unit = pageNode?.querySelector("svg")?.getScreenCTM?.()?.a;
@@ -2725,10 +2736,10 @@ export function mount(studio, container) {
     if (!sizing.moved && Math.hypot(event.clientX - sizing.start.x, event.clientY - sizing.start.y) < 3) return;
     sizing.moved = true;
     let scale = scaleFor(event.clientX, event.clientY);
-    // It catches at the width of its place, and at the size it was.
+    // It catches at the width of its place, and at the size it was -- ⌘ held, at neither.
     const full = across / box.width;
-    if (full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
-    if (Math.abs(scale - 1) * box.width < 4) scale = 1;
+    if (!event.metaKey && full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
+    if (!event.metaKey && Math.abs(scale - 1) * box.width < 4) scale = 1;
     sizing.scale = scale;
     const at = sizing.place(scale), k = scaleOf(sizing.wrap);
     sizing.wrap.style.transform = `translate(${(at.left - box.left) * k}px, ${(at.top - box.top) * k}px) scale(${scale})`;
@@ -2762,15 +2773,17 @@ export function mount(studio, container) {
     resized(was.at, [was.wrap], (b) => setOption(b, "width", width));
   }
 
-  // The parts of its place glide to where the slide is drawn with it sized.
-  function resized(at, wraps, change) {
+  // The parts of its place glide to where the slide is drawn with it sized (any drawing held
+  // back meanwhile is behind the one that comes of it).
+  function resized(at, wraps, change, label = null) {
+    drawingHeld = false;
     const count = blocksAt(slideAt(), at.region).length;
     const plan = Array.from({ length: count }, (_, index) => [{ region: at.region, index }, { region: at.region, index }]);
     moving = { slide: state.slide, at: Date.now(), plan, wraps };
     chosen.hidden = true;
     const mine = moving;
     setTimeout(() => { if (moving === mine) { moving = null; for (const wrap of mine.wraps) wrap.style.transform = ""; placeChosen(); } }, 6000);
-    editBlock(at, change);
+    editBlock(at, change, label ? { label } : {});
     renderInspector();
   }
 
@@ -2783,6 +2796,13 @@ export function mount(studio, container) {
     was.wrap.classList.remove("block-sized");
     was.wrap.style.transform = "";
     placeChosen();
+    putHeld();
+  }
+  // A drawing held back while an object was sized, put in now it is let go of unchanged.
+  function putHeld() {
+    if (!drawingHeld) return;
+    drawingHeld = false;
+    renderStage();
   }
   function sizeKey(event) {
     if (event.key !== "Escape") return;
@@ -2795,8 +2815,236 @@ export function mount(studio, container) {
   function sizeFit() {
     const focus = state.focus;
     const block = focus && blocksAt(slideAt() || {}, focus.region)[focus.index];
-    if (!block || !SIZED.has(kindOf(block)) || block.width == null) return;
+    if (!block || block.width == null || !(SIZED.has(kindOf(block)) || SIDEWAYS.has(kindOf(block)) || CORNERED.has(kindOf(block)))) return;
     resized({ ...focus }, [], (b) => setOption(b, "width", null));
+  }
+
+  // -- any other object, sized by its sides or its corners --
+  // Words -- a text, a list, a quote, a callout, a listing, numbers, an equation -- have a
+  // handle at each side, as a Keynote text box has: dragged, it sets how wide they are, their
+  // words wrapped again as it goes, as the slide will wrap them (resize.js). A plot, a gallery
+  // and a table have a handle at each corner, and are drawn larger or smaller in proportion --
+  // a table's columns sharing its width, its words as they are. The edge dragged follows the
+  // pointer and the other stays where it is (an object standing centred stays centred: both
+  // move). It catches at the width of its place -- where it fills it again, with no width of
+  // its own -- at the width it takes of itself, and at the width it was; ⌘ held, at none. It
+  // is never narrower than it needs to be: its longest word, a column's, a picture's least.
+  // Let go, it is that wide, one step to undo ("Resize Table"); Esc puts it back as it was, and
+  // a handle double-clicked gives it no width of its own again.
+  const SIDEWAYS = new Set(["text", "bullets", "quote", "callout", "code", "stats", "math"]);
+  const CORNERED = new Set(["plot", "gallery", "table"]);
+  // Those as wide as their place with no width of their own: filling it again is having none.
+  // (A table, a listing and an equation are as wide as they are of themselves: that is none.)
+  const FILLING = new Set(["text", "bullets", "quote", "callout", "stats", "plot", "gallery"]);
+  // How near (in the window's pixels) a width catches at one it may be.
+  const WIDTH_CATCH = 6;
+  let resizing = null;
+  const attribute = (element, name) => { const value = parseFloat(element?.getAttribute(name) ?? ""); return Number.isFinite(value) ? value : null; };
+
+  function resizeStart(event, handle) {
+    if (event.button !== 0 || sizing || resizing || carry) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const focus = state.focus;
+    const slide = slideAt() || {};
+    const block = focus && blocksAt(slide, focus.region)[focus.index];
+    const kind = block && kindOf(block);
+    if (!block || !(SIDEWAYS.has(kind) || CORNERED.has(kind))) return;
+    const element = blockElement(focus.region, focus.index);
+    const region = regionsOf(slide).find((item) => item.key === focus.region);
+    const group = region && pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`);
+    const matrix = element?.parentNode?.getScreenCTM?.();
+    const spanned = String(element?.getAttribute("data-flexo-span") || "").split(" ").map(Number);
+    const roomed = String(group?.getAttribute("data-flexo-box") || "").split(" ").map(Number);
+    if (!element || !matrix || !matrix.a || spanned.length !== 2 || spanned.some(Number.isNaN) || roomed.length !== 4 || roomed.some(Number.isNaN)) return;
+    closeInline();
+    hover.hidden = true;
+    const span = { x: spanned[0], width: spanned[1] };
+    const room = { x: roomed[0], width: roomed[2] };
+    const share = attribute(element, "data-flexo-share") ?? 0;
+    const natural = attribute(element, "data-flexo-natural");
+    // An equation is never wider than it is: given more, it is drawn as it was.
+    const most = kind === "math" ? Math.min(room.width, natural ?? room.width) : room.width;
+    const least = Math.min(span.width, most, attribute(element, "data-flexo-least") ?? 24);
+    // How much larger it is set than it is drawn now when given room (a listing or an
+    // equation set smaller to fit its width), for it to be drawn so again as it is given more.
+    const grow = attribute(element, "data-flexo-grow") ?? 1;
+    const wrap = mover(element);
+    wrap.classList.add("block-sized");
+    Object.assign(wrap.style, { transformBox: "fill-box", transformOrigin: "0 0", transform: "" });
+    const kept = element.cloneNode(true);
+    const set = sizer(element, kind, span, { natural: kind === "code" ? natural : undefined, grow, share });
+    // What follows it in its place moves down (or up) as it grows taller (or shorter).
+    const count = blocksAt(slide, focus.region).length;
+    const after = Array.from({ length: count - focus.index - 1 }, (_, n) => blockElement(focus.region, focus.index + 1 + n)).filter(Boolean).map(mover);
+    for (const each of after) each.classList.add("block-sized");
+    const box = drawnBox(element);
+    const regions = regionsDrawn();
+    const drawn = regions.find((item) => item.key === focus.region);
+    const place = CORNERED.has(kind) && box && drawn?.room ? placerOf(drawn, regions, box) : null;
+    const side = handle.endsWith("w") ? "w" : "e";
+    resizing = { at: { ...focus }, block, kind, element, wrap, kept, set, after, span, room, share, natural, most, least, box, place, side,
+      corner: handle.length === 2 ? handle : null, centred: Math.abs(share - 0.5) < 0.001, matrix, unit: matrix.a,
+      start: { x: event.clientX, y: event.clientY }, moved: false, pointer: null, width: span.width, left: span.x, stand: share, caught: null,
+      column: regions.length > 1 ? "column" : "slide" };
+    pageNode.classList.add("block-sizing");
+    if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
+    window.addEventListener("pointermove", resizeMove);
+    window.addEventListener("pointerup", resizeEnd);
+    window.addEventListener("pointercancel", resizeCancel);
+    window.addEventListener("keydown", resizeKey, true);
+    window.addEventListener("keyup", resizeKey, true);
+  }
+
+  // The width the pointer gives it (in points), where it then stands, and what it caught at.
+  function resizeAt(clientX, clientY, free) {
+    const it = resizing;
+    const { span, room, side, unit } = it;
+    const x = (clientX - it.matrix.e) / unit;
+    const right = span.x + span.width, middle = room.x + room.width / 2;
+    let width = it.centred ? 2 * Math.abs(x - middle) : side === "e" ? x - span.x : right - x;
+    if (it.corner && it.kind !== "table" && it.box?.height) {
+      // A corner of a plot or a gallery, in proportion: the size that puts it nearest the
+      // pointer, as the slide will stand it.
+      const miss = (wide) => {
+        const at = standAt(wide), tall = it.box.height * wide / span.width;
+        const top = it.place ? it.place(wide / span.width).top : it.box.top;
+        const cx = it.matrix.e + (at.left + (side === "e" ? wide : 0)) * unit, cy = top + (it.corner.startsWith("n") ? 0 : tall);
+        return Math.hypot(clientX - cx, clientY - cy);
+      };
+      let best = width, far = Infinity;
+      for (let step = 0; step <= 200; step += 1) {
+        const wide = it.least + (it.most - it.least) * step / 200, off = miss(wide);
+        if (off < far) { far = off; best = wide; }
+      }
+      width = best;
+    }
+    width = Math.min(it.most, Math.max(it.least, width));
+    let caught = null;
+    if (!free) {
+      const near = WIDTH_CATCH / unit;
+      const catches = [["full", room.width], ["natural", it.natural], ["was", span.width]];
+      for (const [name, value] of catches) {
+        if (value != null && value >= it.least - 0.01 && value <= it.most + 0.01 && Math.abs(width - value) < near && (!caught || Math.abs(width - value) < Math.abs(width - caught[1]))) caught = [name, value];
+      }
+      if (caught) width = caught[1];
+    }
+    return { width, ...standAt(width), caught: caught?.[0] || null };
+  }
+  // Where it stands at `width`: the edge not dragged where it was -- as far as its place lets
+  // it, against whose side it then grows -- or, standing centred, centred.
+  function standAt(width) {
+    const { span, room, side } = resizing;
+    const right = span.x + span.width, middle = room.x + room.width / 2;
+    let left = resizing.centred ? middle - width / 2 : side === "e" ? span.x : right - width;
+    left = Math.min(Math.max(left, room.x), room.x + room.width - width);
+    let stand = room.width - width > 0.5 ? (left - room.x) / (room.width - width) : resizing.share;
+    if (!resizing.centred && room.width - width > 0.5) {
+      // (Standing where it stood, or at an end or the middle, rather than a hair from it.)
+      for (const stop of [resizing.share, 0, 0.25, 0.5, 0.75, 1]) {
+        if (Math.abs((stop - stand) * (room.width - width)) < 1.5) { stand = stop; break; }
+      }
+      left = room.x + (room.width - width) * stand;
+    }
+    return { left, stand };
+  }
+
+  function resizeMove(event) {
+    const it = resizing;
+    if (!it) return;
+    if (!it.moved && Math.hypot(event.clientX - it.start.x, event.clientY - it.start.y) < 3) return;
+    it.moved = true;
+    it.pointer = { x: event.clientX, y: event.clientY, free: event.metaKey };
+    resizeDraw();
+  }
+  // It drawn at the width the pointer gives it, what follows it moved with it, its frame round
+  // it and its width said beside the pointer.
+  function resizeDraw() {
+    const it = resizing;
+    const { x, y, free } = it.pointer;
+    const at = resizeAt(x, y, free);
+    Object.assign(it, at);
+    const down = it.set ? it.set(at.left, at.width) || 0 : 0;
+    let lift = 0;
+    if (it.place && it.box) {
+      // (A plot, a gallery or a table standing alone keeps standing where the slide stands
+      // such things as it grows: a little above the middle of its place.)
+      const tall = it.box.height + down * it.unit;
+      lift = (it.place(tall / it.box.height).top - it.box.top) / it.unit;
+    }
+    it.wrap.style.transform = lift ? `translate(0px, ${lift}px)` : "";
+    for (const each of it.after) each.style.transform = down + lift ? `translate(0px, ${down + lift}px)` : "";
+    const outer = pageNode.getBoundingClientRect();
+    const inked = drawnBox(it.element);
+    const left = it.matrix.e + at.left * it.unit - outer.left, wide = at.width * it.unit;
+    const pad = CORNERED.has(it.kind) ? 5 : 8;
+    if (inked) place(chosen, { left: left - pad, top: inked.top - outer.top - pad, width: wide + 2 * pad, height: inked.height + 2 * pad });
+    sizeTip.textContent = at.caught === "full" ? `Full ${it.column} width` : at.caught === "natural" ? naturalSaid(it.kind) : `${points(it, at.width)} pt wide`;
+    Object.assign(sizeTip.style, { left: `${x - outer.left + 14}px`, top: `${y - outer.top + 16}px` });
+    sizeTip.hidden = false;
+  }
+  // A width in whole points, as it is written: never less than its least (a hair less, its
+  // words would not fit).
+  const points = (it, width) => Math.max(Math.round(width), Math.ceil(it.least - 0.001));
+  const naturalSaid = (kind) => ({ table: "Fits its columns", code: "Fits its lines", math: "Full size", stats: "Fits its numbers", gallery: "Fits its pictures" })[kind] || "Fits its words";
+
+  function resizeFinish() {
+    const was = resizing;
+    resizing = null;
+    window.removeEventListener("pointermove", resizeMove);
+    window.removeEventListener("pointerup", resizeEnd);
+    window.removeEventListener("pointercancel", resizeCancel);
+    window.removeEventListener("keydown", resizeKey, true);
+    window.removeEventListener("keyup", resizeKey, true);
+    pageNode?.classList.remove("block-sizing");
+    sizeTip.hidden = true;
+    if (was?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    return was;
+  }
+
+  function resizeEnd() {
+    const was = resizeFinish();
+    if (!was) return;
+    const { block, kind, caught } = was;
+    const width = caught === "natural" && FILLING.has(kind) ? Math.ceil(was.natural) : points(was, was.width);
+    const moved = Math.abs(was.stand - was.share) > 0.0005;
+    const none = (caught === "full" && FILLING.has(kind)) || (caught === "natural" && !FILLING.has(kind)) || (kind === "math" && width >= was.most - 0.5);
+    const same = none ? block.width == null && !(FILLING.has(kind) && block.horizontal != null) : width === block.width;
+    if (!was.moved || caught === "was" || (!moved && same)) { resizeCancelled(was); return; }
+    const stand = Math.round(was.stand * 1000) / 1000;
+    resized(was.at, [was.wrap, ...was.after], (b) => {
+      if (none) {
+        delete b.width;
+        // Filling its place again, it stands nowhere across it: as it did before it was sized.
+        if (FILLING.has(kind)) delete b.horizontal;
+      } else b.width = width;
+      if (!moved || (none && FILLING.has(kind))) return;
+      if (kind === "math" && [0, 0.5, 1].includes(stand)) { setOption(b, "align", shareWritten(stand, ACROSS_NAMES), "middle"); delete b.horizontal; }
+      else b.horizontal = shareWritten(stand, ACROSS_NAMES);
+    }, `Resize ${objectName(block)}`);
+  }
+
+  function resizeCancel() {
+    const was = resizeFinish();
+    if (was) resizeCancelled(was);
+  }
+  // As it was: its drawing put back, and what follows it where it was.
+  function resizeCancelled(was) {
+    if (was.element.isConnected) was.element.replaceWith(was.kept);
+    for (const wrap of [was.wrap, ...was.after]) { wrap.classList.remove("block-sized"); wrap.style.transform = ""; }
+    placeChosen();
+    putHeld();
+  }
+  function resizeKey(event) {
+    // ⌘ pressed or let go: its catches off or on again, where the pointer is.
+    if (event.key === "Meta") {
+      if (resizing?.moved && resizing.pointer) { resizing.pointer.free = event.type === "keydown"; resizeDraw(); }
+      return;
+    }
+    if (event.type !== "keydown" || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizeCancel();
   }
 
   function onPick(event) {
@@ -2946,7 +3194,7 @@ export function mount(studio, container) {
     if (OWN_LINES[kind]?.caption) items.push({ icon: "text", label: block.caption != null ? "Edit Caption" : "Add Caption", run: () => openInline({ kind: "block", ...at, part: "caption" }) });
     if (cell) items.push("-", ...tableItems(at, cell));
     if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", keys: "A", run: () => whenFigure(() => figure.parts.addPalette(point)) });
-    if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
+    if ((SIZED.has(kind) || SIDEWAYS.has(kind) || CORNERED.has(kind)) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
     // Another picture in its place, as Keynote's Replace: its size, caption and place kept.
     if (kind === "image") items.push({ icon: "image", label: "Replace Picture…", run: () => replacePicture(at) });
@@ -3027,7 +3275,7 @@ export function mount(studio, container) {
   function placeChosen() {
     const focus = state.focus;
     placeAll();
-    if (sizing) return;  // its frame follows it as it is sized
+    if (sizing || resizing) return;  // its frame follows it as it is sized
     if (!focus && state.field && pageNode && !inline && !moving && !landing) {
       place(chosen, frameOf({ kind: "field", id: state.field.id }), fieldName(state.field.field));
       chosen.classList.remove("sizable", "holder");
@@ -3042,7 +3290,8 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt() || {}, focus.region)[focus.index];
     const box = region && frameOf({ kind: "block", ...focus, id: `slide${state.slide + 1}.${region.svg}.${focus.index}` });
     place(chosen, box, block ? blockName(block) : "");
-    chosen.classList.toggle("sizable", Boolean(block && SIZED.has(kindOf(block))));
+    chosen.classList.toggle("sizable", Boolean(block && (SIZED.has(kindOf(block)) || CORNERED.has(kindOf(block)))));
+    chosen.classList.toggle("sideways", Boolean(block && SIDEWAYS.has(kindOf(block))));
     holding();
   }
   // ⌘A chooses all the slide's objects, as Keynote's Select All, and ⇧-click one more (or
@@ -5328,7 +5577,23 @@ export function mount(studio, container) {
     if (ink) framed = { ...framed, top: ink.top - 5, height: ink.bottom - ink.top + 10 };
     // Words, or drawn to its edges (an equation's glyphs, a table's rules), it has the room
     // round it a line of the slide's words has (wordsFrame): its frame never touches them.
-    return framed && (INKED.has(kind) || WIDE.has(kind)) ? { left: framed.left - 3, top: framed.top - 3, width: framed.width + 6, height: framed.height + 6 } : framed;
+    const aired = INKED.has(kind) || WIDE.has(kind);
+    if (framed && aired) framed = { left: framed.left - 3, top: framed.top - 3, width: framed.width + 6, height: framed.height + 6 };
+    // Sized by its sides or corners, it is framed as wide as it stands across its place: its
+    // handles on the edges they move.
+    const across = framed && (SIDEWAYS.has(kind) || CORNERED.has(kind)) ? spanOf(part.id) : null;
+    return across ? { ...framed, left: across.left - (aired ? 8 : 5), width: across.right - across.left + (aired ? 16 : 10) } : framed;
+  }
+  // Where an object stands across its place, as the slide says it set it (compose's
+  // data-flexo-span), in the page's pixels.
+  function spanOf(id) {
+    const element = pageNode?.querySelector(`[id="${CSS.escape(id)}"]`);
+    const [x, width] = String(element?.getAttribute("data-flexo-span") || "").split(" ").map(Number);
+    const matrix = element?.parentNode?.getScreenCTM?.();
+    if (!matrix || !Number.isFinite(x) || !Number.isFinite(width)) return null;
+    const outer = pageNode.getBoundingClientRect();
+    const a = new DOMPoint(x, 0).matrixTransform(matrix).x, b = new DOMPoint(x + width, 0).matrixTransform(matrix).x;
+    return { left: Math.min(a, b) - outer.left, right: Math.max(a, b) - outer.left };
   }
   const INKED = new Set(["math", "table", "stats"]);
   // A frame round words (a line of the slide's, a text, a list, a quote) as wide as their
@@ -6132,8 +6397,12 @@ export function mount(studio, container) {
   // or table beside a list (or under words) at the words' left edge, else centred
   // (compose._placing); words, a list, a listing, numbers from the left; an equation as it is
   // aligned.
-  function autoPlace(slide, region, block) {
+  function autoPlace(slide, region, block, at = null) {
     if (kindOf(block) === "math") return shareOf(block.align, ACROSS_NAMES) ?? 0.5;
+    // Given a width, it stands where the slide stands it (compose's _set_against): at the side
+    // its words are set against, or where a picture stands.
+    const drawn = at && block.width != null && !block.horizontal ? attribute(blockElement(at.region, at.index), "data-flexo-share") : null;
+    if (drawn != null && !PLACEABLE.has(kindOf(block))) return [0, 0.25, 0.5, 0.75, 1].find((stop) => Math.abs(stop - drawn) < 0.001) ?? 0;
     if (!PLACEABLE.has(kindOf(block))) return 0;
     const kinds = blocksAt(slide, region).filter((each) => !each.placeholder).map(kindOf);
     if (kinds.includes("bullets")) return 0;
@@ -6142,7 +6411,7 @@ export function mount(studio, container) {
     return graphics && words && graphics + words === kinds.length && kinds[0] === "text" ? 0 : 0.5;
   }
   // Where it stands across its place: as asked, else where the slide sets it.
-  const placedAt = (slide, region, block) => shareOf(block.horizontal, ACROSS_NAMES) ?? autoPlace(slide, region, block);
+  const placedAt = (slide, region, block, at = null) => shareOf(block.horizontal, ACROSS_NAMES) ?? autoPlace(slide, region, block, at);
   // Whether it is drawn as wide as its place, with nowhere across it to go.
   function fillsPlace(at) {
     const box = drawnBox(blockElement(at.region, at.index));
@@ -6178,7 +6447,7 @@ export function mount(studio, container) {
   function placeBlock(at, { across, down }) {
     const block = blocksAt(slideAt(), at.region)[at.index];
     if (!block) return false;
-    if (across !== undefined && placedAt(slideAt(), at.region, block) === across) across = undefined;
+    if (across !== undefined && placedAt(slideAt(), at.region, block, at) === across) across = undefined;
     if (down !== undefined && shareOf(block.vertical, DOWN_NAMES) === down) down = undefined;
     if (across === undefined && down === undefined) return false;
     const name = objectName(block);
@@ -6188,7 +6457,7 @@ export function mount(studio, container) {
     editBlock(at, (b, slide) => {
       if (across !== undefined) {
         if (kindOf(b) === "math" && [0, 0.5, 1].includes(across)) { setOption(b, "align", shareWritten(across, ACROSS_NAMES), "middle"); delete b.horizontal; }
-        else if (kindOf(b) !== "math" && across === autoPlace(slide, at.region, b)) delete b.horizontal;
+        else if (kindOf(b) !== "math" && across === autoPlace(slide, at.region, b, at)) delete b.horizontal;
         else b.horizontal = shareWritten(across, ACROSS_NAMES);
       }
       if (down !== undefined) setOption(b, "vertical", down === null ? null : shareWritten(down, DOWN_NAMES));
@@ -6200,7 +6469,7 @@ export function mount(studio, container) {
   // stands now marked) and five down it -- Automatic, in line under what is before it.
   function positionPad(slide, at, block) {
     const stops = (list, down) => list.map(([value, title]) => ({ value, title, label: stopGlyph(value, down) }));
-    const across = ui.segmented({ value: placedAt(slide, at.region, block), key: "position.across", options: stops(ACROSS, false),
+    const across = ui.segmented({ value: placedAt(slide, at.region, block, at), key: "position.across", options: stops(ACROSS, false),
       onChange: (value) => placeBlock(at, { across: value }) });
     const down = ui.segmented({ value: shareOf(block.vertical, DOWN_NAMES) ?? "auto", key: "position.down",
       options: [{ value: "auto", label: "Auto", title: "Automatic: in line under what is before it" }, ...stops(DOWN, true)],
@@ -6241,7 +6510,9 @@ export function mount(studio, container) {
         // Across its place, as Keynote's Arrange › Align: where it stands, chosen. (One as wide
         // as its place -- a paragraph filling it -- or as tall, has nowhere to go, and says so.)
         kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block)) : null),
-      h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at)),
+      h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at),
+        // (A figure's and a picture's is among their own settings.)
+        SIDEWAYS.has(kind) || CORNERED.has(kind) || kind === "mechanism" ? widthField(block, at) : null),
       buildSection(block, at),
     ];
   }
@@ -7476,15 +7747,22 @@ export function mount(studio, container) {
     return area;
   }
 
-  // A figure's or picture's width, in points: as its place sets it, or as its corners were
-  // dragged to; ↑ from "Auto" goes from the width it is drawn at.
+  // An object's width, in points: as its place sets it, or as its handles were dragged to;
+  // ↑ from "Auto" goes from the width it is drawn at (as wide as it stands across its place).
   function widthField(block, at) {
+    const sideways = SIDEWAYS.has(kindOf(block));
+    const drawnWidth = () => spanWidth(at) ?? drawnOf(at).width;
     return ui.field("Width", h("div.row", {},
       ui.number({ value: block.width, placeholder: "Auto", min: 10, step: 10, unit: "pt", start: 300, key: "block.width",
         // (Stepped through, ↑↑↑, one step in the history, as the font size is.)
-        current: () => drawnOf(at).width, onChange: (value) => editBlock(at, (b) => setOption(b, "width", value), { merge: `${state.slide}-${at.region}-${at.index}-width` }) }),
+        current: drawnWidth, onChange: (value) => editBlock(at, (b) => setOption(b, "width", value), { merge: `${state.slide}-${at.region}-${at.index}-width` }) }),
       block.width != null ? ui.button("Reset Size", () => { editBlock(at, (b) => setOption(b, "width", null)); renderInspector(); }, { small: true, kind: "ghost" }) : null),
-    { hint: "Or drag a corner on the slide" });
+    { hint: sideways ? "Or drag a side on the slide" : "Or drag a corner on the slide" });
+  }
+  // How wide it stands across its place, as the slide set it (compose's data-flexo-span).
+  function spanWidth(at) {
+    const width = Number(String(blockElement(at.region, at.index)?.getAttribute("data-flexo-span") || "").split(" ")[1]);
+    return Number.isFinite(width) && width > 0 ? Math.round(width) : null;
   }
 
   function galleryForm(block, at, edit, size) {

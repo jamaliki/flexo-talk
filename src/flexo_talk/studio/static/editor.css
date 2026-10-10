@@ -121,13 +121,17 @@
    slide under them is the slide's own colour). */
 .size-handle { display: none; position: absolute; width: 8px; height: 8px; box-sizing: border-box; background: #ffffff; border: 1px solid var(--accent); border-radius: 1.5px; box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.18); pointer-events: auto; touch-action: none; }
 .size-handle::before { content: ""; position: absolute; inset: -6px; }
-.hit.selected.sizable .size-handle { display: block; }
+.hit.selected.sizable .size-handle:not(.side) { display: block; }
+/* Words have a handle at each side, as a Keynote text box has: their width alone. */
+.hit.selected.sideways .size-handle.side { display: block; }
 /* With a part of the figure chosen, only the part's own handles show (one set, not two). */
 .hit.selected.sizable.holder .size-handle { display: none; }
 .size-handle.nw { left: -6px; top: -6px; cursor: nwse-resize; }
 .size-handle.ne { right: -6px; top: -6px; cursor: nesw-resize; }
 .size-handle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
 .size-handle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.size-handle.w { left: -6px; top: calc(50% - 4px); cursor: ew-resize; }
+.size-handle.e { right: -6px; top: calc(50% - 4px); cursor: ew-resize; }
 .size-handle:hover { background: var(--accent); }
 .slide-page.block-sizing .hit { transition: none; }
 .slide-page.block-sizing .hit.hover, .slide-page.block-sizing .fig-marks, .slide-page.block-sizing .figure-bar { visibility: hidden; }

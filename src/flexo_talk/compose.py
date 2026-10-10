@@ -339,16 +339,10 @@ class _Canvas:
                 # And, for an editor wrapping them at another width as it is dragged, how far
                 # apart their lines are and where a line was begun by hand.
                 drawn.set("data-flexo-line", number(metrics.line_height))
-                if any("\n" in run.text for run in runs if not run.math):
-                    begun = []
-                    count = 0
-                    for hard in _hard_lines(runs):
-                        if count:
-                            begun.append(str(count))
-                        lines = self.measure(hard, size, box.width, weight, title=title, balance=balance,
-                                             family=family).lines if hard else ()
-                        count += max(1, len(lines))
-                    drawn.set("data-flexo-breaks", " ".join(begun))
+                if local_name(drawn.tag) == "g":
+                    # (Words with formulas among them, set from where their anchor says.)
+                    drawn.set("data-flexo-anchor", align)
+                _mark_breaks(self, drawn, runs, size, box.width, weight, balance=balance, title=title, family=family)
         # And the colour their own strong words are drawn in, for its bold to show so there too.
         if strong_colour and drawn is not None and PLACEHOLDERS.get():
             drawn.set("data-flexo-strong", strong_colour)
@@ -381,6 +375,24 @@ class _Canvas:
             downs.append(top + one.baseline - own[0].baseline)
             top += one.line_height + (DISPLAY_GAP * size if shown and index < len(own) - 1 else 0.0)
         return own, downs, top
+
+
+def _mark_breaks(
+    canvas: _Canvas, drawn: ET.Element, runs: tuple[TextRun, ...], size: float, width: float | None,
+    weight: int | None = None, **options: object,
+) -> None:
+    """Which of the lines words were set on were begun by hand (a new line typed in them),
+    on their drawing: for an editor wrapping them at another width to keep them so."""
+
+    if not any("\n" in run.text for run in runs if not run.math):
+        return
+    begun, count = [], 0
+    for hard in _hard_lines(runs):
+        if count:
+            begun.append(str(count))
+        lines = canvas.measure(hard, size, width, weight, **options).lines if hard else ()
+        count += max(1, len(lines))
+    drawn.set("data-flexo-breaks", " ".join(begun))
 
 
 def _hard_lines(runs: tuple[TextRun, ...]) -> list[tuple[TextRun, ...]]:
@@ -1549,8 +1561,14 @@ def _sizing(
         stand = (left - box.x) / (box.width - wide)
     drawn.set("data-flexo-span", f"{number(left)} {number(wide)}")
     drawn.set("data-flexo-share", number(min(max(stand, 0.0), 1.0)))
-    natural = _table_natural(canvas, block) if isinstance(block, _Table) else (
-        _natural(canvas, block, box.width, share) if not isinstance(block, _Plot) else None)
+    if isinstance(block, _Table):
+        natural = _table_natural(canvas, block)
+    elif isinstance(block, _Gallery):
+        # Pictures of a height of their own: their cells no wider than they are.
+        columns = _gallery_plan(canvas, block, box.width)[0]
+        natural = columns * block.height + canvas.deck.style.column_gap * 0.6 * (columns - 1) if block.height else None
+    else:
+        natural = _natural(canvas, block, box.width, share) if not isinstance(block, _Plot) else None
     if natural is not None and natural < box.width - 0.5:
         drawn.set("data-flexo-natural", number(natural))
     least = _least(canvas, block, box.width)
@@ -2063,12 +2081,17 @@ def _table(canvas: _Canvas, identifier: str, block: _Table, box: Box) -> float:
                 )
                 align = mirrored[plan.align[c]] if plan.rtl else plan.align[c]
                 anchor = {"start": inner.x, "middle": inner.x + inner.width / 2.0, "end": inner.x + inner.width}
-                render_runs(
+                written = render_runs(
                     group, f"{identifier}.{r}.{c}", metrics, x=anchor[align], y=inner.y,
                     typography=canvas.deck.typography(plan.size), palette=canvas.palette,
                     fill_role="ink", anchor=align,
                     weight=700 if plan.header and r == 0 else None,
                 )
+                if written is not None and PLACEHOLDERS.get():
+                    # (Where a line was begun by hand in it, for an editor sharing another
+                    # width among the columns.)
+                    _mark_breaks(canvas, written, cell, plan.size, plan.widths[c] - 2 * plan.pad - plan.size * 0.2,
+                                 700 if plan.header and r == 0 else None, balance=False)
         y += plan.heights[r]
     top_rule, mid_rule, bottom_rule = plan.rules
     rules = [(box.y, top_rule), (y, bottom_rule)]
@@ -2376,8 +2399,9 @@ def _stats(canvas: _Canvas, identifier: str, block: _Stats, box: Box, *, draw: b
     if not draw:
         return height
     align = "middle" if style.title_align == "middle" else "start"
-    if canvas.place in {0.5, 1.0}:
-        # Numbers set at the middle (the right) of their place stand so in their cells too.
+    if canvas.place in {0.5, 1.0} and block.width is None:
+        # Numbers set at the middle (the right) of their place stand so in their cells too
+        # (given a width, they are a box of cells moved there, set in them as they were).
         align = "middle" if canvas.place == 0.5 else "end"
     role, fill = _paint_of(block.colour, "tone-1-stroke")
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="stats")
@@ -2969,8 +2993,12 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
             anchor="end" if rtl else None,
         )
         if written is not None and PLACEHOLDERS.get():
-            # How far apart its lines are, for an editor wrapping it at another width.
+            # How far apart its lines are, for an editor wrapping it at another width (and,
+            # with formulas among its words, which side they are set from).
             written.set("data-flexo-line", number(metrics.line_height))
+            if local_name(written.tag) == "g":
+                written.set("data-flexo-anchor", "end" if rtl else "start")
+            _mark_breaks(canvas, written, runs, size, box.width - offset, balance=False)
         layout.items.append((level, runs, baseline))
         layout.steps.append(metrics.line_height)
         layout.opened.append((metrics.rise, metrics.fall, len(metrics.lines)))
