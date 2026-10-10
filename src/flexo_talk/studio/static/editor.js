@@ -544,6 +544,22 @@ export function mount(studio, container) {
   let moving = null;
   let landing = null;
   let swallowClick = false;
+  // The click a press ends in once it has done what it did (a drag, a band, a crop) is none: it
+  // chooses nothing where it is let go. `held`: the press goes on, its drag taken back by Esc
+  // with the button still down -- the click its release makes, whenever it comes, is none either.
+  let swallowing = 0;
+  function swallowRelease(held = false) {
+    const mine = ++swallowing;
+    swallowClick = true;
+    const free = () => setTimeout(() => { if (swallowing === mine) swallowClick = false; }, 0);
+    if (!held) { free(); return; }
+    const off = () => { window.removeEventListener("pointerup", up, true); window.removeEventListener("pointerdown", down, true); };
+    const up = () => { off(); free(); };
+    // (A release the window never saw, let go outside it: the next press is a click again.)
+    const down = () => { off(); if (swallowing === mine) swallowClick = false; };
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointerdown", down, true);
+  }
 
   // Figures on slides keep their layouts while the deck is changed, and are laid out at
   // their best once it has been still a moment: the page asks the server to settle. (That
@@ -2492,8 +2508,7 @@ export function mount(studio, container) {
     was.lifted.classList.remove("block-lifted", "block-astray");
     for (const wrap of was.group) wrap.classList.remove("block-lifted", "block-astray");
     // The drag ends in a click on whatever is under the pointer: that click is not one.
-    swallowClick = true;
-    setTimeout(() => { swallowClick = false; }, 0);
+    swallowRelease();
     return was;
   }
   // Its drawing is going (drawn again under it): let go of it where it is.
@@ -2538,6 +2553,7 @@ export function mount(studio, container) {
     event.preventDefault();
     event.stopPropagation();
     carryCancel();
+    swallowRelease(true);
   }
 
   function carryEnd(event) {
@@ -2826,7 +2842,7 @@ export function mount(studio, container) {
     window.removeEventListener("keydown", sizeKey, true);
     pageNode?.classList.remove("block-sizing");
     sizeTip.hidden = true;
-    if (was?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    if (was?.moved) swallowRelease();
     return was;
   }
 
@@ -2878,6 +2894,7 @@ export function mount(studio, container) {
     event.preventDefault();
     event.stopPropagation();
     sizeCancel();
+    swallowRelease(true);
   }
 
   // Sized to its place again, as it was before it was given a width.
@@ -3078,7 +3095,7 @@ export function mount(studio, container) {
     window.removeEventListener("pointercancel", cropRelease);
     pageNode?.classList.remove("cropping-drag");
     // (A drag let go elsewhere is no click there: nothing else is chosen by it.)
-    if (cropping?.drag?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    if (cropping?.drag?.moved) swallowRelease();
     if (cropping) cropping.drag = null;
   }
 
@@ -3257,6 +3274,7 @@ export function mount(studio, container) {
       Object.assign(cropping, { keep: { ...cropping.drag.keep }, whole: { ...cropping.drag.whole } });
       cropping.drag.moved = true;
       cropRelease();
+      swallowRelease(true);
       placeCrop();
       return;
     }
@@ -3505,7 +3523,7 @@ export function mount(studio, container) {
     window.removeEventListener("keyup", resizeKey, true);
     pageNode?.classList.remove("block-sizing");
     sizeTip.hidden = true;
-    if (was?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    if (was?.moved) swallowRelease();
     return was;
   }
 
@@ -3552,6 +3570,7 @@ export function mount(studio, container) {
     event.preventDefault();
     event.stopPropagation();
     resizeCancel();
+    swallowRelease(true);
   }
 
   function onPick(event) {
@@ -4004,8 +4023,7 @@ export function mount(studio, container) {
     if (!was?.node) return;
     was.node.remove();
     // The press ends in a click on what is under the pointer: not one that chooses again.
-    swallowClick = true;
-    setTimeout(() => { swallowClick = false; }, 0);
+    swallowRelease();
     renderInspector(); reportFocus();
   }
   // A press on the slide chooses afresh -- unless on one of them, which carries them all
@@ -9138,8 +9156,7 @@ export function mount(studio, container) {
     pageNode?.classList.remove("logo-dragging");
     document.body.classList.remove("block-grabbing");
     // The drag ends in a click on what is under the pointer: that click is not one.
-    swallowClick = true;
-    setTimeout(() => { swallowClick = false; }, 0);
+    swallowRelease();
     return was;
   }
   function logoDragEnd() {
@@ -9165,6 +9182,7 @@ export function mount(studio, container) {
     event.preventDefault();
     event.stopPropagation();
     logoDragCancel();
+    swallowRelease(true);
   }
 
   // A corner of the chosen logo dragged: it is sized as by itself, about its far corner, and
@@ -9236,7 +9254,7 @@ export function mount(studio, container) {
     window.removeEventListener("keydown", logoSizeKey, true);
     pageNode?.classList.remove("block-sizing");
     sizeTip.hidden = true;
-    if (was?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    if (was?.moved) swallowRelease();
     return was;
   }
   function logoSizeEnd() {
@@ -9258,6 +9276,7 @@ export function mount(studio, container) {
     event.preventDefault();
     event.stopPropagation();
     logoSizeCancel();
+    swallowRelease(true);
   }
 
   // The keys with a logo chosen: ← and → choose the one beside it, ⌥← and ⌥→ move it along
