@@ -372,6 +372,9 @@ class _Bullets:
     """The words' paint, as a text's ``colour``; the bullets and numbers keep the theme's."""
     plain: bool = False
     """Whether its items have no bullets or numbers, their levels kept (Keynote's None)."""
+    width: float | None = None
+    """The most it takes across its place (points), set there as its place sets it;
+    ``None`` as wide as its place makes it."""
 
 
 @dataclass(slots=True)
@@ -381,6 +384,9 @@ class _Words:
     align: Literal["start", "middle", "end"] = "start"
     muted: bool = False
     colour: str | None = None
+    width: float | None = None
+    """The most it takes across its place (points), set there as its place sets it;
+    ``None`` as wide as its place makes it."""
 
 
 @dataclass(slots=True)
@@ -423,6 +429,9 @@ class _Plot:
     """Width over height; ``None`` fills the height the place has."""
     drawn: str = ""
     """The SVG it was last drawn as, at the size of its place (what ``convert`` saves)."""
+    width: float | None = None
+    """The width it is drawn at (points), as its place allows, its height in proportion;
+    ``None`` as wide as its place."""
 
 
 @dataclass(slots=True)
@@ -439,6 +448,9 @@ class _Table:
     """Its caption put there empty, to be written: its placeholder drawn while editing."""
     outline: bool = True
     """Whether it has its rules above and below (Keynote's Table Outline)."""
+    width: float | None = None
+    """The width its columns share (points), as its place allows; ``None`` as wide as its
+    words make it."""
 
 
 @dataclass(slots=True)
@@ -451,12 +463,16 @@ class _Gallery:
     size: float | None = None
     align: str | None = None
     """``start`` or ``middle``; ``None`` sets one column flush with the words, a grid centred."""
+    width: float | None = None
+    """The width its cells share (points), as its place allows; ``None`` as wide as its place."""
 
 
 @dataclass(slots=True)
 class _Code:
     lines: list[str]
     size: float | None = None
+    width: float | None = None
+    """Its panel's width (points), as its place allows; ``None`` as wide as its lines."""
 
 
 @dataclass(slots=True)
@@ -467,6 +483,9 @@ class _Quote:
     held: bool = False
     """Who said it put there empty (``by: ""``), to be written: its placeholder drawn while
     editing, in its place."""
+    width: float | None = None
+    """The most it takes across its place (points), set there as its place sets it;
+    ``None`` as wide as its place makes it."""
 
 
 @dataclass(slots=True)
@@ -475,6 +494,9 @@ class _Stats:
     """``(value, label)`` runs for each figure."""
     colour: str | None = None
     size: float | None = None
+    width: float | None = None
+    """The most it takes across its place (points), set there as its place sets it;
+    ``None`` as wide as its place makes it."""
 
 
 @dataclass(slots=True)
@@ -486,6 +508,9 @@ class _Callout:
     held: bool = False
     """Its heading put there empty (``title: ""``), to be written: its placeholder drawn while
     editing."""
+    width: float | None = None
+    """The most it takes across its place (points), set there as its place sets it;
+    ``None`` as wide as its place makes it."""
 
 
 @dataclass(slots=True)
@@ -508,6 +533,9 @@ class _Math:
     size: float | None = None
     align: Literal["start", "middle", "end"] = "middle"
     colour: str | None = None
+    width: float | None = None
+    """The most it takes across its place (points), set smaller to fit it; ``None`` as wide
+    as its place."""
 
 
 class Reference:
@@ -840,16 +868,18 @@ class Region:
         reveal: bool = False,
         colour: str | None = None,
         plain: bool = False,
+        width: float | None = None,
     ) -> Region:
         """A bulleted list. A nested list of strings is the level below the item before it.
         ``numbered=True`` numbers every level, each in its tier (1., a., i.), as Keynote does.
         ``reveal=True`` shows the outer items one at a time: a click each in the
         PowerPoint, a page each in the PDF (the SVG and PNG show them all). ``colour``
         paints its words, as a text's does. ``plain=True`` draws no bullets or numbers,
-        each item at its level's indent (Keynote's None)."""
+        each item at its level's indent (Keynote's None). ``width`` (points) is the most it
+        takes across its place, its items wrapped in it -- as every object's is."""
 
         size, numbered, reveal = _size(size), _flag(numbered, "numbered"), _flag(reveal, "reveal")
-        plain = _flag(plain, "plain")
+        plain, width = _flag(plain, "plain"), _width(width)
         numbered = numbered and not plain
         colour = _colour(colour)
         flattened: list[tuple[int, tuple[TextRun, ...]]] = []
@@ -867,10 +897,10 @@ class Region:
                     flattened.append((level, inline(_words(entry, "A bullet"))))
 
         add(items, 0)
-        self.blocks.append(_Bullets(flattened, size, numbered, reveal, colour, plain))
+        self.blocks.append(_Bullets(flattened, size, numbered, reveal, colour, plain, width))
         self._record(
             "bullets", _plain(items), size=size, numbered=numbered or None, reveal=reveal or None, colour=colour,
-            plain=plain or None,
+            plain=plain or None, width=width,
         )
         return self
 
@@ -882,12 +912,14 @@ class Region:
         align: Literal["start", "middle", "end"] = "start",
         muted: bool = False,
         colour: str | None = None,
+        width: float | None = None,
     ) -> Region:
         """A paragraph, wrapped to the region; ``$...$`` is math, as in flexo labels.
         ``colour`` paints it: ``accent`` (``accent2``...), ``muted``, a palette role,
-        or ``#rrggbb``; ``[words]{colour}`` paints only some words."""
+        or ``#rrggbb``; ``[words]{colour}`` paints only some words. ``width`` (points) is
+        the most it takes across its place, its words wrapped in it, as a text box's."""
 
-        words, size = _words(words, "text"), _size(size)
+        words, size, width = _words(words, "text"), _size(size), _width(width)
         align = _choice(align, "align", ("start", "middle", "end"))
         muted, colour = _flag(muted, "muted"), _colour(colour)
         if displayed(words):
@@ -895,7 +927,7 @@ class Region:
             # it: centred unless placed, as a document's is.
             return self.math(
                 words, size=size, align="middle" if align == "start" else align,
-                colour=colour or ("muted" if muted else None),
+                colour=colour or ("muted" if muted else None), width=width,
             )
         runs = inline(words)
         worded = [run for run in runs if run.text.strip() or run.math]
@@ -905,9 +937,10 @@ class Region:
             runs = tuple(
                 replace(run, math=f"\\displaystyle {run.math}") if run is worded[0] else run for run in runs
             )
-        self.blocks.append(_Words(runs, size, align, muted, colour))
+        self.blocks.append(_Words(runs, size, align, muted, colour, width))
         self._record(
-            "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour
+            "text", words, size=size, align=None if align == "start" else align, muted=muted or None, colour=colour,
+            width=width,
         )
         return self
 
@@ -918,17 +951,21 @@ class Region:
         size: float | None = None,
         align: Literal["start", "middle", "end"] = "middle",
         colour: str | None = None,
+        width: float | None = None,
     ) -> Region:
         """An equation on a line of its own, as LaTeX displays one: ``\\frac``, ``\\sum``
         with its limits, matrices, ``cases``, and lines aligned at ``&`` and broken at
         ``\\\\``. Centred (``align`` to set it at the start or end), at the words' size
-        (``size``) or smaller if that is wider than its place."""
+        (``size``) or smaller if that is wider than its place -- or than ``width`` (points),
+        the most it takes across its place."""
 
         source = display_source(_words(source, "math"))
-        size, colour = _size(size), _colour(colour)
+        size, colour, width = _size(size), _colour(colour), _width(width)
         align = _choice(align, "align", ("start", "middle", "end"))
-        self.blocks.append(_Math(source, size, align, colour))
-        self._record("math", source, size=size, align=None if align == "middle" else align, colour=colour)
+        self.blocks.append(_Math(source, size, align, colour, width))
+        self._record(
+            "math", source, size=size, align=None if align == "middle" else align, colour=colour, width=width
+        )
         return self
 
     def mechanism(
@@ -939,6 +976,7 @@ class Region:
         charges: Literal["circled", "plain"] = "circled",
         per_row: int | None = None,
         arrow_colour: str | None = None,
+        width: float | None = None,
     ) -> Region:
         """A reaction mechanism, drawn as chemists draw it (see ``flexo.mechanism``):
         each step a structure in SMILES and its curly arrows, a reaction arrow (reagents
@@ -955,9 +993,10 @@ class Region:
         is written. A step's ``place`` moves its molecules from where they are laid out
         (``{5: {"move": [-1, 0.5], "turn": 30, "flip": True}}``: the molecule with atom 5).
         The curly arrows are magenta, or ``arrow_colour``: a palette role (accent, ink,
-        muted) or #rrggbb."""
+        muted) or #rrggbb. ``width`` (points) draws it that wide, as a figure's does."""
 
         lone_pairs = _choice(lone_pairs, "lone_pairs", ("used", "all", "none"))
+        width = _width(width)
         arrow_colour = _colour(arrow_colour, "arrow_colour")
         if arrow_colour is not None and not re.fullmatch(r"#.*|ink|muted|accent\d*", arrow_colour):
             raise SettingError("arrow_colour", "arrow_colour must be accent (accent2, \u2026), ink, muted or a "
@@ -989,12 +1028,13 @@ class Region:
             said = error.diagnostics[0]
             raise ValueError(f"{said.message}{' ' + said.hint if said.hint else ''}") from None
         wrong = () if problem is None else (f"{problem.message}{' ' + problem.hint if problem.hint else ''}",)
-        self.blocks.append(_Figure(figure, False, said=wrong))
+        self.blocks.append(_Figure(figure, False, width, said=wrong))
         self._record(
             "mechanism", steps if isinstance(steps, str) else [dict(step) if isinstance(step, dict) else step
                                                                for step in written],
             lone_pairs=None if lone_pairs == "used" else lone_pairs,
             charges=None if charges == "circled" else charges, per_row=per_row, arrow_colour=arrow_colour,
+            width=width,
         )
         return self
 
@@ -1007,6 +1047,7 @@ class Region:
         crop: Literal["circle", "square"] | None = None,
         size: float | None = None,
         align: Literal["start", "middle"] | None = None,
+        width: float | None = None,
     ) -> Region:
         """Pictures in a grid -- logos, or people with their names -- each with an
         optional caption under it (``(file, "**Name**\\nInstitute")``).
@@ -1015,7 +1056,8 @@ class Region:
         picture's height (the cell's width at most); ``crop="circle"`` cuts
         photographs to circles (and ``"square"`` to squares), which needs Pillow.
         ``align`` sets a single column flush with the words (``start``, its default)
-        or centred; a grid of several columns is centred.
+        or centred; a grid of several columns is centred. ``width`` (points) is the most it
+        takes across its place, its cells and pictures smaller with it.
         """
 
         if isinstance(items, str | Path) or not items:
@@ -1028,6 +1070,7 @@ class Region:
         crop = None if crop is None else _choice(crop, "crop", ("circle", "square"))
         size = _size(size)
         align = None if align is None else _choice(align, "align", ("start", "middle"))
+        width = _width(width)
         cells = []
         for item in items:
             if isinstance(item, str | Path):
@@ -1037,21 +1080,27 @@ class Region:
             else:
                 raise ValueError(f"A gallery picture must be a file, or a file and its caption, not {item!r}.")
             cells.append((str(source), inline(_words(caption, "A caption")) if caption else ()))
-        self.blocks.append(_Gallery(cells, columns, height, crop, size, align))
+        self.blocks.append(_Gallery(cells, columns, height, crop, size, align, width))
         pictures = [str(item) if isinstance(item, str | Path) else {"picture": str(item[0]), "caption": item[1]}
                     for item in items]
-        self._record("gallery", pictures, columns=columns, height=height, crop=crop, size=size, align=align)
+        self._record(
+            "gallery", pictures, columns=columns, height=height, crop=crop, size=size, align=align, width=width
+        )
         return self
 
-    def quote(self, words: str, *, by: str | None = None, size: float | None = None) -> Region:
+    def quote(
+        self, words: str, *, by: str | None = None, size: float | None = None, width: float | None = None
+    ) -> Region:
         """A quotation set large in the title face, an accent quotation mark hung in
         the margin beside it, and who said it (``by``) under it, muted (an empty one, ``""``,
-        holds its place while the deck is edited, as a placeholder)."""
+        holds its place while the deck is edited, as a placeholder). ``width`` (points) is
+        the most it takes across its place, its mark and words wrapped in it."""
 
         held = by == ""
         words, by, size = _words(words, "quote"), _words(by or "", "by"), _size(size)
-        self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size, held))
-        self._record("quote", words, by=by or None, size=size)
+        width = _width(width)
+        self.blocks.append(_Quote(inline(words), inline(f"\u2014 {by}") if by else (), size, held, width))
+        self._record("quote", words, by=by or None, size=size, width=width)
         return self
 
     def stats(
@@ -1059,11 +1108,13 @@ class Region:
         *items: tuple[object, str],
         colour: str | None = None,
         size: float | None = None,
+        width: float | None = None,
     ) -> Region:
         """Numbers to remember, side by side: ``stats(("93%", "top-1 accuracy"), ("4x", "faster"))``.
         Each value is set very large in the accent colour (``colour`` to choose
         another: ``accent2``, ``#hex``) with its label under it, muted; ``size``
-        is the values' size."""
+        is the values' size. ``width`` (points) is the most they take across their place
+        together, each its share of it."""
 
         if not items:
             raise ValueError("Stats need at least one (value, label) pair.")
@@ -1071,29 +1122,36 @@ class Region:
             if isinstance(item, str) or not isinstance(item, list | tuple) or len(item) != 2:
                 raise ValueError(f'Each stat must be a (value, label) pair, such as ("93%", "accuracy"), not {item!r}.')
         items = tuple((_words(value, "A stat's value"), _words(label, "A stat's label")) for value, label in items)
-        colour, size = _colour(colour), _size(size)
+        colour, size, width = _colour(colour), _size(size), _width(width)
         self.blocks.append(
-            _Stats([(inline(str(value)), inline(label)) for value, label in items], colour, size)
+            _Stats([(inline(str(value)), inline(label)) for value, label in items], colour, size, width)
         )
         self._record(
-            "stats", [{"value": value, "label": label} for value, label in items], colour=colour, size=size
+            "stats", [{"value": value, "label": label} for value, label in items], colour=colour, size=size,
+            width=width,
         )
         return self
 
     def callout(
-        self, words: str, *, title: str | None = None, colour: str = "accent", size: float | None = None
+        self, words: str, *, title: str | None = None, colour: str = "accent", size: float | None = None,
+        width: float | None = None,
     ) -> Region:
         """A key point on a panel tinted in a tone, a bar of the tone along its edge:
         ``colour`` is ``accent`` (``accent2``, ...); ``title`` is set bold above the words (an
-        empty one, ``""``, holds its place while the deck is edited, as a placeholder)."""
+        empty one, ``""``, holds its place while the deck is edited, as a placeholder).
+        ``width`` (points) is the panel's, as its place allows; its words wrap in it."""
 
         held = title == ""
         words, title, size = _words(words, "callout"), _words(title or "", "title"), _size(size)
+        width = _width(width)
         if not (isinstance(colour, str) and colour.startswith("accent") and paint_role(colour) in _roles()):
             raise ValueError(f"A callout's colour must be an accent (accent, accent2, \u2026), not {colour!r}.")
-        self.blocks.append(_Callout(inline(words), inline(f"**{title}**") if title else (), colour, size, held))
+        self.blocks.append(
+            _Callout(inline(words), inline(f"**{title}**") if title else (), colour, size, held, width)
+        )
         self._record(
-            "callout", words, title=title or None, colour=None if colour == "accent" else colour, size=size
+            "callout", words, title=title or None, colour=None if colour == "accent" else colour, size=size,
+            width=width,
         )
         return self
 
@@ -1215,6 +1273,7 @@ class Region:
         size: float | None = None,
         caption: str | None = None,
         outline: bool = True,
+        width: float | None = None,
     ) -> Region:
         """A table, ruled as in a paper: a rule above, one under the header, one below.
 
@@ -1224,12 +1283,14 @@ class Region:
         default a column of numbers is set flush right and any other flush left.
         ``caption`` is set under it, centred, a size smaller. ``outline=False`` leaves
         out the rules above and below: with no header too, it is words in columns
-        (names and what each is), with no lines at all.
+        (names and what each is), with no lines at all. ``width`` (points) is the width its
+        columns share, as its place allows, each in proportion to its words.
         """
 
         if isinstance(rows, str) or not all(isinstance(row, list | tuple) for row in rows):
             raise ValueError("A table must be a list of rows, each a list of cells.")
         header, size, outline = _flag(header, "header"), _size(size), _flag(outline, "outline")
+        width = _width(width)
         cells = [[inline("" if cell is None else _words(cell, "A table cell")) for cell in row] for row in rows]
         columns = max((len(row) for row in cells), default=0)
         ragged = len({len(row) for row in cells}) > 1
@@ -1254,38 +1315,43 @@ class Region:
                 for index in range(columns)
             )
         held, caption = caption == "", _caption(caption)
-        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held, outline))
+        self.blocks.append(_Table(cells, header, aligned, size, ragged, inline(caption), held, outline, width))
         given = align if isinstance(align, str) else list(align)
         self._record(
             "table", _plain(rows), header=None if header else False, align=given or None, size=size,
-            caption=caption or None, outline=None if outline else False,
+            caption=caption or None, outline=None if outline else False, width=width,
         )
         return self
 
-    def code(self, source: str, *, size: float | None = None) -> Region:
+    def code(self, source: str, *, size: float | None = None, width: float | None = None) -> Region:
         """A code listing in the monospace family, on a tinted panel; lines are kept as
-        written (tabs become four spaces) and whole-line comments are set muted."""
+        written (tabs become four spaces) and whole-line comments are set muted. ``width``
+        (points) is its panel's, as its place allows: lines longer than it are set smaller,
+        then wrapped, as in a place too narrow for them."""
 
         import textwrap
 
-        source, size = _words(source, "code"), _size(size)
+        source, size, width = _words(source, "code"), _size(size), _width(width)
         text = textwrap.dedent(source.expandtabs(4)).strip("\n")
-        self.blocks.append(_Code(text.splitlines() or [""], size))
-        self._record("code", text, size=size)
+        self.blocks.append(_Code(text.splitlines() or [""], size, width))
+        self._record("code", text, size=size, width=width)
         return self
 
-    def plot(self, figure: object, *, aspect: float | None = None) -> Region:
+    def plot(self, figure: object, *, aspect: float | None = None, width: float | None = None) -> Region:
         """A matplotlib figure, drawn at the size of this place in the deck's type.
 
         The figure is laid out again at the place's size (matplotlib's
         constrained layout), so its words are the deck's figure size rather than
         scaled; its text is set in the deck's font and stays text. Make it inside
-        ``with deck.plotting():`` for the deck's colours as well.
+        ``with deck.plotting():`` for the deck's colours as well. ``width`` (points)
+        draws it that wide, as its place allows, its height in proportion (its
+        ``aspect``, else its place's).
         """
 
         aspect = None if aspect is None else _number(aspect, "aspect", 0.1, 10.0, "1.6 (width over height)")
-        self.blocks.append(_Plot(figure, aspect))
-        self._record("plot", None, aspect=aspect)
+        width = _width(width)
+        self.blocks.append(_Plot(figure, aspect, width=width))
+        self._record("plot", None, aspect=aspect, width=width)
         return self
 
 
@@ -1451,9 +1517,10 @@ class Slide:
         reveal: bool = False,
         colour: str | None = None,
         plain: bool = False,
+        width: float | None = None,
     ) -> Slide:
         next(iter(self.regions.values())).bullets(
-            *items, size=size, numbered=numbered, reveal=reveal, colour=colour, plain=plain
+            *items, size=size, numbered=numbered, reveal=reveal, colour=colour, plain=plain, width=width
         )
         return self
 
@@ -1499,16 +1566,16 @@ class Slide:
         next(iter(self.regions.values())).gallery(items, **options)  # type: ignore[arg-type]
         return self
 
-    def code(self, source: str, *, size: float | None = None) -> Slide:
-        next(iter(self.regions.values())).code(source, size=size)
+    def code(self, source: str, *, size: float | None = None, width: float | None = None) -> Slide:
+        next(iter(self.regions.values())).code(source, size=size, width=width)
         return self
 
     def table(self, rows: Sequence[Sequence[object]], **options: object) -> Slide:
         next(iter(self.regions.values())).table(rows, **options)  # type: ignore[arg-type]
         return self
 
-    def plot(self, figure: object, *, aspect: float | None = None) -> Slide:
-        next(iter(self.regions.values())).plot(figure, aspect=aspect)
+    def plot(self, figure: object, *, aspect: float | None = None, width: float | None = None) -> Slide:
+        next(iter(self.regions.values())).plot(figure, aspect=aspect, width=width)
         return self
 
     def quote(self, words: str, **options: object) -> Slide:

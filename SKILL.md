@@ -147,6 +147,11 @@ a picture; words turn light), `dark=` (force light words), and `align=` (see
 Slide-level extras: `slide.notes(text)` (speaker notes), `slide.footnote(text)`
 (small and muted above the footer; several stack in order).
 
+Every block also takes `width=` (points; `width:` in a document): the most it takes
+across its place, standing where the place stands it (or where `horizontal` asks) --
+words wrap in it, a plot keeps its proportions, a table's columns and a gallery's cells
+share it. Left out, each is drawn as it always was.
+
 A figure's, picture's or table's `caption=` is set under it, centred and a size
 smaller, as part of it (a Caption in the PDF's tags, grouped with a picture or
 figure in the PowerPoint). `region.build_in()` (`build: true` in a document) makes

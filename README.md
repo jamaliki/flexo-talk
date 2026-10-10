@@ -137,6 +137,20 @@ stand there as a box as wide as they are, their lines as they were set. Down, an
 takes that share of the room its place has to spare above it, and what comes after it
 follows it.
 
+Any object can be given a width of its own, in points (`width: 300` in a deck document,
+`width=300` in Python): the most it takes across its place, standing where its place
+stands it -- words, a list, a quotation, a callout or a listing at the side their words
+are set against (centred words centred), an equation as it is aligned, a plot, gallery or
+table where a picture stands -- or where `horizontal` asks. Words wrap in it (a listing
+is set smaller, then wrapped, as in a place too narrow for it); numbers share it; an
+equation is set smaller to fit it; a plot is drawn that wide, its height in proportion; a
+gallery's cells and pictures shrink with it; a table's columns share it (wider than its
+words, each in proportion to them; narrower, each its longest word at least). With no
+width an object is drawn as it always was: words, lists, quotations, callouts, numbers,
+plots and galleries fill their place; a table, a listing and an equation are as wide as
+they are of themselves. The PowerPoint's native lists, tables and text boxes take the
+same widths.
+
 A single-column gallery (a column of logos) stands flush with the words above
 it; a grid is centred. Native lists and tables move with their region, so the
 PowerPoint matches the PDF.
@@ -380,10 +394,17 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   (a title, a list, a paragraph) to type them in place, on the slide, in their own
   face and size; double-click a table's cell to type in it (Tab to the next, a new
   row after the last; Enter to the one below), or an equation to type its LaTeX
-  under it as it redraws. Right-click anything for what can be done with it. A
-  figure or picture chosen has a handle at each corner: drag one to size it (its
-  `width`), drawn where the slide will put it as you drag; double-click a handle
-  to fit it to its place again. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  under it as it redraws. Right-click anything for what can be done with it. Every
+  object chosen has handles, as in Keynote: words (a text, a list, a quote, a callout,
+  a listing, numbers, an equation) a handle at each side, which sets their width, the
+  words wrapping again as it is dragged, where the slide will wrap them; a figure,
+  picture, mechanism, plot, gallery or table a handle at each corner, which sizes it in
+  proportion (a table's columns sharing its width). The edge dragged follows the pointer
+  and the other stays (an object standing centred stays centred); it catches at the
+  width of its place, the width it takes of itself and the width it was -- ⌘ drags it
+  free of them -- and is never narrower than its longest word, a column's, or a
+  picture's least. Esc puts it back; double-click a handle to give it no width of its
+  own again. The inspector's Width is the same setting, empty for none. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere. The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,

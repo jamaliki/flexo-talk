@@ -86,21 +86,22 @@ from flexo_talk.deck import (
 SCHEMA_VERSION = 1
 
 BLOCKS: dict[str, tuple[str, ...]] = {
-    "bullets": ("size", "numbered", "reveal", "colour", "plain"),
-    "text": ("size", "align", "muted", "colour"),
+    "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
+    "text": ("size", "align", "muted", "colour", "width"),
     "figure": ("turn", "width", "description", "caption"),
     "image": ("width", "description", "caption"),
-    "plot": ("aspect",),
-    "table": ("header", "align", "size", "caption", "outline"),
-    "gallery": ("columns", "height", "crop", "size", "align"),
-    "code": ("size",),
-    "quote": ("by", "size"),
-    "stats": ("colour", "size"),
-    "callout": ("title", "colour", "size"),
-    "math": ("size", "align", "colour"),
-    "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour"),
+    "plot": ("aspect", "width"),
+    "table": ("header", "align", "size", "caption", "outline", "width"),
+    "gallery": ("columns", "height", "crop", "size", "align", "width"),
+    "code": ("size", "width"),
+    "quote": ("by", "size", "width"),
+    "stats": ("colour", "size", "width"),
+    "callout": ("title", "colour", "size", "width"),
+    "math": ("size", "align", "colour", "width"),
+    "mechanism": ("lone_pairs", "charges", "per_row", "arrow_colour", "width"),
 }
-"""Each block kind and the options it takes beside its value."""
+"""Each block kind and the options it takes beside its value. Every kind takes ``width``
+(points): the most it takes across its place, set there as its place sets it."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
