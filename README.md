@@ -179,8 +179,11 @@ PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
 `plot(matplotlib_figure)`, `table(rows)`, `gallery(pictures)` (logos or people in a
 grid, captions under them, `crop="circle"` for photographs), `code(source)` (a monospace listing
-on a tinted panel, comment lines muted), `image(path, description=)` (`description` says what it
-shows, for screen readers and PowerPoint's alt text), `quote(words, by=)` (set large,
+on a tinted panel, comment lines muted), `image(path, description=, crop=, mask=)` (`description` says what it
+shows, for screen readers and PowerPoint's alt text; `crop=[x, y, width, height]` keeps a part of
+it, as fractions of the whole picture -- `[0.1, 0, 0.8, 1]` the middle 80% across -- which is then
+the picture, its size and proportions, a native crop in PowerPoint; `mask="circle"` draws it
+round), `quote(words, by=)` (set large,
 an accent quotation mark hung in the margin), `stats(("93%", "accuracy"), ("4x", "faster"))`
 (numbers to remember, very large in the accent, labels under them), and
 `callout(words, title=, colour="accent2")` (a key point on a panel tinted in a tone). Words take the
@@ -394,7 +397,14 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   under it as it redraws. Right-click anything for what can be done with it. A
   figure or picture chosen has a handle at each corner: drag one to size it (its
   `width`), drawn where the slide will put it as you drag; double-click a handle
-  to fit it to its place again. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  to fit it to its place again. Double-click a picture (or choose it and press
+  Return, or **Crop…**) to crop it, as Keynote masks one: the whole of it shows
+  faintly round the part kept; drag the frame's handles to crop a side (⇧ keeps its
+  proportions), the frame to move it over the picture, the picture to move it under
+  the frame, or the bar's slider to zoom it in the frame; Return, **Done** or a click
+  elsewhere keeps the crop (`crop: [x, y, width, height]`, fractions of the whole
+  picture), Esc leaves it as it was. Its panel crops it to a square, 4:3, 16:9 or a
+  circle at once (`mask: circle`), or back to the whole (**Original**). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere. The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
@@ -448,7 +458,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   in place of the slides. A click or → goes on; a slide's number then Return goes to
   it; B and W blank the screen black or white; Esc ends. **Export** makes a PDF (a
   page per slide, or per stage of its builds), a PowerPoint, or a PNG or SVG of each
-  slide, saved where you say (downloaded, in a browser). Saving is automatic; ⌘Z undoes your own last change, and the
+  slide (a PNG 1280, 1920 or 3840 pixels wide, as last chosen), saved where you say
+  (downloaded, in a browser). Saving is automatic; ⌘Z undoes your own last change, and the
   history beside it (⌥⌘Z) lists every change by name -- "Rename “Model” to
   “Encoder” · Slide 2" -- to go back, or forward, to any of them, the deck going
   to the slide each was made on. Saving writes the document back as YAML

@@ -132,6 +132,32 @@
 .slide-page.block-sizing .hit { transition: none; }
 .slide-page.block-sizing .hit.hover, .slide-page.block-sizing .fig-marks, .slide-page.block-sizing .figure-bar { visibility: hidden; }
 .size-tip { position: absolute; z-index: 30; pointer-events: none; white-space: nowrap; font: 600 11px/18px var(--font); color: var(--accent-ink); background: var(--accent); padding: 0 8px; border-radius: 99px; box-shadow: var(--shadow-2); }
+/* A picture being cropped, as Keynote masks one: the whole of it faint round the part kept,
+   a frame with a handle at each corner and side, a bar under it. The faint picture runs past
+   the slide's edges, as Keynote's does. */
+.crop-picture { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 3; }
+.crop-faint { opacity: 0.35; pointer-events: all; cursor: grab; }
+.crop-kept { pointer-events: none; }
+.crop-oval { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.crop-frame { position: absolute; z-index: 4; box-sizing: border-box; border: 1.5px solid var(--accent); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.9); cursor: move; pointer-events: auto; touch-action: none; }
+.crop-frame.round { border: 1px dashed var(--accent); box-shadow: none; }
+.crop-handle { position: absolute; width: 8px; height: 8px; box-sizing: border-box; background: #ffffff; border: 1px solid var(--accent); border-radius: 1.5px; box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.18); }
+.crop-handle::before { content: ""; position: absolute; inset: -6px; }
+.crop-handle:hover { background: var(--accent); }
+.crop-handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.crop-handle.n { left: calc(50% - 4px); top: -5px; cursor: ns-resize; }
+.crop-handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.crop-handle.e { right: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+.crop-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.crop-handle.s { left: calc(50% - 4px); bottom: -5px; cursor: ns-resize; }
+.crop-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.crop-handle.w { left: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+.slide-page.cropping-drag .crop-faint { cursor: grabbing; }
+.crop-bar { position: absolute; z-index: 12; display: flex; align-items: center; gap: 6px; padding: 3px 3px 3px 10px; border-radius: 9px; background: var(--raised); border: 1px solid var(--line-strong); box-shadow: var(--shadow-2); line-height: normal; white-space: nowrap; }
+.crop-zoom { width: 108px; margin: 0; accent-color: var(--accent); }
+.crop-scale { display: inline-flex; color: var(--ink-3); }
+.crop-scale svg { width: 15px; height: 15px; }
+.crop-scale.small svg { width: 11px; height: 11px; }
 /* The slide's parts, dragged on it: lifted, the others stepping aside, a frame or a line where it goes. */
 .figure-grip { cursor: grab; }
 .block-mover { transition: transform 0.2s cubic-bezier(.2, .8, .2, 1); }
@@ -487,6 +513,13 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .table-edit .corner .row-pick:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus-ring); }
 
 .preview-pic { width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); }
+/* A picture cropped, previewed as the slide shows it: the part kept, round if it is. */
+.preview-crop { display: grid; place-items: center; height: 140px; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); }
+.preview-crop > div { position: relative; overflow: hidden; aspect-ratio: var(--kept); width: min(100% - 16px, (140px - 16px) * var(--kept)); }
+.preview-crop.round > div { border-radius: 50%; }
+.preview-kept { position: absolute; max-width: none; }
+.crop-field { display: grid; gap: 6px; justify-items: start; }
+.crop-field .segmented { width: 100%; }
 .math-notes { display: grid; gap: 6px; }
 .math-notes:empty { display: none; }
 .math-chips { display: flex; flex-wrap: wrap; gap: 4px; }

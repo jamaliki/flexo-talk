@@ -37,7 +37,10 @@ block is a mapping named by its kind (``bullets``, ``text``, ``figure``,
 document. A figure is a flexo figure file, a flexo figure document written
 inline, or ``file.py:function`` (a function returning a flexo figure); a plot is
 ``file.py:function`` returning a matplotlib figure, called inside
-``deck.plotting()`` (and given the deck, if it takes an argument).
+``deck.plotting()`` (and given the deck, if it takes an argument). A picture
+(``image``) may be cropped: ``crop: [x, y, width, height]``, the part kept as
+fractions of the whole picture (``[0.1, 0, 0.8, 1]`` keeps the middle 80% across),
+and drawn round with ``mask: circle``.
 
 ``read_deck`` makes a ``Deck`` from a file, ``deck_from_document`` from a parsed
 document, and ``deck_document`` writes any deck -- one made in Python too --
@@ -90,7 +93,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain"),
     "text": ("size", "align", "muted", "colour"),
     "figure": ("turn", "width", "description", "caption"),
-    "image": ("width", "description", "caption"),
+    "image": ("width", "crop", "mask", "description", "caption"),
     "plot": ("aspect",),
     "table": ("header", "align", "size", "caption", "outline"),
     "gallery": ("columns", "height", "crop", "size", "align"),

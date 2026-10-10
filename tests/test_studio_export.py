@@ -1,11 +1,15 @@
 """The studio's exports of a deck, as Keynote's Export To makes them: a PDF with a
 page per slide (each stage of its builds only when asked), and an image of each slide
-in a folder of the deck's name, made aside for the page to hand over; the CLI's build/
-is as it was."""
+in a folder of the deck's name and theirs, made aside for the page to hand over, a PNG
+as wide as chosen; the CLI's build/ is as it was."""
 
 from __future__ import annotations
 
+import re
+import zlib
 from pathlib import Path
+
+import pytest
 
 from flexo_talk.studio import DeckKind
 
@@ -23,6 +27,18 @@ def _pages(pdf: Path) -> int:
     return pdf.read_bytes().count(b"/Type /Page ")
 
 
+def _streams(data: bytes) -> list[bytes]:
+    """A PDF's content streams, as drawn: each inflated."""
+
+    found = []
+    for stream in re.findall(rb"stream\r?\n(.*?)\r?\nendstream", data, re.DOTALL):
+        try:
+            found.append(zlib.decompress(stream))
+        except zlib.error:
+            found.append(stream)
+    return found
+
+
 def test_the_pdf_has_a_page_per_slide_showing_it_whole(tmp_path: Path) -> None:
     written = DeckKind().export(DECK, tmp_path, "talk", ["pdf"], into=tmp_path / "out")
     assert [path.name for path in written] == ["My Talk.pdf"]
@@ -37,8 +53,10 @@ def test_each_stage_of_builds_is_a_page_when_asked(tmp_path: Path) -> None:
 
 def test_images_made_aside_are_a_folder_of_the_deck_s_name(tmp_path: Path) -> None:
     written = DeckKind().export(DECK, tmp_path, "talk", ["png", "svg"], into=tmp_path / "out")
+    # (Named for what they are, too: a folder of PNGs is told apart from one of SVGs.)
+    folder = "My Talk \u2013 PNG 1920 px \u2013 SVG"
     assert sorted(path.relative_to(tmp_path / "out").as_posix() for path in written) == [
-        "My Talk/slide-01.png", "My Talk/slide-01.svg", "My Talk/slide-02.png", "My Talk/slide-02.svg",
+        f"{folder}/slide-01.png", f"{folder}/slide-01.svg", f"{folder}/slide-02.png", f"{folder}/slide-02.svg",
     ]
     assert not (tmp_path / "build").exists()
 
@@ -193,3 +211,62 @@ def test_a_deck_s_logos_are_in_every_export_as_pictures(tmp_path: Path) -> None:
     assert pdf.read_bytes().count(b"/Subtype /Image") >= 2
     svgs = sorted(path for path in written if path.suffix == ".svg")
     assert 'id="slide1.logo0"' in svgs[0].read_text() and 'id="slide2.logo1"' in svgs[1].read_text()
+
+
+def test_a_png_is_as_wide_as_chosen_and_named_apart_from_an_svg(tmp_path: Path) -> None:
+    from PIL import Image
+
+    pngs = DeckKind().export(DECK, tmp_path, "talk", ["png"], into=tmp_path / "png", png_width=1280)
+    assert {path.parent.name for path in pngs} == {"My Talk \u2013 PNG 1280 px"}
+    assert {Image.open(path).size for path in pngs} == {(1280, 720)}
+    (wide,) = DeckKind().export({**DECK, "slides": DECK["slides"][:1]}, tmp_path, "talk", ["png"],
+                                into=tmp_path / "big", png_width=3840)
+    assert Image.open(wide).size == (3840, 2160)
+    # Not chosen, 1920 pixels across, as the CLI's build draws a 16:9 slide.
+    (plain,) = DeckKind().export({**DECK, "slides": DECK["slides"][:1]}, tmp_path, "talk", ["png"], into=tmp_path / "x")
+    assert Image.open(plain).size == (1920, 1080) and plain.parent.name == "My Talk \u2013 PNG 1920 px"
+    svgs = DeckKind().export(DECK, tmp_path, "talk", ["svg"], into=tmp_path / "svg")
+    assert {path.parent.name for path in svgs} == {"My Talk \u2013 SVG"}
+    with pytest.raises(ValueError, match="A PNG is 1280, 1920 or 3840 pixels wide, not 1000"):
+        DeckKind().export(DECK, tmp_path, "talk", ["png"], into=tmp_path / "bad", png_width=1000)
+
+
+def test_a_cropped_picture_is_cropped_natively_in_the_powerpoint_and_its_pdf_shows_only_the_part_kept(
+    tmp_path: Path,
+) -> None:
+    from PIL import Image
+    from pptx import Presentation
+
+    picture = Image.new("RGB", (400, 200), "#ffffff")
+    picture.paste(Image.new("RGB", (200, 200), "#c0392b"), (100, 0))
+    picture.save(tmp_path / "wide.png")
+    (tmp_path / "drawing.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" viewBox="0 0 80 40">'
+        '<rect x="0" y="0" width="80" height="40" fill="#2b4c9b"/></svg>'
+    )
+    deck = {"deck": {"id": "Crops"}, "slides": [
+        {"title": "Kept", "body": [{"image": "wide.png", "crop": [0.25, 0.1, 0.5, 0.8]}]},
+        {"title": "Round", "body": [{"image": "wide.png", "crop": [0.25, 0, 0.5, 1], "mask": "circle"}]},
+        {"title": "Vectors", "body": [{"image": "drawing.svg", "crop": [0, 0, 0.5, 1]}]},
+    ]}
+    (pptx,) = DeckKind().export(deck, tmp_path, "talk", ["pptx"], into=tmp_path / "out")
+    pictures = [[shape for shape in slide.shapes if shape.shape_type == 13] for slide in Presentation(pptx).slides]
+    kept, round_, vectors = (found[0] for found in pictures)
+    assert [round(value, 3) for value in (kept.crop_left, kept.crop_top, kept.crop_right, kept.crop_bottom)] == [
+        0.25, 0.1, 0.25, 0.1]
+    assert abs(kept.width / kept.height - (0.5 * 400) / (0.8 * 200)) < 0.01
+    # Round: PowerPoint's own oval picture, of the square kept.
+    assert round_._element.spPr.prstGeom.get("prst") == "ellipse" and abs(round_.width - round_.height) < 2
+    assert round(round_.crop_left, 3) == round(round_.crop_right, 3) == 0.25
+    # A cropped SVG is a picture of its vectors, cropped as a photograph is.
+    assert round(vectors.crop_right, 3) == 0.5 and "svgBlip" in vectors._element.xml
+    # The PDF and the PNG show the part kept: the picture's red middle, none of its white.
+    (pdf,) = DeckKind().export(deck, tmp_path, "talk", ["pdf"], into=tmp_path / "pdf")
+    drawn = b"".join(_streams(pdf.read_bytes()))
+    assert drawn.count(b" re W n ") == 2 and drawn.count(b" c h W n ") == 1
+    (png, *_) = DeckKind().export(deck, tmp_path, "talk", ["png"], into=tmp_path / "png")
+    shown = Image.open(png).convert("RGB")
+    reds = [x for x in range(shown.width) if shown.getpixel((x, shown.height // 2))[0] > 150
+            and shown.getpixel((x, shown.height // 2))[1] < 100]
+    whites = [x for x in range(min(reds), max(reds)) if shown.getpixel((x, shown.height // 2)) == (255, 255, 255)]
+    assert reds and not whites

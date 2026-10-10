@@ -32,6 +32,8 @@ const BLOCKS = {
 };
 // Flow charts and structures are figures: they are offered by name, and made as figures.
 const MAIN_BLOCKS = ["text", "bullets", "figure", "flow", "structure", "image", "table"];
+// How wide a slide's PNG is exported, in pixels (the studio's PNG_WIDTHS).
+const PNG_WIDTHS = [1280, 1920, 3840];
 // Those that ask for a file or function first.
 const CHOOSE = new Set(["structure", "image", "gallery", "plot"]);
 const MORE_BLOCKS = ["math", "mechanism", "stats", "quote", "callout", "code", "gallery", "plot"];
@@ -1469,8 +1471,9 @@ export function mount(studio, container) {
     // Not drawn, with the studio away: the slide's title, calmly, not a spinner that never ends.
     const away = !page?.svg && studio.state === "offline";
     const shows = page?.svg ? `${state.slide}:${page.hash}` : away ? `away:${state.slide}` : "";
-    let before = null, moved = null;
+    let before = null, moved = null, renewed = false;
     if (!pageNode || pageNode.dataset.shows !== shows) {
+      renewed = true;
       // A figure's parts just moved on this slide: they land from where they were.
       before = figureBlock() ? figure.parts.landing() : null;
       // So do the slide's own parts, just moved or swapped.
@@ -1526,6 +1529,8 @@ export function mount(studio, container) {
     clear(stageMessages, own.map((message) => messageView(message, true)));
     stageMessages.hidden = !own.length;
     fitStage();
+    if (renewed && cropping) cropRedrawn();
+    if (renewed) cropDrawn();
     placeChosen();
     placeOthers(here);
     if (inline) positionInline();
@@ -2057,6 +2062,8 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
+    // A picture being cropped: nothing else is pointed at meanwhile.
+    if (cropping && !cropping.done) { hover.hidden = true; return; }
     if (figure?.parts.inline) hover.hidden = true;
     if (figure?.parts.dragging || carry?.started || inline || figure?.parts.inline) return;
     if (inFigure(event)) {
@@ -2811,6 +2818,451 @@ export function mount(studio, container) {
     resized({ ...focus }, [], (b) => setOption(b, "width", null));
   }
 
+  // -- a picture, cropped as Keynote masks one --
+  // A picture double-clicked -- or chosen and Return pressed, or Crop… chosen from its menu or
+  // the inspector -- shows whole, faintly, round the part of it kept, which is framed with a
+  // handle at each corner and side. A handle crops that side (⇧ keeps the part's
+  // proportions); the frame dragged moves over the picture, the picture dragged moves under
+  // the frame; the bar's slider zooms the picture in the frame. Return, Done or a click
+  // elsewhere keeps the crop, one step in the history (Crop Picture); Esc leaves it as it
+  // was. What is kept is the picture then: its size, its proportions, what Width sizes --
+  // drawn as large as the frame was, once the frame is sized. A crop is written as
+  // [x, y, width, height], fractions of the whole picture; a round one has `mask: circle`.
+  const CROP_SIDES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+  let cropping = null;
+  // The proportions a picture's panel was made with: drawn otherwise since (another picture
+  // put in its place), the panel is made again.
+  let formAspect = null;
+  function cropDrawn() {
+    const was = formAspect, at = state.focus;
+    if (!was || !at || !samePlace(at, was.at) || kindOf(blocksAt(slideAt() || {}, at.region)[at.index]) !== "image") return;
+    const now = pictureAspect(at);
+    if (now && Math.abs(now - (was.aspect || 0)) > 0.001) renderInspector();
+  }
+  const svgNode = (tag, attributes = {}, ...children) => {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [name, value] of Object.entries(attributes)) if (value != null) node.setAttribute(name, String(value));
+    node.append(...children);
+    return node;
+  };
+  const cropFrame = h("div.crop-frame", { onpointerdown: (event) => cropPress(event, "move"), ondblclick: (event) => { event.stopPropagation(); cropApply(); } },
+    ...CROP_SIDES.map((side) => h(`span.crop-handle.${side}`, { onpointerdown: (event) => cropPress(event, side) })));
+  const cropZoom = h("input.crop-zoom", { type: "range", min: "1", max: "4", step: "any", title: "Zoom", "aria-label": "Zoom", oninput: () => cropZoomTo(Number(cropZoom.value)) });
+  const cropBar = h("div.crop-bar", {}, h("span.crop-scale.small", {}, icon("image")), cropZoom, h("span.crop-scale", {}, icon("image")),
+    ui.button("Reset", () => cropReset(), { small: true, kind: "ghost", title: "Show the Whole Picture" }),
+    ui.button("Done", () => cropApply(), { small: true, kind: "primary" }));
+  for (const node of [cropFrame, cropBar]) {
+    // What is pressed here is the crop's, not the slide's: no object chosen or moved under it.
+    for (const type of ["click", "dblclick", "contextmenu", "pointerdown"]) node.addEventListener(type, (event) => event.stopPropagation());
+  }
+
+  // The part of a picture kept, as fractions of the whole: the whole, uncropped.
+  function cropOf(block) {
+    const crop = Array.isArray(block?.crop) && block.crop.length === 4 && block.crop.every(Number.isFinite) ? block.crop : [0, 0, 1, 1];
+    return { x: crop[0], y: crop[1], w: crop[2], h: crop[3] };
+  }
+  // The picture itself, in a picture's drawing: one with a caption is a group of it and its words.
+  const pictureOf = (element) => (element?.id && element.querySelector(`[id="${CSS.escape(element.id)}.picture"]`)) || element;
+  // A picture's own proportions (width over height), as the slide draws it whole.
+  function pictureAspect(at) {
+    const values = (pictureOf(blockElement(at.region, at.index))?.getAttribute("data-flexo-whole") || "").split(" ").map(Number);
+    return values.length === 4 && values[2] > 0 && values[3] > 0 ? values[2] / values[3] : null;
+  }
+
+  // The whole of a picture as the slide draws it, in the slide's points (`x`, `y`, `w`, `h`),
+  // and a drawing of it for the crop's view: cropped, the picture its pattern is filled with;
+  // else its own drawing (a photograph, or an SVG's shapes) -- where it is.
+  function wholeOf(element, root) {
+    const values = (element?.getAttribute("data-flexo-whole") || "").split(" ").map(Number);
+    const matrix = element?.parentNode?.getScreenCTM?.(), rootMatrix = root?.getScreenCTM?.();
+    if (values.length !== 4 || values.some((value) => !Number.isFinite(value)) || !matrix || !rootMatrix) return null;
+    const toRoot = rootMatrix.inverse().multiply(matrix);
+    const [x, y, w, h] = values;
+    const a = new DOMPoint(x, y).matrixTransform(toRoot), b = new DOMPoint(x + w, y + h).matrixTransform(toRoot);
+    const fill = /url\(\s*["']?#([^"')]+)/.exec(element.getAttribute("fill") || "")?.[1];
+    const image = fill ? pageNode.querySelector(`[id="${CSS.escape(fill)}"] image`) : null;
+    let drawn;
+    if (image) drawn = svgNode("image", { href: image.getAttribute("href") || image.getAttributeNS("http://www.w3.org/1999/xlink", "href"), x, y, width: w, height: h, preserveAspectRatio: "none" });
+    else {
+      drawn = element.cloneNode(true);
+      // (Its caption, set within an SVG's drawing, is not the picture.)
+      for (const node of drawn.querySelectorAll('[id$=".caption"]')) node.remove();
+      for (const node of [drawn, ...drawn.querySelectorAll("[id]")]) node.removeAttribute("id");
+      drawn.style.visibility = "";
+    }
+    const placed = svgNode("g", { transform: `matrix(${toRoot.a} ${toRoot.b} ${toRoot.c} ${toRoot.d} ${toRoot.e} ${toRoot.f})` }, drawn);
+    return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y), drawn: placed };
+  }
+
+  function startCrop(at) {
+    if (cropping && !cropping.done) return;
+    if (awayFrom("crop a picture") || outOfStep(true)) return;
+    const block = blocksAt(slideAt() || {}, at.region)[at.index];
+    if (!block || kindOf(block) !== "image" || !block.image) return;
+    if (!samePlace(state.focus, at) || state.field) focusBlock(at.region, at.index);
+    closeInline();
+    const element = pictureOf(blockElement(at.region, at.index)), root = pageNode?.querySelector("svg");
+    const whole = wholeOf(element, root);
+    if (!whole) return;
+    hover.hidden = true;
+    const crop = cropOf(block);
+    const keep = { x: whole.x + crop.x * whole.w, y: whole.y + crop.y * whole.h, w: crop.w * whole.w, h: crop.h * whole.h };
+    const shown = { x: whole.x, y: whole.y, w: whole.w, h: whole.h };
+    cropping = { at: { ...at }, slide: state.slide, block, element, whole: shown, keep, mask: block.mask === "circle" ? "circle" : null,
+      started: { whole: { ...shown }, keep: { ...keep } }, drawn: whole.drawn, base: whole.w, drag: null, done: false };
+    cropMount();
+    window.addEventListener("keydown", cropKey, true);
+    window.addEventListener("pointerdown", cropOutside, true);
+    placeChosen();
+    reportFocus();
+  }
+
+  // The crop's view put on the page: the picture whole and faint, the part kept bright, the
+  // frame and its handles, the bar.
+  function cropMount() {
+    const was = cropping;
+    const root = pageNode?.querySelector("svg");
+    if (!was || !root) return;
+    was.element.style.visibility = "hidden";
+    const kept = was.mask ? svgNode("ellipse") : svgNode("rect");
+    const outline = was.mask ? svgNode("ellipse", { class: "crop-oval" }) : null;
+    // (The picture as it was drawn, moved and scaled to where it is panned and zoomed to.)
+    const shifts = [svgNode("g", {}, was.drawn), svgNode("g", {}, was.drawn.cloneNode(true))];
+    const faint = svgNode("g", { class: "crop-faint" }, shifts[0]);
+    faint.addEventListener("pointerdown", (event) => { event.stopPropagation(); cropPress(event, "pan"); });
+    const svg = svgNode("svg", { class: "crop-picture", viewBox: root.getAttribute("viewBox"), preserveAspectRatio: root.getAttribute("preserveAspectRatio") || "xMidYMid meet" },
+      svgNode("defs", {}, svgNode("clipPath", { id: "flexo-crop-kept" }, kept)), faint,
+      svgNode("g", { class: "crop-kept", "clip-path": "url(#flexo-crop-kept)" }, shifts[1]), ...(outline ? [outline] : []));
+    for (const type of ["click", "dblclick", "contextmenu"]) svg.addEventListener(type, (event) => event.stopPropagation());
+    was.view = { svg, kept, outline, root, shifts };
+    pageNode.append(svg, cropFrame, cropBar);
+    cropFrame.classList.toggle("round", Boolean(was.mask));
+    placeCrop();
+  }
+
+  // The frame, its handles and the bar where the crop puts them now, on the page as it is shown.
+  function placeCrop() {
+    const was = cropping;
+    if (!was?.view || !pageNode?.contains(was.view.svg)) return;
+    const { keep, whole } = was, { kept, outline, root, shifts } = was.view, start = was.started.whole;
+    const shift = `translate(${whole.x} ${whole.y}) scale(${whole.w / start.w}) translate(${-start.x} ${-start.y})`;
+    for (const node of shifts) node.setAttribute("transform", shift);
+    const shape = was.mask
+      ? { cx: keep.x + keep.w / 2, cy: keep.y + keep.h / 2, rx: keep.w / 2, ry: keep.h / 2 }
+      : { x: keep.x, y: keep.y, width: keep.w, height: keep.h };
+    for (const [name, value] of Object.entries(shape)) { kept.setAttribute(name, value); outline?.setAttribute(name, value); }
+    if (was.done) { cropFrame.remove(); cropBar.remove(); return; }
+    const matrix = root.getScreenCTM(), outer = pageNode.getBoundingClientRect();
+    const a = new DOMPoint(keep.x, keep.y).matrixTransform(matrix), b = new DOMPoint(keep.x + keep.w, keep.y + keep.h).matrixTransform(matrix);
+    Object.assign(cropFrame.style, { left: `${a.x - outer.left}px`, top: `${a.y - outer.top}px`, width: `${b.x - a.x}px`, height: `${b.y - a.y}px` });
+    // The bar under the frame (and the picture's caption) -- below the slide, if need be --
+    // or over it where the stage ends below; never out of sight.
+    const caption = pageNode.querySelector(`[id="${CSS.escape(blockId(was.at))}.caption"]`)?.getBoundingClientRect();
+    const bar = cropBar.getBoundingClientRect(), gap = 10, room = stage.getBoundingClientRect();
+    let top = Math.max(b.y, caption?.height ? caption.bottom : -Infinity) - outer.top + gap;
+    if (outer.top + top + bar.height > room.bottom - 8) top = Math.max(a.y - outer.top - gap - bar.height, room.top - outer.top + 8);
+    const left = Math.min(Math.max((a.x + b.x) / 2 - outer.left - bar.width / 2, 4), Math.max(outer.width - bar.width - 4, 4));
+    Object.assign(cropBar.style, { left: `${left}px`, top: `${top}px` });
+    // The slider runs from the picture just covering the frame to five times as large.
+    const least = Math.max(keep.w / was.base, (keep.h / whole.h) * (whole.w / was.base));
+    const most = Math.max(least * 1.01, 5, (whole.w / was.base) * 1.01);
+    cropZoom.min = String(least);
+    cropZoom.max = String(Math.min(most, (keep.w * 100) / was.base));
+    cropZoom.value = String(whole.w / was.base);
+    cropZoom.disabled = Number(cropZoom.max) - least < 0.01;
+  }
+
+  // Where the pointer is, in the slide's points.
+  const cropPoint = (event) => new DOMPoint(event.clientX, event.clientY).matrixTransform(cropping.view.root.getScreenCTM().inverse());
+  function cropPress(event, kind) {
+    if (!cropping || cropping.done || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    // (Followed wherever the pointer goes, off the page and back, until it is let go.)
+    event.target.setPointerCapture?.(event.pointerId);
+    cropping.drag = { kind, start: cropPoint(event), keep: { ...cropping.keep }, whole: { ...cropping.whole }, moved: false };
+    pageNode.classList.add("cropping-drag");
+    window.addEventListener("pointermove", cropMove);
+    window.addEventListener("pointerup", cropRelease);
+    window.addEventListener("pointercancel", cropRelease);
+  }
+  function cropMove(event) {
+    const was = cropping, drag = was?.drag;
+    if (!drag) return;
+    const at = cropPoint(event), dx = at.x - drag.start.x, dy = at.y - drag.start.y;
+    const whole = was.whole;
+    drag.moved = true;
+    if (drag.kind === "move") {
+      was.keep.x = Math.min(Math.max(drag.keep.x + dx, whole.x), whole.x + whole.w - was.keep.w);
+      was.keep.y = Math.min(Math.max(drag.keep.y + dy, whole.y), whole.y + whole.h - was.keep.h);
+    } else if (drag.kind === "pan") {
+      const keep = was.keep;
+      whole.x = Math.min(Math.max(drag.whole.x + dx, keep.x + keep.w - whole.w), keep.x);
+      whole.y = Math.min(Math.max(drag.whole.y + dy, keep.y + keep.h - whole.h), keep.y);
+    } else was.keep = cropSided(drag, dx, dy, event.shiftKey);
+    placeCrop();
+  }
+  function cropRelease() {
+    window.removeEventListener("pointermove", cropMove);
+    window.removeEventListener("pointerup", cropRelease);
+    window.removeEventListener("pointercancel", cropRelease);
+    pageNode?.classList.remove("cropping-drag");
+    // (A drag let go elsewhere is no click there: nothing else is chosen by it.)
+    if (cropping?.drag?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    if (cropping) cropping.drag = null;
+  }
+
+  // The frame with a side (or a corner: two) moved by `dx`, `dy`: within the picture, no
+  // smaller than a handle's reach -- and, with ⇧, in the proportions it had.
+  function cropSided(drag, dx, dy, keepShape) {
+    const whole = cropping.whole, was = drag.keep, side = drag.kind;
+    const unit = cropping.view.root.getScreenCTM().a || 1;
+    const leastW = Math.max(16 / unit, whole.w * 0.0101), leastH = Math.max(16 / unit, whole.h * 0.0101);
+    const right = whole.x + whole.w, bottom = whole.y + whole.h;
+    let x0 = was.x, y0 = was.y, x1 = was.x + was.w, y1 = was.y + was.h;
+    if (!keepShape) {
+      if (side.includes("w")) x0 = Math.min(Math.max(x0 + dx, whole.x), x1 - leastW);
+      if (side.includes("e")) x1 = Math.max(Math.min(x1 + dx, right), x0 + leastW);
+      if (side.includes("n")) y0 = Math.min(Math.max(y0 + dy, whole.y), y1 - leastH);
+      if (side.includes("s")) y1 = Math.max(Math.min(y1 + dy, bottom), y0 + leastH);
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    }
+    // In proportion: from the corner (or the side's middle) across from the one held.
+    const across = side.includes("e") ? 1 : side.includes("w") ? -1 : 0, down = side.includes("s") ? 1 : side.includes("n") ? -1 : 0;
+    const ax = across > 0 ? x0 : across < 0 ? x1 : x0 + was.w / 2, ay = down > 0 ? y0 : down < 0 ? y1 : y0 + was.h / 2;
+    const wide = across ? (across > 0 ? x1 + dx - ax : ax - (x0 + dx)) / was.w : 0;
+    const tall = down ? (down > 0 ? y1 + dy - ay : ay - (y0 + dy)) / was.h : 0;
+    // A corner follows the pointer along its diagonal; a side, the pointer across it.
+    const diagonal = across && down ? ((wide * was.w) * was.w + (tall * was.h) * was.h) / (was.w * was.w + was.h * was.h) : 0;
+    let scale = across && down ? diagonal : across ? wide : tall;
+    const roomW = across > 0 ? right - ax : across < 0 ? ax - whole.x : 2 * Math.min(ax - whole.x, right - ax);
+    const roomH = down > 0 ? bottom - ay : down < 0 ? ay - whole.y : 2 * Math.min(ay - whole.y, bottom - ay);
+    scale = Math.min(Math.max(scale, leastW / was.w, leastH / was.h), roomW / was.w, roomH / was.h);
+    const w = was.w * scale, hgt = was.h * scale;
+    const x = across > 0 ? ax : across < 0 ? ax - w : ax - w / 2, y = down > 0 ? ay : down < 0 ? ay - hgt : ay - hgt / 2;
+    return { x, y, w, h: hgt };
+  }
+
+  // The picture zoomed in the frame (`zoom` times as large as it was shown at first): about
+  // what is in the middle of the frame, the frame kept where it is, and covered.
+  function cropZoomTo(zoom) {
+    const was = cropping;
+    if (!was || was.done || !Number.isFinite(zoom)) return;
+    const { keep, whole } = was;
+    const fx = (keep.x + keep.w / 2 - whole.x) / whole.w, fy = (keep.y + keep.h / 2 - whole.y) / whole.h;
+    const w = Math.max(was.base * zoom, keep.w, keep.h * (whole.w / whole.h)), h = w * (whole.h / whole.w);
+    let x = keep.x + keep.w / 2 - fx * w, y = keep.y + keep.h / 2 - fy * h;
+    x = Math.min(Math.max(x, keep.x + keep.w - w), keep.x);
+    y = Math.min(Math.max(y, keep.y + keep.h - h), keep.y);
+    was.whole = { x, y, w, h };
+    placeCrop();
+  }
+
+  // Reset: the whole picture kept, square-cornered -- kept so once Done.
+  function cropReset() {
+    if (!cropping || cropping.done) return;
+    cropping.keep = { ...cropping.whole };
+    cropping.mask = null;
+    const { svg } = cropping.view;
+    svg.remove();
+    cropMount();
+  }
+
+  // The crop as written: fractions of the whole picture, to four places, inside it.
+  function cropWritten(was) {
+    const { keep, whole } = was;
+    const round = (value) => Math.round(value * 10000) / 10000;
+    let x = round((keep.x - whole.x) / whole.w), y = round((keep.y - whole.y) / whole.h);
+    let w = round(keep.w / whole.w), h = round(keep.h / whole.h);
+    x = Math.max(0, x); y = Math.max(0, y);
+    w = Math.min(Math.max(w, 0.01), round(1 - x)); h = Math.min(Math.max(h, 0.01), round(1 - y));
+    return [x, y, w, h];
+  }
+
+  // The crop kept: one step in the history. Its part kept stays on the page, where the frame
+  // was, until the slide is drawn with it -- and glides from there to where the slide puts it.
+  function cropApply() {
+    const was = cropping;
+    if (!was || was.done) return;
+    const crop = cropWritten(was);
+    const whole = crop.every((value, i) => Math.abs(value - [0, 0, 1, 1][i]) < 0.0005) && !was.mask;
+    const block = blocksAt(slideAt() || {}, was.at.region)[was.at.index];
+    const before = cropOf(block);
+    const after = { crop: whole ? null : crop, mask: whole ? null : was.mask };
+    if (!block || kindOf(block) !== "image" || (same(after.crop ?? null, block.crop ?? null) && (after.mask ?? null) === (block.mask ?? null))) { cropCancel(); return; }
+    // Sized by the frame, the part kept is drawn as large as the frame was; a crop taken away
+    // leaves the picture at the scale it was drawn.
+    const sized = Math.abs(was.keep.w - was.started.keep.w) > 0.5 || Math.abs(was.keep.h - was.started.keep.h) > 0.5;
+    let width = block.width ?? null;
+    if (whole) width = width == null ? null : Math.round(width / before.w);
+    else if (sized) width = Math.round(was.keep.w);
+    width = widthWithin(was.at, width);
+    cropEnd(true);
+    // Where the slide draws it now, it shows as the frame: the parts of its place glide on from there.
+    const wrap = mover(was.element);
+    const box = drawnBox(was.element), frame = cropFrameBox(was);
+    if (box && frame) {
+      const k = scaleOf(wrap);
+      // (There at once: not gliding there.)
+      wrap.classList.add("block-sized");
+      Object.assign(wrap.style, { transformBox: "fill-box", transformOrigin: "0 0",
+        transform: `translate(${(frame.left - box.left) * k}px, ${(frame.top - box.top) * k}px) scale(${frame.width / box.width}, ${frame.height / box.height})` });
+    }
+    resized(was.at, [wrap], (b) => { setOption(b, "crop", after.crop); setOption(b, "mask", after.mask); setOption(b, "width", width); });
+  }
+  // The frame on the screen.
+  function cropFrameBox(was) {
+    const matrix = was.view?.root?.getScreenCTM?.();
+    if (!matrix) return null;
+    const a = new DOMPoint(was.keep.x, was.keep.y).matrixTransform(matrix), b = new DOMPoint(was.keep.x + was.keep.w, was.keep.y + was.keep.h).matrixTransform(matrix);
+    return { left: a.x, top: a.y, width: b.x - a.x, height: b.y - a.y };
+  }
+
+  function cropCancel() {
+    if (!cropping) return;
+    cropEnd(false);
+  }
+  // Cropping done with: kept (`applied`), the part kept shown until the slide is drawn with
+  // it; else the picture as it was.
+  function cropEnd(applied) {
+    const was = cropping;
+    cropRelease();
+    window.removeEventListener("keydown", cropKey, true);
+    window.removeEventListener("pointerdown", cropOutside, true);
+    if (!was) return;
+    if (applied) {
+      was.done = true;
+      was.view?.svg.querySelector(".crop-faint")?.remove();
+      placeCrop();
+      // Should the slide not be drawn again (the studio away), it shows as it is.
+      setTimeout(() => { if (cropping === was) cropGone(); }, 6000);
+      return;
+    }
+    cropGone();
+    placeChosen();
+    reportFocus();
+  }
+  function cropGone() {
+    const was = cropping;
+    cropping = null;
+    if (!was) return;
+    was.view?.svg.remove();
+    cropFrame.remove();
+    cropBar.remove();
+    was.element.style.visibility = "";
+  }
+
+  // The slide drawn again while cropping: the crop goes on over its new drawing -- unless the
+  // picture is gone, or another; once kept, it is done.
+  function cropRedrawn() {
+    const was = cropping;
+    if (!was) return;
+    if (was.done) { cropping = null; return; }
+    if (was.slide !== state.slide) { cropEnd(false); return; }
+    const block = blocksAt(slideAt() || {}, was.at.region)[was.at.index];
+    const element = pictureOf(blockElement(was.at.region, was.at.index)), root = pageNode?.querySelector("svg");
+    const whole = block && kindOf(block) === "image" && block.image === was.block.image ? wholeOf(element, root) : null;
+    if (!whole) { cropEnd(false); return; }
+    // Where the picture is drawn now, its crop follows it.
+    const start = was.started.whole, k = whole.w / start.w;
+    const moved = (box) => ({ x: whole.x + (box.x - start.x) * k, y: whole.y + (box.y - start.y) * k, w: box.w * k, h: box.h * k });
+    Object.assign(was, { element, drawn: whole.drawn, whole: moved(was.whole), keep: moved(was.keep), base: was.base * k,
+      started: { whole: moved(start), keep: moved(was.started.keep) } });
+    cropMount();
+  }
+
+  // Keys while cropping: Return keeps the crop, Esc (or ⌘Z) leaves it as it was, the arrows
+  // move the frame a point (⇧: ten). Nothing else acts on the picture meanwhile; a command
+  // (⌘C, say) keeps the crop first.
+  function cropKey(event) {
+    if (!cropping || cropping.done || event.isComposing) return;
+    const mod = event.metaKey || event.ctrlKey, key = event.key;
+    if (document.querySelector(".scrim, .menu") && !mod) return;
+    // Typing in a field (the caption, say), only Esc is the crop's.
+    if (document.activeElement?.matches?.("input:not([type=range]), textarea, [contenteditable=true]") && key !== "Escape") return;
+    // Esc in a drag takes back the drag alone, as Keynote's does; the next leaves the crop.
+    if (key === "Escape" && cropping.drag) {
+      event.preventDefault();
+      event.stopPropagation();
+      Object.assign(cropping, { keep: { ...cropping.drag.keep }, whole: { ...cropping.drag.whole } });
+      cropping.drag.moved = true;
+      cropRelease();
+      placeCrop();
+      return;
+    }
+    if (key === "Escape" || (mod && key.toLowerCase() === "z")) { event.preventDefault(); event.stopPropagation(); cropCancel(); return; }
+    if (key === "Enter" && !mod) { event.preventDefault(); event.stopPropagation(); cropApply(); return; }
+    if (key.startsWith("Arrow") && !mod) {
+      event.preventDefault();
+      event.stopPropagation();
+      const step = event.shiftKey ? 10 : 1, { keep, whole } = cropping;
+      const dx = key === "ArrowLeft" ? -step : key === "ArrowRight" ? step : 0, dy = key === "ArrowUp" ? -step : key === "ArrowDown" ? step : 0;
+      keep.x = Math.min(Math.max(keep.x + dx, whole.x), whole.x + whole.w - keep.w);
+      keep.y = Math.min(Math.max(keep.y + dy, whole.y), whole.y + whole.h - keep.h);
+      placeCrop();
+      return;
+    }
+    if (mod && !["Meta", "Control", "Shift", "Alt"].includes(key)) { cropApply(); return; }
+    if (!mod && (key.length === 1 || ["Delete", "Backspace", "Tab"].includes(key))) { event.preventDefault(); event.stopPropagation(); }
+  }
+  // A press anywhere but the crop keeps it, and goes on to do what it does there.
+  function cropOutside(event) {
+    if (!cropping || cropping.done) return;
+    const view = cropping.view;
+    if (cropFrame.contains(event.target) || cropBar.contains(event.target) || view?.svg.contains(event.target)) return;
+    cropApply();
+  }
+
+  // The quick shapes of a picture's crop, as Photos' and Keynote's: the picture as it is
+  // (Original), a square, 4:3 and 16:9 as the picture is turned (3:4 and 9:16 for one
+  // standing up), and a circle -- each the largest of its proportions in the picture,
+  // centred where its crop was. A width given keeps the picture at the scale it was drawn.
+  const cropShapes = (aspect) => [
+    { value: "original", label: "Original", ratio: null },
+    { value: "square", label: "Square", ratio: 1 },
+    { value: "4:3", label: aspect >= 1 ? "4:3" : "3:4", ratio: aspect >= 1 ? 4 / 3 : 3 / 4 },
+    { value: "16:9", label: aspect >= 1 ? "16:9" : "9:16", ratio: aspect >= 1 ? 16 / 9 : 9 / 16 },
+    { value: "circle", label: "Circle", ratio: 1, round: true },
+  ];
+  function cropShapeOf(block, aspect) {
+    if (block.crop == null && block.mask == null) return "original";
+    const crop = cropOf(block), ratio = (crop.w * aspect) / crop.h;
+    const found = cropShapes(aspect).find((shape) => shape.ratio && Boolean(shape.round) === (block.mask === "circle") && Math.abs(ratio / shape.ratio - 1) < 0.01);
+    return found?.value || "";
+  }
+  function quickCrop(at, value) {
+    const block = blocksAt(slideAt() || {}, at.region)[at.index], aspect = pictureAspect(at);
+    const shape = cropShapes(aspect || 1).find((item) => item.value === value);
+    if (!block || kindOf(block) !== "image" || !shape || !aspect) return;
+    const now = cropOf(block);
+    let crop = null;
+    if (shape.ratio) {
+      let w = shape.ratio / aspect, hgt = 1;
+      if (w > 1) { hgt = 1 / w; w = 1; }
+      const round = (number) => Math.round(number * 10000) / 10000;
+      const x = round(Math.min(Math.max(now.x + now.w / 2 - w / 2, 0), 1 - w)), y = round(Math.min(Math.max(now.y + now.h / 2 - hgt / 2, 0), 1 - hgt));
+      crop = [x, y, Math.min(round(w), round(1 - x)), Math.min(round(hgt), round(1 - y))];
+    }
+    const kept = crop ? crop[2] : 1;
+    const width = widthWithin(at, block.width == null ? null : Math.round((block.width * kept) / now.w));
+    editBlock(at, (b) => { setOption(b, "crop", crop); setOption(b, "mask", shape.round ? "circle" : null); setOption(b, "width", width); });
+    renderInspector();
+  }
+  // A picture's width, unless it is wider than its place: none then, as it is drawn as
+  // large as its place lets it either way.
+  function widthWithin(at, width) {
+    const region = regionsDrawn().find((item) => item.key === at.region);
+    const unit = pageNode?.querySelector("svg")?.getScreenCTM?.()?.a;
+    const most = region?.room && unit ? (region.room.right - region.room.left) / unit : Infinity;
+    return width != null && width > most + 0.5 ? null : width;
+  }
+  // The crop taken away: the picture whole again, at the scale it was drawn.
+  function resetCrop(at) {
+    const block = blocksAt(slideAt() || {}, at.region)[at.index];
+    if (!block || (block.crop == null && block.mask == null)) return;
+    quickCrop(at, "original");
+  }
+
   function onPick(event) {
     if (outOfStep(true)) return;
     if (figure?.parts.justDragged || swallowClick) return;
@@ -2866,6 +3318,8 @@ export function mount(studio, container) {
         if (cell) openInline({ kind: "cell", region: part.region, index: part.index, ...cell }, { at: point });
       }
       else if (block && kindOf(block) === "figure") focusBlock(part.region, part.index, () => figure.parts.dblclick(event));
+      // A picture is cropped, as Keynote's is masked.
+      else if (block && kindOf(block) === "image") startCrop({ region: part.region, index: part.index });
       // A number, or its label, typed in where it is drawn.
       else if (block && kindOf(block) === "stats") {
         const stat = statAt(part.id, event);
@@ -2963,7 +3417,12 @@ export function mount(studio, container) {
     if (SIZED.has(kind) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
     // Another picture in its place, as Keynote's Replace: its size, caption and place kept.
-    if (kind === "image") items.push({ icon: "image", label: "Replace Picture…", run: () => replacePicture(at) });
+    if (kind === "image") {
+      items.push({ icon: "image", label: "Replace Picture…", run: () => replacePicture(at) });
+      // (Not a picture whose file is missing: there is nothing drawn to crop.)
+      if (pictureAspect(at)) items.push({ icon: "crop", label: "Crop…", run: () => startCrop(at) });
+      if (block.crop != null || block.mask != null) items.push({ icon: "refresh", label: "Reset Crop", run: () => resetCrop(at) });
+    }
     if (items.length) items.push("-");
     items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => duplicateBlock(at) });
     items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
@@ -3044,6 +3503,8 @@ export function mount(studio, container) {
     placeAll();
     placeLogo();
     if (sizing) return;  // its frame follows it as it is sized
+    // A picture being cropped has the crop's frame instead.
+    if (cropping && !cropping.done) { chosen.hidden = true; placeCrop(); return; }
     if (!focus && state.field && pageNode && !inline && !moving && !landing) {
       place(chosen, frameOf({ kind: "field", id: state.field.id }), fieldName(state.field.field));
       chosen.classList.remove("sizable", "holder");
@@ -7497,8 +7958,26 @@ export function mount(studio, container) {
     const preview = h("img.preview-pic", { src: block.image ? studio.raw(block.image) : "", alt: "", hidden: !block.image,
       onload: () => { tries = 0; },
       onerror: () => { if (preview.getAttribute("src") && tries < 4) { tries += 1; const src = preview.src.replace(/&again=\d+$/, ""); setTimeout(() => { preview.src = `${src}&again=${tries}`; }, 400 * tries); } } });
-    return [preview,
-      fileRow(block.image, ["image"], (path) => { editBlock(at, (b) => { b.image = path; }, {}); preview.src = studio.raw(path); preview.hidden = false; }, "picture.png"),
+    // Shown as the slide shows it: cropped, and round -- by the picture's proportions as the
+    // slide last drew it (a picture just replaced: shown again once it is drawn, cropDrawn).
+    const aspect = pictureAspect(at), crop = cropOf(block);
+    formAspect = { at: { ...at }, aspect };
+    let shown = preview;
+    if (aspect && block.image && (block.crop != null || block.mask != null)) {
+      preview.className = "preview-kept";
+      Object.assign(preview.style, { width: `${100 / crop.w}%`, height: `${100 / crop.h}%`, left: `${(-100 * crop.x) / crop.w}%`, top: `${(-100 * crop.y) / crop.h}%` });
+      shown = h(`div.preview-crop${block.mask === "circle" ? ".round" : ""}`, {}, h("div", {}, preview));
+      shown.style.setProperty("--kept", String((crop.w * aspect) / crop.h));
+    }
+    const shape = aspect ? cropShapeOf(block, aspect) : "original";
+    return [shown,
+      fileRow(block.image, ["image"], (path) => replacePicture(at, path), "picture.png"),
+      // As Keynote's mask: a quick shape, or the picture cropped by hand on the slide.
+      aspect && ui.field("Crop", h("div.crop-field", {},
+        ui.segmented({ value: shape, options: cropShapes(aspect || 1).map(({ value, label }) => ({ value, label, title: value === "original" ? "The Whole Picture" : `Crop to ${label}` })),
+          onChange: (value) => quickCrop(at, value) }),
+        ui.button("Crop…", () => startCrop(at), { small: true, kind: "ghost", icon: "crop", title: "Crop on the Slide" })),
+      { hint: "Or double-click the picture" }),
       widthField(block, at),
       captionField(block, at),
       // As Keynote's Description: read out for whoever cannot see the picture, its lines
@@ -8101,9 +8580,34 @@ export function mount(studio, container) {
   // A picture's file swapped for another (`path`, else one chosen), all else about it kept.
   async function replacePicture(at, path = null) {
     path ||= await chooseFile({ title: "Replace Picture", types: ["image"], action: "Replace" });
-    if (!path || kindOf(blocksAt(slideAt(), at.region)[at.index]) !== "image") return;
-    editBlock(at, (b) => { b.image = path; }, { label: "Replace Picture" });
+    const block = blocksAt(slideAt(), at.region)[at.index];
+    if (!path || kindOf(block) !== "image" || path === block.image) return;
+    // A crop goes with it as its proportions, the largest part of the new picture of them,
+    // in its middle -- as Keynote fits a picture replaced to its mask; of a picture whose
+    // proportions can't be read here (a PDF), the whole is kept, its mask round as it was.
+    let crop = null;
+    if (block.crop != null) {
+      const was = pictureAspect(at), now = await naturalAspect(path), kept = cropOf(block);
+      if (was && now) {
+        const ratio = (kept.w * was) / kept.h, round = (number) => Math.round(number * 10000) / 10000;
+        let w = ratio / now, hgt = 1;
+        if (w > 1) { hgt = 1 / w; w = 1; }
+        // (The whole of the new picture is no crop at all.)
+        crop = w > 0.9999 && hgt > 0.9999 ? null : [round((1 - w) / 2), round((1 - hgt) / 2), round(w), round(hgt)];
+      }
+    }
+    editBlock(at, (b) => { b.image = path; if (b.crop != null) setOption(b, "crop", crop); }, { label: "Replace Picture" });
     focusBlock(at.region, at.index);
+  }
+  // A picture file's own proportions (width over height), as a browser reads it; null if it can't.
+  function naturalAspect(path) {
+    return new Promise((done) => {
+      const image = new Image();
+      image.onload = () => done(image.naturalWidth > 0 && image.naturalHeight > 0 ? image.naturalWidth / image.naturalHeight : null);
+      image.onerror = () => done(null);
+      image.src = studio.raw(path);
+      setTimeout(() => done(null), 4000);
+    });
   }
   // An object copied after itself (its figure with an id of its own), the copy chosen.
   function duplicateBlock(at) {
@@ -8754,6 +9258,7 @@ export function mount(studio, container) {
       else if (block && kindOf(block) === "table") openInline({ kind: "cell", ...state.focus, row: 0, col: 0 }, { selectAll: true });
       else if (block && kindOf(block) === "stats" && block.stats?.length) openInline({ kind: "stat", ...state.focus, item: 0 }, { selectAll: true });
       else if (block && kindOf(block) === "gallery" && block.gallery?.length) openInline({ kind: "picture", ...state.focus, item: 0 }, { selectAll: true });
+      else if (block && kindOf(block) === "image") startCrop({ ...state.focus });
       else if (block && kindOf(block) === "figure" && figure && figureBlock() === block) {
         const first = figure.parts.model?.nodes?.[0]?.id;
         if (first) figure.parts.select([first]);
@@ -8779,7 +9284,16 @@ export function mount(studio, container) {
         return builds() ? [{ name: "steps", label: "Include each stage of builds", value: remembered(key, "0") === "1", onChange: (value) => remember(key, value ? "1" : "0") }] : [];
       } },
     { format: "pptx", get label() { return `PowerPoint${asks() ? "…" : ""}`; }, hint: "Editable shapes and text" },
-    { format: "png", label: "Images…", icon: "image", hint: "A PNG or SVG image of each slide", choose: [{ format: "png", label: "PNG" }, { format: "svg", label: "SVG" }] },
+    { format: "png", label: "Images…", icon: "image", hint: "A PNG or SVG image of each slide", choose: [{ format: "png", label: "PNG" }, { format: "svg", label: "SVG" }],
+      // A PNG's size, as the person last chose it: its pixels across, and down as the slide's
+      // proportions make them.
+      get options() {
+        const view = pageNode?.querySelector("svg")?.viewBox?.baseVal, tall = view?.width ? view.height / view.width : 9 / 16;
+        const width = Number(remembered("png-width", "1920"));
+        return [{ name: "png_width", label: "Size", formats: ["png"], hint: "In pixels", value: PNG_WIDTHS.includes(width) ? width : 1920,
+          choices: PNG_WIDTHS.map((across) => ({ value: across, label: `${across} × ${Math.round(across * tall)}` })),
+          onChange: (value) => remember("png-width", String(value)) }];
+      } },
   ];
   studio.present = () => present();
   studio.commands = () => [
@@ -8895,6 +9409,8 @@ export function mount(studio, container) {
     return [
       ...(kind === "text" ? [{ icon: "list", label: "Convert to List", run: () => restyle(at, "bulleted") }] : []),
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "text") }] : []),
+      ...(kind === "image" && pictureAspect(at) ? [{ icon: "crop", label: "Crop Picture…", hint: name, run: () => startCrop(at) }] : []),
+      ...(kind === "image" && (block.crop != null || block.mask != null) ? [{ icon: "refresh", label: "Reset Crop", hint: name, run: () => resetCrop(at) }] : []),
       // As the Mac app's Arrange menu names them; the hint says what they move.
       ...(at.index > 0 ? [{ icon: "up", label: "Move Up", keys: "⌥↑", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
       ...(at.index < count - 1 ? [{ icon: "down", label: "Move Down", keys: "⌥↓", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) }] : []),
@@ -9103,6 +9619,10 @@ export function mount(studio, container) {
     // A placeholder (an empty text or list) a new object took the place of: that object added.
     if (kind !== kindOf(a) && blank(a)) return `Add ${objectName(b)}`;
     if (keys.length === 1 && keys[0] === "width") return b.width == null ? `Reset ${name} Size` : `Resize ${name}`;
+    // A picture's crop, its mask and the width that goes with them: one step.
+    if (kind === "image" && keys.some((key) => key === "crop" || key === "mask") && keys.every((key) => ["crop", "mask", "width"].includes(key))) {
+      return b.crop == null && b.mask == null ? "Reset Crop" : "Crop Picture";
+    }
     if (keys.includes(kind)) {
       if (kind === "figure" && typeof a.figure === "object" && typeof b.figure === "object") return figureChange(a.figure, b.figure);
       if (kind === "image") return "Change Picture";
