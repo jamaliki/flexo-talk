@@ -3024,7 +3024,7 @@ export function mount(studio, container) {
     return [
       field ? { icon: "pencil", label: `Edit ${fieldName(state.field?.field || fieldOf(field))}`, run: () => openInline({ kind: "field", field: state.field?.field || fieldOf(field) }) } : null,
       // What the toolbar adds, in its order.
-      ...MAIN_BLOCKS.map((kind) => (kind === "image" && logoRoom(slideAt()) ? { icon: "image", label: "Add Logo…", run: () => addLogos() }
+      ...MAIN_BLOCKS.map((kind) => (kind === "image" && logoRoom(slideAt()) ? { icon: "image", label: "Add Logo…", run: () => addLogos(null, null, { said: false }) }
         : { icon: BLOCKS[kind].icon, label: `Add ${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, disabled: !room, run: () => insertBlock(kind) })),
       // Then the slide's, as its thumbnail's menu has them. On the slide itself its list has
       // the keys (a right-click on it gives them): ⌘C copies it and ⌫ deletes it. On a
@@ -8160,7 +8160,7 @@ export function mount(studio, container) {
   // (Until the slide is drawn again with the change, the drawing's logos are the old row's: the
   // frame waits for the new one rather than frame the logo now at the place it is chosen by.)
   let logosRedrawn = null;
-  function editLogos(mutate, label, { chosen = undefined, was = state.logo } = {}) {
+  function editLogos(mutate, label, { chosen = undefined, was = logoChosen() ? state.logo : null } = {}) {
     logosRedrawn = pageNode;
     studio.change((d) => {
       d.deck ||= {};
@@ -8170,7 +8170,7 @@ export function mount(studio, container) {
     }, { label });
     const entry = studio.past[studio.past.length - 1];
     const after = chosen === undefined ? state.logo : chosen;
-    if (entry) studio.said(entry).logos = { before: logoChosen() ? was : null, after, slide: state.slide };
+    if (entry) studio.said(entry).logos = { before: was, after, slide: state.slide };
     state.logo = after;
     placeChosen(); renderInspector(); reportFocus();
   }
@@ -8184,8 +8184,8 @@ export function mount(studio, container) {
     placeChosen(); renderInspector(); reportFocus();
   }
   // Pictures added as logos (`paths`; else one chosen), at `at` in the row (else after the
-  // logo chosen, or at its end): said so, as what was asked for was a picture.
-  async function addLogos(paths = null, at = null) {
+  // logo chosen, or at its end) -- said so (`said`) where what was asked for was a picture.
+  async function addLogos(paths = null, at = null, { said = true } = {}) {
     if (awayFrom("add logos")) return;
     if (!paths) {
       const path = await chooseFile({ title: "Add Logo", types: ["image"], action: "Add" });
@@ -8199,8 +8199,7 @@ export function mount(studio, container) {
     const count = logosOf().length;
     const where = at ?? (logoChosen() ? state.logo + 1 : count);
     editLogos((list) => list.splice(where, 0, ...paths), paths.length === 1 ? "Add Logo" : `Add ${paths.length} Logos`, { chosen: where + paths.length - 1 });
-    // (A picture asked for on a title slide: what it became is said.)
-    toast(paths.length === 1 ? "Added as a logo" : `${paths.length} pictures added as logos`, { icon: "image" });
+    if (said) toast(paths.length === 1 ? "Added as a logo" : `${paths.length} pictures added as logos`, { icon: "image" });
   }
   function deleteLogo(index, label = "Delete Logo") {
     if (awayFrom("delete logos") || index >= logosOf().length) return;
@@ -8469,8 +8468,8 @@ export function mount(studio, container) {
   }
 
   // Design › Logos, and the panel of a logo chosen: the deck's logos, in their order -- each
-  // dragged up or down to move it (⌥↑ ⌥↓ with its row's keys), or removed -- Add Logo…, where
-  // they show, and how tall.
+  // dragged up or down to move it (⌥↑ ⌥↓ with its row's keys), or removed (Remove, or ⌫) --
+  // Add Logo…, where they show, and how tall.
   let logoDragged = null;
   // The logos whose file is not there, as the last drawing said, by their files: their rows
   // drawn again when that changes (a file put there, one renamed away).
@@ -8502,6 +8501,8 @@ export function mount(studio, container) {
             // (Its row, drawn again where it went, keeps the keys: keepFocus finds it by its file.)
             moveLogo(index, index + (event.key === "ArrowUp" ? -1 : 1));
           } else if ((event.key === "Enter" || event.key === " ") && logosShown()) { event.preventDefault(); chooseLogo(index); }
+          // ⌫ takes it out of the list, as Remove does.
+          else if ((event.key === "Backspace" || event.key === "Delete") && !event.metaKey && !event.ctrlKey) { event.preventDefault(); deleteLogo(index, "Remove Logo"); }
         },
         ondragstart: (event) => { logoDragged = index; row.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", logoName(path)); },
         ondragend: () => { logoDragged = null; row.classList.remove("dragging"); },
@@ -8530,11 +8531,11 @@ export function mount(studio, container) {
     // (Where they show, and how tall, once there are some.)
     if (!list.length) {
       return [h("div.hint-line", {}, "Your institution’s and funders’ logos, along the foot of the title slide."),
-        h("div", {}, ui.button("Add Logo…", () => addLogos(), { kind: "ghost", icon: "plus", small: true }))];
+        h("div", {}, ui.button("Add Logo…", () => addLogos(null, null, { said: false }), { kind: "ghost", icon: "plus", small: true }))];
     }
     return [
       h("div.list-rows.logo-rows", {}, rows),
-      h("div", {}, ui.button("Add Logo…", () => addLogos(), { kind: "ghost", icon: "plus", small: true })),
+      h("div", {}, ui.button("Add Logo…", () => addLogos(null, null, { said: false }), { kind: "ghost", icon: "plus", small: true })),
       ui.field("Show On", ui.segmented({ value: deck.logos_on === "every" ? "every" : "title", key: "deck.logos_on",
         options: [{ value: "title", label: "Title Slide" }, { value: "every", label: "Every Slide" }],
         onChange: (value) => {
