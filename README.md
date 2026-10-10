@@ -386,7 +386,14 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   under it as it redraws. Right-click anything for what can be done with it. A
   figure or picture chosen has a handle at each corner: drag one to size it (its
   `width`), drawn where the slide will put it as you drag; double-click a handle
-  to fit it to its place again. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  to fit it to its place again. Double-click a picture (or choose it and press
+  Return, or **Crop…**) to crop it, as Keynote masks one: the whole of it shows
+  faintly round the part kept; drag the frame's handles to crop a side (⇧ keeps its
+  proportions), the frame to move it over the picture, the picture to move it under
+  the frame, or the bar's slider to zoom it in the frame; Return, **Done** or a click
+  elsewhere keeps the crop (`crop: [x, y, width, height]`, fractions of the whole
+  picture), Esc leaves it as it was. Its panel crops it to a square, 4:3, 16:9 or a
+  circle at once (`mask: circle`), or back to the whole (**Original**). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere. The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
