@@ -169,3 +169,27 @@ def test_the_slides_after_one_skipped_are_numbered_as_they_are_shown(tmp_path: P
     svgs = sorted(kind.export(deck, tmp_path, "talk", ["svg"], into=tmp_path / "out"))
     assert [path.name for path in svgs] == ["slide-01.svg", "slide-02.svg"]
     assert _numbers([path.read_text(encoding="utf-8") for path in svgs]) == ["1", "2"]
+
+
+def test_a_deck_s_logos_are_in_every_export_as_pictures(tmp_path: Path) -> None:
+    import re
+    import zipfile
+
+    import pytest
+
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    Image.new("RGBA", (300, 100), (120, 30, 40, 255)).save(tmp_path / "institute.png")
+    Image.new("RGB", (80, 80), (10, 60, 140)).save(tmp_path / "crest.jpg")
+    deck = {**DECK, "deck": {**DECK["deck"], "logos": ["institute.png", "crest.jpg"], "logos_on": "every"}}
+    written = DeckKind().export(deck, tmp_path, "talk", ["pdf", "pptx", "svg"], into=tmp_path / "out")
+    pptx = next(path for path in written if path.suffix == ".pptx")
+    archive = zipfile.ZipFile(pptx)
+    slides = [archive.read(f"ppt/slides/slide{n}.xml").decode() for n in (1, 2)]
+    # Native pictures on every slide, named as PowerPoint's Selection Pane shows them.
+    assert [len(re.findall(r'<p:cNvPr id="\d+" name="Logo"', slide)) for slide in slides] == [2, 2]
+    pdf = next(path for path in written if path.suffix == ".pdf")
+    assert pdf.read_bytes().count(b"/Subtype /Image") >= 2
+    svgs = sorted(path for path in written if path.suffix == ".svg")
+    assert 'id="slide1.logo0"' in svgs[0].read_text() and 'id="slide2.logo1"' in svgs[1].read_text()

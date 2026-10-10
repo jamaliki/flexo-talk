@@ -872,16 +872,21 @@ export function mount(studio, container) {
   });
 
   // A slide whose layout has no room for objects (a title slide, a section): what it is, and
-  // what to do, said where an object would be added -- a greyed button, a file dropped.
-  const noRoomSaid = (slide) => `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, such as a logo, choose a layout with room, such as Content`;
+  // what to do, said where an object would be added -- a greyed button, a file dropped. A
+  // title slide has room for logos: a picture added to it is one (Design › Logos).
+  const noRoomSaid = (slide) => (layoutOf(slide) === "title" ? "The Title layout has room for logos only: Picture adds one, along its foot"
+    : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, choose a layout with room, such as Content (logos are in Design)`);
+  const logoRoom = (slide) => layoutOf(slide) === "title" && !regionsOf(slide).length;
   const renderBar = () => {
     const slide = slideAt();
     const room = regionsOf(slide).length > 0;
-    // Greyed out, each says why: the layout has no room (a title slide, a section).
+    // Greyed out, each says why: the layout has no room (a title slide, a section) -- but for
+    // Picture on a title slide, which adds a logo.
     for (const button of [...insertButtons, moreButton]) {
       button.dataset.title ||= button.title || "More objects";
-      button.disabled = !room;
-      button.title = room ? button.dataset.title : noRoomSaid(slide);
+      const logo = button === insertButtons[MAIN_BLOCKS.indexOf("image")] && logoRoom(slide);
+      button.disabled = !room && !logo;
+      button.title = room ? button.dataset.title : logo ? "Add Logo: a picture on the title slide is a logo, in a row along its foot" : noRoomSaid(slide);
     }
   };
 
@@ -1184,6 +1189,7 @@ export function mount(studio, container) {
     state.picked = [];
     state.focus = focus;
     state.field = null;
+    state.logo = null;
     renderRail();
     renderStage();
     renderInspector();
@@ -1863,6 +1869,7 @@ export function mount(studio, container) {
   const PART = /^slide(\d+)\.(body|left|right|column(\d+))\.(\d+)(?:\.|$)/;
   const WORDS = /^slide(\d+)\.(title|subtitle|byline|footer|footnote\d+)$/;
   const BLOCK_ID = /^slide\d+\.(body|left|right|column\d+)\.\d+$/;
+  const LOGO = /^slide(\d+)\.logo(\d+)$/;
 
   function partOf(target) {
     for (let node = target; node && node !== pageNode; node = node.parentNode) {
@@ -1871,6 +1878,8 @@ export function mount(studio, container) {
       if (part) return { kind: "block", region: part[3] ? `columns.${Number(part[3]) - 1}` : part[2], index: Number(part[4]), id: `slide${part[1]}.${part[2]}.${part[4]}` };
       const words = WORDS.exec(id);
       if (words) return { kind: "field", field: words[2], id };
+      const logo = LOGO.exec(id);
+      if (logo) return { kind: "logo", index: Number(logo[2]), id };
     }
     return null;
   }
@@ -2041,6 +2050,7 @@ export function mount(studio, container) {
   }
 
   function labelOf(part) {
+    if (part.kind === "logo") return "Logo";
     if (part.kind === "field") return { title: "Title", subtitle: "Subtitle", byline: "Byline", footer: "Footer" }[part.field] || (FOOT.test(part.field) ? "Footnote" : "Text");
     const block = blocksAt(slideAt() || {}, part.region)[part.index];
     return block ? blockName(block) : "";
@@ -2063,7 +2073,8 @@ export function mount(studio, container) {
     if (inner) { place(hover, boxOf(inner.element.id), ""); return; }
     // What is chosen has its own frame: no second one, nor a tag over the words above it.
     const chosenNow = part && (part.kind === "block" ? state.focus && state.focus.region === part.region && state.focus.index === part.index
-      : state.field && state.field.field === fieldOf(part.field, { x: event.clientX, y: event.clientY }));
+      : part.kind === "logo" ? logoChosen() && state.logo === part.index
+        : state.field && state.field.field === fieldOf(part.field, { x: event.clientX, y: event.clientY }));
     if (chosenNow) { hover.hidden = true; return; }
     place(hover, part && frameOf(part), part ? labelOf(part) : "");
   }
@@ -2080,6 +2091,7 @@ export function mount(studio, container) {
       if (figure.parts.connecting || (id && holder && !loneShape(figure.parts.model, id))) { figure.parts.pointerdown(event); return; }
     }
     const part = partAt(event);
+    if (part?.kind === "logo") { pressLogo(event, part); return; }
     // A shape of a figure not yet chosen is dragged as the shape, the figure chosen first --
     // but a figure's only shape is the figure, moved on the slide as it is once chosen.
     const inner = part && figurePartAt(event, part);
@@ -2809,7 +2821,8 @@ export function mount(studio, container) {
     hover.hidden = true;
     // ⇧-click or ⌘-click adds an object to what is chosen, or takes it out, as in Keynote.
     if ((event.shiftKey || event.metaKey) && part?.kind === "block" && (state.focus || allOn())) { pickAlso(part); return; }
-    if (!part) { state.focus = null; state.field = null; placeChosen(); renderInspector(); reportFocus(); return; }
+    if (part?.kind === "logo") { chooseLogo(part.index); return; }
+    if (!part) { state.focus = null; state.field = null; state.logo = null; placeChosen(); renderInspector(); reportFocus(); return; }
     state.field = null;
     // A click on a figure's part chooses that part, the figure not chosen first.
     if (part.kind === "block") focusBlock(part.region, part.index, () => figure.parts.click(event));
@@ -2883,6 +2896,7 @@ export function mount(studio, container) {
       menu(point, [...clipItems(), { icon: "duplicate", label: `Duplicate ${count} Objects`, keys: "⌘D", run: () => duplicateChosen() }, "-", ...chosenCommands()]);
       return;
     }
+    if (part?.kind === "logo") { chooseLogo(part.index); menu(point, logoItems(part.index)); return; }
     if (part?.kind !== "block") {
       leaveFigure(false);
       state.focus = null;
@@ -3010,7 +3024,8 @@ export function mount(studio, container) {
     return [
       field ? { icon: "pencil", label: `Edit ${fieldName(state.field?.field || fieldOf(field))}`, run: () => openInline({ kind: "field", field: state.field?.field || fieldOf(field) }) } : null,
       // What the toolbar adds, in its order.
-      ...MAIN_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `Add ${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, disabled: !room, run: () => insertBlock(kind) })),
+      ...MAIN_BLOCKS.map((kind) => (kind === "image" && logoRoom(slideAt()) ? { icon: "image", label: "Add Logo…", run: () => addLogos(null, null, { said: false }) }
+        : { icon: BLOCKS[kind].icon, label: `Add ${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, disabled: !room, run: () => insertBlock(kind) })),
       // Then the slide's, as its thumbnail's menu has them. On the slide itself its list has
       // the keys (a right-click on it gives them): ⌘C copies it and ⌫ deletes it. On a
       // title, they are the title's.
@@ -3027,6 +3042,7 @@ export function mount(studio, container) {
   function placeChosen() {
     const focus = state.focus;
     placeAll();
+    placeLogo();
     if (sizing) return;  // its frame follows it as it is sized
     if (!focus && state.field && pageNode && !inline && !moving && !landing) {
       place(chosen, frameOf({ kind: "field", id: state.field.id }), fieldName(state.field.field));
@@ -3222,6 +3238,7 @@ export function mount(studio, container) {
       .filter((at) => { const box = drawnBox(blockElement(at.region, at.index)); return box && box.right >= left && box.left <= right && box.bottom >= top && box.top <= bottom; });
     const picks = [...band.keep, ...touched.filter((at) => !band.keep.some((kept) => samePlace(kept, at)))];
     state.field = null;
+    state.logo = null;
     allChosen = null;
     state.focus = picks.length === 1 ? { ...picks[0] } : null;
     if (picks.length > 1) chooseMany(picks);
@@ -4836,6 +4853,17 @@ export function mount(studio, container) {
   // After an undo or a redo, the object it changed is chosen, as Keynote does: the first
   // on the slide shown that is not as it was.
   function chooseChanged(was, entry) {
+    // A logo added, moved, sized or deleted: undone or redone, it is chosen (none, gone).
+    if (entry?.logos) {
+      const undone = studio.future[studio.future.length - 1]?.said === entry;
+      const at = undone ? entry.logos.before : entry.logos.after;
+      if (entry.logos.slide !== state.slide && entry.logos.slide < slides().length) select(entry.logos.slide);
+      leaveFigure(false);
+      state.focus = null; state.field = null; allChosen = null;
+      state.logo = Number.isInteger(at) && at < logosOf().length ? at : null;
+      logosRedrawn = pageNode;
+      return;
+    }
     // Several chosen together and changed so (deleted, moved, pasted): undone or redone, they
     // are chosen again where they now are -- none when they are gone.
     if (entry?.many) {
@@ -5320,6 +5348,7 @@ export function mount(studio, container) {
   // chosen, or chosen by another.
   function frameOf(part) {
     if (part.kind === "field") return roomy(part.id, wordsFrame(part.id));
+    if (part.kind === "logo") return boxOf(part.id);
     const block = blocksAt(slideAt() || {}, part.region)[part.index];
     const kind = block ? kindOf(block) : "";
     let framed = roomy(part.id, boxOf(part.id), kind);
@@ -5627,10 +5656,11 @@ export function mount(studio, container) {
     if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
     // (Never opened in place of the deck, as a browser opens a file dropped where none is taken.)
     event.preventDefault();
-    const room = regionsOf(slideAt()).length > 0;
-    if (!room) event.dataTransfer.dropEffect = "none";
+    const room = regionsOf(slideAt()).length > 0, logos = logoRoom(slideAt());
+    if (!room && !logos) event.dataTransfer.dropEffect = "none";
     const said = room ? "Drop pictures or structure files (PDB, mmCIF) to add them to the slide"
-      : `The ${LAYOUT_NAMES[layoutOf(slideAt())]} layout has no room for pictures: choose one with room, such as Content`;
+      : logos ? "Drop pictures to add them as logos"
+        : `The ${LAYOUT_NAMES[layoutOf(slideAt())]} layout has no room for pictures: choose one with room, such as Content`;
     if (dropNote?.textContent !== said) { dropNote?.remove(); dropNote = h("div.drop-note", {}, said); center.append(dropNote); }
     if (!room) return;
     // Where structures would go: after the figure's part under the pointer, into the
@@ -5655,7 +5685,7 @@ export function mount(studio, container) {
     const files = [...(event.dataTransfer?.files || [])];
     // Taken now, before anything is waited for: later, the browser would have opened the file.
     if (files.length) event.preventDefault();
-    if (files.length && !regionsOf(slideAt()).length) { toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return; }
+    if (files.length && !regionsOf(slideAt()).length && !logoRoom(slideAt())) { toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return; }
     await addFiles(files, partAt(event), event);
   });
 
@@ -5664,6 +5694,17 @@ export function mount(studio, container) {
   async function addFiles(all, part, at = null) {
     const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|pdf|ai)$/i.test(file.name));
     const structures = all.filter((file) => STRUCTURE_FILE.test(file.name));
+    // On a title slide, pictures are logos: in the row where they are let go (`at`, a drop),
+    // else after the logo chosen.
+    if (logoRoom(slideAt())) {
+      if (!pictures.length) { if (all.length) toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return all.length > 0; }
+      const row = at?.clientX !== undefined ? logoRow() : [];
+      const where = row.length ? row.filter((item) => (item.box.left + item.box.right) / 2 < at.clientX).length : null;
+      const paths = [];
+      for (const file of pictures) paths.push(await studio.upload(file));
+      await addLogos(paths, where);
+      return true;
+    }
     if (!pictures.length && !structures.length) {
       if (all.length) toast("Only pictures and structure files (PDB, mmCIF) can be added to a slide.", { icon: "info" });
       return all.length > 0;
@@ -5712,6 +5753,7 @@ export function mount(studio, container) {
     if (!slide) return null;
     const block = state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
     if (block) return { what: "block", block: structuredClone(block), label: blockName(block).toLowerCase() };
+    if (logoChosen()) return { what: "block", block: { image: logosOf()[state.logo] }, label: "logo", logo: state.logo };
     if (allOn()) { const blocks = allBlocks().map((each) => structuredClone(each.block)); return { what: "blocks", blocks, label: `${blocks.length} objects` }; }
     // The slide itself only when the slides have the keys (a thumbnail clicked last).
     if (!railList.contains(document.activeElement)) return null;
@@ -5747,6 +5789,7 @@ export function mount(studio, container) {
   let cutLast = null;
   function cutAway(clip) {
     if (clip.what === "parts") { figureCut = true; figure.parts.remove(); }
+    else if (clip.what === "block" && clip.logo !== undefined) deleteLogo(clip.logo, "Cut Logo");
     else if (clip.what === "block") { cutLast = { block: structuredClone(clip.block), at: Date.now() }; deleteBlock(state.focus, "cut"); }
     else if (clip.what === "blocks") deleteAll("cut");
     else if (clip.what === "slides") deleteSlides(clip.indices, "cut");
@@ -5884,6 +5927,7 @@ export function mount(studio, container) {
       studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, copyOf(clip.slide)); }, { label: "Paste Slide" });
       select(at);
     } else if (clip.what === "block") {
+      if (logoRoom(slideAt()) && kindOf(clip.block) === "image" && clip.block.image) { addLogos([clip.block.image]); return; }
       if (!regionsOf(slideAt()).length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
       // Cut here, and back since -- kept for another typing in it as it was cut -- the paste
       // is a move: it is taken from where it came back, with their words, and put here; one
@@ -5954,6 +5998,7 @@ export function mount(studio, container) {
     closeInline();
     const slide = slideAt();
     const regions = regionsOf(slide);
+    if (!regions.length && kind === "image" && logoRoom(slide)) { await addLogos(given?.image ? [given.image] : null); return; }
     if (!regions.length) { toast(`${noRoomSaid(slide)}.`, { icon: "info", seconds: 6 }); return; }
     const more = Array.isArray(given) ? given.slice(1) : [];
     if (Array.isArray(given)) given = given[0];
@@ -6114,6 +6159,7 @@ export function mount(studio, container) {
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
       else if (block) clear(inspectorBody, blockPanel(slide, block));
+      else if (logoChosen()) clear(inspectorBody, logoPanel(slide));
       else if (allOn()) clear(inspectorBody, manyPanel(slide));
       else if (chosenSlides().length > 1) clear(inspectorBody, slidesPanel(slide));
       else clear(inspectorBody, slidePanel(slide));
@@ -6371,11 +6417,13 @@ export function mount(studio, container) {
         text("by", "Attribution"),
         layout === "agenda" ? h("div.hint-line", {}, "Lists the section slides.") : null,
         // (Said once here, where the slide's objects would be listed: the toolbar's are greyed.)
-        WORDLESS.has(layout) ? h("div.hint-line", {}, `${noRoomSaid(slide).replace(/^The \S+ layout/, "This layout")}.`) : null,
+        // (A title slide's logos are listed under it: its section says what goes there.)
+        WORDLESS.has(layout) && layout !== "title" ? h("div.hint-line", {}, `${noRoomSaid(slide).replace(/^The \S+ layout/, "This layout")}.`) : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn’t show its title.") : null),
     ];
     const regions = regionsOf(slide);
     if (regions.length) parts.push(h("div.section", {}, h("div.section-title", {}, "Objects"), regions.map((region) => regionView(slide, region))));
+    if (layout === "title") parts.push(h("div.section.logos-section", {}, h("div.section-title", {}, "Logos"), logosControls()));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts, studio.info?.palette),
       layout === "two-columns" ? splitControl(slide) : null,
       layout === "columns" ? columnsControls(slide) : null,
@@ -7950,6 +7998,7 @@ export function mount(studio, container) {
         // (Its lines as typed, as on the slide: Return starts a new one, ⌘Return is done.)
         ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: FOOTER_HINT, colours: false, lines: true, key: "deck.footer", onInput: typeDeck("footer") })),
         ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", key: "deck.id", onInput: typeDeck("id") }), { hint: `${deck.id || "talk"}.pptx, ${deck.id || "talk"}.pdf` })),
+      h("div.section.logos-section", {}, h("div.section-title", {}, "Logos"), logosControls()),
       h("div.section", {}, h("details.more", { open: changed > 0 }, h("summary", {}, icon("chevron"), `Proportions${changed ? ` (${changed} changed)` : ""}`),
         h("div.inner", {}, styleRows))),
     ];
@@ -8067,6 +8116,7 @@ export function mount(studio, container) {
   }
   function duplicateChosen() {
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
+    if (logoChosen() && !state.focus) return;
     if ((state.focus || allOn()) && awayFrom("duplicate objects")) return;
     // Several chosen (⌘A, ⇧-click): each copied after the last of them in its column, one step.
     if (allOn()) {
@@ -8088,16 +8138,444 @@ export function mount(studio, container) {
     else if (slides().length) duplicateSlide(state.slide);
   }
 
+  // -- the deck's logos --
+  // Pictures of the deck's own -- an institution's, its funders' -- not of any one slide: in a
+  // row along a title slide's foot, or small in every slide's footer, as Design › Logos says.
+  // On a slide a logo is chosen by a click, as any object is: ⌫ deletes it, ⌥← and ⌥→ or a
+  // drag along the row move it, and a corner sizes every logo at once (they share one height,
+  // and catch at the deck's default; a double-click on a corner goes back to it).
+  state.logo = null;
+  const logosOf = (d = doc()) => { const value = d?.deck?.logos; return Array.isArray(value) ? value : typeof value === "string" && value ? [value] : []; };
+  const logosShown = (slide = slideAt()) => Boolean(slide) && logosOf().length > 0 && (doc().deck?.logos_on === "every" || layoutOf(slide) === "title");
+  const LOGO_DEFAULT = catalog.logos?.height ?? 40;
+  const [LOGO_LEAST, LOGO_MOST] = catalog.logos?.heights ?? [12, 120];
+  const logoHeight = () => (typeof doc().deck?.logo_height === "number" ? doc().deck.logo_height : LOGO_DEFAULT);
+  const logoId = (index) => `slide${state.slide + 1}.logo${index}`;
+  const logoChosen = () => Number.isInteger(state.logo) && state.logo < logosOf().length && logosShown();
+  // A logo by its file's name, as the person named the file (never the folders it is in).
+  const logoName = (path) => String(path ?? "").split("/").pop();
+  const logoFile = (path) => (catalog.logos?.types ?? [".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai"]).some((suffix) => String(path).toLowerCase().endsWith(suffix));
+  // The deck's logos changed, as one step named `label`; `chosen`: the logo chosen after it,
+  // and before it (undone, the one chosen then is chosen again: chooseChanged).
+  // (Until the slide is drawn again with the change, the drawing's logos are the old row's: the
+  // frame waits for the new one rather than frame the logo now at the place it is chosen by.)
+  let logosRedrawn = null;
+  function editLogos(mutate, label, { chosen = undefined, was = logoChosen() ? state.logo : null } = {}) {
+    logosRedrawn = pageNode;
+    studio.change((d) => {
+      d.deck ||= {};
+      const list = logosOf(d).slice();
+      mutate(list, d.deck);
+      if (list.length) d.deck.logos = list; else delete d.deck.logos;
+    }, { label });
+    const entry = studio.past[studio.past.length - 1];
+    const after = chosen === undefined ? state.logo : chosen;
+    if (entry) studio.said(entry).logos = { before: was, after, slide: state.slide };
+    state.logo = after;
+    placeChosen(); renderInspector(); reportFocus();
+  }
+  function chooseLogo(index) {
+    closeInline();
+    leaveFigure(false);
+    offRail();
+    allChosen = null;
+    state.focus = null; state.field = null; state.tab = "slide";
+    state.logo = index;
+    placeChosen(); renderInspector(); reportFocus();
+  }
+  // Pictures added as logos (`paths`; else one chosen), at `at` in the row (else after the
+  // logo chosen, or at its end) -- said so (`said`) where what was asked for was a picture.
+  async function addLogos(paths = null, at = null, { said = true } = {}) {
+    if (awayFrom("add logos")) return;
+    if (!paths) {
+      const path = await chooseFile({ title: "Add Logo", types: ["image"], action: "Add" });
+      if (!path) return;
+      paths = [path];
+    }
+    const wrong = paths.filter((path) => !logoFile(path));
+    if (wrong.length) toast(`A logo is a PNG, JPEG, SVG or PDF picture: ${logoName(wrong[0])} is none of these.`, { icon: "info", seconds: 5 });
+    paths = paths.filter(logoFile);
+    if (!paths.length) return;
+    const count = logosOf().length;
+    const where = at ?? (logoChosen() ? state.logo + 1 : count);
+    editLogos((list) => list.splice(where, 0, ...paths), paths.length === 1 ? "Add Logo" : `Add ${paths.length} Logos`, { chosen: where + paths.length - 1 });
+    if (said) toast(paths.length === 1 ? "Added as a logo" : `${paths.length} pictures added as logos`, { icon: "image" });
+  }
+  function deleteLogo(index, label = "Delete Logo") {
+    if (awayFrom("delete logos") || index >= logosOf().length) return;
+    editLogos((list) => list.splice(index, 1), label, { chosen: null, was: index });
+    // Said as it was done: "Logo deleted", "Logo cut", "Logo removed".
+    const done = { "Cut Logo": "cut", "Remove Logo": "removed" }[label] || "deleted";
+    undoNote(`Logo ${done}`, { icon: done === "cut" ? "cut" : "trash" });
+  }
+  function moveLogo(index, to) {
+    const count = logosOf().length;
+    if (to < 0 || to >= count || to === index || awayFrom("move logos")) return;
+    editLogos((list) => { const [moved] = list.splice(index, 1); list.splice(to, 0, moved); }, "Move Logo", { chosen: to, was: index });
+  }
+  async function replaceLogo(index) {
+    const path = await chooseFile({ title: "Replace Logo", types: ["image"], action: "Replace" });
+    if (!path || !logoFile(path) || index >= logosOf().length) { if (path && !logoFile(path)) toast(`A logo is a PNG, JPEG, SVG or PDF picture: ${logoName(path)} is none of these.`, { icon: "info", seconds: 5 }); return; }
+    editLogos((list) => { list[index] = path; }, "Replace Logo", { chosen: index, was: index });
+  }
+  // Every logo as tall as `height` points (null: the deck's default), one step.
+  function sizeLogos(height, label = "Resize Logos") {
+    const value = height === null || height === LOGO_DEFAULT ? null : Math.round(Math.min(LOGO_MOST, Math.max(LOGO_LEAST, height)));
+    if ((doc().deck?.logo_height ?? null) === value) return;
+    studio.change((d) => { d.deck ||= {}; setOption(d.deck, "logo_height", value); }, { label });
+    const entry = studio.past[studio.past.length - 1];
+    if (entry && logoChosen()) studio.said(entry).logos = { before: state.logo, after: state.logo, slide: state.slide };
+    renderInspector();
+  }
+  const resetLogoSize = () => { if (doc().deck?.logo_height != null) sizeLogos(null, "Reset Logo Size"); };
+
+  // The chosen logo's frame, as any object's, with a handle at each corner that sizes them all.
+  const logoFrame = h("div.hit.selected.sizable.logo-frame", { hidden: true }, h("span.hit-label"),
+    ["nw", "ne", "sw", "se"].map((corner) => h(`span.size-handle.${corner}`, {
+      title: "Drag to resize every logo · Double-click to reset size",
+      onpointerdown: (event) => logoSizeStart(event, corner),
+      ondblclick: (event) => { event.stopPropagation(); event.preventDefault(); resetLogoSize(); },
+    })));
+  function placeLogo() {
+    // Anything else chosen, the logo is not.
+    if (state.focus || state.field || allOn()) state.logo = null;
+    if (!pageNode) return;
+    if (logoFrame.parentNode !== pageNode) pageNode.append(logoFrame);
+    if (logoSizing) return;  // its frame follows it as it is sized
+    if (logosRedrawn && logosRedrawn !== pageNode) logosRedrawn = null;
+    const shown = logoChosen() && !inline && !logoDrag?.started && !logosRedrawn ? boxOf(logoId(state.logo)) : null;
+    place(logoFrame, shown, "Logo");
+  }
+  // The logos drawn on the slide, in their order: [{ index, element, box }] (box: the window's pixels).
+  const logoRow = () => logosOf().map((_, index) => {
+    const element = pageNode?.querySelector(`[id="${CSS.escape(logoId(index))}"]`);
+    return element ? { index, element, box: drawnBox(element) } : null;
+  }).filter((item) => item?.box);
+
+  // A logo pressed and dragged along its row goes where it is let go, the others making room
+  // for it as it passes them; Esc sends it back.
+  let logoDrag = null;
+  function pressLogo(event, part) {
+    if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || logoDrag || logoSizing || carry) return;
+    const row = logoRow();
+    const from = row.findIndex((item) => item.index === part.index);
+    if (from < 0 || outOfStep()) return;
+    logoDrag = { row, from, to: from, start: { x: event.clientX, y: event.clientY }, started: false };
+    window.addEventListener("pointermove", logoDragMove);
+    window.addEventListener("pointerup", logoDragEnd);
+    window.addEventListener("pointercancel", logoDragCancel);
+    window.addEventListener("keydown", logoDragKey, true);
+  }
+  function logoDragMove(event) {
+    const drag = logoDrag;
+    if (!drag) return;
+    const dx = event.clientX - drag.start.x;
+    if (!drag.started) {
+      if (Math.hypot(dx, event.clientY - drag.start.y) < 4 || drag.row.length < 2) return;
+      drag.started = true;
+      closeInline();
+      hover.hidden = true;
+      if (state.logo !== drag.row[drag.from].index || !logoChosen()) chooseLogo(drag.row[drag.from].index);
+      logoFrame.hidden = true;
+      pageNode.classList.add("logo-dragging");
+      document.body.classList.add("block-grabbing");
+      for (const item of drag.row) item.element.style.transition = item === drag.row[drag.from] ? "none" : "transform 160ms cubic-bezier(.2,.8,.2,1)";
+    }
+    const { row, from } = drag, me = row[from];
+    // Along the row only, no further than its ends.
+    const shift = Math.min(Math.max(dx, row[0].box.left - me.box.left), row[row.length - 1].box.right - me.box.right);
+    // It passes another once its leading edge is past that one's middle (a wide logo passes
+    // a narrow one, as a narrow one passes a wide one).
+    const others = row.filter((item) => item !== me);
+    const middle = (item) => (item.box.left + item.box.right) / 2;
+    drag.to = others.filter((item, k) => (k < from ? me.box.left + shift > middle(item) : me.box.right + shift > middle(item))).length;
+    // The others where they will stand with it there: the row's spacing is even, so they are
+    // where the slide will draw them.
+    const gap = row.length > 1 ? (row[row.length - 1].box.right - row[0].box.left - row.reduce((sum, item) => sum + item.box.width, 0)) / (row.length - 1) : 0;
+    const order = [...others];
+    order.splice(drag.to, 0, me);
+    let x = row[0].box.left;
+    for (const item of order) {
+      const scale = scaleOf(item.element);
+      if (item !== me) item.element.style.transform = `translate(${(x - item.box.left) * scale}px, 0px)`;
+      else drag.slot = x - item.box.left;
+      x += item.box.width + gap;
+    }
+    me.element.style.transform = `translate(${shift * scaleOf(me.element)}px, 0px)`;
+  }
+  function logoDragFinish() {
+    window.removeEventListener("pointermove", logoDragMove);
+    window.removeEventListener("pointerup", logoDragEnd);
+    window.removeEventListener("pointercancel", logoDragCancel);
+    window.removeEventListener("keydown", logoDragKey, true);
+    const was = logoDrag;
+    logoDrag = null;
+    if (!was?.started) return null;
+    pageNode?.classList.remove("logo-dragging");
+    document.body.classList.remove("block-grabbing");
+    // The drag ends in a click on what is under the pointer: that click is not one.
+    swallowClick = true;
+    setTimeout(() => { swallowClick = false; }, 0);
+    return was;
+  }
+  function logoDragEnd() {
+    const was = logoDragFinish();
+    if (!was) return;
+    const me = was.row[was.from];
+    if (was.to === was.from) { logoDragBack(was); return; }
+    // It glides the rest of the way to its place, and stays there until the slide is drawn so.
+    me.element.style.transition = "transform 160ms cubic-bezier(.2,.8,.2,1)";
+    me.element.style.transform = `translate(${(was.slot ?? 0) * scaleOf(me.element)}px, 0px)`;
+    moveLogo(me.index, was.row[was.to].index);
+  }
+  function logoDragBack(was) {
+    for (const item of was.row) { item.element.style.transition = "transform 160ms cubic-bezier(.2,.8,.2,1)"; item.element.style.transform = ""; }
+    setTimeout(placeChosen, 180);
+  }
+  function logoDragCancel() { const was = logoDragFinish(); if (was) logoDragBack(was); }
+  function logoDragKey(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    logoDragCancel();
+  }
+
+  // A corner of the chosen logo dragged: it is sized as by itself, about its far corner, and
+  // every logo grows or shrinks with it, shown about the point the slide keeps still as they
+  // do -- the foot of a title slide's row, its middle across; the middle of a footer's --
+  // catching at the deck's default height (⌘ drags freely). Let go, they are drawn that
+  // tall: one step, "Resize Logos". Esc puts them back.
+  let logoSizing = null;
+  function logoSizeStart(event, corner) {
+    if (event.button !== 0 || logoSizing || logoDrag || !logoChosen()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const svg = pageNode?.querySelector("svg");
+    const elements = logosOf().map((_, index) => pageNode.querySelector(`[id="${CSS.escape(logoId(index))}"]`)).filter(Boolean);
+    const mine = pageNode?.querySelector(`[id="${CSS.escape(logoId(state.logo))}"]`);
+    const matrix = mine?.getScreenCTM?.();
+    if (!svg || !mine || !matrix || !elements.length) return;
+    // In the slide's points.
+    const boxes = elements.map((element) => element.getBBox());
+    const left = Math.min(...boxes.map((b) => b.x)), right = Math.max(...boxes.map((b) => b.x + b.width));
+    const view = svg.viewBox.baseVal, title = layoutOf(slideAt()) === "title";
+    const middle = (left + right) / 2;
+    const across = Math.abs(middle - view.width / 2) < 1 ? middle : middle > view.width / 2 ? left : right;
+    const down = title ? Math.max(...boxes.map((b) => b.y + b.height)) : boxes.reduce((sum, b) => sum + b.y + b.height / 2, 0) / boxes.length;
+    const own = mine.getBBox();
+    const handle = { x: corner.endsWith("w") ? own.x : own.x + own.width, y: corner.startsWith("n") ? own.y : own.y + own.height };
+    const far = { x: corner.endsWith("w") ? own.x + own.width : own.x, y: corner.startsWith("n") ? own.y + own.height : own.y };
+    closeInline();
+    hover.hidden = true;
+    logoSizing = { elements, anchor: { x: across, y: down }, handle, far, inverse: matrix.inverse(), height: logoHeight(), now: logoHeight(),
+      pixels: own.height * matrix.a / logoHeight(), start: { x: event.clientX, y: event.clientY }, moved: false };
+    pageNode.classList.add("block-sizing");
+    if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
+    window.addEventListener("pointermove", logoSizeMove);
+    window.addEventListener("pointerup", logoSizeEnd);
+    window.addEventListener("pointercancel", logoSizeCancel);
+    window.addEventListener("keydown", logoSizeKey, true);
+  }
+  function logoSizeMove(event) {
+    const sizing = logoSizing;
+    if (!sizing) return;
+    if (!sizing.moved && Math.hypot(event.clientX - sizing.start.x, event.clientY - sizing.start.y) < 3) return;
+    sizing.moved = true;
+    // The size that puts the corner held nearest the pointer, the logo sized about its far corner.
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(sizing.inverse);
+    const { anchor, handle, far } = sizing;
+    const ax = handle.x - far.x, ay = handle.y - far.y;
+    const reach = ax * ax + ay * ay;
+    const scale = reach > 0 ? Math.max(((point.x - far.x) * ax + (point.y - far.y) * ay) / reach, 0) : 1;
+    let height = Math.round(Math.min(LOGO_MOST, Math.max(LOGO_LEAST, sizing.height * scale)));
+    // It catches at the deck's default (a few pixels either side of it), unless ⌘ is held.
+    const snapped = !(event.metaKey || event.ctrlKey) && Math.abs(height - LOGO_DEFAULT) * sizing.pixels < 6;
+    if (snapped) height = LOGO_DEFAULT;
+    sizing.now = height;
+    const k = height / sizing.height;
+    for (const element of sizing.elements) element.setAttribute("transform", `translate(${anchor.x} ${anchor.y}) scale(${k}) translate(${-anchor.x} ${-anchor.y})`);
+    place(logoFrame, boxOf(logoId(state.logo)));
+    sizeTip.textContent = height === LOGO_DEFAULT ? `${height} pt · Default Size` : `${height} pt`;
+    const outer = pageNode.getBoundingClientRect();
+    Object.assign(sizeTip.style, { left: `${event.clientX - outer.left + 14}px`, top: `${event.clientY - outer.top + 16}px` });
+    sizeTip.hidden = false;
+  }
+  function logoSizeFinish() {
+    const was = logoSizing;
+    logoSizing = null;
+    window.removeEventListener("pointermove", logoSizeMove);
+    window.removeEventListener("pointerup", logoSizeEnd);
+    window.removeEventListener("pointercancel", logoSizeCancel);
+    window.removeEventListener("keydown", logoSizeKey, true);
+    pageNode?.classList.remove("block-sizing");
+    sizeTip.hidden = true;
+    if (was?.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    return was;
+  }
+  function logoSizeEnd() {
+    const was = logoSizeFinish();
+    if (!was) return;
+    // (Drawn so until the slide is drawn again that size.)
+    if (!was.moved || was.now === was.height) { logoSizeBack(was); return; }
+    sizeLogos(was.now);
+  }
+  function logoSizeBack(was) {
+    for (const element of was.elements) element.removeAttribute("transform");
+    placeChosen();
+  }
+  function logoSizeCancel() { const was = logoSizeFinish(); if (was) logoSizeBack(was); }
+  function logoSizeKey(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    logoSizeCancel();
+  }
+
+  // The keys with a logo chosen: ← and → choose the one beside it, ⌥← and ⌥→ move it along
+  // the row, ⌫ deletes it, Esc leaves it. Whether the key was one of these.
+  function logoKey(event) {
+    const key = event.key, at = state.logo, count = logosOf().length;
+    if (key === "ArrowLeft" || key === "ArrowRight") {
+      const to = at + (key === "ArrowLeft" ? -1 : 1);
+      if (event.altKey) moveLogo(at, to);
+      else if (to >= 0 && to < count) chooseLogo(to);
+      return true;
+    }
+    if (key === "ArrowUp" || key === "ArrowDown") {
+      // As from any of the slide's things: the one before it, or after it.
+      if (event.altKey) return true;
+      const stops = slideStops(slideAt()), now = stops.findIndex((stop) => stop.logo === at);
+      const next = stops[now + (key === "ArrowUp" ? -1 : 1)];
+      if (next) chooseStop(next);
+      return true;
+    }
+    if (key === "Delete" || key === "Backspace") { deleteLogo(at); return true; }
+    if (key === "Escape") { state.logo = null; placeChosen(); renderInspector(); reportFocus(); return true; }
+    return false;
+  }
+  // A logo's menu, as a picture's is.
+  function logoItems(index) {
+    const count = logosOf().length;
+    return [
+      { icon: "image", label: "Replace Logo…", run: () => replaceLogo(index) },
+      "-",
+      { icon: "left", label: "Move Left", keys: "⌥←", disabled: index === 0, run: () => moveLogo(index, index - 1) },
+      { icon: "right", label: "Move Right", keys: "⌥→", disabled: index >= count - 1, run: () => moveLogo(index, index + 1) },
+      { icon: "undo", label: "Reset Logo Size", disabled: doc().deck?.logo_height == null, run: resetLogoSize },
+      "-",
+      { icon: "trash", label: "Delete Logo", keys: "⌫", danger: true, run: () => deleteLogo(index) },
+    ];
+  }
+
+  // Design › Logos, and the panel of a logo chosen: the deck's logos, in their order -- each
+  // dragged up or down to move it (⌥↑ ⌥↓ with its row's keys), or removed (Remove, or ⌫) --
+  // Add Logo…, where they show, and how tall.
+  let logoDragged = null;
+  // The logos whose file is not there, as the last drawing said, by their files: their rows
+  // drawn again when that changes (a file put there, one renamed away).
+  // (Their pictures are asked for once the first drawing has said which are there.)
+  let goneLogos = null;
+  studio.on("drawn", (result) => {
+    const list = logosOf();
+    const gone = new Set((result.messages || []).map((message) => list[Number(/^deck\.logos\[(\d+)\]$/.exec(message.where || "")?.[1])]).filter(Boolean));
+    if (goneLogos && same([...gone].sort(), [...goneLogos].sort())) return;
+    goneLogos = gone;
+    if (inspectorBody.querySelector(".logo-rows")) setTimeout(renderInspector, 0);
+  });
+  function logosControls() {
+    const deck = doc().deck || {};
+    const list = logosOf();
+    const chosenHere = logoChosen() ? state.logo : null;
+    // Those whose file is not there, as the drawing says: a sign in place of a picture.
+    const missing = () => h("span.pic.logo-pic.gone", { title: "Not in the deck’s folder" }, icon("warning"));
+    const rows = list.map((path, index) => {
+      const row = h(`div.list-row.logo-row${index === chosenHere ? ".chosen" : ""}`, {
+        dataset: { index, key: `logo:${path}` }, draggable: true, tabindex: 0, role: "button",
+        "aria-label": `Logo ${index + 1} of ${list.length}: ${logoName(path)}`,
+        title: logosShown() ? "Click to choose it on the slide · Drag to reorder" : "Drag to reorder",
+        onclick: (event) => { if (!event.target.closest("button") && logosShown()) chooseLogo(index); },
+        onkeydown: (event) => {
+          if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+            event.preventDefault();
+            event.stopPropagation();
+            // (Its row, drawn again where it went, keeps the keys: keepFocus finds it by its file.)
+            moveLogo(index, index + (event.key === "ArrowUp" ? -1 : 1));
+          } else if ((event.key === "Enter" || event.key === " ") && logosShown()) { event.preventDefault(); chooseLogo(index); }
+          // ⌫ takes it out of the list, as Remove does.
+          else if ((event.key === "Backspace" || event.key === "Delete") && !event.metaKey && !event.ctrlKey) { event.preventDefault(); deleteLogo(index, "Remove Logo"); }
+        },
+        ondragstart: (event) => { logoDragged = index; row.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", logoName(path)); },
+        ondragend: () => { logoDragged = null; row.classList.remove("dragging"); },
+        ondragover: (event) => {
+          if (logoDragged === null) return;
+          event.preventDefault();
+          const box = row.getBoundingClientRect();
+          row.classList.remove("drop-before", "drop-after");
+          row.classList.add(event.clientY > box.top + box.height / 2 ? "drop-after" : "drop-before");
+        },
+        ondragleave: () => row.classList.remove("drop-before", "drop-after"),
+        ondrop: (event) => {
+          if (logoDragged === null) return;
+          event.preventDefault();
+          const after = row.classList.contains("drop-after");
+          row.classList.remove("drop-before", "drop-after");
+          const from = logoDragged, place = index + (after ? 1 : 0);
+          moveLogo(from, place > from ? place - 1 : place);
+        },
+      },
+      !goneLogos ? h("span.pic.logo-pic") : goneLogos.has(path) ? missing() : h("img.pic.logo-pic", { src: studio.raw(path), alt: "", draggable: false, onerror: (event) => event.currentTarget.replaceWith(missing()) }),
+      h("span.logo-name", {}, logoName(path)),
+      ui.button("", () => deleteLogo(index, "Remove Logo"), { kind: "ghost", icon: "trash", small: true, title: "Remove" }));
+      return row;
+    });
+    // (Where they show, and how tall, once there are some.)
+    if (!list.length) {
+      return [h("div.hint-line", {}, "Your institution’s and funders’ logos, along the foot of the title slide."),
+        h("div", {}, ui.button("Add Logo…", () => addLogos(null, null, { said: false }), { kind: "ghost", icon: "plus", small: true }))];
+    }
+    return [
+      h("div.list-rows.logo-rows", {}, rows),
+      h("div", {}, ui.button("Add Logo…", () => addLogos(null, null, { said: false }), { kind: "ghost", icon: "plus", small: true })),
+      ui.field("Show On", ui.segmented({ value: deck.logos_on === "every" ? "every" : "title", key: "deck.logos_on",
+        options: [{ value: "title", label: "Title Slide" }, { value: "every", label: "Every Slide" }],
+        onChange: (value) => {
+          studio.change((d) => { d.deck ||= {}; setOption(d.deck, "logos_on", value, "title"); }, { label: value === "every" ? "Show Logos on Every Slide" : "Show Logos on Title Slide" });
+          renderInspector();
+        } })),
+      ui.field("Size", h("div.row", {},
+        ui.number({ value: deck.logo_height ?? null, placeholder: String(LOGO_DEFAULT), min: LOGO_LEAST, max: LOGO_MOST, step: 2, unit: "pt", key: "deck.logo_height",
+          onChange: (value) => sizeLogos(value, "Change Logo Size") }),
+        deck.logo_height != null ? ui.button("Reset Size", () => resetLogoSize(), { small: true, kind: "ghost" }) : null),
+      { hint: `How tall they stand on the title slide; in a footer, ${Math.round((catalog.logos?.footer ?? 0.5) * 100)}% of that. Or drag a logo’s corner on the slide` }),
+    ];
+  }
+  function logoPanel(slide) {
+    const index = state.logo;
+    return [
+      h("div.section.block-top", {},
+        h("div.crumbs", {},
+          h("button.crumb", { type: "button", onclick: () => { state.logo = null; renderInspector(); placeChosen(); reportFocus(); } }, glyph(layoutOf(slide)), `Slide ${state.slide + 1}`),
+          icon("chevron"), h("span.crumb.here", {}, icon("image"), "Logo")),
+        h("div.block-actions", { dataset: { head: "" } },
+          ui.button("", () => moveLogo(index, index - 1), { kind: "ghost", small: true, icon: "left", title: "Move Left (⌥←)", disabled: index === 0 }),
+          ui.button("", () => moveLogo(index, index + 1), { kind: "ghost", small: true, icon: "right", title: "Move Right (⌥→)", disabled: index >= logosOf().length - 1 }),
+          ui.button("", () => deleteLogo(index), { kind: "ghost", small: true, icon: "trash", title: "Delete (⌫)" }))),
+      h("div.section", {}, h("div.section-title", {}, "Logos"), logosControls()),
+    ];
+  }
+
   // -- keys --
   // What the slide's keys go round, in order (Tab, ↑ and ↓): its lines of words, placeholders
   // too (an empty title is written, and holds its place), then its objects.
   const slideStops = (slide) => (!slide ? [] : [
     ...["title", "words", "subtitle", "author", "date", "by"].filter((name) => (slide[name] || name in slide) && catalog.slide_keys[layoutOf(slide)].includes(name)).map((name) => ({ field: name })),
     ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => ({ region: region.key, index }))),
-    // (Its footnotes last, at its foot.)
+    // (Its footnotes last, at its foot -- and the deck's logos, the foot's own.)
     ...notesOf(slide).map((_, n) => ({ field: `footnote${n}` })),
+    ...(logosShown(slide) ? logosOf().map((_, logo) => ({ logo })) : []),
   ]);
   const chooseStop = (stop) => {
+    if (stop.logo !== undefined) { chooseLogo(stop.logo); return; }
     if (!stop.field) { focusBlock(stop.region, stop.index); return; }
     leaveFigure(false);
     state.focus = null; state.field = { field: stop.field, id: fieldId(stop.field) };
@@ -8185,6 +8663,7 @@ export function mount(studio, container) {
     // Several chosen: with ⌥ the arrows move them all (moveAll); without, ↑ chooses the one
     // before the first of them and ↓ the one after the last, ← and → the one beside the first
     // or the last, as a Mac list's arrows go on from a choice of several.
+    else if (logoChosen() && !state.focus && !state.field && logoKey(event)) event.preventDefault();
     else if (key.startsWith("Arrow") && allOn()) {
       event.preventDefault();
       if (event.altKey) { moveAll(key); return; }
@@ -8242,7 +8721,8 @@ export function mount(studio, container) {
       toured = null;
       const stops = slideStops(slideAt());
       if (!stops.length) return;
-      const now = stops.findIndex((stop) => (stop.field ? state.field?.field === stop.field : state.focus?.region === stop.region && state.focus?.index === stop.index));
+      const now = stops.findIndex((stop) => (stop.logo !== undefined ? logoChosen() && state.logo === stop.logo
+        : stop.field ? state.field?.field === stop.field : state.focus?.region === stop.region && state.focus?.index === stop.index));
       chooseStop(stops[(now + (event.shiftKey ? -1 : 1) + stops.length + (now < 0 && event.shiftKey ? 1 : 0)) % stops.length]);
     }
     else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }

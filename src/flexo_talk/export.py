@@ -223,7 +223,7 @@ def _read_in_order(tree, slide: Slide) -> None:
         named = next(child.iter(f"{{{_PML}}}cNvPr"), None)
         name = named.get("name", "") if named is not None else ""
         rest = name.removeprefix(f"{slide.id}.")
-        if rest in {"number", "footer"}:
+        if rest in {"number", "footer"} or re.fullmatch(r"logo\d+", rest):
             return 3, 0, 0, False
         if rest.startswith("footnote"):
             return 2, 0, 0, False
@@ -462,11 +462,17 @@ def _structure_title(source: str) -> str:
 
 def _describe(tree: etree._Element, slide: Slide) -> None:
     """Each picture's description as its alt text, on the shape drawn for it: a figure's,
-    and each molecule's in it, as well as a picture's own."""
+    and each molecule's in it, as well as a picture's own; a logo marked decorative."""
+
+    import re
 
     described = _descriptions(slide)
-    for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
+    for properties in tree.iter(f"{{{_PML}}}cNvPr"):
         name = properties.get("name", "")
+        if re.fullmatch(rf"{re.escape(slide.id)}\.logo\d+", name):
+            # A logo is the slide's furniture, as its number is: passed over by a screen reader.
+            _decorative(properties)
+            continue
         # (A picture with a caption is grouped with it: described as its group is.)
         text = described.get(name) or described.get(name.removesuffix(".picture"))
         if not text:

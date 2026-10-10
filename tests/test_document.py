@@ -2634,3 +2634,92 @@ def test_a_figure_of_one_molecule_is_described_once_in_powerpoint(tmp_path: Path
     # Its description on the figure; the molecule's picture in it says the same, so it is
     # marked decorative -- a screen reader says it once.
     assert described == [("Figure", "A dimeric beta-barrel", False), ("Structure E2 domain", None, True)]
+
+
+def _logos(folder: Path) -> list[str]:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    (folder / "logos").mkdir(exist_ok=True)
+    Image.new("RGB", (300, 100), (120, 30, 40)).save(folder / "logos" / "institute.png")
+    Image.new("RGB", (80, 80), (10, 60, 140)).save(folder / "logos" / "crest.jpg")
+    return ["logos/institute.png", "logos/crest.jpg"]
+
+
+def test_a_deck_s_logos_are_read_beside_it_and_written_back_as_given(tmp_path: Path) -> None:
+    names = _logos(tmp_path)
+    document = {"schema_version": 1, "deck": {"logos": names, "logos_on": "every", "logo_height": 36},
+                "slides": [{"layout": "title", "title": "A talk"}, {"title": "Then", "body": [{"text": "Words"}]}]}
+    deck = deck_from_document(document, tmp_path)
+    assert deck.logos == [str(tmp_path / name) for name in names]
+    assert deck.logos_on == "every" and deck.logo_height == 36.0
+    assert deck_document(deck)["deck"] == {"id": "talk", "logos": names, "logos_on": "every", "logo_height": 36}
+    # The defaults are not written: on the title slide, at the deck's height.
+    plain = deck_document(deck_from_document({"deck": {"logos": names[0]}, "slides": []}, tmp_path))
+    assert plain["deck"] == {"id": "talk", "logos": [names[0]]}
+    # One made in Python is written as its files are named there.
+    made = Deck("talk", logos=[tmp_path / names[0]], logos_on="every")
+    assert deck_document(made)["deck"]["logos"] == [str(tmp_path / names[0])]
+    assert "logos_on: every" in dump_document(deck_document(made))
+
+
+@pytest.mark.parametrize(("deck", "said"), [
+    ({"logos_on": "all"}, "logos_on must be title (the title slide) or every (every slide), not 'all'."),
+    ({"logo_height": 500}, "logo_height must be between 12 and 120, not 500."),
+    ({"logo_height": "big"}, "logo_height must be a number, such as 40 (points), not 'big'."),
+    ({"logos": ["logo.gif"]}, "A logo must be a PNG, JPEG, SVG or PDF picture: logo.gif is none of these."),
+    ({"logos": {"a": "b.png"}}, "logos must be a list of picture files (PNG, JPEG, SVG or PDF), such as "
+                                "[logos/institute.png], not {'a': 'b.png'}."),
+])
+def test_a_deck_s_logos_said_wrong_are_said_where_they_are(tmp_path: Path, deck: dict, said: str) -> None:
+    (tmp_path / "logo.gif").write_bytes(b"GIF89a")
+    with pytest.raises(DeckDocumentError) as raised:
+        deck_from_document({"deck": deck, "slides": []}, tmp_path)
+    assert raised.value.where == f"deck.{next(iter(deck))}"
+    assert str(raised.value).endswith(said)
+
+
+def test_a_missing_logo_holds_its_place_while_editing_and_is_said_once(tmp_path: Path) -> None:
+    from flexo.confine import folder_root
+
+    from flexo_talk.document import MissingFile
+
+    names = _logos(tmp_path)
+    kind = DeckKind()
+    document = {"deck": {"logos": [names[0], "logos/funder.png", names[1]]}, "slides": [
+        {"title": "Before", "body": [{"text": "Words"}]},
+        {"layout": "title", "title": "A talk"},
+        {"layout": "title", "title": "Thanks"},
+    ]}
+    root = folder_root.set(tmp_path)
+    try:
+        drawing = kind.draw(document, tmp_path, {})
+    finally:
+        folder_root.reset(root)
+    first, title, thanks = (page.svg for page in drawing.pages)
+    assert "logo" not in first and "Missing logo: funder.png" in title and "Missing logo: funder.png" in thanks
+    said = [(message.text, message.place, message.page) for message in drawing.messages if message.severity == "error"]
+    assert said == [("Can't find logos/funder.png in the deck's folder.", "Design · Logos", "slide2")]
+    # Presented (and exported), the row closes up without it.
+    presented = title[title.index('data-flexo-presented=""') - 400:]
+    assert "Missing logo" not in presented.split("data-flexo-presented")[1]
+    # Watched while missing, so the slides are drawn again once it is there.
+    assert tmp_path / "logos" / "funder.png" in {Path(file) for file in drawing.files}
+    with pytest.raises(MissingFile, match=r"Cannot find logos/funder\.png"):
+        deck_from_document(document, tmp_path)
+
+
+def test_a_logo_s_file_changed_draws_its_slides_again(tmp_path: Path) -> None:
+    import os
+
+    names = _logos(tmp_path)
+    kind = DeckKind()
+    document = {"deck": {"logos": names[:1]}, "slides": [{"layout": "title", "title": "A talk"}]}
+    before = kind.draw(document, tmp_path, {}).pages[0].svg
+    from PIL import Image
+
+    Image.new("RGB", (100, 100), (0, 0, 0)).save(tmp_path / names[0])
+    os.utime(tmp_path / names[0], ns=(10**18, 10**18))
+    after = kind.draw(document, tmp_path, {}).pages[0].svg
+    # Square now: drawn again in its new proportions.
+    assert before != after and 'width="40"' in after

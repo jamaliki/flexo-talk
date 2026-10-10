@@ -1822,6 +1822,8 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
                           if name == key or name.startswith(f"{key}.")), None)
             if rest in _FURNITURE or rest.startswith("footnote"):
                 said = _FURNITURE.get(rest, "Footnote")
+            elif re.fullmatch(r"logo\d+", rest):
+                said = "Logo"
             elif block == name:
                 kind = blocks[block]
                 text = words(element) if kind in {"List", "Text", "Quote", "Callout", "Code"} else ""

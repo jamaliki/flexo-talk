@@ -160,6 +160,17 @@ Any slide (title and section slides too) can take `background=`: a colour
 (a native crop in PowerPoint), with `shade=0.4` to darken it. On a dark
 background the slide's words and accents are set light (`dark=` overrides).
 
+A deck's **logos** -- an institution's, its funders' -- are the deck's, not a slide's:
+`Deck(logos=["logos/institute.png", "logos/funder.svg"])`, PNG, JPEG, SVG or PDF
+pictures in the order they stand. On a title slide they stand in a row along its
+foot, centred and evenly spaced, each `logo_height` points tall (40 unless set) in its
+own proportions -- a very wide one narrowed until the row fits -- and the title, subtitle
+and byline make room above them. With `logos_on="every"` the other slides carry them
+too, small (half that height) in the footer, clear of its words and the slide's number.
+A logo is drawn as it is, never recoloured, on light and dark slides alike, and is a
+native picture in the PowerPoint. In a document:
+`deck: {logos: [logos/institute.png, logos/funder.svg], logos_on: every, logo_height: 36}`.
+
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below; `numbered=True` numbers every level in its tier (1., a., i.), natively in PowerPoint;
 `plain=True` draws no bullets or numbers, each item at its level's indent (Keynote's None);
@@ -417,9 +428,15 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   or its document as a flexo figure file (YAML).
 - **Format shows what is selected**: an object's own settings, or, with nothing
   selected, the slide's title, its parts in order (drag to reorder), its layout,
-  background, and footnotes. **Design** holds the look, theme, palette, type, and
-  proportions; **Customise…** starts a theme file from the deck's theme and opens it
+  background, and footnotes. **Design** holds the look, theme, palette, type, logos
+  and proportions; **Customise…** starts a theme file from the deck's theme and opens it
   in the theme editor, and the deck redraws as the theme changes.
+- **Logos**: on a title slide **Picture** (or a picture dropped on it) adds a logo,
+  in the row along its foot. A logo on a slide is chosen by a click, as any object
+  is: ⌫ deletes it, ⌥← ⌥→ or a drag along the row move it, and a corner sizes every
+  logo at once (they share one height; it catches at the default, and a double-click
+  on a corner goes back to it). **Design › Logos** lists them (drag to reorder),
+  adds them, and says where they show and how tall.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
   being edited is drawn first; the others follow.

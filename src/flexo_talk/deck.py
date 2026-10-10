@@ -206,6 +206,19 @@ def data_colours(palette: Palette, dark: bool) -> list[str]:
 MOST_LEVELS = 100
 """More levels than a list on any slide nests."""
 
+LOGO_HEIGHT = 40.0
+"""How tall a deck's logos stand in the row along a title slide's foot, in points, unless
+the deck says otherwise (``logo_height``); on the other slides, in their footer, a share of
+that (``FOOTER_LOGOS``)."""
+FOOTER_LOGOS = 0.5
+"""How tall logos stand in a slide's footer, as a share of how tall they stand on its title slide."""
+LOGO_HEIGHTS = (12.0, 120.0)
+"""The heights a deck's logos may be given, in points."""
+LOGOS_ON = ("title", "every")
+"""Where a deck's logos show: on its title slide (or slides), or on every slide."""
+LOGO_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai")
+"""The pictures a logo may be: a photograph's kinds, and vectors (SVG, a PDF's page)."""
+
 _STYLE_NUMBERS: dict[str, tuple[float, float]] = {
     # PowerPoint's slides are 1 to 56 inches each way.
     "width": (72.0, 4032.0), "height": (72.0, 4032.0), "margin": (0.0, 2016.0),
@@ -575,6 +588,18 @@ def _check_settings(settings: dict[str, object]) -> None:
     for key in ("id", "footer"):
         if settings[key] is not None:
             _words(settings[key], key)
+    logos = settings["logos"]
+    if isinstance(logos, str | Path):
+        logos = [logos]
+    if not isinstance(logos, list | tuple) or not all(isinstance(logo, str | Path) and str(logo) for logo in logos):
+        raise wrong("logos", "a list of picture files (PNG, JPEG, SVG or PDF), such as [logos/institute.png]")
+    for logo in logos:
+        if Path(logo).suffix.lower() not in LOGO_SUFFIXES:
+            raise SettingError("logos", f"A logo must be a PNG, JPEG, SVG or PDF picture: {Path(logo).name} is "
+                                        "none of these.")
+    if settings["logos_on"] not in LOGOS_ON:
+        raise wrong("logos_on", "title (the title slide) or every (every slide)")
+    _number(settings["logo_height"], "logo_height", *LOGO_HEIGHTS, f"{LOGO_HEIGHT:g} (points)")
     conventions, sketch = settings["conventions"], settings["sketch"]
     if conventions is not None and not isinstance(conventions, dict):
         raise wrong("conventions", "a mapping of flexo conventions, such as {lines: straight}")
@@ -1621,11 +1646,15 @@ class Deck:
         footer: str = "",
         style: DeckStyle | None = None,
         look: str | None = None,
+        logos: Sequence[str | Path] | str | Path = (),
+        logos_on: Literal["title", "every"] = "title",
+        logo_height: float = LOGO_HEIGHT,
     ) -> None:
         self.source: dict[str, object] = {
             "theme": theme, "palette": _plain(palette), "font": font, "title_font": title_font,
             "figure_font": figure_font, "conventions": conventions, "sketch": sketch, "background": background,
             "footer": footer, "look": look,
+            "logos": _plain(logos), "logos_on": logos_on, "logo_height": logo_height,
         }
         """What the deck was made with, as a deck document writes it (see ``flexo_talk.document``)."""
         # A theme file is read now, by the Figure machinery that knows how, and
@@ -1634,6 +1663,7 @@ class Deck:
         _check_settings({
             "id": id, "palette": palette, "font": font, "title_font": title_font, "figure_font": figure_font,
             "look": look, "background": background, "footer": footer, "conventions": conventions, "sketch": sketch,
+            "logos": logos, "logos_on": logos_on, "logo_height": logo_height,
         })
         try:
             probe = flexo.Figure("probe", theme=theme, palette=palette)
@@ -1677,6 +1707,14 @@ class Deck:
         """The page every slide is drawn on: the theme's page colour (``True``), a colour,
         a picture that fills each slide (a paper texture), or nothing (``False``)."""
         self.footer = "" if footer is None else str(footer)
+        self.logos: list[str] = [str(logo) for logo in ([logos] if isinstance(logos, str | Path) else logos)]
+        """The deck's logos, picture files in the order they stand in their row: an
+        institution's, its funders'. On its title slide they stand in a row along the foot,
+        under the title; on every slide, as ``logos_on`` says, small in the footer."""
+        self.logos_on = logos_on
+        """Where the logos show: ``title``, on the title slide (or slides); ``every``, on every slide."""
+        self.logo_height = float(logo_height)
+        """How tall the logos stand on the title slide, in points; in the footer, half that."""
         if look is not None and look not in LOOKS:
             raise SettingError("look", f"Unknown look \u201c{look}\u201d. Available looks: {', '.join(LOOKS)}.")
         # The theme's proportions, and the look: the deck's own look over the
@@ -1803,6 +1841,11 @@ class Deck:
         anywhere in the deck, so it can come before them."""
 
         return self.slide(title, layout="agenda")
+
+    def shows_logos(self, slide: Slide) -> bool:
+        """Whether ``slide`` shows the deck's logos: a title slide, or any as ``logos_on`` says."""
+
+        return bool(self.logos) and (self.logos_on == "every" or slide.layout == "title")
 
     def figure_options(self) -> dict[str, object]:
         options: dict[str, object] = {"theme": self.theme, "palette": self.palette_name}

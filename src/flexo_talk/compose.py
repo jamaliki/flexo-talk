@@ -41,6 +41,7 @@ from flexo.themes import figure_palette, figure_style
 from flexo.units import MILLIMETRES_PER_INCH, POINTS_PER_INCH
 
 from flexo_talk.deck import (
+    FOOTER_LOGOS,
     PLACED,
     Deck,
     ListLayout,
@@ -583,6 +584,16 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         x = width - 6.0 if slide.title_runs and _rtl(slide.title_runs) else 0.0
         _paint_rect(canvas, f"{slide.id}.edge", Box(x, 0.0, 6.0, height), "tone-1-stroke")
     bottom = height - margin - (style.small_size if style.numbers or deck.footer else 0.0)
+    # The deck's logos stand where they do first: what the slide sets keeps clear of them --
+    # a title slide's words above their row, any other's body (and a section's or statement's
+    # words) above its footer's logos.
+    logos = _logo_row(canvas, slide)
+    foot = height - margin
+    if logos and slide.layout == "title":
+        foot = min(foot, min(logo.box.y for logo in logos) - LOGO_ROOM)
+    elif logos:
+        foot = min(foot, min(logo.box.y for logo in logos) - LOGO_ROOM / 2.0)
+        bottom = min(bottom, foot)
     if slide.footnotes:
         # Footnotes sit at the foot of the body, above the footer; the body ends above them.
         size = style.small_size
@@ -596,11 +607,11 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
             top += used + size * 0.3
         bottom -= sum(heights) + size * 0.3 * len(heights) + size * 0.6
     if slide.layout == "title":
-        _title_slide(canvas, slide)
+        _title_slide(canvas, slide, foot)
     elif slide.layout == "section":
-        _section_slide(canvas, slide)
+        _section_slide(canvas, slide, foot)
     elif slide.layout == "statement":
-        _statement_slide(canvas, slide)
+        _statement_slide(canvas, slide, foot)
     else:
         top = _heading(canvas, slide) if slide.title_runs and slide.layout != "blank" else margin
         body = Box(margin, top, width - 2 * margin, bottom - top)
@@ -615,6 +626,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         canvas.layer.remove(note)
         canvas.layer.append(note)
     _furniture(canvas, slide)
+    _logos(canvas, slide, logos)
     if f"{slide.id}.title" in empty and (not slide.subtitle_runs or f"{slide.id}.subtitle" in empty):
         # With no heading shown, the band or rule a heading is set on is not shown either.
         # While editing it stays, round the title's place, but marked as a placeholder is,
@@ -804,7 +816,10 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
     return top + style.title_gap
 
 
-def _title_slide(canvas: _Canvas, slide: Slide) -> None:
+def _title_slide(canvas: _Canvas, slide: Slide, foot: float) -> None:
+    """The opening slide's title, subtitle and byline, ending above ``foot`` (the slide's
+    margin, or the row of logos along its foot): centred down the room above that."""
+
     deck, style = canvas.deck, canvas.deck.style
     width, height, margin = style.width, style.height, style.margin
     bold = deck.title_weight
@@ -825,7 +840,7 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
                   if slide.byline_runs else None)
         block = title.height + (subtitle.height + 14.0 if subtitle else 0.0)
         needed = block + (byline.height + 34.0 if byline else 0.0) + (margin * 1.6 if opening == "band" else 0.0)
-        if needed <= height - 2 * margin:
+        if needed <= foot - margin:
             break
     _said_shrunk(canvas, slide, scale)
     size, subtitle_size = size * scale, subtitle_size * scale
@@ -833,14 +848,17 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
     if opening == "band":
         # Title and subtitle on a band of the accent, the byline under it.
         pad = margin * 0.8
-        band_top = height * 0.3
+        # (Higher, should the byline under it otherwise run into the logos.)
+        under = block + 2 * pad + 22.0 + (byline.height if byline else 0.0)
+        band_top = max(min(height * 0.3, foot - under), margin * 0.5)
         _paint_rect(canvas, f"{slide.id}.band", Box(0.0, band_top, width, block + 2 * pad), None)
         role = subtitle_role = _words_on(canvas)
         top = band_top + pad
         after = band_top + block + 2 * pad + 22.0
     else:
         total = block + (byline.height + 34.0 if byline else 0.0)
-        top = (height - total) / 2.0 - (height * 0.04 if opening == "left" else 0.0)
+        # Centred in the slide -- or, over a row of logos, in the room above them.
+        top = (foot + margin - total) / 2.0 - (height * 0.04 if opening == "left" else 0.0)
         after = top + block + 34.0
         if opening == "left":
             bar = width - margin * 1.5 - 5.0 if rtl else margin * 1.5
@@ -865,10 +883,13 @@ def _title_slide(canvas: _Canvas, slide: Slide) -> None:
             align=align, role="muted-ink",
         )
         after += byline.height + 20.0
-    _region(canvas, slide.body, Box(margin, after, width - 2 * margin, max(height - after - margin, 0.0)))
+    if slide.body.blocks:
+        # (Only for what is there: an empty one would mark the slide's own layer as a region's,
+        # and the PowerPoint would group its byline and logos as one shape.)
+        _region(canvas, slide.body, Box(margin, after, width - 2 * margin, max(foot - after, 0.0)))
 
 
-def _section_slide(canvas: _Canvas, slide: Slide) -> None:
+def _section_slide(canvas: _Canvas, slide: Slide, foot: float) -> None:
     deck, style = canvas.deck, canvas.deck.style
     width, height, margin = style.width, style.height, style.margin
     box = Box(margin * 1.5, 0.0, width - 3 * margin, 0.0)
@@ -886,17 +907,18 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
                     if slide.subtitle_runs else None)
         # Set about the middle of the slide, with the number or rule above it.
         needed = 2 * title.height + (subtitle.height + 10.0 if subtitle else 0.0) + style.title_size * 2.6
-        if needed <= height - 2 * margin:
+        if needed <= foot - margin:
             break
     _said_shrunk(canvas, slide, scale)
     number = (TextRun(f"{_section_number(slide):02d}"),)
     sections = style.sections
+    under = title.height + (subtitle.height + 10.0 if subtitle else 0.0)
     if sections == "number":
         # The section's number set large in the accent, the title under it.
         big = style.title_size * 2.6
         figure = canvas.measure(number, big, None, title=True)
-        total = figure.height + 6.0 + title.height + (subtitle.height + 10.0 if subtitle else 0.0)
-        top = (height - total) / 2.0
+        total = figure.height + 6.0 + under
+        top = min((height - total) / 2.0, foot - total)
         canvas.words(
             f"{slide.id}.number", number, replace(box, y=top), size=big, role="tone-1-stroke", title=True,
             align=figure_align,
@@ -905,8 +927,8 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
     elif sections == "fill":
         small = style.subtitle_size
         figure = canvas.measure(number, small, None, 700)
-        total = figure.height + 16.0 + title.height + (subtitle.height + 10.0 if subtitle else 0.0)
-        top = (height - total) / 2.0
+        total = figure.height + 16.0 + under
+        top = min((height - total) / 2.0, foot - total)
         canvas.words(
             f"{slide.id}.number", number, replace(box, y=top), size=small, weight=700, role="muted-ink",
             align=figure_align,
@@ -914,7 +936,7 @@ def _section_slide(canvas: _Canvas, slide: Slide) -> None:
         _paint_rect(canvas, f"{slide.id}.rule", Box(left, top + figure.height + 6.0, 60.0, 3.0), "ink")
         top += figure.height + 16.0
     else:
-        top = max(height / 2.0 - title.height, margin + 22.0)
+        top = max(min(height / 2.0 - title.height, foot - under), margin + 22.0)
         _paint_rect(canvas, f"{slide.id}.rule", Box(left, top - 18.0, 60.0, 4.0), "tone-1-stroke")
     used = canvas.words(
         f"{slide.id}.title", slide.title_runs, replace(box, y=top), size=size, weight=bold,
@@ -938,8 +960,9 @@ def _said_shrunk(canvas: _Canvas, slide: Slide, scale: float) -> None:
         canvas.diagnostics.append(f"{slide.id}: Text does not fit, even at half size. Try shortening it.")
 
 
-def _statement_slide(canvas: _Canvas, slide: Slide) -> None:
-    """One sentence, large, in the middle of the slide; who said it under it."""
+def _statement_slide(canvas: _Canvas, slide: Slide, foot: float) -> None:
+    """One sentence, large, in the middle of the slide; who said it under it -- all of it
+    above ``foot`` (the logos in its footer)."""
 
     deck, style = canvas.deck, canvas.deck.style
     width, height = style.width, style.height
@@ -948,10 +971,11 @@ def _statement_slide(canvas: _Canvas, slide: Slide) -> None:
         size = style.title_size * 1.3 * scale
         words = canvas.measure(slide.title_runs, size, box.width, deck.title_weight, title=True)
         byline = canvas.measure(slide.byline_runs, style.subtitle_size, box.width) if slide.byline_runs else None
-        if words.height + (byline.height + 24.0 if byline else 0.0) <= height - 2 * style.margin:
+        if words.height + (byline.height + 24.0 if byline else 0.0) <= foot - style.margin:
             break
     _said_shrunk(canvas, slide, scale)
-    top = (height - words.height - (byline.height + 24.0 if byline else 0.0)) / 2.0
+    total = words.height + (byline.height + 24.0 if byline else 0.0)
+    top = min((height - total) / 2.0, foot - total)
     top += canvas.words(
         f"{slide.id}.title", slide.title_runs, replace(box, y=top), size=size, align="middle",
         weight=deck.title_weight, title=True,
@@ -1219,6 +1243,180 @@ def _furniture(canvas: _Canvas, slide: Slide) -> None:
         place = Box(half, y, half - style.margin, 0.0) if rtl else Box(style.margin, y, half, 0.0)
         canvas.words(
             f"{slide.id}.footer", footer, place, size=size, role="muted-ink", align="end" if rtl else "start",
+        )
+
+
+# -- logos ------------------------------------------------------------------------------
+
+LOGO_GAP = 0.8
+"""The space between two logos in their row, as a share of how tall they stand."""
+LOGO_WIDEST = 3.0
+"""How narrow a very wide logo may be made, as a multiple of how tall the row stands, before
+the whole row is made smaller instead: a wordmark narrowed further would be too small to read."""
+LOGO_ROOM = 24.0
+"""The room kept clear between logos and the words beside or above them, in points."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Logo:
+    """A logo as it stands on a slide: which of the deck's (``index``), its file, its box,
+    and what is drawn of it -- None where its file is not there or can't be read (``said``)."""
+
+    index: int
+    source: str
+    box: Box
+    artwork: Any = None
+    said: str = ""
+
+
+def _logo_row(canvas: _Canvas, slide: Slide) -> list[_Logo]:
+    """Where the deck's logos stand on this slide, if it shows them: on a title slide in a row
+    along its foot, centred, each as tall as the deck says; on any other, small in its footer,
+    clear of the footer's words and the slide's number. Each keeps its proportions; a very
+    wide one is narrowed (and so stands shorter) until the row fits, and the whole row is made
+    smaller only when that is not enough."""
+
+    deck, style = canvas.deck, canvas.deck.style
+    if not deck.shows_logos(slide):
+        return []
+    # (One whose file is not there holds its place while editing; presented or exported, the
+    # row closes up without it.)
+    pictures = [(index, source, *_logo_picture(canvas, slide, source)) for index, source in enumerate(deck.logos)]
+    pictures = [picture for picture in pictures if picture[2] is not None or PLACEHOLDERS.get()]
+    if not pictures:
+        return []
+    width, height, margin = style.width, style.height, style.margin
+    if slide.layout == "title":
+        tall = deck.logo_height
+        left, right = margin, width - margin
+        middle = height - margin * 0.8 - tall / 2.0
+    else:
+        size = style.small_size * 0.8
+        line = canvas.measure((TextRun("0"),), size, None)
+        # Centred on the footer's words as the eye centres them, their capitals' middle.
+        middle = height - margin + size * 0.2 + line.baseline - line.cap_height / 2.0
+        tall = min(deck.logo_height * FOOTER_LOGOS, 2.0 * (height - middle) - LOGO_ROOM)
+        left, right = _footer_room(canvas, slide, size)
+    # One that is not there holds a place as wide as what it says.
+    aspects = [aspect or max(2.0, (canvas.measure((TextRun(said),), _missing_size(canvas, tall), None).width
+                                   + 12.0) / tall) for _, _, _, aspect, said in pictures]
+    scale, widest = _row_fit(aspects, tall, max(right - left, 1.0))
+    tall, gap = tall * scale, tall * LOGO_GAP * scale
+    sizes = [(min(tall * aspect, widest * scale), min(tall * aspect, widest * scale) / aspect) for aspect in aspects]
+    across = sum(w for w, _ in sizes) + gap * (len(sizes) - 1)
+    # Centred on the slide, or as near it as the footer's words and number let it stand.
+    x = min(max(width / 2.0 - across / 2.0, left), right - across)
+    row = []
+    for (index, source, art, _, said), (w, h) in zip(pictures, sizes, strict=True):
+        row.append(_Logo(index, source, Box(x, middle - h / 2.0, w, h), art, said))
+        x += w + gap
+    return row
+
+
+def _logo_picture(canvas: _Canvas, slide: Slide, source: str) -> tuple[Any, float | None, str]:
+    """A logo's picture and its proportions (width over height); for a logo whose file is not
+    there, or does not read, none, and why it is not drawn."""
+
+    from flexo.diagnostics import FlexoError
+
+    name = Path(source).name
+    if not Path(source).is_file() and STANDING_ASIDE.get():
+        return None, None, f"Missing logo: {name}"
+    try:
+        art = load_artwork("logo", source)
+    except FlexoError as error:
+        if not STANDING_ASIDE.get():
+            raise
+        from flexo.studio.plain import explain
+
+        canvas.diagnostics.append(f"{slide.id}: The logo {name} {CANT_DRAW}: {explain(error)}")
+        return None, None, f"This logo {CANT_DRAW}"
+    return art, art.aspect or 1.0, ""
+
+
+def _missing_size(canvas: _Canvas, tall: float) -> float:
+    """The size of what a logo not drawn says in its place, ``tall`` high."""
+
+    return min(canvas.deck.style.small_size * 0.8, tall * 0.42)
+
+
+def _row_fit(aspects: list[float], tall: float, room: float) -> tuple[float, float]:
+    """How a row of logos ``tall`` high fits ``room``: the share of their size they stand at,
+    and the widest any of them may be at full size (a very wide one narrowed to it)."""
+
+    widths = sorted((tall * aspect for aspect in aspects), reverse=True)
+    gaps = tall * LOGO_GAP * (len(widths) - 1)
+    if sum(widths) + gaps <= room:
+        return 1.0, widths[0] if widths else 0.0
+    # The widest narrowed, together, until the row fits: their width is what the rest leave.
+    spare = room - gaps
+    for count in range(1, len(widths) + 1):
+        widest = (spare - sum(widths[count:])) / count
+        if count == len(widths) or widest >= widths[count]:
+            break
+    least = tall * LOGO_WIDEST
+    if widest >= least:
+        return 1.0, widest
+    # Not even so: every logo smaller, the widest no narrower than its least.
+    capped = sum(min(width, least) for width in widths) + gaps
+    return room / capped, least
+
+
+def _footer_room(canvas: _Canvas, slide: Slide, size: float) -> tuple[float, float]:
+    """Where logos may stand across a slide's footer: between its footer's words and its
+    number, with room kept from each (the whole width between the margins on a slide with
+    neither)."""
+
+    deck, style = canvas.deck, canvas.deck.style
+    left, right = style.margin, style.width - style.margin
+    if slide.layout in {"title", "section", "statement"}:
+        return left, right
+    footer = inline(deck.footer) if deck.footer else ()
+    rtl = bool(footer) and _rtl(footer)
+    if footer:
+        used = canvas.measure(footer, size, style.width / 2.0).width + LOGO_ROOM
+        left, right = (left, right - used) if rtl else (left + used, right)
+    number = _slide_number(slide)
+    if style.numbers and number is not None:
+        used = canvas.measure((TextRun(str(number)),), size, None).width + LOGO_ROOM
+        left, right = (left + used, right) if rtl else (left, right - used)
+    return left, right
+
+
+def _logos(canvas: _Canvas, slide: Slide, row: list[_Logo]) -> None:
+    """The deck's logos, drawn where ``_logo_row`` stands them: pictures as they are, never
+    recoloured, on any slide's colours. One whose file is not there (or does not read) is a
+    quiet box saying so, while editing."""
+
+    for logo in row:
+        identifier = f"{slide.id}.logo{logo.index}"
+        box = logo.box
+        if logo.artwork is None:
+            group = element(canvas.layer, "g", id=identifier, data__flexo__talk="missing")
+            ink = canvas.palette.get("muted-ink")
+            element(
+                group, "rect", id=f"{identifier}.box", x=box.x, y=box.y, width=box.width, height=box.height,
+                rx=4.0, fill=ink, fill_opacity=0.06, stroke=ink, stroke_opacity=0.6, stroke_width=1.0,
+                stroke_dasharray="4 3",
+            )
+            runs, size = (TextRun(logo.said),), _missing_size(canvas, box.height)
+            said = canvas.measure(runs, size, None)
+            canvas.words(
+                f"{identifier}.words", runs, Box(box.x, box.y + (box.height - said.height) / 2.0, box.width, 0.0),
+                size=size, align="middle", role="muted-ink", parent=group, wrap=False,
+            )
+            continue
+        art = logo.artwork
+        if art.format == "svg":
+            import base64
+
+            # A logo is a picture, vectors and all: a picture in the PowerPoint too.
+            href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+        else:
+            href = picture_href(art)
+        element(
+            canvas.layer, "image", id=identifier, x=box.x, y=box.y, width=box.width, height=box.height,
+            href=href, preserveAspectRatio="xMidYMid meet", data__flexo__talk="logo",
         )
 
 
