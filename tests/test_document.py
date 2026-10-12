@@ -2754,6 +2754,33 @@ def test_a_picture_is_cropped_to_the_part_kept_and_drawn_round_by_its_mask(tmp_p
     assert slides[1]["body"][0]["mask"] == "circle"
 
 
+def test_a_cropped_svg_pictures_words_are_drawn_in_their_own_face(tmp_path: Path) -> None:
+    """A cropped SVG is a picture of its vectors, and a picture has none of the page's fonts:
+    a plot's labels were drawn in a serif once it was cropped. Its words are outlines there."""
+
+    import base64
+
+    (tmp_path / "plot.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">'
+        '<rect x="0" y="0" width="200" height="100" fill="#eef"/>'
+        '<text x="20" y="50" font-family="Figtree" font-size="12">Accuracy</text></svg>'
+    )
+    document = yaml.safe_load(
+        "deck: {id: crop}\nslides:\n"
+        "  - title: Whole\n    body:\n      - {image: plot.svg}\n"
+        "  - title: Cropped\n    body:\n      - {image: plot.svg, crop: [0, 0, 0.5, 1]}\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+    # Whole, its words are words on the slide, in the slide's fonts.
+    assert ">Accuracy<" in render_slide(deck, deck.slides[0]).svg
+    cropped = render_slide(deck, deck.slides[1]).svg
+    held = re.search(r'href="data:image/svg\+xml;base64,([^"]+)"', cropped)
+    assert held is not None
+    picture = base64.b64decode(held[1]).decode()
+    assert "<text" not in picture and 'aria-label="Accuracy"' in picture and "<path" in picture
+    assert 'viewBox="0 0 200 100"' in picture
+
+
 @pytest.mark.parametrize(("crop", "said"), [
     ("circle", "To draw a picture round, keep a square of it and add mask: circle"),
     ([0.5, 0, 0.8, 1], r"x \+ width and y \+ height no more than 1, not \[0.5, 0, 0.8, 1\]"),

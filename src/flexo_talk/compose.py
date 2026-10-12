@@ -4783,7 +4783,7 @@ def _cropped_image(
     left, top, kept_w, kept_h = crop
     whole_w, whole_h = kept.width / kept_w, kept.height / kept_h
     if art.format == "svg":
-        href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+        href = "data:image/svg+xml;base64," + base64.b64encode(_as_picture(art.markup).encode()).decode()
     else:
         href = picture_href(art)
     # One tile, as large as the picture: drawn once, where the crop puts it.
@@ -4805,6 +4805,23 @@ def _cropped_image(
         )
     _described(picture, block.description)
     _whole(picture, Box(kept.x - left * whole_w, kept.y - top * whole_h, whole_w, whole_h))
+
+
+@functools.lru_cache(maxsize=32)
+def _as_picture(markup: str) -> str:
+    """An SVG file as it is drawn as a picture: its words as outlines, where the drawing
+    reader reads it exactly. A picture has none of the fonts of the page round it: its words
+    left as words were drawn in whatever face its viewer fell back to (a plot's labels in a
+    serif, once it was cropped)."""
+
+    if not _drawable(markup):
+        return markup
+    from flexo.portable import portable_svg
+
+    try:
+        return portable_svg(markup)
+    except Exception:  # not one the reader draws after all: as it is, as before
+        return markup
 
 
 def _whole(picture: ET.Element, box: Box) -> None:
