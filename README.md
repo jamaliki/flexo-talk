@@ -137,6 +137,21 @@ stand there as a box as wide as they are, their lines as they were set. Down, an
 takes that share of the room its place has to spare above it, and what comes after it
 follows it.
 
+Any object can be given a width of its own, in points (`width: 300` in a deck document,
+`width=300` in Python): the most it takes across its place, standing where its place
+stands it -- words, a list, a quotation, a callout or a listing at the side their words
+are set against (centred words centred), an equation as it is aligned, a plot, gallery or
+table where a picture stands -- or where `horizontal` asks. Words wrap in it (a listing
+is set smaller, then wrapped, as in a place too narrow for it); numbers share it; an
+equation is set smaller to fit it; a plot is drawn that wide, its height in proportion (its
+`aspect`, else its place's, but no wider than 3:2: its words keep their size); a
+gallery's cells and pictures shrink with it; a table's columns share it (wider than its
+words, each in proportion to them; narrower, each its longest word at least). With no
+width an object is drawn as it always was: words, lists, quotations, callouts, numbers,
+plots and galleries fill their place; a table, a listing and an equation are as wide as
+they are of themselves. The PowerPoint's native lists, tables and text boxes take the
+same widths.
+
 A single-column gallery (a column of logos) stands flush with the words above
 it; a grid is centred. Native lists and tables move with their region, so the
 PowerPoint matches the PDF.
@@ -160,6 +175,17 @@ Any slide (title and section slides too) can take `background=`: a colour
 (a native crop in PowerPoint), with `shade=0.4` to darken it. On a dark
 background the slide's words and accents are set light (`dark=` overrides).
 
+A deck's **logos** -- an institution's, its funders' -- are the deck's, not a slide's:
+`Deck(logos=["logos/institute.png", "logos/funder.svg"])`, PNG, JPEG, SVG or PDF
+pictures in the order they stand. On a title slide they stand in a row along its
+foot, centred and evenly spaced, each `logo_height` points tall (40 unless set) in its
+own proportions -- a very wide one narrowed until the row fits -- and the title, subtitle
+and byline make room above them. With `logos_on="every"` the other slides carry them
+too, small (half that height) in the footer, clear of its words and the slide's number.
+A logo is drawn as it is, never recoloured, on light and dark slides alike, and is a
+native picture in the PowerPoint. In a document:
+`deck: {logos: [logos/institute.png, logos/funder.svg], logos_on: every, logo_height: 36}`.
+
 A region takes blocks, set one under the other: `bullets(*items)` (a nested list
 is the level below; `numbered=True` numbers every level in its tier (1., a., i.), natively in PowerPoint;
 `plain=True` draws no bullets or numbers, each item at its level's indent (Keynote's None);
@@ -168,8 +194,11 @@ PDF page per step unless `deck.build(handout=True)`), `text(words, size=, align=
 (a new flexo `Figure`, used as a `with` block), `add(figure)` (an existing one),
 `plot(matplotlib_figure)`, `table(rows)`, `gallery(pictures)` (logos or people in a
 grid, captions under them, `crop="circle"` for photographs), `code(source)` (a monospace listing
-on a tinted panel, comment lines muted), `image(path, description=)` (`description` says what it
-shows, for screen readers and PowerPoint's alt text), `quote(words, by=)` (set large,
+on a tinted panel, comment lines muted), `image(path, description=, crop=, mask=)` (`description` says what it
+shows, for screen readers and PowerPoint's alt text; `crop=[x, y, width, height]` keeps a part of
+it, as fractions of the whole picture -- `[0.1, 0, 0.8, 1]` the middle 80% across -- which is then
+the picture, its size and proportions, a native crop in PowerPoint; `mask="circle"` draws it
+round), `quote(words, by=)` (set large,
 an accent quotation mark hung in the margin), `stats(("93%", "accuracy"), ("4x", "faster"))`
 (numbers to remember, very large in the accent, labels under them), and
 `callout(words, title=, colour="accent2")` (a key point on a panel tinted in a tone). Words take the
@@ -380,10 +409,26 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   (a title, a list, a paragraph) to type them in place, on the slide, in their own
   face and size; double-click a table's cell to type in it (Tab to the next, a new
   row after the last; Enter to the one below), or an equation to type its LaTeX
-  under it as it redraws. Right-click anything for what can be done with it. A
-  figure or picture chosen has a handle at each corner: drag one to size it (its
-  `width`), drawn where the slide will put it as you drag; double-click a handle
-  to fit it to its place again. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  under it as it redraws. Right-click anything for what can be done with it. Every
+  object chosen has handles, as in Keynote: words (a text, a list, a quote, a callout,
+  a listing, numbers, an equation) a handle at each side, which sets their width, the
+  words wrapping again as it is dragged, where the slide will wrap them; a figure,
+  picture, mechanism, plot, gallery or table a handle at each corner, which sizes it in
+  proportion (a table's columns sharing its width; a plot no flatter than 3:2, its words
+  keeping their size). The edge dragged follows the pointer
+  and the other stays (an object standing centred stays centred); it catches at the
+  width of its place, the width it takes of itself and the width it was -- ⌘ drags it
+  free of them -- and is never narrower than its longest word, a column's, or a
+  picture's least. Esc puts it back; double-click a handle to give it no width of its
+  own again. The inspector's Width is the same setting, empty for none. Double-click a
+  picture (or choose it and press Return, or **Crop…**) to crop it, as Keynote masks
+  one: the whole of it shows faintly round the part kept; drag the frame's handles to
+  crop a side (⇧ keeps its proportions), the frame to move it over the picture, the
+  picture to move it under the frame, or the bar's slider to zoom it in the frame;
+  Return, **Done** or a click elsewhere keeps the crop (`crop: [x, y, width, height]`,
+  fractions of the whole picture), Esc leaves it as it was. Its panel crops it to a
+  square, 4:3, 16:9 or a circle at once (`mask: circle`), or back to the whole
+  (**Original**). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere. The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
@@ -400,7 +445,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   another group where it is drawn (a figure's only part -- a structure added with
   **Structure** -- moves the figure on the slide instead, and has **Position** in
   its panel), as in flexo's figure editor: a bar above the
-  figure adds parts (A) and draws lines (C), a **+** beside the part chosen adds
+  figure adds parts and draws lines, typing on a part chosen types over its words, a
+  **+** beside the part chosen adds
   the next step, joined to it, its words typed at once, and the inspector shows
   the part chosen. A part added after one whose single line runs on to the next
   goes into that line, as a step into a flow chart. A chosen molecule turns as
@@ -416,9 +462,16 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   or its document as a flexo figure file (YAML).
 - **Format shows what is selected**: an object's own settings, or, with nothing
   selected, the slide's title, its parts in order (drag to reorder), its layout,
-  background, and footnotes. **Design** holds the look, theme, palette, type, and
-  proportions; **Customise…** starts a theme file from the deck's theme and opens it
+  background, and footnotes. **Design** holds the look, theme, palette, type, logos
+  and proportions; **Customise…** starts a theme file from the deck's theme and opens it
   in the theme editor, and the deck redraws as the theme changes.
+- **Logos**: on a title slide **Picture** (or a picture dropped on it) adds a logo,
+  in the row along its foot. A logo on a slide is chosen by a click, as any object
+  is: ⌫ deletes it, ⌥← ⌥→ or a drag along the row move it, and a corner sizes every
+  logo at once (they share one height; it catches at the default, and a double-click
+  on a corner goes back to it). **Design › Logos** lists them (drag to reorder),
+  adds them, and says where they show and how tall; added to a deck with no title
+  slide, they show on every slide.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
   being edited is drawn first; the others follow.
@@ -430,7 +483,8 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   in place of the slides. A click or → goes on; a slide's number then Return goes to
   it; B and W blank the screen black or white; Esc ends. **Export** makes a PDF (a
   page per slide, or per stage of its builds), a PowerPoint, or a PNG or SVG of each
-  slide, saved where you say (downloaded, in a browser). Saving is automatic; ⌘Z undoes your own last change, and the
+  slide (a PNG 1280, 1920 or 3840 pixels wide, as last chosen), saved where you say
+  (downloaded, in a browser). Saving is automatic; ⌘Z undoes your own last change, and the
   history beside it (⌥⌘Z) lists every change by name -- "Rename “Model” to
   “Encoder” · Slide 2" -- to go back, or forward, to any of them, the deck going
   to the slide each was made on. Saving writes the document back as YAML

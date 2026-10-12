@@ -280,6 +280,28 @@ def test_words_read_on_every_backdrop_and_panel() -> None:
         assert contrast(ink, panel) >= 7.0 and contrast(muted, panel) >= 4.5, theme
 
 
+def test_a_slides_text_light_or_dark_is_as_asked_and_its_accents_show_on_its_colour() -> None:
+    from flexo.colour import contrast, is_dark
+
+    from flexo_talk.compose import _slide_palette
+
+    deck = Deck("g")
+    # Auto: light words on the theme's mid blue (a slide of its accent), as Keynote sets them;
+    # dark on a yellow.
+    slide = deck.slide("T", background="accent")
+    accent, auto = slide.backdrop, _slide_palette(deck, slide)
+    assert not is_dark(auto.get("ink"))
+    assert is_dark(_slide_palette(deck, deck.slide("Y", background="#f2d03b")).get("ink"))
+    # Light or Dark asked is what is drawn, however the colour would have it.
+    asked = _slide_palette(deck, deck.slide("D", background="accent", dark=False))
+    assert is_dark(asked.get("ink"))
+    assert not is_dark(_slide_palette(deck, deck.slide("L", background="#f0f0f0", dark=True)).get("ink"))
+    assert is_dark(_slide_palette(deck, deck.slide("N", background="#1b2a41", dark=False)).get("ink"))
+    # The accent (the title's rule, accented words) on a slide of that accent is still seen.
+    assert contrast(deck.palette.get("tone-1-stroke"), accent) < 2.0
+    assert all(contrast(palette.get("tone-1-stroke"), accent) >= 3.0 for palette in (auto, asked))
+
+
 def test_an_accent_word_in_a_band_title_is_lifted_off_the_band() -> None:
     import re
 
@@ -626,6 +648,15 @@ def test_a_date_is_written_as_a_document_writes_one() -> None:
     assert DeckKind().parse("title: yes\ndate: 2026-10-01\n") == {"title": "yes", "date": "2026-10-01"}
 
 
+def test_an_author_of_several_lines_has_the_date_on_a_line_of_its_own() -> None:
+    # Not after the author's last line (a place under a name), as one byline line would.
+    deck = Deck("d")
+    one = deck.title("T", author="Ada Lovelace", date="2026")
+    several = deck.title("T", author="Ada Lovelace\nUniversity College London", date="2026")
+    assert "".join(run.text for run in one.byline_runs) == "Ada Lovelace · 2026"
+    assert "".join(run.text for run in several.byline_runs) == "Ada Lovelace\nUniversity College London\n2026"
+
+
 def test_a_document_nested_past_any_deck_is_refused_in_words(tmp_path: Path) -> None:
     deep: list = ["x"]
     for _ in range(3000):
@@ -932,3 +963,17 @@ def test_black_words_in_a_plot_read_on_a_dark_slide_as_black_lines_do() -> None:
     ink = deck.palette.get("ink").lower()
     words = re.search(r"<text[^>]*>(?:(?!</text>).)*black words", slide.svg, re.DOTALL)
     assert words is not None and ink in words.group(0).lower()
+
+
+def test_the_command_line_build_leaves_out_a_skipped_slide(tmp_path: Path) -> None:
+    # As the studio's export and the show leave it out (Keynote's Skip Slide).
+    (tmp_path / "talk.yaml").write_text(
+        "schema_version: 1\ndeck: {id: skips}\nslides:\n"
+        "- {title: One}\n- {title: Two, skip: true}\n- {title: Three}\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    assert main(["build", str(tmp_path / "talk.yaml"), "--formats", "svg", "-o", str(out)]) == 0
+    # Numbered as they are shown, as the numbers drawn on them are: no gap where one was skipped.
+    assert sorted(path.name for path in out.glob("*.svg")) == ["skips-01.svg", "skips-02.svg"]
+    assert "Three" in (out / "skips-02.svg").read_text(encoding="utf-8")

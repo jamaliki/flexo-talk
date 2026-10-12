@@ -49,11 +49,14 @@ def build_deck(
     handout: bool = False,
     editable_maths: bool = True,
     images: Path | None = None,
+    png_width: int | None = None,
 ) -> DeckBuild:
     """Write the deck into ``directory``: its PowerPoint and PDF, named after the deck,
     and an SVG and a PNG of each slide, beside them as talk-01.png, or in a folder of
     their own (``images``) as slide-01.png. The PDF has a page per step of each list a
-    slide reveals, or, as a ``handout``, one page per slide, showing it whole."""
+    slide reveals, or, as a ``handout``, one page per slide, showing it whole. A PNG is
+    ``png_width`` pixels wide, as tall as the slide's proportions make it -- else drawn
+    at 144 dpi (1920 pixels across a 16:9 slide)."""
 
     unknown = set(formats) - set(FORMATS)
     if unknown:
@@ -76,10 +79,13 @@ def build_deck(
     # Numbered as wide as the count needs, so the files sort in order: talk-100 after talk-099.
     digits = max(2, len(str(len(rendered))))
     folder, prefix = (directory, name) if images is None else (images, "slide")
+    # (The pixels across a slide's points, at 72 to the inch: 144 dpi draws a point as two.)
+    dpi = 144.0 if png_width is None else png_width * 72.0 / deck.style.width
     if images is not None and {"svg", "png"} & set(formats):
         folder.mkdir(parents=True, exist_ok=True)
-    for item in rendered:
-        stem = f"{prefix}-{item.slide.index:0{digits}d}"
+    # (Numbered as the slides are shown: a slide skipped leaves no gap -- compose._slide_number.)
+    for number, item in enumerate(rendered, 1):
+        stem = f"{prefix}-{number:0{digits}d}"
         if "svg" in formats:
             path = folder / f"{stem}.svg"
             path.write_text(item.svg, encoding="utf-8")
@@ -87,7 +93,7 @@ def build_deck(
         if "png" in formats:
             # Drawn from outlines, so the preview shows exactly the glyphs measured.
             path = folder / f"{stem}.png"
-            path.write_bytes(rasterise(portable_svg(item.svg), dpi=144))
+            path.write_bytes(rasterise(portable_svg(item.svg), dpi=dpi))
             pngs.append(path)
     pdf = None
     if "pdf" in formats:
@@ -222,7 +228,7 @@ def _read_in_order(tree, slide: Slide) -> None:
         named = next(child.iter(f"{{{_PML}}}cNvPr"), None)
         name = named.get("name", "") if named is not None else ""
         rest = name.removeprefix(f"{slide.id}.")
-        if rest in {"number", "footer"}:
+        if rest in {"number", "footer"} or re.fullmatch(r"logo\d+", rest):
             return 3, 0, 0, False
         if rest.startswith("footnote"):
             return 2, 0, 0, False
@@ -461,11 +467,17 @@ def _structure_title(source: str) -> str:
 
 def _describe(tree: etree._Element, slide: Slide) -> None:
     """Each picture's description as its alt text, on the shape drawn for it: a figure's,
-    and each molecule's in it, as well as a picture's own."""
+    and each molecule's in it, as well as a picture's own; a logo marked decorative."""
+
+    import re
 
     described = _descriptions(slide)
-    for properties in tree.iter(f"{{{_PML}}}cNvPr") if described else ():
+    for properties in tree.iter(f"{{{_PML}}}cNvPr"):
         name = properties.get("name", "")
+        if re.fullmatch(rf"{re.escape(slide.id)}\.logo\d+", name):
+            # A logo is the slide's furniture, as its number is: passed over by a screen reader.
+            _decorative(properties)
+            continue
         # (A picture with a caption is grouped with it: described as its group is.)
         text = described.get(name) or described.get(name.removesuffix(".picture"))
         if not text:

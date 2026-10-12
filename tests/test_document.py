@@ -116,11 +116,25 @@ def test_a_wrong_document_says_where(tmp_path: Path, slide: dict, where: str, wo
 
 def test_a_wrong_slide_stands_aside_when_errors_are_collected(tmp_path: Path) -> None:
     errors: list[DeckDocumentError] = []
-    document = {"deck": {}, "slides": [{"title": "Fine"}, {"body": [{"table": 3}]}, {"title": "Also fine"}]}
+    document = {"deck": {}, "slides": [{"title": "Fine"}, {"title": "T", "colour": "red"}, {"title": "Also fine"}]}
     deck = deck_from_document(document, tmp_path, errors=errors)
     assert [slide.index for slide in deck.slides] == [1, 2, 3]
     assert deck.slides[1].layout == "blank"
-    assert [error.where for error in errors] == ["slides[1].body[0] (table)"]
+    assert [error.where for error in errors] == ["slides[1]"]
+
+
+def test_a_wrong_object_stands_aside_and_the_rest_of_its_slide_is_made(tmp_path: Path) -> None:
+    from flexo_talk.document import InvalidObject
+
+    errors: list[DeckDocumentError] = []
+    slide = {"title": "Kept", "body": [{"table": 3}, {"python": "plots.py:spread"}, {"text": "Words stay"}]}
+    deck = deck_from_document({"deck": {}, "slides": [slide]}, tmp_path, errors=errors)
+    (made,) = deck.slides
+    assert made.layout == "content" and [type(block).__name__ for block in made.regions["body"].blocks] == [
+        "_Missing", "_Missing", "_Words"]
+    assert [(type(error), error.where) for error in errors] == [
+        (InvalidObject, "slides[0].body[0] (table)"), (InvalidObject, "slides[0].body[1]")]
+    assert made.regions["body"].blocks[0].said == "This table can\u2019t be drawn as it is"
 
 
 def test_figures_and_plots_named_by_python_are_made_when_drawn(tmp_path: Path) -> None:
@@ -195,12 +209,50 @@ def test_a_figure_written_in_the_deck_is_read_once_for_each_version(tmp_path: Pa
 
 def test_the_studio_reports_a_wrong_slide_on_its_page(tmp_path: Path) -> None:
     kind = DeckKind()
-    document = {"deck": {}, "slides": [{"title": "Fine"}, {"body": [{"stats": []}]}]}
+    document = {"deck": {}, "slides": [{"title": "Fine"}, {"title": "Not", "colour": "red"}]}
     drawing = kind.draw(document, tmp_path, {})
     assert [page.extra["error"] for page in drawing.pages] == [False, True]
     (message,) = [message for message in drawing.messages if message.severity == "error"]
-    assert message.page == "slide2" and message.where == "slides[1].body[0] (stats)"
-    assert message.place == "Slide 2 · Numbers"
+    assert message.page == "slide2" and message.where == "slides[1]" and message.place == "Slide 2"
+
+
+def test_the_studio_draws_a_slide_with_an_object_that_cannot_be_and_says_which(tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    (tmp_path / "plots.py").write_text("def broken():\n    raise RuntimeError('no data')\n")
+    document = {"deck": {}, "slides": [
+        {"title": "Numbers", "body": [{"stats": []}, {"text": "Words stay"}]},
+        {"layout": "two-columns", "title": "A plot", "left": [{"plot": "plots.py:spred"}],
+         "right": [{"text": "Beside it"}]},
+        {"title": "Another", "body": [{"text": "Above"}, {"plot": "plots.py:broken"}]},
+    ]}
+    kind = DeckKind()
+    drawing = kind.draw(document, tmp_path, {"settle": True})
+    while drawing.unfinished:
+        drawing = kind.draw(document, tmp_path, {"settle": True})
+    # Each slide drawn, the object that can't be a box saying so, the rest as written.
+    assert [page.extra["error"] for page in drawing.pages] == [False, False, False]
+    first, second, third = (page.svg for page in drawing.pages)
+    assert "Words stay" in first and "This object can\u2019t be drawn as it is" in first
+    assert "Beside it" in second and "This plot can\u2019t be drawn as it is" in second
+    assert "Above" in third and 'data-flexo-talk="invalid"' in third
+    # Why, said under its slide, naming it as a person would: to be chosen by.
+    said = [(message.where, message.place, message.text) for message in drawing.messages if message.severity == "error"]
+    assert said[0][:2] == ("slides[0].body[0] (stats)", "Slide 1 \u00b7 Numbers")
+    assert said[1] == ("slides[1].left[0]", "Slide 2 \u00b7 Plot", "plots.py has no function spred")
+    assert said[2][:2] == ("slides[2].body[1]", "Slide 3 \u00b7 Plot") and "no data" in said[2][2]
+    # Presented, and exported, the box is not there: the export goes ahead, and says so.
+    (pdf,) = kind.export(document, tmp_path, "talk", ["pdf"], into=tmp_path / "out")
+    assert pdf.read_bytes().count(b"/Type /Page ") == 3
+    assert kind.export_notes == [
+        "Slide 1 \u00b7 Numbers is left empty: it can\u2019t be drawn as it is.",
+        "Slide 2 \u00b7 Plot is left empty: it can\u2019t be drawn as it is.",
+        "Slide 3 \u00b7 Plot is left empty: it can\u2019t be drawn as it is.",
+    ]
+    svgs = kind.export(document, tmp_path, "talk", ["svg"], into=tmp_path / "svg")
+    assert all("can\u2019t be drawn" not in path.read_text() for path in svgs)
+    # On the command line, a plot that fails stops the build, said.
+    with pytest.raises(DeckDocumentError, match="no function spred"):
+        deck_from_document({"deck": {}, "slides": document["slides"][1:2]}, tmp_path).render()
 
 
 def test_a_missing_picture_or_figure_file_stands_aside_and_its_slide_is_drawn(tmp_path: Path) -> None:
@@ -643,7 +695,7 @@ def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
     result = kind.act(document, {"do": "figure", "at": at, "edit": rename}, tmp_path)
     assert result["file"] == "model.yaml" and result["document"] is document
     text = (tmp_path / "model.yaml").read_text()
-    assert text.startswith("# A flexo figure") and "id: backbone" in text and "to: backbone" in text
+    assert text.startswith("# A figure: ") and "id: backbone" in text and "to: backbone" in text
 
 
 def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: Path) -> None:
@@ -1500,6 +1552,27 @@ def test_an_empty_title_or_text_holds_its_place_and_shows_only_in_the_studio() -
     assert shown == re.findall(kept, render_slide(alone, alone.slides[0]).svg, re.S)
     assert float(shown[0]) < float(re.findall(kept, studio[0], re.S)[0])
     assert not [layout for layout in render_slide(deck, deck.slides[0]).lists if layout.id == "slide1.body.0"]
+
+
+def test_a_list_says_how_wide_its_items_run_for_the_editor_and_only_for_it() -> None:
+    from flexo_talk.compose import PLACEHOLDERS
+
+    document = yaml.safe_load(
+        "deck: {id: wraps}\nslides:\n  - layout: two-columns\n    split: 0.3\n"
+        "    left: [{bullets: [A long item that wraps in its narrow column, Short]}]\n    right: [{text: Words}]\n"
+    )
+    deck = deck_from_document(document, Path("."))
+    exported = render_slide(deck, deck.slides[0]).svg
+    token = PLACEHOLDERS.set(True)
+    try:
+        editing = render_slide(deck, deck.slides[0])
+    finally:
+        PLACEHOLDERS.reset(token)
+    # Its items wrap at its column's width, and the editor typing them wraps them there too.
+    (wrap,) = re.findall(r'<g id="slide1\.left\.0"[^>]*data-flexo-wrap="([\d.]+)"', editing.svg)
+    (layout,) = [layout for layout in editing.lists if layout.id == "slide1.left.0"]
+    assert float(wrap) == pytest.approx(layout.width)
+    assert "data-flexo-wrap" not in re.search(r'<g id="slide1\.left\.0"[^>]*>', exported).group(0)
 
 
 def test_an_agenda_before_any_section_shows_its_rows_faintly_while_editing() -> None:
@@ -2380,7 +2453,7 @@ def test_a_figure_that_fails_as_it_is_laid_out_leaves_the_rest_of_its_slide(
     assert any("“Log it”" in message.text for message in drawing.messages)
     kind = DeckKind()
     assert kind.export(document, tmp_path, "t", ["pdf"])
-    assert kind.export_notes == ["Slide 1 has a figure left empty: it can\u2019t be drawn as it is."]
+    assert kind.export_notes == ["Slide 1 \u00b7 Figure is left empty: it can\u2019t be drawn as it is."]
 
 
 def test_a_figure_edited_on_a_slide_is_said_as_the_figure_says_it() -> None:
@@ -2561,3 +2634,140 @@ def test_a_figure_of_one_molecule_is_described_once_in_powerpoint(tmp_path: Path
     # Its description on the figure; the molecule's picture in it says the same, so it is
     # marked decorative -- a screen reader says it once.
     assert described == [("Figure", "A dimeric beta-barrel", False), ("Structure E2 domain", None, True)]
+
+
+def _logos(folder: Path) -> list[str]:
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    (folder / "logos").mkdir(exist_ok=True)
+    Image.new("RGB", (300, 100), (120, 30, 40)).save(folder / "logos" / "institute.png")
+    Image.new("RGB", (80, 80), (10, 60, 140)).save(folder / "logos" / "crest.jpg")
+    return ["logos/institute.png", "logos/crest.jpg"]
+
+
+def test_a_deck_s_logos_are_read_beside_it_and_written_back_as_given(tmp_path: Path) -> None:
+    names = _logos(tmp_path)
+    document = {"schema_version": 1, "deck": {"logos": names, "logos_on": "every", "logo_height": 36},
+                "slides": [{"layout": "title", "title": "A talk"}, {"title": "Then", "body": [{"text": "Words"}]}]}
+    deck = deck_from_document(document, tmp_path)
+    assert deck.logos == [str(tmp_path / name) for name in names]
+    assert deck.logos_on == "every" and deck.logo_height == 36.0
+    assert deck_document(deck)["deck"] == {"id": "talk", "logos": names, "logos_on": "every", "logo_height": 36}
+    # The defaults are not written: on the title slide, at the deck's height.
+    plain = deck_document(deck_from_document({"deck": {"logos": names[0]}, "slides": []}, tmp_path))
+    assert plain["deck"] == {"id": "talk", "logos": [names[0]]}
+    # One made in Python is written as its files are named there.
+    made = Deck("talk", logos=[tmp_path / names[0]], logos_on="every")
+    assert deck_document(made)["deck"]["logos"] == [str(tmp_path / names[0])]
+    assert "logos_on: every" in dump_document(deck_document(made))
+
+
+@pytest.mark.parametrize(("deck", "said"), [
+    ({"logos_on": "all"}, "logos_on must be title (the title slide) or every (every slide), not 'all'."),
+    ({"logo_height": 500}, "logo_height must be between 12 and 120, not 500."),
+    ({"logo_height": "big"}, "logo_height must be a number, such as 40 (points), not 'big'."),
+    ({"logos": ["logo.gif"]}, "A logo must be a PNG, JPEG, SVG or PDF picture: logo.gif is none of these."),
+    ({"logos": {"a": "b.png"}}, "logos must be a list of picture files (PNG, JPEG, SVG or PDF), such as "
+                                "[logos/institute.png], not {'a': 'b.png'}."),
+])
+def test_a_deck_s_logos_said_wrong_are_said_where_they_are(tmp_path: Path, deck: dict, said: str) -> None:
+    (tmp_path / "logo.gif").write_bytes(b"GIF89a")
+    with pytest.raises(DeckDocumentError) as raised:
+        deck_from_document({"deck": deck, "slides": []}, tmp_path)
+    assert raised.value.where == f"deck.{next(iter(deck))}"
+    assert str(raised.value).endswith(said)
+
+
+def test_a_missing_logo_holds_its_place_while_editing_and_is_said_once(tmp_path: Path) -> None:
+    from flexo.confine import folder_root
+
+    from flexo_talk.document import MissingFile
+
+    names = _logos(tmp_path)
+    kind = DeckKind()
+    document = {"deck": {"logos": [names[0], "logos/funder.png", names[1]]}, "slides": [
+        {"title": "Before", "body": [{"text": "Words"}]},
+        {"layout": "title", "title": "A talk"},
+        {"layout": "title", "title": "Thanks"},
+    ]}
+    root = folder_root.set(tmp_path)
+    try:
+        drawing = kind.draw(document, tmp_path, {})
+    finally:
+        folder_root.reset(root)
+    first, title, thanks = (page.svg for page in drawing.pages)
+    assert "logo" not in first and "Missing logo: funder.png" in title and "Missing logo: funder.png" in thanks
+    said = [(message.text, message.place, message.page) for message in drawing.messages if message.severity == "error"]
+    assert said == [("Can't find logos/funder.png in the deck's folder.", "Design · Logos", "slide2")]
+    # Presented (and exported), the row closes up without it.
+    presented = title[title.index('data-flexo-presented=""') - 400:]
+    assert "Missing logo" not in presented.split("data-flexo-presented")[1]
+    # Watched while missing, so the slides are drawn again once it is there.
+    assert tmp_path / "logos" / "funder.png" in {Path(file) for file in drawing.files}
+    with pytest.raises(MissingFile, match=r"Cannot find logos/funder\.png"):
+        deck_from_document(document, tmp_path)
+
+
+def test_a_logo_s_file_changed_draws_its_slides_again(tmp_path: Path) -> None:
+    import os
+
+    names = _logos(tmp_path)
+    kind = DeckKind()
+    document = {"deck": {"logos": names[:1]}, "slides": [{"layout": "title", "title": "A talk"}]}
+    before = kind.draw(document, tmp_path, {}).pages[0].svg
+    from PIL import Image
+
+    Image.new("RGB", (100, 100), (0, 0, 0)).save(tmp_path / names[0])
+    os.utime(tmp_path / names[0], ns=(10**18, 10**18))
+    after = kind.draw(document, tmp_path, {}).pages[0].svg
+    # Square now: drawn again in its new proportions.
+    assert before != after and 'width="40"' in after
+
+
+def test_a_picture_is_cropped_to_the_part_kept_and_drawn_round_by_its_mask(tmp_path: Path) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (400, 200), "#2b4c9b").save(tmp_path / "wide.png")
+    document = yaml.safe_load(
+        "deck: {id: crop}\nslides:\n"
+        "  - title: Cropped\n    body:\n"
+        "      - {image: wide.png, crop: [0.25, 0, 0.5, 1], width: 200}\n"
+        "  - title: Round\n    body:\n"
+        "      - {image: wide.png, crop: [0.25, 0, 0.5, 1], mask: circle}\n"
+    )
+    deck = deck_from_document(document, tmp_path)
+    svg = render_slide(deck, deck.slides[0]).svg
+    # The part kept is the picture: a square, 200 points wide as asked -- the whole of it,
+    # twice as wide, filling it from where the crop puts it.
+    kept = re.search(r'<rect id="slide1\.body\.0" x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" '
+                     r'fill="url\(#slide1\.body\.0\.crop\)"', svg)
+    assert kept and float(kept[3]) == float(kept[4]) == 200.0
+    pattern = re.search(r'<pattern id="slide1\.body\.0\.crop" patternUnits="userSpaceOnUse" x="([\d.]+)" y="([\d.]+)" '
+                        r'width="([\d.]+)" height="([\d.]+)"', svg)
+    assert pattern and float(pattern[3]) == 400.0 and float(pattern[1]) == float(kept[1]) - 100.0
+    round_svg = render_slide(deck, deck.slides[1]).svg
+    assert re.search(r'<ellipse id="slide2\.body\.0"[^>]*fill="url\(#slide2\.body\.0\.crop\)"', round_svg)
+    # Written back as it was read.
+    slides = deck_document(deck)["slides"]
+    assert slides[0]["body"][0] == {"image": "wide.png", "width": 200, "crop": [0.25, 0, 0.5, 1]}
+    assert slides[1]["body"][0]["mask"] == "circle"
+
+
+@pytest.mark.parametrize(("crop", "said"), [
+    ("circle", "To draw a picture round, keep a square of it and add mask: circle"),
+    ([0.5, 0, 0.8, 1], r"x \+ width and y \+ height no more than 1, not \[0.5, 0, 0.8, 1\]"),
+    ([0, 0, 1], r"\[x, y, width, height\] as fractions of it"),
+    ([0, 0, 0, 1], "width and height from 0.01"),
+])
+def test_a_crop_that_keeps_no_part_of_the_picture_says_what_a_crop_is(tmp_path: Path, crop: object, said: str) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (40, 20), "#2b4c9b").save(tmp_path / "wide.png")
+    document = {"deck": {"id": "crop"}, "slides": [{"title": "A", "body": [{"image": "wide.png", "crop": crop}]}]}
+    with pytest.raises(DeckDocumentError, match=r"slides\[0\]\.body\[0\] \(image\): crop must be") as caught:
+        deck_from_document(document, tmp_path)
+    assert re.search(said, str(caught.value))
+    document["slides"][0]["body"][0] = {"image": "wide.png", "mask": "oval"}
+    with pytest.raises(DeckDocumentError, match="mask must be one of circle, not 'oval'"):
+        deck_from_document(document, tmp_path)

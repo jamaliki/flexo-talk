@@ -748,18 +748,32 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
         embed = ids.pictures(data, mime)
         size = struct.unpack(">II", data[16:24]) if mime == "image/png" else _jpeg_size(data)
         x, y, width, height = image.placed(*size) if size else (image.x, image.y, image.width, image.height)
-        if size and "slice" in image.fit and (width > image.width + 0.01 or height > image.height + 0.01):
-            # A picture filling its box, cropped rather than stretched: a native crop.
-            crop = (
-                (image.x - x) / width, (image.y - y) / height,
-                (x + width - image.x - image.width) / width, (y + height - image.y - image.height) / height,
-            )
-            extension = '<a:srcRect l="{}" t="{}" r="{}" b="{}"/>'.format(*(round(v * 100000) for v in crop))
-            x, y, width, height = image.x, image.y, image.width, image.height
     else:
         return None
-    blip_extension = extension if extension.startswith("<a:extLst") else ""
-    crop_rect = extension if extension.startswith("<a:srcRect") else ""
+    # What of it shows: a picture filling its box (sliced) shows the box; one cropped, what
+    # is kept. A native crop -- the rest is there still, to be shown again, as in Keynote.
+    shown = (x, y, x + width, y + height)
+    if "slice" in image.fit and mime != "image/svg+xml":
+        shown = (max(x, image.x), max(y, image.y), min(x + width, image.x + image.width),
+                 min(y + height, image.y + image.height))
+    if image.clip is not None:
+        shown = (max(shown[0], image.clip[0]), max(shown[1], image.clip[1]),
+                 min(shown[2], image.clip[2]), min(shown[3], image.clip[3]))
+    if shown[2] - shown[0] < 0.01 or shown[3] - shown[1] < 0.01:
+        return None
+    crop_rect = ""
+    if max(abs(shown[0] - x), abs(shown[1] - y), abs(shown[2] - x - width), abs(shown[3] - y - height)) > 0.01:
+        crop = ((shown[0] - x) / width, (shown[1] - y) / height,
+                (x + width - shown[2]) / width, (y + height - shown[3]) / height)
+        # (Of the picture as stored: a side of one drawn mirrored is the other side of it.)
+        if image.flip_x:
+            crop = (crop[2], crop[1], crop[0], crop[3])
+        if image.flip_y:
+            crop = (crop[0], crop[3], crop[2], crop[1])
+        crop_rect = '<a:srcRect l="{}" t="{}" r="{}" b="{}"/>'.format(*(round(v * 100000) for v in crop))
+        x, y, width, height = shown[0], shown[1], shown[2] - shown[0], shown[3] - shown[1]
+    # Cropped round, it is an oval picture: PowerPoint's Crop to Shape, Oval.
+    geometry = "ellipse" if image.oval else "rect"
     left, top = placement.point(x, y)
     flips = (' flipH="1"' if image.flip_x else "") + (' flipV="1"' if image.flip_y else "")
     label = escape(image.id or "picture", {'"': "&quot;"})
@@ -771,11 +785,11 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
     return etree.fromstring(
         f'<p:pic {_NS}><p:nvPicPr><p:cNvPr id="{number}" name="{label}"/>'
         f'<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
-        f'<p:blipFill><a:blip r:embed="{embed}">{blip_extension}</a:blip>{crop_rect}'
+        f'<p:blipFill><a:blip r:embed="{embed}">{extension}</a:blip>{crop_rect}'
         f"<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
         f'<p:spPr><a:xfrm{flips}><a:off x="{left}" y="{top}"/>'
         f'<a:ext cx="{placement.length(width)}" cy="{placement.length(height)}"/></a:xfrm>'
-        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
+        f'<a:prstGeom prst="{geometry}"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
     )
 
 
@@ -1822,6 +1836,8 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
                           if name == key or name.startswith(f"{key}.")), None)
             if rest in _FURNITURE or rest.startswith("footnote"):
                 said = _FURNITURE.get(rest, "Footnote")
+            elif re.fullmatch(r"logo\d+", rest):
+                said = "Logo"
             elif block == name:
                 kind = blocks[block]
                 text = words(element) if kind in {"List", "Text", "Quote", "Callout", "Code"} else ""

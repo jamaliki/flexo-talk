@@ -147,6 +147,11 @@ a picture; words turn light), `dark=` (force light words), and `align=` (see
 Slide-level extras: `slide.notes(text)` (speaker notes), `slide.footnote(text)`
 (small and muted above the footer; several stack in order).
 
+Every block also takes `width=` (points; `width:` in a document): the most it takes
+across its place, standing where the place stands it (or where `horizontal` asks) --
+words wrap in it, a plot keeps its proportions, a table's columns and a gallery's cells
+share it. Left out, each is drawn as it always was.
+
 A figure's, picture's or table's `caption=` is set under it, centred and a size
 smaller, as part of it (a Caption in the PDF's tags, grouped with a picture or
 figure in the PowerPoint). `region.build_in()` (`build: true` in a document) makes
@@ -182,6 +187,11 @@ with English words, numbers, and maths inside it kept in order.
   (960x540 pt is 16:9; 720x540 is 4:3). `from flexo_talk import DeckStyle`.
 - **Type by role**: `Deck(font=, title_font=, figure_font=)`; each falls back to
   `font`, then to the theme's family.
+- **Logos** (an institution's, its funders'): `Deck(logos=["logos/institute.png",
+  "logos/funder.svg"], logos_on="title", logo_height=40)` -- PNG, JPEG, SVG or PDF
+  files, in order. On a title slide: a row along its foot, the words above making room;
+  `logos_on="every"` puts them small in every other slide's footer too. In a document:
+  `deck: {logos: [logos/institute.png], logos_on: every}`.
 - **A theme file can carry the slides' look**: beside `theme:`, a `slides:`
   section gives the deck's `look`, `style` (any `DeckStyle` field), `background`
   (a colour, or a picture such as a paper texture under every slide), and fonts
