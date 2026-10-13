@@ -31,6 +31,54 @@ from flexo_talk.pptx import editable_maths as editable_maths_of
 FORMATS = ("pptx", "pdf", "svg", "png")
 
 
+
+def clicks_lifted(svg: str, builds: list[tuple[int, str]]) -> str:
+    """The slide with a figure's parts that appear on a click gathered, for each click, into
+    a group of their own beside the figure (named as ``builds`` names the click): PowerPoint
+    animates a shape on the slide itself, never one inside a group. Each part keeps its
+    place -- the group is the figure's own box again, and every group a part was in -- and
+    is drawn over the rest of the figure, which it was beside."""
+
+    import xml.etree.ElementTree as ET
+
+    clicks = {step: name for step, name in builds if ".click." in name}
+    if not clicks:
+        return svg
+    root = ET.fromstring(svg)
+    parents = {child: parent for parent in root.iter() for child in parent}
+    after: dict[str, int] = {}
+    for step, name in sorted(clicks.items()):
+        of = name.rsplit(".click.", 1)[0]
+        block = next((item for item in root.iter() if item.get("id") == of), None)
+        if block is None or block not in parents:
+            continue
+        parts = [
+            item for item in block.iter()
+            if item is not block and item.get("data-flexo-step") == str(step)
+        ]
+        if not parts:
+            continue
+        kept = {key: value for key, value in block.attrib.items() if not key.startswith("data-")}
+        group = ET.Element(block.tag, {**kept, "id": name, "data-flexo-step": str(step)})
+        twins = {block: group}
+
+        def twin(item: ET.Element, twins: dict = twins) -> ET.Element:
+            if item not in twins:
+                shell = {key: value for key, value in item.attrib.items() if key != "id"}
+                twins[item] = ET.SubElement(twin(parents[item]), item.tag, shell)
+            return twins[item]
+
+        for part in parts:
+            holder = parents[part]
+            holder.remove(part)
+            part.attrib.pop("data-flexo-step", None)
+            twin(holder).append(part)
+        holder = parents[block]
+        after[of] = after.get(of, 0) + 1
+        holder.insert(list(holder).index(block) + after[of], group)
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+
+
 def file_stem(identifier: object) -> str:
     """A deck's id as the name of its files: its own words, with nothing that would take
     them out of the folder they are written to (a slash, a leading dot) -- or "deck"."""
@@ -130,7 +178,7 @@ def write_pptx(
     _properties(presentation, deck)
     layouts = {layout.name: layout for layout in presentation.slide_layouts}
     for item in rendered:
-        drawing = read_drawing(item.svg)
+        drawing = read_drawing(clicks_lifted(item.svg, item.builds))
         formulas = _drop_lists(drawing.root)
         _dissolve_regions(drawing.root)
         under, headings = _take_headings(drawing.root, item)

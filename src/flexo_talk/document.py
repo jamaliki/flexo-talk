@@ -92,7 +92,7 @@ SCHEMA_VERSION = 1
 BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
     "text": ("size", "align", "muted", "colour", "width"),
-    "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight"),
+    "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight", "stages"),
     "image": ("width", "crop", "mask", "description", "caption"),
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),

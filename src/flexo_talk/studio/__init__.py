@@ -708,9 +708,28 @@ class DeckKind:
         if isinstance(value, str) and value and ".py:" not in value:
             path = _figure_file(base, value)
             was = path.read_text(encoding="utf-8")
+            if edit.get("do") == "show":
+                # Parts hidden, dimmed or highlighted on this slide alone: the file is other
+                # slides' figure too, so it is the slide's block that says so (its ``hide``,
+                # ``dim``, ``highlight``, over the file's own), and the file is left as it is.
+                data = _figure_data(was, path.suffix)
+                data = {**data, "figure": {**(data.get("figure") or {}), **_shown_here(block, data)}}
+                made = apply_to_data(data, edit, base=path.parent)
+                for key in SHOWN_KEYS:
+                    block[key] = list((made["data"].get("figure") or {}).get(key) or [])
+                    if not block[key] and not (_figure_data(was, path.suffix).get("figure") or {}).get(key):
+                        del block[key]
+                shown = model(was, suffix=path.suffix)
+                shown["figure"] = {**(shown.get("figure") or {}), **_shown_here(block, shown)}
+                # (Answered as an edit of the deck, which it is: no file is named as changed.)
+                return {"document": changed, "select": made["select"], "model": shown}
             result = apply(was, edit, suffix=path.suffix, base=path.parent)
             answer = {"document": document, "select": result["select"],
                       "model": model(result["text"], suffix=path.suffix), "file": value}
+            # (As this slide shows it: what its block hides, dims and highlights.)
+            if isinstance(answer["model"], dict):
+                here = _shown_here(block, answer["model"])
+                answer["model"]["figure"] = {**(answer["model"].get("figure") or {}), **here}
             if edit.get("do") != "read" and result["text"] != was:
                 path.write_text(result["text"], encoding="utf-8")
                 answer |= {"was": was, "now": result["text"],
@@ -1703,6 +1722,24 @@ def _figure_said(old: Any, new: Any) -> tuple[str, str] | None:
     if note == "changed the figure's settings":
         return "changed the settings of", what
     return f"{note} in", what
+
+
+SHOWN_KEYS = ("hide", "dim", "highlight")
+"""What a slide's figure block says of the figure's parts, over what the figure says itself."""
+
+
+def _shown_here(block: Any, figure: Any) -> dict[str, list[str]]:
+    """The parts a slide's block shows apart from the rest -- each list the block's own where
+    it has one, else the figure's -- for every list either has."""
+
+    settings = (figure.get("figure") or {}) if isinstance(figure, dict) else {}
+    here: dict[str, list[str]] = {}
+    for key in SHOWN_KEYS:
+        if isinstance(block, dict) and isinstance(block.get(key), list):
+            here[key] = list(block[key])
+        elif settings.get(key):
+            here[key] = list(settings[key])
+    return here
 
 
 class Unreadable(ValueError):

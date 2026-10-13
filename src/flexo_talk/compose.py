@@ -20,6 +20,7 @@ import math
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1674,6 +1675,8 @@ def _block(
         scale = scales[index]
         height = prepared[index].height * scale
         top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
+        if block.stages:
+            _stage_parts(canvas, identifier, block.stages, prepared[index].spec)
     elif isinstance(block, _Image):
         top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
     elif isinstance(block, _Plot):
@@ -1949,6 +1952,82 @@ def _stand(canvas: _Canvas, region: Region, marks: list, shown: list[int], spare
         canvas.layer.insert(first, group)
         owned = canvas.lists[lists:after[1]], canvas.tables[tables:after[2]], canvas.worded[worded:after[3]]
         _shift(group, down, *owned)
+
+
+def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
+    """The click each part of a figure appears on (from 1), for those that appear on one:
+    a shape or group named in ``stages`` (a group, with all it holds) on the first click
+    that names it; a line on the later of its ends' (or its own); a group's own box with
+    the first of what it holds, if all of that waits for a click; a frame with the last of
+    what it goes round. A group's box is keyed ``"<id> box"``: its pieces, not what it holds."""
+
+    from flexo.frames import FRAME_KIND, around
+
+    groups = {group.id: group for group in spec.groups}
+
+    def within(ids: Sequence[str]) -> list[str]:
+        found: list[str] = []
+        left = list(ids)
+        while left:
+            one = left.pop()
+            if one not in found:
+                found.append(one)
+                left += groups[one].children if one in groups else ()
+        return found
+
+    named: dict[str, int] = {}
+    for click, names in enumerate(stages, 1):
+        for one in within(list(names)):
+            named.setdefault(one, click)
+    shapes = [node.id for node in spec.nodes if node.kind != FRAME_KIND]
+    steps = {shape: named[shape] for shape in shapes if shape in named}
+    for edge in spec.edges:
+        ends = (edge.source.node_id, edge.target.node_id, edge.id)
+        if (click := max(named.get(end, 0) for end in ends)) > 0:
+            steps[edge.id] = click
+    for net in spec.nets:
+        ends = [port.node_id for port in (*net.sources, *net.targets)] + [net.id]
+        if (click := max(named.get(end, 0) for end in ends)) > 0:
+            steps[net.id] = click
+    for group in spec.groups:
+        if group.id == spec.root:
+            continue
+        held = [steps.get(one, 0) for one in within([group.id]) if one in shapes]
+        click = named.get(group.id) or (min(held) if held and all(held) else 0)
+        if click:
+            steps[f"{group.id} box"] = click
+    for node in spec.nodes:
+        if node.kind == FRAME_KIND:
+            held = [steps.get(one, 0) for one in within(list(around(node))) if one in shapes]
+            click = named.get(node.id) or (max(held) if held and all(held) else 0)
+            if click:
+                steps[node.id] = click
+    return steps
+
+
+def _stage_parts(canvas: _Canvas, identifier: str, stages: Sequence[Sequence[str]], spec: Any) -> None:
+    """A figure's parts that appear on a click each, marked so in its drawing (as a block that
+    builds in is): each click a step of the slide, after those before it."""
+
+    drawn = _drawn(canvas, identifier)
+    if drawn is None or spec is None:
+        return
+    steps = part_steps(spec, stages)
+    found = {item.get("id"): item for item in drawn.iter() if item.get("id")}
+    marked: set[int] = set()
+    for part, click in steps.items():
+        if part.endswith(" box"):
+            names = [f"{identifier}.{part[:-4]}.{piece}" for piece in ("container", "label", "shadow")]
+        else:
+            names = [f"{identifier}.{part}"]
+        for name in names:
+            if (item := found.get(name)) is not None:
+                item.set("data-flexo-step", str(canvas.steps + click))
+                marked.add(click)
+    # (A click that shows nothing -- every part it names gone from the figure -- is none.)
+    for click in sorted(marked):
+        canvas.built.append((canvas.steps + click, f"{identifier}.click.{click}"))
+    canvas.steps += max(marked, default=0)
 
 
 def _drawn(canvas: _Canvas, identifier: str) -> ET.Element | None:
@@ -3260,6 +3339,9 @@ class _Prepared:
     alone: Any = None
     """The scale it would be drawn at with a place ``(width, height)`` to itself (a slide of
     its own), laid out for it: asked only when it is drawn small."""
+    spec: Any = None
+    """The figure as it was laid out: its shapes, groups and lines, for its parts to be found
+    in its drawing (those revealed a click at a time)."""
 
 
 LEGIBLE = 7.0
@@ -3687,7 +3769,8 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
     # (Turned off by its person, or arranged by hand: either way, said if turning would help.)
     turnable = _settled_only(where, "turned", larger_turned, 1.0) if not free else None
     return _Prepared(
-        laid["svg"], left, top, width, height, most, base, spec.id, turnable, _settled_only(where, "alone", alone, 0.0)
+        laid["svg"], left, top, width, height, most, base, spec.id, turnable, _settled_only(where, "alone", alone, 0.0),
+        spec,
     )
 
 
