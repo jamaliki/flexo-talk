@@ -894,7 +894,7 @@ export function mount(studio, container) {
   // what to do, said where an object would be added -- a greyed button, a file dropped. A
   // title slide has room for logos: a picture added to it is one (Design › Logos).
   const noRoomSaid = (slide) => (layoutOf(slide) === "title" ? "The Title layout has room for logos only: Picture adds one, along its foot"
-    : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, choose a layout with room, such as Content (logos are in Design)`);
+    : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, choose a layout with room, such as Content (logos are in Design › Deck)`);
   const logoRoom = (slide) => layoutOf(slide) === "title" && !regionsOf(slide).length;
   const renderBar = () => {
     const slide = slideAt();
@@ -8781,7 +8781,7 @@ export function mount(studio, container) {
     const fontTiles = h("div.font-tiles", { role: "group", "aria-label": "Font" }, fontTile("", "Theme", families.theme), quick.map((name) => fontTile(name, name, name)));
     const lookStyle = catalog.looks.find((item) => item.name === look)?.style || {};
     const changes = deck.style || {};
-    const styleRows = catalog.style.map((field) => {
+    const styleRow = (field) => {
       const fallback = lookStyle[field.name] ?? field.default;
       const setStyle = (value) => editDeck((d) => { d.style ||= {}; setOption(d.style, field.name, value, undefined); if (!Object.keys(d.style).length) delete d.style; }, { quiet: true, merge: `style-${field.name}` });
       const choiceLabel = (choice) => choiceName(field.name, choice);
@@ -8798,8 +8798,18 @@ export function mount(studio, container) {
       named?.setAttribute("aria-labelledby", nameId);
       return h("div.style-row", {}, h("span.name", {}, h(`span${set ? ".changed" : ""}`, { id: nameId }, styleName(field.name)), h("span.note", {}, String(field.note || "").replace(/,? in points$/i, ""))), control,
         ui.button("", () => { setStyle(null); renderInspector(); }, { kind: "ghost", icon: "undo", small: true, title: "Reset", disabled: !set }));
-    });
-    const changed = Object.keys(changes).length;
+    };
+    // The deck's own settings, each in the tab of what it changes: a colour, the type, or
+    // where things stand and how far apart. (One the page is not told of here is spacing.)
+    const styleRows = (names) => catalog.style.filter((field) => names.includes(field.name)).map(styleRow);
+    const placed = [...STYLE_COLOUR, ...STYLE_TYPE, ...STYLE_ALIGN, ...STYLE_SLIDES];
+    const spacing = catalog.style.filter((field) => !placed.includes(field.name));
+    const spaced = spacing.filter((field) => changes[field.name] !== undefined).length;
+    const tab = DESIGN_TABS.some(([value]) => value === designTab) ? designTab : "colour";
+    const section = (title, ...children) => h("div.section", {}, h("div.section-title", {}, title), ...children);
+    // What the theme sets a kind of words in apart from the rest, if it does: said where
+    // the deck's own choice is made.
+    const themes = (family) => (family ? `Theme’s (${family})` : "Same as body");
     return [
       h("div.section", {}, h("div.section-title", {}, "Theme"),
         // (Customise… is the button under it, not again in its menu.)
@@ -8807,12 +8817,24 @@ export function mount(studio, container) {
           onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); } }),
         h("div.row", {},
           themeIsFile ? ui.button("Edit Theme", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" })
-            : ui.button("Customise…", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Create a theme file based on this theme to edit its colours, fonts and lines" })),
-        ui.field("Palette", paletteList)),
-      h("div.section", {}, h("div.section-title", {}, "Look"), looks),
-      h("div.section", {}, h("div.section-title", {}, "Fonts"),
-        fontTiles,
-        fonts("font", "Body", families.theme ? `Theme’s (${families.theme})` : "Theme’s"), fonts("title_font", "Titles", "Same as body"), fonts("figure_font", "Figures", "Same as body")),
+            : ui.button("Customise…", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Create a theme file based on this theme to edit its colours, fonts and lines" }))),
+      // The rest by what it changes, as the tabs of a Mac's inspector: the deck's colours,
+      // its type, where things stand on a slide, and what is the deck's alone.
+      h("div.design-tabs", {}, ui.segmented({ value: tab, key: "design-tab", options: DESIGN_TABS.map(([value, label, title]) => ({ value, label, title })),
+        onChange: (next) => { designTab = next; remember("design-tab", next); renderInspector(); inspectorBody.scrollTop = 0; } })),
+      tab === "colour" ? [
+        section("Colours", ui.field("Palette", paletteList), styleRows(STYLE_COLOUR))] : null,
+      tab === "type" ? [
+        section("Fonts",
+          fontTiles,
+          fonts("font", "Body", families.theme ? `Theme’s (${families.theme})` : "Theme’s"), fonts("title_font", "Titles", themes(families.theme_title)), fonts("figure_font", "Figures", themes(families.theme_figure))),
+        section("Sizes", styleRows(STYLE_TYPE))] : null,
+      tab === "layout" ? [
+        section("Look", looks),
+        section("Alignment", styleRows(STYLE_ALIGN)),
+        section("Slides", styleRows(STYLE_SLIDES)),
+        h("div.section", {}, h("details.more", { open: spaced > 0 }, h("summary", {}, icon("chevron"), `Spacing${spaced ? ` (${spaced} changed)` : ""}`),
+          h("div.inner", {}, spacing.map(styleRow)))),
       // Every arrow in the deck's figures, in one shape (a line with a head of its own keeps it).
       // (Not "Figures", the name of the font field just above.)
       h("div.section", {}, h("div.section-title", {}, "Arrows"),
@@ -8824,14 +8846,13 @@ export function mount(studio, container) {
             if (value === "theme") delete d.conventions.arrowheads; else d.conventions.arrowheads = value;
             if (!Object.keys(d.conventions).length) delete d.conventions;
           }, { label: "Change Arrowheads" }); renderInspector(); } }),
-        { hint: "Every arrow without a head of its own" })),
+        { hint: "Every arrow without a head of its own" }))] : null,
+      tab === "deck" ? [
       h("div.section", {}, h("div.section-title", {}, "Deck"),
         // (Its lines as typed, as on the slide: Return starts a new one, ⌘Return is done.)
         ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: FOOTER_HINT, colours: false, lines: true, key: "deck.footer", onInput: typeDeck("footer") })),
         ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", key: "deck.id", onInput: typeDeck("id") }), { hint: `${deck.id || "talk"}.pptx, ${deck.id || "talk"}.pdf` })),
-      h("div.section.logos-section", {}, h("div.section-title", {}, "Logos"), logosControls()),
-      h("div.section", {}, h("details.more", { open: changed > 0 }, h("summary", {}, icon("chevron"), `Proportions${changed ? ` (${changed} changed)` : ""}`),
-        h("div.inner", {}, styleRows))),
+      h("div.section.logos-section", {}, h("div.section-title", {}, "Logos"), logosControls())] : null,
     ];
   }
 
@@ -10446,6 +10467,16 @@ export function mount(studio, container) {
   renderInspector();
   renderBar();
 }
+
+// The Design panel's tabs, the one last shown (kept from deck to deck, and visit to visit),
+// and which of the deck's own settings each tab has.
+const DESIGN_TABS = [["colour", "Colour", "The deck’s palette and the colours of its slides"], ["type", "Type", "Fonts and text sizes"],
+  ["layout", "Layout", "The look of the slides, and where things stand on them"], ["deck", "Deck", "Its footer, file name and logos"]];
+let designTab = remembered("design-tab", "colour");
+const STYLE_COLOUR = ["title_role"];
+const STYLE_TYPE = ["title_size", "subtitle_size", "body_size", "small_size", "figure_size", "line_height", "title_weight"];
+const STYLE_ALIGN = ["title_align", "align"];
+const STYLE_SLIDES = ["header", "opening", "sections", "edge", "numbers"];
 
 function remembered(key, fallback) {
   try { return localStorage.getItem(`flexo-deck-${key}`) ?? fallback; } catch { return fallback; }

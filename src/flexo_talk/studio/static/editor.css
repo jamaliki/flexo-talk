@@ -536,6 +536,8 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .hint-line kbd { font: var(--text-hint); }
 
 .looks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* The Design panel's tabs stay at its top as what is under them scrolls. */
+.design-tabs { position: sticky; top: 0; z-index: 2; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .look { border: 1px solid var(--line-strong); border-radius: 9px; padding: 8px; display: grid; gap: 5px; cursor: pointer; background: var(--raised); text-align: left; transition: border-color 0.12s; }
 .look:hover { border-color: var(--ink-3); }
 .look.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

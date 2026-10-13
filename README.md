@@ -43,7 +43,8 @@ palette's first colour, captions and footers its muted ink.
 Type can be set by role: `Deck(font="IBM Plex Sans", title_font="Latin Modern
 Roman", figure_font="Figtree")` sets the words, the titles and section headings,
 and the figures each in their own family (each falls back to `font`, then the
-theme's). `DeckStyle(title_align="middle", title_role="tone-1-stroke",
+theme's: a theme file's `type: {title_family: ..., figure_family: ...}` sets
+titles and figures apart for every deck in it). `DeckStyle(title_align="middle", title_role="tone-1-stroke",
 title_weight=700)` centres titles and paints them in the accent colour.
 
 ### Figures are laid out for the slide
@@ -462,14 +463,16 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   or its document as a flexo figure file (YAML).
 - **Format shows what is selected**: an object's own settings, or, with nothing
   selected, the slide's title, its parts in order (drag to reorder), its layout,
-  background, and footnotes. **Design** holds the look, theme, palette, type, logos
-  and proportions; **Customise…** starts a theme file from the deck's theme and opens it
+  background, and footnotes. **Design** holds the theme and, in tabs, the deck's **Colour**
+  (palette, title colour), **Type** (fonts by role, sizes), **Layout** (the look,
+  alignment, slide furniture, spacing) and what is the **Deck**'s own (footer, file
+  name, logos); **Customise…** starts a theme file from the deck's theme and opens it
   in the theme editor, and the deck redraws as the theme changes.
 - **Logos**: on a title slide **Picture** (or a picture dropped on it) adds a logo,
   in the row along its foot. A logo on a slide is chosen by a click, as any object
   is: ⌫ deletes it, ⌥← ⌥→ or a drag along the row move it, and a corner sizes every
   logo at once (they share one height; it catches at the default, and a double-click
-  on a corner goes back to it). **Design › Logos** lists them (drag to reorder),
+  on a corner goes back to it). **Design › Deck › Logos** lists them (drag to reorder),
   adds them, and says where they show and how tall; added to a deck with no title
   slide, they show on every slide.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
