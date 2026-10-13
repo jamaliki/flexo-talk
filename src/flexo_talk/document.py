@@ -33,7 +33,7 @@ matching ``Deck`` call takes, and its regions -- ``body``, ``left`` and
 ``right``, or ``columns`` (a list of block lists) -- each a list of blocks. A
 block is a mapping named by its kind (``bullets``, ``text``, ``figure``,
 ``image``, ``plot``, ``table``, ``gallery``, ``code``, ``quote``, ``stats``,
-``callout``) with that call's options beside it. Files are found next to the
+``callout``, ``math``, ``mechanism``) with that call's options beside it. Files are found next to the
 document. A figure is a flexo figure file, a flexo figure document written
 inline, or ``file.py:function`` (a function returning a flexo figure); a plot is
 ``file.py:function`` returning a matplotlib figure, called inside
@@ -41,6 +41,19 @@ inline, or ``file.py:function`` (a function returning a flexo figure); a plot is
 (``image``) may be cropped: ``crop: [x, y, width, height]``, the part kept as
 fractions of the whole picture (``[0.1, 0, 0.8, 1]`` keeps the middle 80% across),
 and drawn round with ``mask: circle``.
+
+A figure block may show its figure differently on each slide, nothing in it moved:
+``hide``, ``dim`` and ``highlight`` list the figure's parts left out, drawn faint, or
+kept while the rest is drawn faint; ``stages`` lists the clicks its parts appear on
+(``stages: [[encoder, decoder], [loss]]``: two parts on the first click, one on the next).
+
+A ``mechanism`` is a reaction drawn with its curly arrows: a SMILES, or a list of steps,
+each ``{smiles, arrows, label, reagents, conditions}``. The atoms the arrows name are
+mapped (``[O-:5]`` is 5); an arrow from a lone pair is ``"5 -> 2"``, from a bond
+``"2=3 -> 3"``; a step with no ``smiles`` is drawn from the arrows before it. An atom may
+be a placeholder, drawn as written, for a reaction in general: ``{smiles: "[X:1].[Y:2][Z:3]",
+arrows: ["1 -> 2", "2-3 -> 3"]}``, ``[Nu-]``, ``[E]``, ``[LG]``, ``[R1]`` (``[*Ar]``,
+``[*B]`` where the letters are an element's). ``math`` is LaTeX set as an equation.
 
 A slide of columns (``two-columns``, ``columns``) may be set in rows: ``rows`` lists
 the rows' labels (``rows: ["", Mechanism, Geometry]``; ``""`` for a row without one).
