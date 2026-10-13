@@ -3,6 +3,7 @@ slide by slide in the studio."""
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import re
@@ -1173,6 +1174,8 @@ def test_a_plot_in_a_figure_on_a_slide_waits_for_trust_and_follows_its_python_an
         "import matplotlib.pyplot as plt\n"
         "def curve():\n"
         "    numbers = [float(n) for n in Path('numbers.txt').read_text().split()]\n"
+        "    with open('runs.txt', 'a') as runs:\n"
+        "        runs.write('run\\n')\n"
         "    figure, axes = plt.subplots()\n"
         "    axes.plot(numbers)\n"
         "    axes.set_title(f'Curve of {len(numbers)}')\n"
@@ -1182,9 +1185,11 @@ def test_a_plot_in_a_figure_on_a_slide_waits_for_trust_and_follows_its_python_an
     )
     (folder / "plots.py").write_text(python)
     (folder / "numbers.txt").write_text("3 1 2")
+    (folder / "weights.bin").write_text("as a library reads for itself")
 
     def figure(function: str) -> dict:
-        plot = {"id": "p", "kind": "plot", "properties": {"source": "plots.py", "function": function}}
+        plot = {"id": "p", "kind": "plot",
+                "properties": {"source": "plots.py", "function": function, "data": ["weights.bin", "late/*.bin"]}}
         return {"figure": {"id": function}, "nodes": [plot, {"id": "b", "label": "Model"}]}
 
     (folder / "panels.yaml").write_text(yaml.safe_dump(figure("curve")))
@@ -1208,6 +1213,15 @@ def test_a_plot_in_a_figure_on_a_slide_waits_for_trust_and_follows_its_python_an
         data, _ = drawn()
         (folder / "plots.py").write_text(python.replace("Curve of", "Curve through"))
         code, _ = drawn()
+        # The data its shape names -- a file it is not seen to read, a pattern nothing fits
+        # yet -- is found from the deck's folder, or the figure file's, and watched.
+        named = {file.relative_to(folder.resolve()).as_posix() for file in drawn()[1].files}
+        runs = [len((folder / "runs.txt").read_text().split())]
+        for name in ("weights.bin", "late/first.bin"):
+            (folder / name).parent.mkdir(exist_ok=True)
+            (folder / name).write_text("changed")
+            drawn()
+            runs.append(len((folder / "runs.txt").read_text().split()))
     finally:
         workspace.close()
         worker.stop_all()
@@ -1226,6 +1240,268 @@ def test_a_plot_in_a_figure_on_a_slide_waits_for_trust_and_follows_its_python_an
     assert {"plots.py", "numbers.txt", "panels.yaml"} <= watched
     assert data == ["Curve of 4", "Curve of 4", None]
     assert code == ["Curve through 4", "Curve through 4", None]
+    # (Run again for each, once: on the slide and from the figure's file it is one plot.)
+    assert {"weights.bin", "late"} <= named and runs == [3, 4, 5]
+
+
+APART = (
+    "import os, time\n"
+    "from pathlib import Path\n"
+    "import matplotlib.pyplot as plt\n"
+    "def good():\n"
+    "    figure, axes = plt.subplots()\n"
+    "    axes.set_title(f'pid {os.getpid()}')\n"
+    "    return figure\n"
+    "def forever():\n"
+    "    Path('began').write_text(str(os.getpid()))\n"
+    "    while True:\n"
+    "        time.sleep(0.05)\n"
+)
+"""Plots for a folder's workers: one drawn, one that says it has begun and never returns."""
+
+
+def _figure_plot(folder: Path, function: str) -> dict:
+    """What flexo asks of a worker for a figure's plot (``flexo.plots.drawn``)."""
+
+    import flexo
+    from flexo.plots import plot_style
+
+    look = plot_style(flexo.resolve_style("paper"), flexo.resolve_palette("paper"))
+    return {"do": "figure-plot", "file": str(folder / "plots.py"), "function": function, "width": 170.0,
+            "height": 113.0, "look": look, "folder": str(folder)}
+
+
+def _begun(folder: Path, seconds: float = 30.0) -> int:
+    """The process ``forever`` is running in, once it has begun."""
+
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        with contextlib.suppress(OSError, ValueError):
+            return int((folder / "began").read_text())
+        time.sleep(0.05)
+    raise AssertionError("the plot never began")
+
+
+def test_a_plot_that_never_returns_holds_up_no_other_document_of_its_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In the app, a plot given another function took thirty seconds to draw again: another
+    figure's plot was running, and never returned."""
+
+    pytest.importorskip("matplotlib")
+    import threading
+    import time
+
+    from flexo.studio.workspace import Workspace
+
+    from flexo_talk import worker
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.setattr(worker, "TIMEOUT", 6.0)
+    folder = tmp_path / "paper"
+    folder.mkdir()
+    (folder / "plots.py").write_text(APART)
+
+    def figure(function: str, width: str = "60mm") -> dict:
+        plot = {"id": "p", "kind": "plot", "width": width, "properties": {"source": "plots.py", "function": function}}
+        return {"figure": {"id": function, "style": "paper"}, "nodes": [plot]}
+
+    (folder / "stuck.yaml").write_text(yaml.safe_dump(figure("forever")))
+    (folder / "panels.yaml").write_text(yaml.safe_dump(figure("good")))
+    (folder / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [
+        {"title": "Its own", "body": [{"plot": "plots.py:good"}]},
+        {"title": "A figure's", "body": [{"figure": figure("good", "70mm")}]},
+    ]}))
+    workspace = Workspace(folder, trusted=True)
+    stuck: dict[str, object] = {}
+
+    def never() -> None:
+        started = time.monotonic()
+        drawing = workspace.drawing_of("stuck.yaml")
+        stuck["said"] = [message.text for message in drawing.messages if message.code.startswith("plot.")]
+        stuck["seconds"] = time.monotonic() - started
+
+    thread = threading.Thread(target=never)
+    thread.start()
+    try:
+        # Asked for while the folder's first worker is starting for the plot that never
+        # returns, and again once it is busy with it: another figure's plot, a deck's own,
+        # and a figure's on a slide are each drawn, in another worker, before its time is up.
+        panels = workspace.drawing_of("panels.yaml")
+        running = _begun(folder)
+        slides = workspace.drawing_of("talk.yaml")
+        (folder / "panels.yaml").write_text(yaml.safe_dump(figure("good", "80mm")))
+        workspace.reread(workspace.open("panels.yaml"))
+        resized = workspace.drawing_of("panels.yaml")
+        waited = "said" in stuck
+        thread.join(60)
+        workers = len(worker._WORKERS[folder.resolve()].all)
+    finally:
+        workspace.close()
+        worker.stop_all()
+    drawn = [panels.pages[0].svg, resized.pages[0].svg, *(page.svg for page in slides.pages)]
+    assert all("pid " in svg and f"pid {running}" not in svg for svg in drawn) and not waited
+    # And it is said, when its own time is up -- not its worker's start and its time.
+    assert stuck["said"] == ["forever in plots.py took longer than 6 seconds and was stopped."]
+    assert 1 <= workers <= worker.MOST
+
+
+def test_a_plots_time_is_its_own_and_a_worker_slow_to_start_is_left_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In the app's first run in a new environment a plot that never returned was given its
+    worker's start as well as its own time: 75 seconds, with every other plot behind it."""
+
+    pytest.importorskip("matplotlib")
+    import sys
+    import time
+
+    from flexo_talk import worker
+
+    folder = tmp_path / "paper"
+    folder.mkdir()
+    (folder / "plots.py").write_text(APART)
+    # A worker slow to start, as one is where matplotlib has yet to list the computer's fonts.
+    slow = "import time; time.sleep(3); from flexo_talk.worker import serve; raise SystemExit(serve())"
+    monkeypatch.setattr(worker, "COMMAND", [sys.executable, "-c", slow])
+    monkeypatch.setattr(worker, "TIMEOUT", 2.0)
+    monkeypatch.setattr(worker, "STARTUP", 1.0)
+    try:
+        # Not ready in the time a request waits for it: the plot is to be asked for again,
+        # and the worker is not stopped, to start from nothing for the next.
+        started = time.monotonic()
+        with pytest.raises(worker.NotYet, match="has not been run yet: Python is still starting here"):
+            worker.ask(folder, _figure_plot(folder, "good"))
+        gave_up = time.monotonic() - started
+        (starting,) = worker._WORKERS[folder.resolve()].all
+        assert starting.process.poll() is None and not starting.ready
+        # Asked again, the same worker answers once it is ready -- and a plot that never
+        # returns is stopped when its own time is up, however long the start took.
+        monkeypatch.setattr(worker, "STARTUP", 60.0)
+        with pytest.raises(worker.Stopped, match="took longer than 2 seconds and was stopped"):
+            worker.ask(folder, _figure_plot(folder, "forever"))
+        took = time.monotonic() - started
+        assert _begun(folder) == starting.process.pid
+        # (Stopped, it is gone: the next plot has a new worker.)
+        assert starting.process.poll() is not None and not worker._WORKERS[folder.resolve()].all
+    finally:
+        worker.stop_all()
+    assert gave_up < 3 and took < 3 + 2 + 10
+
+
+def test_a_folder_has_a_few_workers_and_they_leave_with_its_studio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("matplotlib")
+    import threading
+    import time
+
+    from flexo.plots import STOPPED, WAITING
+    from flexo.studio import folder_root
+
+    from flexo_talk import worker
+
+    monkeypatch.setattr(worker, "TIMEOUT", 2.0)
+    monkeypatch.setattr(worker, "MOST", 2)
+    folder = (tmp_path / "paper").resolve()
+    folder.mkdir()
+    (folder / "plots.py").write_text(APART)
+    said: list[str] = []
+
+    def never() -> None:
+        try:
+            worker.ask(folder, _figure_plot(folder, "forever"))
+        except worker.Stopped as stopped:
+            said.append(f"{type(stopped).__name__}: {stopped}")
+
+    try:
+        # More plots that never return than the folder has workers: never more processes
+        # than that, the last waiting its turn -- and each said when its own time is up.
+        threads = [threading.Thread(target=never) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        most = 0
+        while any(thread.is_alive() for thread in threads):
+            most = max(most, len(worker._WORKERS[folder].all) if folder in worker._WORKERS else 0)
+            time.sleep(0.02)
+        assert most == 2 and said == ["Stopped: took longer than 2 seconds and was stopped."] * 3
+        # Its studio closed while a plot is drawn: the plot ends at once, with its worker,
+        # and is not said to have been stopped by its own fault.
+        (folder / "began").unlink()
+        del said[:]
+        monkeypatch.setattr(worker, "TIMEOUT", 60.0)
+        thread = threading.Thread(target=never)
+        thread.start()
+        running = _begun(folder)
+        process = next(w.process for w in worker._WORKERS[folder].all if w.process.pid == running)
+        started = time.monotonic()
+        worker.stop(folder)
+        thread.join(10)
+        assert said == ["NotYet: was stopped."] and time.monotonic() - started < 5
+        assert process.poll() is not None and folder not in worker._WORKERS
+    finally:
+        worker.stop_all()
+    # What flexo is told of each: one stopped is kept as said, one not run yet asked for again.
+    token = folder_root.set(folder)
+    try:
+        told = ((worker.Stopped("crashed (signal 11)."), STOPPED), (worker.NotYet("was stopped."), WAITING))
+        for error, code in told:
+            def raises(*_: object, error: Exception = error) -> dict:
+                raise error
+
+            monkeypatch.setattr(worker, "ask", raises)
+            answer = worker.figure_plot(_figure_plot(folder, "good"))
+            assert answer == {"said": f"good in plots.py {error}", "code": code}
+    finally:
+        folder_root.reset(token)
+
+
+def test_a_worker_leaves_when_the_app_that_started_it_has_gone(tmp_path: Path) -> None:
+    """A Mac app that quits ends at once, and stops no worker: one in a plot that never
+    returns ran on, with no app."""
+
+    pytest.importorskip("matplotlib")
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    folder = tmp_path / "paper"
+    folder.mkdir()
+    (folder / "plots.py").write_text(APART)
+    app = (
+        "import os, sys, threading, time\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[2])\n"
+        "from test_document import _begun, _figure_plot\n"
+        "from flexo_talk import worker\n"
+        "folder = Path(sys.argv[1])\n"
+        "threading.Thread(target=worker.ask, args=(folder, _figure_plot(folder, 'forever')), daemon=True).start()\n"
+        "print(_begun(folder), flush=True)\n"
+        "os._exit(0)\n"  # (as the app ends: nothing of Python's is run on the way out)
+    )
+    # (What it says of a failure is kept in a file: a worker left running holds a pipe open.)
+    with open(tmp_path / "said.txt", "w") as said:
+        ended = subprocess.run([sys.executable, "-c", app, str(folder), str(Path(__file__).parent)],
+                               stdout=subprocess.PIPE, stderr=said, text=True, timeout=120)
+    assert ended.returncode == 0, (tmp_path / "said.txt").read_text()
+    running = int(ended.stdout)
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                os.kill(running, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("the worker ran on after its app had gone")
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(running, signal.SIGKILL)
 
 
 def test_a_mechanism_block_is_read_and_its_mistakes_said_at_their_place(tmp_path: Path) -> None:

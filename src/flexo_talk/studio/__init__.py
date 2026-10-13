@@ -1897,15 +1897,17 @@ def _files(data: object, base: Path) -> set[Path]:
 
 
 def _plot_files(nodes: object, base: Path) -> set[Path]:
-    """The files the plots among a figure's ``nodes`` are drawn from (``flexo.plots.files``):
-    each one's Python file, and the data its function read when it was last run."""
+    """What the plots among a figure's ``nodes`` are drawn from (``flexo.plots.files``):
+    each one's Python file, and what its function read when it was last run -- its data
+    (that its shape names from ``base`` too), and the folders it listed."""
 
     found: set[Path] = set()
     for node in nodes if isinstance(nodes, list) else ():
         properties = node.get("properties") if isinstance(node, dict) and node.get("kind") == "plot" else None
         source = properties.get("source") if isinstance(properties, dict) else None
         if isinstance(source, str) and source:
-            found.update(plots.files(base / source, str(properties.get("function") or "")))
+            data = plots.beside(base, properties.get("data"))
+            found.update(plots.files(base / source, str(properties.get("function") or ""), data))
     return found
 
 
