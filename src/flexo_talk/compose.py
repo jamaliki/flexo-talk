@@ -1675,8 +1675,8 @@ def _block(
         scale = scales[index]
         height = prepared[index].height * scale
         top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
-        if block.reveal:
-            _reveal_parts(canvas, identifier, block.reveal, prepared[index].spec)
+        if block.stages:
+            _stage_parts(canvas, identifier, block.stages, prepared[index].spec)
     elif isinstance(block, _Image):
         top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
     elif isinstance(block, _Plot):
@@ -1954,9 +1954,9 @@ def _stand(canvas: _Canvas, region: Region, marks: list, shown: list[int], spare
         _shift(group, down, *owned)
 
 
-def part_steps(spec: Any, reveal: Sequence[Sequence[str]]) -> dict[str, int]:
+def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
     """The click each part of a figure appears on (from 1), for those that appear on one:
-    a shape or group named in ``reveal`` (a group, with all it holds) on the first click
+    a shape or group named in ``stages`` (a group, with all it holds) on the first click
     that names it; a line on the later of its ends' (or its own); a group's own box with
     the first of what it holds, if all of that waits for a click; a frame with the last of
     what it goes round. A group's box is keyed ``"<id> box"``: its pieces, not what it holds."""
@@ -1976,7 +1976,7 @@ def part_steps(spec: Any, reveal: Sequence[Sequence[str]]) -> dict[str, int]:
         return found
 
     named: dict[str, int] = {}
-    for click, names in enumerate(reveal, 1):
+    for click, names in enumerate(stages, 1):
         for one in within(list(names)):
             named.setdefault(one, click)
     shapes = [node.id for node in spec.nodes if node.kind != FRAME_KIND]
@@ -2005,14 +2005,14 @@ def part_steps(spec: Any, reveal: Sequence[Sequence[str]]) -> dict[str, int]:
     return steps
 
 
-def _reveal_parts(canvas: _Canvas, identifier: str, reveal: Sequence[Sequence[str]], spec: Any) -> None:
+def _stage_parts(canvas: _Canvas, identifier: str, stages: Sequence[Sequence[str]], spec: Any) -> None:
     """A figure's parts that appear on a click each, marked so in its drawing (as a block that
     builds in is): each click a step of the slide, after those before it."""
 
     drawn = _drawn(canvas, identifier)
     if drawn is None or spec is None:
         return
-    steps = part_steps(spec, reveal)
+    steps = part_steps(spec, stages)
     found = {item.get("id"): item for item in drawn.iter() if item.get("id")}
     marked: set[int] = set()
     for part, click in steps.items():

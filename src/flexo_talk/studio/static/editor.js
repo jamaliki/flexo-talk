@@ -7065,23 +7065,23 @@ export function mount(studio, container) {
     if (!Array.isArray(panel) || !state.focus) return panel;
     const one = figure.parts.selected.length === 1 ? figure.parts.selected[0] : null;
     const place = one && loneShape(figure.parts.model, one) ? h("div.section", {}, ui.field("Position", positionPad(slide, state.focus, block))) : null;
-    return [panel[0], place, ...panel.slice(1), buildSection(block)];
+    return [panel[0], place, ...panel.slice(1), stagesSection(block)];
   }
 
   // -- a figure's parts that appear a click at a time --
   // The shapes and groups chosen in a slide's figure appear with the slide, or on a click of
-  // their own when presenting (the block's `reveal`: a list for each click). Their lines come
+  // their own when presenting (the block's `stages`: a list for each click). Their lines come
   // with them; nothing moves, the figure being laid out with all of it.
-  const clicksOf = (block) => (Array.isArray(block?.reveal) ? block.reveal : []).map((step) => (Array.isArray(step) ? step : [step]));
+  const clicksOf = (block) => (Array.isArray(block?.stages) ? block.stages : []).map((step) => (Array.isArray(step) ? step : [step]));
   function setClick(place, ids, click) {
     editBlock(place, (b) => {
       let steps = clicksOf(b).map((step) => step.filter((id) => !ids.includes(id)));
       if (click > 0) { while (steps.length < click) steps.push([]); steps[click - 1].push(...ids); }
       steps = steps.filter((step) => step.length);
-      if (steps.length) b.reveal = steps; else delete b.reveal;
+      if (steps.length) b.stages = steps; else delete b.stages;
     }, { label: click ? `Build In on Click ${click}` : "Remove Build" });
   }
-  function buildSection(block) {
+  function stagesSection(block) {
     const parts = figure?.parts;
     const chosen = (parts?.selected || []).filter((id) => parts.nodeOf(id) || (parts.groupOf(id) && id !== parts.model?.root));
     if (!chosen.length) return null;

@@ -2945,7 +2945,7 @@ def test_hiding_parts_of_a_figure_file_on_a_slide_is_that_slides_alone(tmp_path:
 
 def test_a_figures_parts_appear_a_click_at_a_time(tmp_path: Path) -> None:
     """A figure built up on one slide took a slide for each state. Its parts now appear on
-    a click each (``reveal``), as a list's items do: a state of the slide, a page of the
+    a click each (``stages``), as a list's items do: a state of the slide, a page of the
     PDF, a click in the PowerPoint."""
 
     import re
@@ -2968,7 +2968,7 @@ def test_a_figures_parts_appear_a_click_at_a_time(tmp_path: Path) -> None:
         "schema_version": 1,
         "deck": {"id": "builds"},
         "slides": [{"title": "Built up", "body": [
-            {"figure": figure, "reveal": [["queue"], "store"]}]}],
+            {"figure": figure, "stages": [["queue"], "store"]}]}],
     }
     deck = deck_from_document(document, tmp_path)
     drawn = render_slide(deck, deck.slides[0])
@@ -2999,7 +2999,7 @@ def test_a_figures_parts_appear_a_click_at_a_time(tmp_path: Path) -> None:
     assert slide.count('nodeType="clickEffect"') == 2
     assert all(f">{words}<" in slide for words in ("API", "Orders", "Store", "Backend"))
     # It is kept in the deck's file as written, and a click that is no list is refused.
-    assert deck_document(deck)["slides"][0]["body"][0]["reveal"] == [["queue"], "store"]
-    wrong = {**document, "slides": [{"title": "x", "body": [{"figure": figure, "reveal": 3}]}]}
-    with pytest.raises(DeckDocumentError, match="reveal"):
+    assert deck_document(deck)["slides"][0]["body"][0]["stages"] == [["queue"], "store"]
+    wrong = {**document, "slides": [{"title": "x", "body": [{"figure": figure, "stages": 3}]}]}
+    with pytest.raises(DeckDocumentError, match="stages"):
         deck_from_document(wrong, tmp_path)

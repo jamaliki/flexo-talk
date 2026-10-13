@@ -402,20 +402,20 @@ sections large; ``keynote`` centres titles and content, without rules; ``margin`
 runs an accent bar down each slide's edge and paints titles in the accent."""
 
 
-def _reveal(value: object) -> tuple[tuple[str, ...], ...]:
-    """A figure's ``reveal`` as written -- a list of clicks, each a list of the parts that
+def _stages(value: object) -> tuple[tuple[str, ...], ...]:
+    """A figure's ``stages`` as written -- a list of clicks, each a list of the parts that
     appear on it (or one part) -- with the clicks that name nothing left out."""
 
     if value in (None, [], ()):
         return ()
-    said = "reveal must be a list of clicks, each the names of the figure\u2019s parts that appear on it"
+    said = "stages must be a list of clicks, each the names of the figure\u2019s parts that appear on it"
     if not isinstance(value, list | tuple):
-        raise SettingError("reveal", f"{said}, not {value!r}.")
+        raise SettingError("stages", f"{said}, not {value!r}.")
     steps = []
     for step in value:
         names = [step] if isinstance(step, str) else step
         if not isinstance(names, list | tuple) or not all(isinstance(name, str) for name in names):
-            raise SettingError("reveal", f"{said}, not {value!r}.")
+            raise SettingError("stages", f"{said}, not {value!r}.")
         if names:
             steps.append(tuple(names))
     return tuple(steps)
@@ -466,7 +466,7 @@ class _Figure:
     caption_held: bool = False
     """Its caption put there empty (``caption: ""``), to be written: its placeholder drawn
     while editing."""
-    reveal: tuple[tuple[str, ...], ...] = ()
+    stages: tuple[tuple[str, ...], ...] = ()
     """Its parts that appear on a click each, in the order of the clicks: the shapes and
     groups (by id) of the first click, of the second... What is in none is there from the
     start; a line appears with the later of its two ends."""
@@ -1256,7 +1256,7 @@ class Region:
     def add(
         self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
         description: str | None = None, caption: str | None = None,
-        reveal: Sequence[str | Sequence[str]] | None = None,
+        stages: Sequence[str | Sequence[str]] | None = None,
     ) -> Region:
         """An existing flexo figure, laid out again in the deck's theme for this place.
 
@@ -1269,7 +1269,7 @@ class Region:
         it; ``width`` (points) draws it that wide instead, smaller or larger, as far as
         its place allows.
         ``description`` says what it shows, as a picture's does; ``caption`` is set under it.
-        ``reveal=[["api"], ["queue", "worker"]]`` shows its parts a click at a time when
+        ``stages=[["api"], ["queue", "worker"]]`` shows its parts a click at a time when
         presenting -- the shapes and groups (by id) of each click; the rest is there from
         the start, and a line appears with the later of its ends. Nothing moves: the figure
         is laid out with all of it. A click in the PowerPoint, a page in the PDF.
@@ -1279,13 +1279,13 @@ class Region:
         description = " ".join(str(description).split()) if description is not None else ""
         turn = None if turn is None else _flag(turn, "turn")
         held, caption = caption == "", _caption(caption)
-        steps = _reveal(reveal)
+        steps = _stages(stages)
         self.blocks.append(
             _Figure(figure, turn, width, description=description, caption=inline(caption), caption_held=held,
-                    reveal=steps)
+                    stages=steps)
         )
         self._record("figure", None, turn=turn, width=width, description=description or None, caption=caption or None,
-                     reveal=[list(step) for step in steps] or None)
+                     stages=[list(step) for step in steps] or None)
         return self
 
     def image(

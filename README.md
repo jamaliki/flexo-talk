@@ -45,7 +45,15 @@ and nothing moved from slide to slide: `{figure: pipeline.yaml, hide: [store],
 highlight: [api]}` (or `dim: [...]`) on a slide's figure, each a list of the figure's
 shapes and groups by id; a figure written in the slide says the same in its own
 `figure: {hide: [...]}`. In the studio, choose shapes in a slide's figure and set
-**Show** to Highlight, Dimmed or Hidden.
+**Show** to Highlight, Dimmed or Hidden (for a figure kept in a file, it is that
+slide's alone: written on its block, the file left as it is).
+
+A figure can also be built up on one slide, a click at a time: `{figure: ..., stages:
+[[api], [queue, worker], [store]]}` names the shapes and groups that appear on each
+click. The rest is there from the start, a line comes with the later of its ends, and
+nothing moves. It is a state each in the slideshow, a page each in the PDF and a click
+each in the PowerPoint. In the studio: choose shapes in the figure, **Build ›
+Appears › On Click 1**.
 
 Type can be set by role: `Deck(font="IBM Plex Sans", title_font="Latin Modern
 Roman", figure_font="Figtree")` sets the words, the titles and section headings,
