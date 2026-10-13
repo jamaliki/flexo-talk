@@ -18,6 +18,7 @@ from flexo_talk import Deck
 from flexo_talk.cli import main
 from flexo_talk.compose import render_slide
 from flexo_talk.document import (
+    BLOCKS,
     DeckDocumentError,
     deck_document,
     deck_from_document,
@@ -420,6 +421,12 @@ def test_an_agent_gets_a_guide_and_a_quick_check() -> None:
     kind = DeckKind()
     guide = kind.guide()
     assert "two-columns" in guide and "bullets" in guide and "Look at each slide" in guide
+    # Every kind of block is named, and what cannot be guessed is said: how a mechanism's
+    # steps and arrows are written (placeholder atoms too), and a figure shown part by part.
+    for kind_name in BLOCKS:
+        assert f"``{kind_name}``" in guide, kind_name
+    for said in ('"5 -> 2"', '"[X:1].[Y:2][Z:3]"', "[*Ar]", "stages: [[encoder, decoder], [loss]]", "highlight"):
+        assert said in guide, said
     assert kind.check({"deck": {}, "slides": [{"body": [{"table": 1}]}]}, ROOT) == [
         "slides[0].body[0] (table): A table must be a list of rows, each a list of cells."
     ]
