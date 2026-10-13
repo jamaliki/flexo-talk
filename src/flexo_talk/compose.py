@@ -1224,14 +1224,16 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
 
     Every block of a row starts on one line, a row is as tall as its tallest block, and
     the rows follow one another as a column's blocks do. Words take the height they need
-    and the rows with pictures share what is left. Down its row a block stands where it
-    was asked to (``Region.down``, of the room its row has to spare); else at its top --
-    a picture or table shorter than the words beside it centred against them, as a column
-    of pictures is against a column of words. Each label is set in a gutter at the slide's
-    edge (the right, for labels read from the right), as wide as the widest needs -- one
-    past ``ROW_GUTTER`` of the body wraps -- and centred down its row; the columns share
-    the width left as they would the whole. The rows stand down the body together, as a
-    slide's content does (``DeckStyle.align``).
+    and the rows with pictures share what is left, by need: a row that comes out shorter
+    than an equal share takes what it uses, and the rows that can use more share what it
+    leaves. Down its row a block stands where it was asked to (``Region.down``, of the
+    room its row has to spare); else at its top -- a picture or table shorter than the
+    words beside it centred against them, as a column of pictures is against a column of
+    words. Each label is set in a gutter at the slide's edge (the right, for labels read
+    from the right), as wide as the widest needs -- one past ``ROW_GUTTER`` of the body
+    wraps -- and centred down its row; the columns share the width left as they would the
+    whole. The rows stand down the body together, as a slide's content does
+    (``DeckStyle.align``).
     """
 
     style = canvas.deck.style
@@ -1332,15 +1334,20 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
             break
         left -= sum(needs[row] for row in over)
         sharing = [row for row in sharing if row not in over]
-    # A picture is as tall as its row lets it be, its caption under it.
-    shares = {
-        place: heights[place[1]] - _captioned(canvas, block, boxes[place[0]].width)
+    captions = {
+        place: _captioned(canvas, block, boxes[place[0]].width)
         for place, block in there.items() if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)
     }
+    several = sum(any(isinstance(blocks[column][row], _Figure) for row in shown[column]) for column in columns) > 1
+    laid: dict[tuple, tuple] = {}
 
-    def planned(words: float | None) -> list[tuple[dict[int, _Prepared], dict[int, float]]]:
+    def planned(
+        shares: dict[tuple[int, int], float], words: float | None, trial: bool = False
+    ) -> list[tuple[dict[int, _Prepared], dict[int, float]]]:
         """Each column's figures laid out for their rows, and the scale each takes: those
-        down one column at one scale, as in any one place, each within its own row."""
+        down one column at one scale, as in any one place, each within its own row. (Once
+        for the heights its figures' rows have: a column whose rows keep theirs while
+        others are given more is not laid out again, and says what it said then.)"""
 
         plans = []
         for column in columns:
@@ -1349,48 +1356,119 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
             if not figures:
                 plans.append(({}, {}))
                 continue
-            found, fits, _ = _plan_figures(
-                canvas, [blocks[column][row] for row in rows], boxes[column], words,
-                each=min(shares[column, row] for row in figures),
-            )
-            prepared = {rows[at]: item for at, item in found.items()}
-            scales = {rows[at]: fit for at, fit in fits.items()}
-            free = [row for row in figures if blocks[column][row].width is None]
-            if len(free) > 1:
-                cap = min(max(shares[column, row], 40.0) / prepared[row].height for row in free)
-                scales |= {row: min(scales[row], cap) for row in free}
+            key = (column, trial, words, *(shares[column, row] for row in figures))
+            if key not in laid:
+                diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
+                found, fits, _ = _plan_figures(
+                    canvas, [blocks[column][row] for row in rows], boxes[column], words,
+                    each=min(shares[column, row] for row in figures),
+                )
+                prepared = {rows[at]: item for at, item in found.items()}
+                scales = {rows[at]: fit for at, fit in fits.items()}
+                free = [row for row in figures if blocks[column][row].width is None]
+                if len(free) > 1:
+                    cap = min(max(shares[column, row], 40.0) / prepared[row].height for row in free)
+                    scales |= {row: min(scales[row], cap) for row in free}
+                laid[key] = (prepared, scales, canvas.diagnostics[diagnostics:], canvas.notes[notes:])
+                del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
+            prepared, scales, said, noted = laid[key]
+            canvas.diagnostics += said
+            canvas.notes += noted
             plans.append((prepared, scales))
         return plans
 
-    # Figures side by side set their words at one size (_regions): the largest at which
-    # every one of them fits its own place.
-    words = None
-    if sum(any(isinstance(blocks[column][row], _Figure) for row in shown[column]) for column in columns) > 1:
-        # A trial: what it would note or warn of is said when the figures are set.
-        diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
-        sizes = [
-            min(own) for column, (prepared, scales) in enumerate(planned(None))
-            if (own := [item.size * scales[row] for row, item in prepared.items() if blocks[column][row].width is None])
-        ]
-        del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
-        words = min(sizes) if sizes else None
-    plans = planned(words)
+    def fitted(heights: list[float]) -> tuple[dict, list, list[float], tuple[list[str], list[str]]]:
+        """The rows given ``heights``: the height each picture then has, each column's
+        figures planned for theirs, and how tall each row comes out, as it will be drawn --
+        with what was said in finding it, taken off the slide again (said once the rows are
+        settled)."""
 
-    # Each row as tall as its tallest block, as it will be drawn; the rows one under the other.
-    tall = list(label_tall)
-    for (column, row), block in there.items():
-        figure = plans[column][0][row].height * plans[column][1][row] if isinstance(block, _Figure) else 0.0
+        diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
+        # A picture is as tall as its row lets it be, its caption under it.
+        shares = {place: heights[place[1]] - caption for place, caption in captions.items()}
+        # Figures side by side set their words at one size (_regions): the largest at which
+        # every one of them fits its own place.
+        words = None
+        if several:
+            # A trial: what it would note or warn of is said when the figures are set.
+            mark = len(canvas.diagnostics), len(canvas.notes)
+            sizes = [
+                min(own) for column, (prepared, scales) in enumerate(planned(shares, None, True))
+                if (own := [item.size * scales[row] for row, item in prepared.items()
+                            if blocks[column][row].width is None])
+            ]
+            del canvas.diagnostics[mark[0]:], canvas.notes[mark[1]:]
+            words = min(sizes) if sizes else None
+        plans = planned(shares, words)
+        # Each row as tall as its tallest block, as it will be drawn.
+        tall = list(label_tall)
+        for (column, row), block in there.items():
+            figure = plans[column][0][row].height * plans[column][1][row] if isinstance(block, _Figure) else 0.0
+            try:
+                own = _cell_tall(
+                    canvas, block, f"{slide.id}.{names[column]}.{row}", boxes[column].width,
+                    shares.get((column, row), 0.0), figure, panels.get(row, 0.0),
+                )
+            except _FigureFailed:
+                raise
+            except Exception:
+                # (What can't be measured -- a picture that does not read -- is said as it is set.)
+                own = 0.0
+            tall[row] = max(tall[row], own)
+        said = canvas.diagnostics[diagnostics:], canvas.notes[notes:]
+        del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
+        return shares, plans, tall, said
+
+    def full(row: int) -> bool:
+        return tall[row] > heights[row] - ROW_NEAR
+
+    # A row that comes out shorter than its share -- its pictures as wide as their column, or
+    # as they were asked to be, its figures' words as large as words are -- takes what it
+    # uses, and the rows that use all of theirs share what it leaves: given that much more
+    # each, until none can use more or nothing is left. (A row that left some may come out
+    # taller as the others grow -- figures down a column at one scale, their words one size
+    # across columns -- and the rows together too tall: they are then given less, between
+    # what fitted and what did not.)
+    settled = shares, plans, tall, said = fitted(heights)
+    growing = [row for row in sharing if full(row)]
+    # (The height known to fit, with the room the rows then leave; and one known not to.)
+    kept, past = (each if sharing else 0.0, left - sum(tall[row] for row in sharing)), None
+    for _ in range(ROW_TRIES):
+        if not growing or kept[1] <= ROW_NEAR:
+            break
+        level = kept[0] + kept[1] / len(growing)
+        if past is not None and level >= past[0]:
+            level = kept[0] + (past[0] - kept[0]) * kept[1] / (kept[1] - past[1])
+        given = [level if row in growing else high for row, high in enumerate(heights)]
+        mark = len(canvas.diagnostics), len(canvas.notes)
         try:
-            own = _cell_tall(
-                canvas, block, f"{slide.id}.{names[column]}.{row}", boxes[column].width,
-                shares.get((column, row), 0.0), figure, panels.get(row, 0.0),
-            )
+            tried = fitted(given)
         except _FigureFailed:
-            raise
-        except Exception:
-            # (What can't be measured -- a picture that does not read -- is said as it is set.)
-            own = 0.0
-        tall[row] = max(tall[row], own)
+            # (A figure that cannot be laid out for another height: the rows as they fitted.)
+            del canvas.diagnostics[mark[0]:], canvas.notes[mark[1]:]
+            break
+        room = left - sum(tried[2][row] for row in sharing)
+        if room < -ROW_NEAR:
+            past = (level, room)
+            continue
+        heights, kept = given, (level, room)
+        settled = shares, plans, tall, said = tried
+        growing = [row for row in growing if full(row)]
+    shares, plans, tall, said = settled
+    canvas.diagnostics += said[0]
+    canvas.notes += said[1]
+
+    def reach(row: int) -> float:
+        """How tall a row would be at most, its pictures asking for all it could give them:
+        as tall as it is where it uses all it has; else its share were it one of those that
+        do, the rest as tall as they are (``_level``)."""
+
+        if row not in sharing or full(row):
+            return max(heights[row], tall[row])
+        others = [other for other in sharing if other != row]
+        return _level(left, [tall[other] for other in others if not full(other)], 1 + sum(map(full, others)))
+
+    # The rows one under the other.
     tops, top = [], body.y
     for row in range(count):
         tops.append(top)
@@ -1427,6 +1505,12 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
                     # The room its row has to spare for it, for an editor to say where it
                     # would stand down it.
                     drawn.set("data-flexo-spare", number(slack))
+                    own = end - tops[row] - captions.get((column, row), 0.0)
+                    if isinstance(block, _Figure | _Image) and own > 0.0:
+                        # How many times its size its row lets it be at most, for an editor
+                        # sizing it by a corner to stop where the slide would.
+                        most = (reach(row) - captions[column, row]) / own
+                        drawn.set("data-flexo-most", number(max(most, 1.0)))
                 centred = align != "top" and row in worded and isinstance(block, _PICTURES)
                 _lowered(canvas, mark, slack * region.down.get(row, 0.5 if centred else 0.0))
         finally:
@@ -1474,6 +1558,25 @@ ROW_GUTTER = 0.2
 
 ROW_GAP = 0.6
 """The room between the rows' labels and the columns, as a share of the room between columns."""
+
+ROW_NEAR = 0.01
+"""How near (points) a row is to the height it has to be using all of it, and the rows
+together to the room they have to be filling it."""
+
+ROW_TRIES = 8
+"""How many times at most the rows are given other heights, sharing out what some leave."""
+
+
+def _level(room: float, most: list[float], count: int) -> float:
+    """The height each of ``count`` rows has, sharing ``room`` equally with rows that take
+    ``most`` at most: one that takes less than an equal share leaves the rest to the others."""
+
+    rows = count + len(most)
+    for high in sorted(most):
+        if high >= room / rows:
+            break
+        room, rows = room - high, rows - 1
+    return room / rows
 
 
 def _cell_tall(

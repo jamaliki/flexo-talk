@@ -134,3 +134,34 @@ export function gatherPlan(counts, all, at) {
   gather(lists, all, at);
   return Object.entries(lists).flatMap(([region, list]) => list.map((old, index) => [old, { region, index }]));
 }
+
+// A part moved across in its own place (editor.js's carry) stands at a stop across it. The
+// room it has to go in is its place's (`room`) less the part as it is drawn (`home`), both
+// { left, right } in the page's pixels -- whatever width it was asked to be: a picture its
+// row's height makes narrower than that has the room it is drawn with.
+export const roomAcross = (room, home) => home.right - home.left < room.right - room.left - 2;
+
+// Carried `dx` across from where it is drawn: the stop it would stand at if let go -- of
+// `stops` (each the share of that room before it) the one that puts it nearest where it has
+// been carried, or `placed`, where it stands, while none is nearer -- and where its left
+// edge is there. Null where it has no room to go.
+export function acrossDrop(room, home, dx, stops, placed) {
+  if (!roomAcross(room, home)) return null;
+  const spare = room.right - room.left - (home.right - home.left);
+  const spot = (share) => room.left + spare * share;
+  const far = (share) => Math.abs(spot(share) - (home.left + dx));
+  const place = stops.reduce((best, share) => (far(share) < far(best) ? share : best), placed);
+  return { place, left: spot(place) };
+}
+
+// Where the slide sets a figure, mechanism, picture or table across its place when it is
+// not asked to stand anywhere (compose.py's _placing), from the kinds of what its place
+// holds: beside a list, or with words it comes after, at the words' left edge (0); else
+// centred (0.5). A mechanism is a figure there.
+const GRAPHICS = new Set(["figure", "mechanism", "image", "plot", "gallery", "table"]);
+export function autoAcross(kinds) {
+  if (kinds.includes("bullets")) return 0;
+  const graphics = kinds.filter((kind) => GRAPHICS.has(kind)).length;
+  const words = kinds.filter((kind) => kind === "text").length;
+  return graphics && words && graphics + words === kinds.length && kinds[0] === "text" ? 0 : 0.5;
+}

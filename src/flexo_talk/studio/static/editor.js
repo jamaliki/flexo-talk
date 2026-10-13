@@ -6,7 +6,7 @@
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine } from "/static/kinds/figure/parts.js";
-import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan } from "/static/kinds/deck/slidedrop.js";
+import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
 import { canRow, rowed, rowCount, labelsOf, setRows, setLabel, keepRows } from "/static/kinds/deck/rows.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
@@ -57,10 +57,10 @@ const MATH_SNIPPETS = [
   ["Tt", "Text", "\\text{|}"],
 ];
 const INLINE = new Set(["text", "bullets", "quote", "callout", "code", "math"]);
-// What stands at the left, middle or right of its place by moving in it (`place`); anything
-// else is set there as a box as wide as it is (compose._natural). An equation's place is its
-// own alignment.
-const PLACEABLE = new Set(["figure", "image", "table"]);
+// What stands at the left, middle or right of its place by moving in it (`place`: a
+// mechanism is a figure there); anything else is set there as a box as wide as it is
+// (compose._natural). An equation's place is its own alignment.
+const PLACEABLE = new Set(["figure", "mechanism", "image", "table"]);
 // Five stops across its place and five down it, each the share of the room it has to spare
 // before it (`horizontal`, `vertical`), named; a file names the ends and the middle by name.
 const ACROSS = [[0, "Left"], [0.25, "Left of Centre"], [0.5, "Centre"], [0.75, "Right of Centre"], [1, "Right"]];
@@ -2288,14 +2288,15 @@ export function mount(studio, container) {
     // A figure, picture or table moved across in its own place stands at the left, the middle
     // or the right of it: the room it has, and the guide shown where it would stand.
     const block = blocksAt(slideAt(), carry.from.region)[carry.from.index];
+    // (Its room is that of the object as it is drawn, whatever width it was asked to be.)
     const own = !carry.all && block ? regions.find((region) => region.key === carry.from.region)?.room : null;
-    const room = own && home.width < own.right - own.left - 2 ? own : null;
+    const room = own && roomAcross(own, home) ? own : null;
     const guide = h("div.block-guide"), guideDown = h("div.block-guide.down");
     pageNode.append(zone, line, guide, guideDown);
     pageNode.classList.add("block-dragging");
     document.body.classList.add("block-grabbing");
     Object.assign(carry, { started: true, regions, home, lifted, group, offsets, base, scale: scaleOf(lifted), zone, line, guide, guideDown, room, shifted: [],
-      placed: block ? placedAt(slideAt(), carry.from.region, block) : null, downs: own && block ? downsOf(carry.from, home) : null });
+      placed: block ? placedAt(slideAt(), carry.from.region, block, carry.from) : null, downs: own && block ? downsOf(carry.from, home) : null });
   }
   // Moved down in its own place, where an object would stand at each stop down it: the room
   // its place has to spare (compose's `data-flexo-spare`), where it stands were it not moved
@@ -2351,11 +2352,9 @@ export function mount(studio, container) {
     // In its own place, moved across: it snaps to the left, middle or right of it, whichever
     // it is nearest -- where it lands if let go, the guide showing it.
     if (at?.kind === "home" && carry.room) {
-      const { room, home } = carry, width = home.right - home.left;
-      const spot = (share) => room.left + (room.right - room.left - width) * share;
-      const place = ACROSS.map(([share]) => share).reduce((best, share) => (Math.abs(spot(share) - (home.left + dx)) < Math.abs(spot(best) - (home.left + dx)) ? share : best), carry.placed);
+      const { place, left } = acrossDrop(carry.room, carry.home, dx, ACROSS.map(([share]) => share), carry.placed);
       at = { kind: "home", place };
-      dx = spot(place) - home.left;
+      dx = left - carry.home.left;
     }
     // And moved down it: to the stop down it it is nearest (never above what is before it),
     // or where it is, nearer that.
@@ -2788,11 +2787,15 @@ export function mount(studio, container) {
     if (!region?.room || !box) return;
     closeInline();
     hover.hidden = true;
-    // No wider than its place, nor taller than the room the parts above and below it leave.
+    // No wider than its place, nor taller than the room the parts above and below it leave --
+    // on a slide set in rows, than its row would let it be (compose's data-flexo-most): the
+    // rows share the body's height, and a width past what its row has room for would be
+    // written and change nothing.
     const across = region.room.right - region.room.left;
     const boxes = region.blocks.map((item) => item.box).filter(Boolean);
     const others = Math.max(...boxes.map((b) => b.bottom)) - Math.min(...boxes.map((b) => b.top)) - box.height;
-    const most = Math.max(1, Math.min(across / box.width, (region.room.bottom - region.room.top - others) / box.height));
+    const taller = attribute(element, "data-flexo-most") ?? (region.room.bottom - region.room.top - others) / box.height;
+    const most = Math.max(1, Math.min(across / box.width, taller));
     const least = Math.min(1, 24 / Math.min(box.width, box.height));
     // Its width as the slide sets it (its ink, not the box round all it draws), in points.
     const points = Number(element.getAttribute("data-flexo-width")) || box.width / unit;
@@ -7021,22 +7024,20 @@ export function mount(studio, container) {
       block ? [icon("chevron"), h("span.crumb.here", {}, icon(blockIcon(block)), blockName(block))] : null);
   }
 
-  // Where the slide sets an object across its place when it is not asked: a figure, picture
-  // or table beside a list (or under words) at the words' left edge, else centred
-  // (compose._placing); words, a list, a listing, numbers from the left; an equation as it is
-  // aligned.
+  // Where the slide sets an object across its place when it is not asked: a figure,
+  // mechanism, picture or table beside a list (or under words) at the words' left edge, else
+  // centred (slidedrop.js's autoAcross); words, a list, a listing, numbers from the left; an
+  // equation as it is aligned.
   function autoPlace(slide, region, block, at = null) {
-    if (kindOf(block) === "math") return shareOf(block.align, ACROSS_NAMES) ?? 0.5;
-    // Given a width, it stands where the slide stands it (compose's _set_against): at the side
-    // its words are set against, or where a picture stands.
-    const drawn = at && block.width != null && !block.horizontal ? attribute(blockElement(at.region, at.index), "data-flexo-share") : null;
-    if (drawn != null && !PLACEABLE.has(kindOf(block))) return [0, 0.25, 0.5, 0.75, 1].find((stop) => Math.abs(stop - drawn) < 0.001) ?? 0;
-    if (!PLACEABLE.has(kindOf(block))) return 0;
-    const kinds = blocksAt(slide, region).filter((each) => !each.placeholder).map(kindOf);
-    if (kinds.includes("bullets")) return 0;
-    const graphics = kinds.filter((kind) => ["figure", "image", "plot", "gallery", "table"].includes(kind)).length;
-    const words = kinds.filter((kind) => kind === "text").length;
-    return graphics && words && graphics + words === kinds.length && kinds[0] === "text" ? 0 : 0.5;
+    const kind = kindOf(block);
+    if (kind === "math") return shareOf(block.align, ACROSS_NAMES) ?? 0.5;
+    // Asked nothing, it stands where the slide drew it (compose's data-flexo-share): what
+    // moves in its place, where its place sets it; anything else, given a width, at the side
+    // its words are set against, or where a picture stands (compose's _set_against).
+    const drawn = at && !block.horizontal && (block.width != null || PLACEABLE.has(kind)) ? attribute(blockElement(at.region, at.index), "data-flexo-share") : null;
+    const stop = drawn == null ? null : [0, 0.25, 0.5, 0.75, 1].find((each) => Math.abs(each - drawn) < 0.001);
+    if (!PLACEABLE.has(kind)) return stop ?? 0;
+    return stop ?? autoAcross(blocksAt(slide, region).filter((each) => !each.placeholder).map(kindOf));
   }
   // Where it stands across its place: as asked, else where the slide sets it.
   const placedAt = (slide, region, block, at = null) => shareOf(block.horizontal, ACROSS_NAMES) ?? autoPlace(slide, region, block, at);

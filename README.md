@@ -196,11 +196,14 @@ semibold and muted, light on a dark slide -- as wide as the widest label needs, 
 than a fifth of the body wrapping; the columns share the width left by `split` or `widths`.
 `""` leaves a row without a label (a row of headings), labels past the last row are kept
 and not drawn, and `rows=[]` only lines the rows up. Words take the height they need and
-the rows with pictures share the rest; a picture or table shorter than the words beside it
-in its row is centred against them (pictures side by side share one top), and an object
-asked to stand down its place (`vertical`) stands so in its row. Builds, placeholders,
-footnotes and `align` work as on any slide of columns; without `rows`, each column stacks
-its blocks on its own, as before. In the PowerPoint a label is a text box where it is drawn.
+the rows with pictures share the rest by need: a row that comes out shorter than an equal
+share (a mechanism, a picture as wide as its column or as it was asked to be) takes what it
+uses, and the rows that can use more share what it leaves. A picture or table shorter than
+the words beside it in its row is centred against them (pictures side by side share one
+top), and an object asked to stand down its place (`vertical`) stands so in its row.
+Builds, placeholders, footnotes and `align` work as on any slide of columns; without `rows`,
+each column stacks its blocks on its own, as before. In the PowerPoint a label is a text box
+where it is drawn.
 
 Any slide (title and section slides too) can take `background=`: a colour
 (`"#1b2a41"`) or a picture that fills the slide, cropped rather than stretched
