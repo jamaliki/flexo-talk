@@ -1496,9 +1496,12 @@ export function mount(studio, container) {
     // An object being sized keeps the drawing it is sized on, as a logo being sized or dragged
     // along its row does: one arriving meanwhile (another's change) is put in once it is let go
     // of -- or, changed, the drawing of it changed.
-    if ((sizing || resizing || logoSizing || logoDrag?.started) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
+    // So does a figure's part being carried: the slide drawn in full a moment after a change
+    // (folded to fit, say) would take the figure from under it and end the drag, nothing done.
+    if ((sizing || resizing || logoSizing || logoDrag?.started || figure?.parts.dragging) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
     else if (!pageNode || pageNode.dataset.shows !== shows) {
       renewed = true;
+      drawingHeld = false;
       // A figure's parts just moved on this slide: they land from where they were.
       before = figureBlock() ? figure.parts.landing() : null;
       // So do the slide's own parts, just moved or swapped.
@@ -4230,6 +4233,9 @@ export function mount(studio, container) {
       changed: () => { hover.hidden = true; renderInspector(); placeFigure(); },
       // Landed, the figure's frame is drawn round it as it now is (grown by a part, say).
       settled: () => { placeChosen(); placeFigure(); },
+      // A part let go: the drawing held back while it was carried is put in, unless the one
+      // its move makes has come first (a moment's wait: that one is the one to see).
+      dragged: () => setTimeout(() => { if (!figure?.parts.dragging) putHeld(); }, 1200),
       // A shape that can't be drawn as written, drawn as a plain box: said in its panel, as
       // the slide says it (a message whose place ends "#shape:what").
       // (A structure's own panel says what keeps it from being drawn: not said twice.)
