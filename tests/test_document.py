@@ -2941,3 +2941,65 @@ def test_hiding_parts_of_a_figure_file_on_a_slide_is_that_slides_alone(tmp_path:
     plain = show(lit["document"], "shown", [], all=True)
     assert plain["document"]["slides"][0]["body"][0] == {"figure": "pipeline.yaml"}
     deck_from_document(lit["document"], tmp_path)
+
+
+def test_a_figures_parts_appear_a_click_at_a_time(tmp_path: Path) -> None:
+    """A figure built up on one slide took a slide for each state. Its parts now appear on
+    a click each (``reveal``), as a list's items do: a state of the slide, a page of the
+    PDF, a click in the PowerPoint."""
+
+    import re
+    import zipfile
+
+    from flexo_talk.compose import render_slide
+
+    figure = {
+        "figure": {"id": "pipeline"},
+        "groups": [
+            {"id": "root", "role": "canvas", "layout": {"kind": "row"}, "children": ["api", "back"]},
+            {"id": "back", "role": "module", "label": "Backend", "layout": {"kind": "row"},
+             "children": ["queue", "store"]},
+        ],
+        "nodes": [{"id": "api", "label": "API"}, {"id": "queue", "label": "Orders"},
+                  {"id": "store", "kind": "database", "label": "Store"}],
+        "edges": [{"from": "api", "to": "queue"}, {"from": "queue", "to": "store"}],
+    }
+    document = {
+        "schema_version": 1,
+        "deck": {"id": "builds"},
+        "slides": [{"title": "Built up", "body": [
+            {"figure": figure, "reveal": [["queue"], "store"]}]}],
+    }
+    deck = deck_from_document(document, tmp_path)
+    drawn = render_slide(deck, deck.slides[0])
+    assert drawn.steps == 3
+
+    def said(step: int) -> list[str]:
+        svg = drawn.at_step(step)
+        return [words for words in ("API", "Orders", "Store", "Backend") if f">{words}<" in svg]
+
+    # With the slide: what waits for no click. A group's box comes with the first of what
+    # it holds; a line with the later of its ends.
+    assert said(1) == ["API"]
+    assert said(2) == ["API", "Orders", "Backend"]
+    assert said(3) == ["API", "Orders", "Store", "Backend"]
+    steps = dict(re.findall(r'id="slide1\.body\.0\.([\w.-]+)"[^>]*data-flexo-step="(\d)"', drawn.svg))
+    assert steps["queue"] == steps["back.container"] == steps["edge.1.api-to-queue"] == "2"
+    assert steps["store"] == steps["edge.2.queue-to-store"] == "3"
+    # Nothing moves from one state to the next: laid out with all of it.
+    plain = render_slide(deck_from_document({**document, "slides": [
+        {"title": "Built up", "body": [{"figure": figure}]}]}, tmp_path), deck.slides[0])
+    place = lambda svg: re.search(r'<rect[^>]*id="slide1\.body\.0\.api\.body"[^>]*>', svg)[0]  # noqa: E731
+    assert place(plain.svg) == place(drawn.svg)
+    built = deck.build(tmp_path / "out", formats=("pptx", "pdf"))
+    assert len(re.findall(rb"/Type\s*/Page[^s]", built.pdf.read_bytes())) == 3  # type: ignore[union-attr]
+    with zipfile.ZipFile(built.pptx) as pptx:  # type: ignore[arg-type]
+        slide = pptx.read("ppt/slides/slide1.xml").decode()
+    # Each click shows a group of its own on the slide: PowerPoint animates no shape in a group.
+    assert slide.count('nodeType="clickEffect"') == 2
+    assert all(f">{words}<" in slide for words in ("API", "Orders", "Store", "Backend"))
+    # It is kept in the deck's file as written, and a click that is no list is refused.
+    assert deck_document(deck)["slides"][0]["body"][0]["reveal"] == [["queue"], "store"]
+    wrong = {**document, "slides": [{"title": "x", "body": [{"figure": figure, "reveal": 3}]}]}
+    with pytest.raises(DeckDocumentError, match="reveal"):
+        deck_from_document(wrong, tmp_path)
