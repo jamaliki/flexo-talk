@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from flexo_talk import Deck
+from flexo_talk import Deck, compose
 from flexo_talk.compose import PLACEHOLDERS, ROW_GAP, ROW_GUTTER, ROW_LABEL, ROW_WEIGHT, _Canvas, render_slide
 from flexo_talk.deck import RenderedSlide, inline
 from flexo_talk.document import DeckDocumentError, deck_document, deck_from_document, dump_document
@@ -228,6 +228,354 @@ def test_the_rows_stand_down_the_body_together_as_the_content_does(tmp_path: Pat
     assert _y(alone, "slide1.left.1") == pytest.approx(_y(alone, "slide1.right.1"))
     at_top = _drawn(_two([small, large], [large, small], rows=["A", "B"], align="top"), tmp_path).svg
     assert 0.0 <= _y(alone, "slide1.left.0") - _y(at_top, "slide1.left.0") < 60.0
+
+
+def _shaped(folder: Path, left: dict | None = None, right: dict | None = None, **settings: object) -> dict:
+    """A slide of a heading, a mechanism and a picture in each column, a row each, under a
+    title of two lines: a wide picture and a squarer one, each asked to be wider than its
+    column (``left``, ``right``: what else each picture is asked)."""
+
+    def mechanism(smiles: str, bond: str) -> dict:
+        return {"mechanism": [{"smiles": smiles, "arrows": ["1 -> 2", f"{bond} -> 3"]}], "horizontal": "middle"}
+
+    wide, squarer = _picture(folder, "wide.png", (660, 300)), _picture(folder, "squarer.png", (600, 300))
+    return _two(
+        [{"text": "**Backside attack**", "align": "center"}, mechanism("[X-:1].[Y:2][Z:3]", "2-3"),
+         {"image": wide, "width": 400, **(left or {})}],
+        [{"text": "**Attack from above**", "align": "center"}, mechanism("[X-:1].[Y:2]=[Z:3]", "2=3"),
+         {"image": squarer, "width": 360, **(right or {})}],
+        rows=[" ", "Mechanism", "Geometry"],
+        title="A title long enough to take two lines of the slide, as a claim does", **settings,
+    )
+
+
+def _box(svg: str, identifier: str) -> tuple[float, float, float, float]:
+    part = _part(svg, identifier)
+    assert part is not None, identifier
+    return tuple(float(part.get(name)) for name in ("x", "y", "width", "height"))
+
+
+def test_a_row_that_cannot_use_its_share_leaves_the_rest_to_the_rows_that_can(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deck = _deck(_shaped(tmp_path), tmp_path)
+    svg, gap = render_slide(deck, deck.slides[0]).svg, deck.style.block_gap
+    _, top, wide, room = _room(svg, "left")
+    heading = _Canvas(deck, deck.slides[0]).measure(inline("**Backside attack**"), deck.style.body_size, wide).height
+    left, right = _box(svg, "slide1.left.2"), _box(svg, "slide1.right.2")
+    # The mechanisms need a good deal less than half the height the two rows have: their row
+    # is as tall as they are, the pictures starting on one line under it.
+    equal = (room - heading - 2 * gap) / 2.0
+    mechanisms = left[1] - gap - (top + heading + gap)
+    assert left[1] == pytest.approx(right[1]) and 60.0 < mechanisms < equal - 30.0
+    # The pictures' row has the rest, to the body's foot -- no band of the slide left empty
+    # under it -- and the squarer picture, the taller, is as tall as it: narrower than it was
+    # asked to be, and than its column.
+    rest = room - heading - mechanisms - 2 * gap
+    assert right[3] == pytest.approx(rest, abs=0.01) and right[1] + right[3] == pytest.approx(top + room, abs=0.01)
+    assert right[2] == pytest.approx(2.0 * rest, abs=0.01) and right[2] < min(360.0, wide) - 20.0
+    # The wide one is as wide as its column, the most it can be however wide it is asked.
+    assert left[2] == pytest.approx(wide) and left[3] == pytest.approx(wide / 2.2) and left[3] < rest
+    # Each a good deal taller than in half the height, which is what they had -- the rows
+    # sharing it equally whatever they used, and what the mechanisms left of theirs left
+    # under the pictures.
+    monkeypatch.setattr(compose, "ROW_TRIES", 0)
+    before = render_slide(deck, deck.slides[0]).svg
+    monkeypatch.undo()
+    assert _box(before, "slide1.left.2")[3] == pytest.approx(equal) == _box(before, "slide1.right.2")[3]
+    assert left[3] > equal + 30.0 and right[3] > equal + 35.0
+    assert _box(before, "slide1.right.2")[1] + equal < top + room - 35.0
+    # Asked nothing, they are drawn the same: as wide as its column, as tall as its row.
+    assert _drawn(_shaped(tmp_path, {"width": None}, {"width": None}), tmp_path).svg == svg
+    # A width its row now has the height for is the picture's: each 300 wide, where half the
+    # height let the wide one be 280 and the squarer one 255.
+    asked = _drawn(_shaped(tmp_path, {"width": 300}, {"width": 300}), tmp_path).svg
+    assert _box(asked, "slide1.left.2")[2:] == pytest.approx((300.0, 300.0 / 2.2))
+    assert _box(asked, "slide1.right.2")[2:] == pytest.approx((300.0, 150.0))
+    assert 2.2 * equal < 300.0 < 2.0 * rest
+
+
+def test_what_a_row_leaves_is_shared_out_until_no_row_can_use_more(tmp_path: Path) -> None:
+    wide, tall = _picture(tmp_path, "wide.png", (660, 300)), _picture(tmp_path, "tall.png", (200, 400))
+    words = [{"text": "One"}, {"text": "Two"}, {"text": "Three"}]
+
+    def drawn(*pictures: dict, **settings: object) -> tuple[str, list[tuple[float, float, float, float]], float]:
+        svg = _drawn(_two(list(pictures), words[:len(pictures)], rows=[], **settings), tmp_path).svg
+        return svg, [_box(svg, f"slide1.left.{row}") for row in range(len(pictures))], _room(svg, "left")[3]
+
+    # Rows that use all they have share the height equally, as they did.
+    svg, boxes, room = drawn({"image": tall}, {"image": tall}, {"image": tall})
+    assert [box[3] for box in boxes] == pytest.approx([(room - 36.0) / 3.0] * 3)
+    # A small picture's row is as tall as it; the two others share the rest, equally.
+    svg, boxes, room = drawn({"image": wide, "width": 110}, {"image": tall}, {"image": tall})
+    assert boxes[0][3] == pytest.approx(50.0)
+    assert [box[3] for box in boxes[1:]] == pytest.approx([(room - 36.0 - 50.0) / 2.0] * 2)
+    # One of those is as wide as it was asked to be before it has its half of the rest: the
+    # last row has what that leaves too, to the body's foot.
+    svg, boxes, room = drawn({"image": wide, "width": 110}, {"image": wide, "width": 264}, {"image": tall})
+    assert (room - 36.0) / 3.0 < 120.0 < (room - 36.0 - 50.0) / 2.0
+    assert [box[3] for box in boxes] == pytest.approx([50.0, 120.0, room - 36.0 - 170.0])
+    assert boxes[2][1] + boxes[2][3] == pytest.approx(_room(svg, "left")[1] + room, abs=0.01)
+    # None able to use more, the rows are as tall as their pictures and the rest is left: at
+    # the body's foot, the rows at its top.
+    svg, boxes, room = drawn({"image": wide, "width": 110}, {"image": wide, "width": 264}, align="top")
+    assert [box[3] for box in boxes] == pytest.approx([50.0, 120.0])
+    assert boxes[0][1] == pytest.approx(_room(svg, "left")[1]) and boxes[1][1] == pytest.approx(boxes[0][1] + 68.0)
+    # A row whose words need more than its share is as tall as they are, as it was: what the
+    # small picture's row leaves goes to the row that can use it.
+    long = {"bullets": [f"Point {index}" for index in range(5)]}
+    svg = _drawn(_two([{"image": wide, "width": 110}, {"image": tall}, {"image": tall}],
+                      [{"text": "One"}, long, {"text": "Three"}], rows=[]), tmp_path).svg
+    listed = _y(svg, "slide1.left.2") - 18.0 - _y(svg, "slide1.left.1")
+    assert listed > (room - 36.0 - 50.0) / 2.0 + 5.0
+    assert _box(svg, "slide1.left.2")[3] == pytest.approx(room - 36.0 - 50.0 - listed, abs=0.01)
+
+
+def test_the_height_a_row_would_have_at_most_is_what_the_rest_leave_it() -> None:
+    # Rows that take all they are given share the room equally; one that takes less than an
+    # equal share leaves the rest to the others, and one that would take more has a share
+    # like theirs.
+    assert compose._level(300.0, [], 2) == pytest.approx(150.0)
+    assert compose._level(300.0, [50.0], 1) == pytest.approx(250.0)
+    assert compose._level(300.0, [50.0, 200.0], 1) == pytest.approx(125.0)
+    assert compose._level(300.0, [120.0, 50.0], 2) == pytest.approx(250.0 / 3.0)
+
+
+def test_figures_at_one_scale_down_a_column_grow_together_and_the_rows_still_fit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def chain(name: str, count: int) -> dict:
+        nodes = [{"id": f"n{index}", "label": f"Step {index}"} for index in range(count)]
+        edges = [{"from": f"n{index}", "to": f"n{index + 1}"} for index in range(count - 1)]
+        return {"figure": {"figure": {"id": name}, "nodes": nodes, "edges": edges}, "turn": False}
+
+    # A short figure and a long one down a column, at one scale, over a tall picture: the
+    # short one's row leaves room, the others take it -- and the short one grows with the
+    # long one, which the rows then allow for.
+    slide = _two([chain("a", 2), chain("b", 6), {"image": _picture(tmp_path, "tall.png", (200, 400))}],
+                 [{"text": "One"}, {"text": "Two"}, {"text": "Three"}], rows=["A", "B", "C"])
+    deck = _deck(slide, tmp_path)
+
+    def drawn() -> tuple[list[float], tuple[float, float, float, float]]:
+        svg = render_slide(deck, deck.slides[0]).svg
+        scales = re.findall(r'<g id="slide1\.left\.[01]" transform="translate\([^)]*\) scale\(([\d.]+)\)"', svg)
+        assert _box(svg, "slide1.left.2")[1] + _box(svg, "slide1.left.2")[3] <= sum(_room(svg, "left")[1::2]) + 0.02
+        return [float(scale) for scale in scales], _box(svg, "slide1.left.2")
+
+    (short, long), picture = drawn()
+    monkeypatch.setattr(compose, "ROW_TRIES", 0)
+    (was_short, was_long), was = drawn()
+    assert short == pytest.approx(long) and was_short == pytest.approx(was_long)
+    assert long > was_long * 1.1 and picture[3] > was[3] * 1.1
+    # To the body's foot, where the short figure's row left a band empty under the picture.
+    foot = sum(_room(render_slide(deck, deck.slides[0]).svg, "left")[1::2])
+    assert picture[1] + picture[3] == pytest.approx(foot, abs=0.02) and was[1] + was[3] < foot - 25.0
+    # A figure that cannot be laid out for the height it would be given keeps the rows as
+    # they fitted: the slide is drawn as it was, and nothing is said of it.
+    monkeypatch.undo()
+    plan, asked = compose._plan_figures, []
+
+    def failing(canvas: object, blocks: list, box: object, words: object, each: float | None = None) -> tuple:
+        asked.append(each)
+        if len(asked) > 1:
+            raise compose._FigureFailed(blocks[0], ValueError("no"), compose.FIGURE_FAILED, compose.FIGURE_FAILED)
+        return plan(canvas, blocks, box, words, each=each)
+
+    monkeypatch.setattr(compose, "_plan_figures", failing)
+    kept = render_slide(deck, deck.slides[0])
+    assert len(asked) == 2 and not any(compose.FIGURE_FAILED in said for said in kept.diagnostics)
+    monkeypatch.setattr(compose, "_plan_figures", plan)
+    monkeypatch.setattr(compose, "ROW_TRIES", 0)
+    assert kept.svg == render_slide(deck, deck.slides[0]).svg
+
+
+def test_a_picture_its_row_makes_narrower_than_its_place_stands_where_it_is_asked(tmp_path: Path) -> None:
+    square = _picture(tmp_path, "square.png", (300, 300))
+
+    def drawn(**asked: object) -> tuple[float, float, float]:
+        """Its left edge and width, and the room its column has to spare beside it."""
+
+        picture = {"image": square, **asked}
+        svg = _drawn(_two([{"text": "**Head**"}, picture, {"image": square}],
+                          [{"text": "**Head**"}, {"text": "Beside"}, {"text": "Beside"}], rows=[]), tmp_path).svg
+        (x, _, wide, _), (left, _, width, _) = _room(svg, "left"), _box(svg, "slide1.left.1")
+        return left - x, width, wide - width
+
+    # In a row half the body's height a square picture is that wide, whatever width it was
+    # asked to be -- none, wider than its column, narrower than it but wider than its row is
+    # tall -- with room beside it.
+    _, width, spare = drawn()
+    assert spare > 150.0
+    for asked in ({}, {"width": 900}, {"width": width + 60.0}):
+        assert drawn(**asked)[1:] == pytest.approx((width, spare))
+        # Under words it starts at their edge; asked, it stands at the left, the middle or
+        # the right of its place, or any share of the way across.
+        assert drawn(**asked)[0] == pytest.approx(0.0)
+        for where, share in (("left", 0.0), ("middle", 0.5), ("right", 1.0), (0.25, 0.25), (0.8, 0.8)):
+            assert drawn(**asked, horizontal=where)[0] == pytest.approx(spare * share)
+    # As one narrower than its place by its own width does.
+    assert drawn(width=120, horizontal="right") == pytest.approx((spare + width - 120.0, 120.0, spare + width - 120.0))
+    # A mechanism too, asked to be wider than its column in a row too short for that.
+    step = {"mechanism": [{"smiles": "[X-:1].[Y:2][Z:3]", "arrows": ["1 -> 2", "2-3 -> 3"]}], "width": 900}
+
+    def mechanism(**asked: object) -> tuple[float, float]:
+        svg = _drawn(_two([{**step, **asked}, step, step], [{"text": "a"}, {"text": "b"}, {"text": "c"}], rows=[]),
+                     tmp_path).svg
+        found = re.search(r'<g id="slide1\.left\.0" transform="translate\(([-\d.]+),[^>]*data-flexo-width="([\d.]+)"',
+                          svg)
+        return float(found.group(1)), float(found.group(2))
+
+    (start, wide), (middle, _), (end, _) = mechanism(), mechanism(horizontal="middle"), mechanism(horizontal="right")
+    room = _room(_drawn(_two([step], [{"text": "a"}], rows=[]), tmp_path).svg, "left")[2]
+    assert wide < room - 60.0
+    assert middle == pytest.approx(start, abs=0.01) and end - start == pytest.approx((room - wide) / 2.0, abs=0.01)
+    assert mechanism(horizontal="left")[0] == pytest.approx(start - (room - wide) / 2.0, abs=0.01)
+
+
+def test_a_picture_in_a_row_says_how_much_larger_its_row_lets_it_be(tmp_path: Path) -> None:
+    def most(svg: str, identifier: str) -> float:
+        found = re.search(rf'id="{re.escape(identifier)}"[^>]*data-flexo-most="([\d.]+)"', svg)
+        assert found, identifier
+        return float(found.group(1))
+
+    editing = _drawn(_shaped(tmp_path), tmp_path, editing=True).svg
+    assert "data-flexo-most" not in _drawn(_shaped(tmp_path), tmp_path).svg
+    # The squarer picture's row has given it all it can: it can be no larger. (The wide one
+    # is as wide as its column: its row would let it be a hair taller, its column no wider.)
+    assert most(editing, "slide1.right.2") == pytest.approx(1.0)
+    left, right = _box(editing, "slide1.left.2"), _box(editing, "slide1.right.2")
+    assert most(editing, "slide1.left.2") == pytest.approx(right[3] / left[3], abs=1e-4)
+    # Made smaller, it says how far it can be made larger again: as large as it was.
+    small = _drawn(_shaped(tmp_path, right={"width": 200}), tmp_path, editing=True).svg
+    assert _box(small, "slide1.right.2")[2:] == pytest.approx((200.0, 100.0))
+    assert most(small, "slide1.right.2") == pytest.approx(right[3] / 100.0, abs=1e-4)
+    # So too where another row has taken the height it left, and the rows fill the body
+    # with no room to be seen: it could have half of it again, and has when it asks.
+    tall = _picture(tmp_path, "tall.png", (200, 400))
+
+    def stacked(**asked: object) -> str:
+        return _drawn(_two([{"image": tall, **asked}, {"image": tall}], [{"text": "a"}, {"text": "b"}], rows=[]),
+                      tmp_path, editing=True).svg
+
+    even, uneven = stacked(), stacked(width=50)
+    half = _box(even, "slide1.left.0")[3]
+    assert _box(uneven, "slide1.left.0")[3] == pytest.approx(100.0) and most(even, "slide1.left.0") == 1.0
+    assert _box(uneven, "slide1.left.1")[3] == pytest.approx(2.0 * half - 100.0)
+    assert most(uneven, "slide1.left.1") == 1.0
+    assert most(uneven, "slide1.left.0") == pytest.approx(half / 100.0, abs=1e-4)
+    assert _box(stacked(width=900), "slide1.left.0")[3] == pytest.approx(half)
+    # A mechanism, its words as large as words are, can be given a width that makes it as
+    # tall as an equal share of the height -- and, its column wide enough, is then drawn so.
+    width = re.compile(r'id="slide1\.left\.1"[^>]*data-flexo-width="([\d.]+)"')
+    grown = _shaped(tmp_path, split=0.7)
+    editing = _drawn(grown, tmp_path, editing=True).svg
+    grown["left"][1]["width"] = 900
+    larger = float(width.search(_drawn(grown, tmp_path).svg).group(1)) / float(width.search(editing).group(1))
+    assert larger > 1.4 and most(editing, "slide1.left.1") == pytest.approx(larger, abs=1e-3)
+    assert _room(editing, "left")[2] / float(width.search(editing).group(1)) > larger + 0.2
+
+
+def _node(script: str, names: str, code: str) -> object:
+    """What a few lines of JavaScript print, run in node with ``names`` of a static script."""
+
+    path = Path(__file__).parents[1] / "src/flexo_talk/studio/static" / script
+    code = f"import {{ {names} }} from {json.dumps(path.as_uri())};\n{code}"
+    done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
+    return json.loads(done.stdout)
+
+
+CARRY_JS = """
+const stops = [0, 0.25, 0.5, 0.75, 1];
+console.log(JSON.stringify(carried.map(({ room, home, dx, placed }) =>
+  ({ room: roomAcross(room, home), drop: acrossDrop(room, home, dx, stops, placed) }))));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_a_picture_is_carried_across_the_room_it_is_drawn_with_whatever_width_it_was_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def places(svg: str) -> list[dict]:
+        """Each column's picture as the page finds it: its place and itself, as drawn, and
+        where the slide says it stood it."""
+
+        found = []
+        for name in ("left", "right"):
+            (x, _, wide, _), (left, _, width, _) = _room(svg, name), _box(svg, f"slide1.{name}.2")
+            placed = float(re.search(rf'id="slide1\.{name}\.2"[^>]*data-flexo-share="([\d.]+)"', svg).group(1))
+            found.append({"room": {"left": x, "right": x + wide}, "home": {"left": left, "right": left + width},
+                          "placed": placed})
+        return found
+
+    def carried(pictures: list[dict], *moves: float) -> list[dict]:
+        tried = [{**picture, "dx": dx} for picture in pictures for dx in moves]
+        return _node("slidedrop.js", "roomAcross, acrossDrop", f"const carried = {json.dumps(tried)};{CARRY_JS}")
+
+    # Each picture is asked to be wider than its column. The squarer one is drawn narrower,
+    # its row no taller: carried half the room it has, it would stand in the middle of its
+    # column -- not where it stands, so that is written -- and carried a hair, where it is.
+    wide, squarer = places(_drawn(_shaped(tmp_path), tmp_path, editing=True).svg)
+    spare = squarer["room"]["right"] - squarer["home"]["right"]
+    assert spare > 20.0 and squarer["placed"] == 0.0
+    middle, hair, right = carried([squarer], spare / 2.0, 1.0, spare)
+    assert middle["room"] is True and middle["drop"]["place"] == 0.5 != squarer["placed"]
+    assert middle["drop"]["left"] == pytest.approx(squarer["home"]["left"] + spare / 2.0)
+    assert hair["drop"] == {"place": 0, "left": squarer["home"]["left"]} and right["drop"]["place"] == 1
+    # The wide one is as wide as its column: it has nowhere across it to go.
+    assert carried([wide], 10.0) == [{"room": False, "drop": None}]
+    # In half the height each, as the rows were, both are a good deal narrower than they
+    # were asked to be, and than their columns: each goes to the middle of its own.
+    monkeypatch.setattr(compose, "ROW_TRIES", 0)
+    for picture in places(_drawn(_shaped(tmp_path), tmp_path, editing=True).svg):
+        spare = picture["room"]["right"] - picture["home"]["right"]
+        assert spare > 70.0 and picture["placed"] == 0.0
+        assert carried([picture], spare / 2.0 - 5.0)[0]["drop"]["place"] == 0.5
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_the_editor_knows_where_the_slide_stands_a_picture_it_is_not_asked_about(tmp_path: Path) -> None:
+    picture = _picture(tmp_path)
+    blocks = {
+        "text": {"text": "Words"}, "bullets": {"bullets": ["One", "Two"]}, "code": {"code": "x = 1"},
+        "image": {"image": picture}, "table": {"table": [["A", "B"], ["1", "2"]]},
+        "figure": {"figure": {"figure": {"id": "f"}, "nodes": [{"id": "a", "label": "A"}]}},
+        "mechanism": {"mechanism": [{"smiles": "[X-:1].[Y:2][Z:3]", "arrows": ["1 -> 2", "2-3 -> 3"]}]},
+    }
+    columns = [
+        ["text", "mechanism", "image"], ["mechanism"], ["text", "mechanism"], ["mechanism", "text"], ["image"],
+        ["text", "image"], ["image", "text"], ["bullets", "image"], ["text", "figure", "table"],
+        ["text", "code", "image"], ["image", "mechanism"], ["text", "text", "figure"],
+    ]
+    said = _node("slidedrop.js", "autoAcross",
+                 f"console.log(JSON.stringify({json.dumps(columns)}.map((kinds) => autoAcross(kinds))));")
+    for kinds, share in zip(columns, said, strict=True):
+        # Where the slide stands each figure, mechanism, picture or table of the column, asked
+        # nothing: said on its drawing while it is edited, a column of its own or one in rows.
+        for settings in ({}, {"rows": []}):
+            svg = _drawn(_two([blocks[kind] for kind in kinds], [{"text": "Beside"}], **settings), tmp_path,
+                         editing=True).svg
+            stood = [
+                float(re.search(rf'id="slide1\.left\.{index}"[^>]*data-flexo-share="([\d.]+)"', svg).group(1))
+                for index, kind in enumerate(kinds) if kind in {"figure", "mechanism", "image", "table"}
+            ]
+            assert stood and all(each == share for each in stood), kinds
+    # A heading, a mechanism and a picture: under the words, at their edge -- not centred,
+    # where a picture carried to the middle would be taken to stand already.
+    assert said[0] == 0 and said[1] == 0.5
+
+
+def test_the_editor_sizes_and_carries_a_picture_by_what_the_slide_draws() -> None:
+    editor = (Path(__file__).parents[1] / "src/flexo_talk/studio/static/editor.js").read_text("utf-8")
+    # Carried across its place: the room it has is its drawing's, the stop it stands at is
+    # the slide's own word for it, and it is let go at the stop nearest.
+    assert "const room = own && roomAcross(own, home) ? own : null;" in editor
+    assert "placedAt(slideAt(), carry.from.region, block, carry.from)" in editor
+    assert "acrossDrop(carry.room, carry.home, dx, ACROSS.map(([share]) => share), carry.placed)" in editor
+    assert 'PLACEABLE.has(kind)) ? attribute(blockElement(at.region, at.index), "data-flexo-share")' in editor
+    assert 'const PLACEABLE = new Set(["figure", "mechanism", "image", "table"]);' in editor
+    # Sized by a corner on a slide set in rows: no larger than its row would let it be.
+    assert 'const taller = attribute(element, "data-flexo-most") ?? (region.room.bottom - region.room.top' in editor
+    assert "Math.min(across / box.width, taller)" in editor
 
 
 def test_builds_footnotes_notes_and_shrinking_work_in_rows(tmp_path: Path) -> None:
