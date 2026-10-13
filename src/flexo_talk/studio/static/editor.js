@@ -7928,6 +7928,7 @@ export function mount(studio, container) {
       h("div", {}, ui.button("Add Step", () => { steps.push({ arrows: [] }); write("steps"); renderInspector(); },
         { kind: "ghost", icon: "plus", small: true })),
       h("div.hint-line", {}, "Atoms are numbered by their atom maps: ", h("code", {}, "[O-:5]"), " is atom 5. ",
+        h("code", {}, "[X:1]"), ", ", h("code", {}, "[Nu-:1]"), ": a placeholder for any atom, drawn as written. ",
         h("code", {}, "5 -> 2"), ": lone pair to atom. ", h("code", {}, "2=3 -> 3"), ": bond to atom. ",
         h("code", {}, "1=2 -> 2-6"), ": bond to bond. ", h("code", {}, "~>"), ": one electron. A step with no structure uses the result of the arrows before it; a structure you enter is checked."),
       ui.field("Lone Pairs", ui.segmented({ value: block.lone_pairs || "used", options: [

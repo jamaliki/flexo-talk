@@ -1082,6 +1082,11 @@ class Region:
         steps, each a SMILES or ``{"smiles": ..., "arrows": ["5 -> 2", "2=3 -> 3"],
         "label": ..., "reagents": ..., "conditions": ..., "arrow": "equilibrium"}``.
 
+        A bracket atom that is no element is a placeholder, drawn as written
+        (``[X:1].[Y:2][Z:3]``, ``[Nu-:1]``, ``[R1]``; ``[*Ar]`` for a symbol that is also an
+        element's): it has a pair wherever an arrow starts from it, nothing is refused on
+        its account, and its charge is kept.
+
         Atoms are named by their atom maps (``[O-:5]``). An arrow from a lone pair is
         ``"5 -> 2"``, from a bond ``"2=3 -> 3"``, a bond moved ``"1=2 -> 2-6"``, a
         fishhook ``"~>"``. A step with no SMILES is drawn from the arrows before it;

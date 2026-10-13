@@ -1513,6 +1513,31 @@ def test_a_mechanism_is_drawn_as_shapes_with_its_arrows_and_a_wrong_one_is_said(
         deck.slide("Wrong").mechanism([{"smiles": "[OH-:5].[CH3:1][C:2](=[O:3])[Cl:4", "arrows": ["5 -> 2"]}])
 
 
+def test_a_mechanism_of_placeholders_is_exported_as_words_charges_and_curves(tmp_path: Path) -> None:
+    deck = Deck("schematic")
+    deck.slide("Attack").mechanism([{"smiles": "[X:1].[Y:2][Z:3]", "arrows": ["1 -> 2", "2-3 -> 3"]}])
+    deck.slide("Addition").mechanism([{"smiles": "[Nu-:1].[E:2]=[R1:3]", "arrows": ["1 -> 2", "2=3 -> 3"]}],
+                                     lone_pairs="all")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    assert not result.diagnostics
+    attack, addition = _slides(result.pptx)  # type: ignore[arg-type]
+    assert "<p:pic>" not in attack + addition
+    # Each letter a word of its own, twice: on the structure, and on what its arrows make.
+    assert [attack.count(f"<a:t>{symbol}</a:t>") for symbol in "XYZ"] == [2, 2, 2]
+    assert "Text \u201cR1\u201d" in addition  # named by its letters
+    assert attack.count('name="Charge"') == 2 and attack.count('name="Electrons"') == 1
+    assert attack.count("<a:cubicBezTo>") >= 2 and 'srgbclr val="d466d6"' in attack.lower()
+    # R1 is R with its number raised, and the pair the arrows leave on it is drawn when
+    # every pair is asked for.
+    runs = re.findall(r"<a:rPr([^>]*)>(?:(?!</a:rPr>).)*</a:rPr><a:t>([^<]*)</a:t>", addition)
+    assert [text for attributes, text in runs if "baseline=" in attributes] == ["1", "1"]
+    assert addition.count('name="Charge"') == 2 and addition.count('name="Pair"') == 1
+    with pytest.raises(ValueError, match=r"Did you mean \[Cl\]\?"):
+        deck.slide("Mistyped").mechanism("[X][CL]")
+    with pytest.raises(ValueError, match=r"cannot be drawn without a name.*\[X\], \[Nu\]"):
+        deck.slide("Unnamed").mechanism("C*")
+
+
 @pytest.mark.parametrize("look", [{"theme": "paper"}, {"theme": "paper", "font": "IBM Plex Sans"}, {"theme": "tikz"}])
 def test_a_mechanism_is_lettered_as_its_deck_is(look) -> None:
     deck = Deck("chemistry", **look)
