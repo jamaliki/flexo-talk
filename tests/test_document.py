@@ -1524,6 +1524,75 @@ def test_a_mechanism_block_is_read_and_its_mistakes_said_at_their_place(tmp_path
         deck_from_document(document, tmp_path)
 
 
+def test_a_mechanism_of_placeholders_is_read_from_a_document_drawn_and_exported(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    (tmp_path / "talk.yaml").write_text(
+        "deck: {id: schematic}\n"
+        "slides:\n"
+        "- layout: two-columns\n"
+        "  left:\n"
+        "  - text: Backside attack\n"
+        "  - mechanism:\n"
+        '    - {smiles: "[X:1].[Y:2][Z:3]", arrows: ["1 -> 2", "2-3 -> 3"]}\n'
+        "  right:\n"
+        "  - text: Addition\n"
+        "  - mechanism:\n"
+        '    - {smiles: "[Nu-:1].[E:2]=[Z:3]", arrows: ["1 -> 2", "2=3 -> 3"]}\n',
+        encoding="utf-8",
+    )
+    deck = read_deck(tmp_path / "talk.yaml")
+    (rendered,) = deck.render()
+    assert not rendered.diagnostics
+    lettered = re.findall(r'<text[^>]*id="slide1\.(\w+)\.1\.mechanism\.(step\d)\.atom\d"[^>]*>'
+                          r"(?:<tspan[^>]*>)?([^<]+)<", rendered.svg)
+    # Each structure and what its arrows make, lettered as written.
+    assert lettered == [("left", step, symbol) for step in ("step1", "step2") for symbol in "XYZ"] + [
+        ("right", step, symbol) for step in ("step1", "step2") for symbol in ("Nu", "E", "Z")]
+    charged = re.findall(r'id="slide1\.(\w+)\.1\.mechanism\.(step\d\.charge\d)"', rendered.svg)
+    assert charged == [("left", "step2.charge0"), ("left", "step2.charge2"),  # X+ and Z-
+                       ("right", "step1.charge0"), ("right", "step2.charge2")]  # Nu-, then Z-
+    # In the PowerPoint: letters as words, charges, bonds and the pairs given as shapes, arrows as curves.
+    built = deck.build(tmp_path / "out", formats=("pptx",))
+    left, right = ([shape for shape in group.shapes[0].shapes]
+                   for group in Presentation(str(built.pptx)).slides[0].shapes if group.name == "Figure")
+    assert [shape.text_frame.text for shape in left if shape.name.startswith("Text")] == ["X", "Y", "Z"] * 2
+    assert [shape.text_frame.text for shape in right if shape.name.startswith("Text")] == ["Nu", "E", "Z"] * 2
+    names = [shape.name for shape in left]
+    assert names.count("Charge") == 2 and names.count("Electrons") == 1 and names.count("Bond") == 2
+    assert names.count("Arrow") == 3  # two curly arrows, and the reaction arrow
+    assert deck_document(deck)["slides"][0]["left"][1]["mechanism"] == [
+        {"smiles": "[X:1].[Y:2][Z:3]", "arrows": ["1 -> 2", "2-3 -> 3"]}]
+    # A real atom among them is checked as ever, and an element mistyped is not taken for one.
+    document = {"deck": {"id": "c"}, "slides": [{"body": [{"mechanism": [
+        {"smiles": "[Nu-:1].[CH3:2][Br:3]", "arrows": ["1 -> 2"]}]}]}]}
+    (rendered,) = deck_from_document(document, tmp_path).render()
+    assert any("C2 would have 10 electrons" in said for said in rendered.diagnostics)
+    document["slides"][0]["body"][0]["mechanism"][0]["smiles"] = "[Nu-:1].[CH3:2][BR:3]"
+    with pytest.raises(DeckDocumentError, match=r"slides\[0\]\.body\[0\] \(mechanism\).*Did you mean \[Br:3\]\?"):
+        deck_from_document(document, tmp_path)
+
+
+def test_the_studio_draws_arrows_from_a_placeholder_as_from_any_atom(tmp_path: Path) -> None:
+    kind = DeckKind()
+    document = {"deck": {"id": "c"}, "slides": [{"body": [{"mechanism": [{"smiles": "[X].[Y][Z]"}]}]}]}
+    at = {"slide": 0, "region": "body", "index": 0}
+    seen = kind.act(document, {"do": "mechanism", "at": at, "step": 0, "holding": []}, tmp_path)
+    # Pointed at, each offers a pair: its valence is unknown, so it has one to give.
+    assert [(atom["name"], len(atom["pairs"])) for atom in seen["sheet"]["atoms"]] == [("X1", 1), ("Y2", 1), ("Z3", 1)]
+    made = kind.act(document, {"do": "mechanism", "at": at, "step": 0, "holding": [],
+                               "add": {"tail": {"atom": 0}, "head": {"atom": 1}}}, tmp_path)
+    assert made["arrow"] == "1 -> 2" and made["sheet"]["problem"] is None
+    made = kind.act(made["document"], {"do": "mechanism", "at": at, "step": 0, "holding": [],
+                                       "add": {"tail": {"bond": [1, 2]}, "head": {"atom": 2}}}, tmp_path)
+    assert made["document"]["slides"][0]["body"][0]["mechanism"] == [
+        {"smiles": "[X].[Y][Z]", "arrows": ["1 -> 2", "2-3 -> 3"]}]
+    assert [arrow["said"] for arrow in made["sheet"]["arrows"]] == ["lone pair on X1 \u2192 Y2", "Y2-Z3 bond \u2192 Z3"]
+    assert made["sheet"]["states"] == 2
+    (rendered,) = deck_from_document(made["document"], tmp_path).render()
+    assert not rendered.diagnostics and ".mechanism.step2.charge0" in rendered.svg
+
+
 def test_the_studio_draws_a_mechanisms_arrows_from_two_clicks(tmp_path: Path) -> None:
     kind = DeckKind()
     document = {"deck": {"id": "c"}, "slides": [{"title": "SN2", "body": [

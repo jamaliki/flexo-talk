@@ -331,10 +331,26 @@ or a list of steps with `smiles`, `arrows`, `label`, `reagents`, `conditions`,
 `arrow`). In the PowerPoint the structures are shapes and their arrows curves, all
 editable.
 
+A mechanism may be schematic: a bracket atom whose symbol is no element is a
+placeholder, drawn as it is written -- `[X]`, `[Nu-]`, `[E]`, `[LG]`, `[EWG]`, `[R1]`
+(R¹), or `[*Ar]` for a symbol that is also an element's. Its valence is unknown, so it
+has a pair to give wherever an arrow starts from it and nothing is refused on its
+account, but its charge is kept (X attacking ends X⁺) and the real atoms beside it
+are checked as ever. Check its letters: an element mistyped into no element (`[Xx]`)
+is drawn as written, though `[CL]` and `[cl]` are still refused, with what was meant.
+
+```yaml
+- mechanism:
+  - {smiles: "[X:1].[Y:2][Z:3]", arrows: ["1 -> 2", "2-3 -> 3"]}
+- mechanism:
+  - {smiles: "[Nu-:1].[E:2]=[Z:3]", arrows: ["1 -> 2", "2=3 -> 3"]}
+```
+
 In the studio each step has **Draw Arrows…**: the structure it acts on, drawn large, to point
 at. Click where the electrons come from -- an atom for its lone pair (pointing at an
-atom shows its pairs), or a bond -- then where they go, and the arrow is written into
-the step (an atom with no map is given one in its SMILES). A bond's electrons sent to
+atom shows its pairs; a placeholder always has one to give), or a bond -- then where
+they go, and the arrow is written into the step (an atom with no map is given one in
+its SMILES). A bond's electrons sent to
 an atom outside it ask which end the new bond forms from; **Single electron (fishhook)** writes
 fishhooks. The step holds still while it is drawn on; **Clean Up** lays it out again for
 its arrows. **Arrange** moves a molecule where you drag it, turns it 30 degrees at a
