@@ -92,7 +92,7 @@ SCHEMA_VERSION = 1
 BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
     "text": ("size", "align", "muted", "colour", "width"),
-    "figure": ("turn", "width", "description", "caption"),
+    "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight"),
     "image": ("width", "crop", "mask", "description", "caption"),
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),
@@ -720,7 +720,10 @@ def add_block(
             strays = _strays(shown)
             if strays:
                 shown = {**shown, "edges": strays[1]}
-            region.add(_figure(base, shown, here, region), **options)
+            # Parts of it hidden, dimmed or highlighted on this slide alone (``hide``, ``dim``,
+            # ``highlight``: flexo.showing): a figure kept in a file, shown several ways.
+            apart = {key: options.pop(key) for key in ("hide", "dim", "highlight") if key in options}
+            region.add(_shown(_figure(base, shown, here, region), apart, here), **options)
             if strays and isinstance(region.blocks[-1], _Figure):
                 region.blocks[-1].said = (*region.blocks[-1].said, *strays[0])
         elif kind == "plot":
@@ -917,6 +920,21 @@ def _stat(item: object, where: str) -> tuple[object, str]:
 
 _FIGURES: OrderedDict[str, object] = OrderedDict()
 _FIGURES_LOCK = threading.Lock()
+
+
+def _shown(figure: object, apart: dict[str, object], where: str) -> object:
+    """``figure`` with what a slide's block says of its parts over what it says itself:
+    those hidden, dimmed and highlighted there (lists of their ids)."""
+
+    import flexo
+
+    if not apart or not isinstance(figure, flexo.FigureSpec):
+        return figure
+    for key, named in apart.items():
+        if not isinstance(named, list) or not all(isinstance(item, str) for item in named):
+            raise DeckDocumentError(where, f"{key} must be a list of the names of the figure\u2019s parts.")
+    words = {"hide": "hidden", "dim": "dimmed", "highlight": "highlighted"}
+    return replace(figure, **{words[key]: tuple(named) for key, named in apart.items()})  # type: ignore[arg-type]
 
 
 def _figure(base: Path, value: object, where: str, region: Region) -> object:

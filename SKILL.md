@@ -185,6 +185,8 @@ with English words, numbers, and maths inside it kept in order.
   `sections` (`rule`/`fill`/`number`), `edge`, `title_align` (`start`/`middle`),
   `title_role`, `title_weight`, `numbers`, `align`, and `width`/`height`
   (960x540 pt is 16:9; 720x540 is 4:3). `from flexo_talk import DeckStyle`.
+- **One figure, several slides**: `{figure: file.yaml, hide: [ids], dim: [ids],
+  highlight: [ids]}` shows parts hidden, faint or alone at full strength; nothing moves.
 - **Type by role**: `Deck(font=, title_font=, figure_font=)`; each falls back to
   `font`, then to the theme's (its `type: {title_family:, figure_family:}`, then its
   family).
