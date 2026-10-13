@@ -412,6 +412,10 @@ figure is a flexo figure file, a figure document written inline, or
 `deck.plotting()`). Files are found next to the document. A wrong document says
 where: `slides[3].left[1] (table): a table is a list of rows`. A document that
 names Python runs it when drawn, as a Python deck would: open only decks you trust.
+A figure's own plots (a shape of `kind: plot`, in flexo's README) are that Python
+too: in the studio they wait for the folder to be trusted, run in the folder's
+worker as the deck's plots do, and are drawn again when their Python or the data
+it read is saved.
 
 `flexo-talk build talk.yaml` builds one; `flexo-talk convert talk.py` writes a
 Python deck as a document (its figures inline, its plots saved as SVG pictures);

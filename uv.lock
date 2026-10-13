@@ -136,6 +136,7 @@ requires-dist = [
     { name = "fonttools", specifier = ">=4.59" },
     { name = "gemmi", marker = "extra == 'structures'", specifier = ">=0.6" },
     { name = "jsonschema", specifier = ">=4.25" },
+    { name = "matplotlib", marker = "extra == 'plots'", specifier = ">=3.8" },
     { name = "molsketch", marker = "extra == 'molecules'", git = "https://github.com/jamaliki/mol-sketch?subdirectory=python" },
     { name = "openai", marker = "extra == 'assistant'", specifier = ">=1.60" },
     { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10" },
@@ -145,13 +146,14 @@ requires-dist = [
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "uharfbuzz", specifier = ">=0.52" },
 ]
-provides-extras = ["assistant", "structures", "molecules", "pdf"]
+provides-extras = ["assistant", "structures", "molecules", "pdf", "plots"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "anthropic", specifier = ">=1.9" },
     { name = "gemmi", specifier = ">=0.6" },
     { name = "hypothesis", specifier = ">=6.138" },
+    { name = "matplotlib", specifier = ">=3.8" },
     { name = "openai", specifier = ">=1.60" },
     { name = "pillow", specifier = ">=10" },
     { name = "pypdfium2", specifier = ">=5.13.0" },

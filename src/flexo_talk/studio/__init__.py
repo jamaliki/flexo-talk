@@ -17,9 +17,11 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any, get_args
 
+from flexo import plots
 from flexo.studio import Drawing, Message, Page
 from flexo.studio.plain import explain
 
+from flexo_talk import worker
 from flexo_talk.deck import FOOTER_LOGOS, LAYOUTS, LOGO_HEIGHT, LOGO_HEIGHTS, LOGO_SUFFIXES, LOOKS, DeckStyle
 from flexo_talk.document import (
     BLOCKS,
@@ -536,12 +538,13 @@ class DeckKind:
             if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
         ]
         watched: set[Path] = set(_theme_files(deck_data, base)) | set(_logo_files(deck_data, base))
-        keys: list[str] = []
-        for index, data in enumerate(slides):
+
+        def key(index: int) -> str:
+            data = slides[index]
             files = sorted(_files(data, base))
             watched.update(files)
             layout = data.get("layout", "content") if isinstance(data, dict) else "content"
-            keys.append(_stable({
+            return _stable({
                 "head": head,
                 "index": index,
                 "sections": sections if layout == "agenda" else None,
@@ -554,7 +557,9 @@ class DeckKind:
                 "shown": sum(1 for item in slides[:index] if not _skipped(item)),
                 "slide": data,
                 "files": [(str(file), _stamp(file)) for file in files],
-            }))
+            })
+
+        keys = [key(index) for index in range(len(slides))]
         focus = int((hints or {}).get("focus") or 0)
         # While the deck is changed its figures keep their layouts (compose.EDITING); once
         # the changes stop the page asks to settle, and the slides that kept one are
@@ -573,6 +578,9 @@ class DeckKind:
             editing, placeholders, aside = EDITING.set(not settle), PLACEHOLDERS.set(True), STANDING_ASIDE.set(True)
             try:
                 rendered = render_slide(deck, slide)
+                # (The data a plot in one of its figures reads is known once it has been
+                # drawn: the slide is kept by those files too, and they are watched.)
+                keys[index] = key(index)
                 self._slides[keys[index]] = {"svg": _presentable(rendered.svg, deck, slide), "steps": rendered.steps,
                                              "diagnostics": rendered.diagnostics, "notes": rendered.notes,
                                              "held": rendered.held, "settled": rendered.settled}
@@ -719,13 +727,13 @@ class DeckKind:
                     block[key] = list((made["data"].get("figure") or {}).get(key) or [])
                     if not block[key] and not (_figure_data(was, path.suffix).get("figure") or {}).get(key):
                         del block[key]
-                shown = model(was, suffix=path.suffix)
+                shown = model(was, suffix=path.suffix, base=path.parent)
                 shown["figure"] = {**(shown.get("figure") or {}), **_shown_here(block, shown)}
                 # (Answered as an edit of the deck, which it is: no file is named as changed.)
                 return {"document": changed, "select": made["select"], "model": shown}
             result = apply(was, edit, suffix=path.suffix, base=path.parent)
             answer = {"document": document, "select": result["select"],
-                      "model": model(result["text"], suffix=path.suffix), "file": value}
+                      "model": model(result["text"], suffix=path.suffix, base=path.parent), "file": value}
             # (As this slide shows it: what its block hides, dims and highlights.)
             if isinstance(answer["model"], dict):
                 here = _shown_here(block, answer["model"])
@@ -1875,12 +1883,53 @@ def _files(data: object, base: Path) -> set[Path]:
                         if path.suffix == ".py":
                             # Python beside it may be what it imports: a change there counts.
                             found.update(sorted(path.parent.glob("*.py"))[:50])
+                        elif key == "figure":
+                            found |= _plot_files(_plots_in(path), path.parent)
                     elif not path.exists():
                         found.add(path)  # missing: watched, so the slide is drawn again once it is there
-            elif isinstance(value, dict | list) and not (key == "figure" and isinstance(value, dict)):
+            elif key == "figure" and isinstance(value, dict):
+                found |= _plot_files(value.get("nodes"), base)
+            elif isinstance(value, dict | list):
                 found |= _files(value, base)
             elif key == "gallery" and isinstance(value, list):
                 found |= _files([{"picture": item} if isinstance(item, str) else item for item in value], base)
+    return found
+
+
+def _plot_files(nodes: object, base: Path) -> set[Path]:
+    """The files the plots among a figure's ``nodes`` are drawn from (``flexo.plots.files``):
+    each one's Python file, and the data its function read when it was last run."""
+
+    found: set[Path] = set()
+    for node in nodes if isinstance(nodes, list) else ():
+        properties = node.get("properties") if isinstance(node, dict) and node.get("kind") == "plot" else None
+        source = properties.get("source") if isinstance(properties, dict) else None
+        if isinstance(source, str) and source:
+            found.update(plots.files(base / source, str(properties.get("function") or "")))
+    return found
+
+
+_PLOTS_IN: dict[Path, tuple[float, list]] = {}
+"""The plots each figure file names, and when the file had last changed."""
+
+
+def _plots_in(path: Path) -> list:
+    """The plots a figure file names (its nodes of that kind), read again when it changes."""
+
+    stamp = _stamp(path)
+    known = _PLOTS_IN.get(path)
+    if known is not None and known[0] == stamp:
+        return known[1]
+    found: list = []
+    try:
+        text = path.read_text(encoding="utf-8")
+        nodes = _figure_data(text, path.suffix).get("nodes") if "plot" in text else None
+        found = [node for node in nodes or [] if isinstance(node, dict) and node.get("kind") == "plot"]
+    except Exception:  # (a file that does not read is said where it is drawn)
+        found = []
+    if len(_PLOTS_IN) > 256:
+        _PLOTS_IN.clear()
+    _PLOTS_IN[path] = (stamp, found)
     return found
 
 
@@ -2077,6 +2126,10 @@ def _palette(deck) -> dict[str, str]:
 
 
 kind = DeckKind
+
+# A figure's plots are run where a deck's own Python is, in a studio: apart, by its
+# folder's worker -- in a figure's own file as on a slide.
+plots.RUNNER = worker.figure_plot
 
 
 def _drawn_plainly(message: str) -> str:

@@ -3628,7 +3628,9 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         largest, turn, block.turn,
     )
     key = opened if seen is None else (*opened, free)
-    laid = _cached_fit(key)
+    # (A figure with plots is laid out again when their Python or their data has changed.)
+    plotted = any(node.kind == "plot" for node in spec.nodes)
+    laid = _plotted_fit(key, spec) if plotted else _cached_fit(key)
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
@@ -3703,13 +3705,18 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
             "svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes,
             "scale": fit.scale, "finding": _FINDING.get(where),
         }
+        if plotted:
+            laid["plots"] = _plots_said(fit.compilation)
         if keep is not None and fit.layout == keep:
             canvas.settled = False
         else:
             # (Found again as it is seen -- by the next drawing, free to turn as this one is
             # turned or not; and by the deck opened next, drawn as it was last seen.)
             for also in dict.fromkeys((key, (*opened, fit.layout.startswith("turned")), opened)):
-                _store_fit(also, laid)
+                if plotted:
+                    _keep_plotted(also, spec, laid)
+                else:
+                    _store_fit(also, laid)
     elif laid.get("finding") is not None:
         # (Found before, in another session: how long it took then.)
         _FINDING[where] = laid["finding"]
@@ -3724,6 +3731,13 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         _SCALES[where] = laid["scale"]
     for said in dict.fromkeys(filter(None, (_figure_check(code) for code in laid["codes"]))):
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}: {said}")
+    # A plot that is not drawn says why itself, by its name, as in a figure's own file -- and
+    # Python not run for want of trust is what the page asks to trust the folder for.
+    for name, code, message in laid.get("plots") or ():
+        if code != "code.untrusted":
+            canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}#{name}: {message}")
+        elif message not in canvas.held:
+            canvas.held.append(message)
     for text in block.said:
         # (One about a part of it -- a line -- names it: "#edge.2.b-to-nowhere: ...".)
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}{text if text.startswith('#') else ': ' + text}")
@@ -3846,7 +3860,7 @@ def _figure_check(code: str) -> str | None:
 
     if code in _FIGURE_CHECKS:
         return _FIGURE_CHECKS[code]
-    if code.startswith(_UNSAID_CHECKS):
+    if code.startswith(_UNSAID_CHECKS) or code in _PLOT_CHECKS or code.startswith("plot."):
         return None
     if code.startswith("routing.") and code.endswith((".arrow", ".clearance", ".orientation")):
         return "A line or arrowhead is cramped in this figure."
@@ -3855,6 +3869,11 @@ def _figure_check(code: str) -> str | None:
     if code.startswith("layout."):
         return "Some shapes in this figure don't fit where they are."
     return "Part of this figure isn't drawn quite as written."
+
+
+_PLOT_CHECKS = ("code.untrusted",)
+"""What is said of a plot not drawn, with flexo's own ``plot.`` codes: said by the plot, in
+its own words (``_plots_said``), not as a check of its figure."""
 
 
 # -- the figure cache --------------------------------------------------------------------
@@ -3920,6 +3939,58 @@ def _store_fit(key: tuple, laid: dict) -> None:
         path.write_text(json.dumps(laid), encoding="utf-8")
     except OSError:
         return
+
+
+_PLOTTED: dict[tuple, tuple[dict, tuple]] = {}
+"""Figures with plots, laid out for a box, each with what its plots were drawn from then
+(``_plots_from``). Kept while the program runs, never between builds: only having run a
+plot does flexo know what data it read, to see that it has changed."""
+
+
+def _plots_from(spec: Any) -> tuple:
+    """What a figure's plots are drawn from, as it is now: whether Python may run here, and
+    each file ``flexo.plots`` draws them from (their Python, their data) with when it last
+    changed."""
+
+    from flexo.plots import files
+    from flexo.studio import code_allowed
+
+    found: list[object] = [code_allowed.get()]
+    for node in spec.nodes:
+        source = str(node.property("source", "") or "")
+        if node.kind != "plot" or not source:
+            continue
+        for file in files(source, str(node.property("function", "") or "")):
+            try:
+                stat = file.stat()
+            except OSError:
+                found.append((str(file), None))
+            else:
+                found.append((str(file), stat.st_mtime_ns, stat.st_size))
+    return tuple(found)
+
+
+def _plotted_fit(key: tuple, spec: Any) -> dict | None:
+    known = _PLOTTED.get(key)
+    return known[0] if known is not None and known[1] == _plots_from(spec) else None
+
+
+def _keep_plotted(key: tuple, spec: Any, laid: dict) -> None:
+    _PLOTTED.pop(key, None)
+    _PLOTTED[key] = (laid, _plots_from(spec))
+    while len(_PLOTTED) > 64:
+        _PLOTTED.pop(next(iter(_PLOTTED)))
+
+
+def _plots_said(compilation: Any) -> list[tuple[str, str, str]]:
+    """What a figure's drawing says of its plots that were not drawn: each one's name, the
+    code of what is said, and the words."""
+
+    return [
+        (str(item.entity_id), item.code, item.message)
+        for item in compilation.measured.diagnostics
+        if item.code.startswith("plot.") or item.code in _PLOT_CHECKS
+    ]
 
 
 TURNED_LARGER = "Turned to fit the slide, it would be larger."

@@ -746,6 +746,38 @@ def test_a_figure_file_on_a_slide_is_edited_in_its_file(tmp_path: Path) -> None:
     assert text.startswith("# A figure: ") and "id: backbone" in text and "to: backbone" in text
 
 
+def test_a_plot_in_a_figure_on_a_slide_is_offered_its_files_functions(tmp_path: Path) -> None:
+    (tmp_path / "figures").mkdir()
+    (tmp_path / "plots.py").write_text("def loss():\n    pass\n\n\ndef accuracy():\n    pass\n")
+    (tmp_path / "figures" / "more.py").write_text("def first():\n    pass\n\n\ndef second():\n    pass\n")
+
+    def figure(source: str, function: str) -> dict:
+        plot = {"id": "p", "kind": "plot", "properties": {"source": source, "function": function}}
+        return {"figure": {"id": "panels"}, "nodes": [plot]}
+
+    (tmp_path / "figures" / "panels.yaml").write_text(yaml.safe_dump(figure("more.py", "second")))
+    document = {"deck": {"id": "talk"}, "slides": [
+        {"title": "Plots", "body": [{"figure": figure("plots.py", "loss")}, {"figure": "figures/panels.yaml"}]},
+    ]}
+    kind = DeckKind()
+
+    def edited(index: int, edit: dict) -> dict:
+        at = {"slide": 0, "region": "body", "index": index}
+        return kind.act(document, {"do": "figure", "at": at, "edit": edit}, tmp_path)
+
+    # Read from each plot's file -- found from the deck's folder for a figure written on the
+    # slide, from the figure file's own for one kept in a file -- for its Function pop-up.
+    assert edited(0, {"do": "read"})["model"]["functions"] == {"p": ["loss", "accuracy"]}
+    assert edited(1, {"do": "read"})["model"]["functions"] == {"p": ["first", "second"]}
+    # Given another file, it takes that file's first function, the old name not being in it.
+    file = {"do": "update", "target": {"type": "node", "id": "p"}, "values": {"properties.source": "figures/more.py"}}
+    changed = edited(0, file)
+    assert changed["document"]["slides"][0]["body"][0]["figure"]["nodes"][0]["properties"] == {
+        "source": "figures/more.py", "function": "first",
+    }
+    assert changed["model"]["functions"] == {"p": ["first", "second"]}
+
+
 def test_an_edit_to_a_figure_file_is_undone_by_putting_the_file_back(tmp_path: Path) -> None:
     from flexo.studio.figure_edit import EditError
     from flexo.studio.figure_kind import SAMPLE_FIGURE
@@ -1044,6 +1076,156 @@ def test_in_the_studio_a_decks_python_runs_apart_and_cannot_hang_or_take_down_th
     assert said["slide9"] == "plots.py:typo: name 'figur' is not defined (line 29)"
     assert "slide1" not in said and "slide7" not in said and "pid " in pages["slide7"].svg
     assert seconds < 30
+
+
+def test_in_the_studio_a_figures_plots_run_apart_too_in_its_file_and_on_a_slide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("matplotlib")
+    import os
+
+    from flexo.studio.workspace import Workspace
+
+    from flexo_talk import worker
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.setattr(worker, "TIMEOUT", 3.0)
+    folder = tmp_path / "paper"
+    (folder / "data").mkdir(parents=True)
+    (folder / "data" / "numbers.txt").write_text("3 1 2")
+    (folder / "plots.py").write_text(
+        "import os, sys, time\n"
+        "from pathlib import Path\n"
+        "import matplotlib\n"
+        "import matplotlib.pyplot as plt\n"
+        "from matplotlib import font_manager\n"
+        "def good():\n"
+        "    print('printed words go to the log, not among the answers')\n"
+        "    numbers = [float(n) for n in Path('data/numbers.txt').read_text().split()]\n"
+        "    family = matplotlib.rcParams['font.family'][0]\n"
+        "    font_manager.findfont(family, fallback_to_default=False)\n"
+        "    figure, axes = plt.subplots()\n"
+        "    axes.plot(numbers)\n"
+        "    axes.set_title(f'pid {os.getpid()} in {family}')\n"
+        "    return figure\n"
+        "def forever():\n"
+        "    while True:\n"
+        "        time.sleep(0.05)\n"
+        "def crash():\n"
+        "    os._exit(3)\n"
+        "def leave():\n"
+        "    sys.exit(2)\n"
+        "def fault():\n"
+        "    import ctypes\n"
+        "    ctypes.string_at(0)\n"
+    )
+    names = ["good", "forever", "crash", "leave", "fault", "good"]
+    plots = [{"id": f"p{index}", "kind": "plot", "width": f"{60 + index}mm",
+              "properties": {"source": "plots.py", "function": name}} for index, name in enumerate(names)]
+    figure = {"figure": {"id": "panels", "style": "paper"}, "nodes": plots}
+    (folder / "panels.yaml").write_text(yaml.safe_dump(figure))
+    (folder / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [
+        {"title": "On a slide", "body": [{"figure": {**figure, "nodes": plots[:1]}}]},
+    ]}))
+    workspace = Workspace(folder, trusted=True)
+    try:
+        started = __import__("time").monotonic()
+        drawing = workspace.drawing_of("panels.yaml")
+        seconds = __import__("time").monotonic() - started
+        slide = workspace.drawing_of("talk.yaml")
+    finally:
+        workspace.close()
+        worker.stop_all()
+    said = {message.where.rpartition("#")[2] or message.where: message.text for message in drawing.messages}
+    svg = drawing.pages[0].svg
+    # Drawn by another process, in the figure's own face (which matplotlib has there, flexo's
+    # fonts registered), twice: before and after the others.
+    assert svg.count("pid ") == 2 and f"pid {os.getpid()} " not in svg and " in Figtree" in svg
+    assert {key: text for key, text in said.items() if key in {"p1", "p2", "p3", "p4"}} == {
+        "p1": "forever in plots.py took longer than 3 seconds and was stopped.",
+        "p2": "crash in plots.py quit unexpectedly (exit code 3).",
+        "p3": "leave in plots.py failed: SystemExit: 2",
+        "p4": "fault in plots.py crashed (signal 11).",
+    }
+    assert "p0" not in said and "p5" not in said and seconds < 30
+    # The data its function read there comes back with the drawing: watched, as its Python is.
+    watched = {file.resolve() for file in drawing.files}
+    assert {(folder / "plots.py").resolve(), (folder / "data" / "numbers.txt").resolve()} <= watched
+    # A figure on a slide is drawn so too.
+    assert "pid " in slide.pages[0].svg and f"pid {os.getpid()} " not in slide.pages[0].svg
+
+
+def test_a_plot_in_a_figure_on_a_slide_waits_for_trust_and_follows_its_python_and_its_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("matplotlib")
+    import re
+
+    from flexo.studio.workspace import Workspace
+
+    from flexo_talk import worker
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    folder = tmp_path / "talk"
+    folder.mkdir()
+    python = (
+        "from pathlib import Path\n"
+        "import matplotlib.pyplot as plt\n"
+        "def curve():\n"
+        "    numbers = [float(n) for n in Path('numbers.txt').read_text().split()]\n"
+        "    figure, axes = plt.subplots()\n"
+        "    axes.plot(numbers)\n"
+        "    axes.set_title(f'Curve of {len(numbers)}')\n"
+        "    return figure\n"
+        "def never():\n"
+        "    raise ValueError('no data yet')\n"
+    )
+    (folder / "plots.py").write_text(python)
+    (folder / "numbers.txt").write_text("3 1 2")
+
+    def figure(function: str) -> dict:
+        plot = {"id": "p", "kind": "plot", "properties": {"source": "plots.py", "function": function}}
+        return {"figure": {"id": function}, "nodes": [plot, {"id": "b", "label": "Model"}]}
+
+    (folder / "panels.yaml").write_text(yaml.safe_dump(figure("curve")))
+    (folder / "talk.yaml").write_text(yaml.safe_dump({"deck": {"id": "talk"}, "slides": [
+        {"title": "Written on the slide", "body": [{"figure": figure("curve")}]},
+        {"title": "In a file", "body": [{"figure": "panels.yaml"}]},
+        {"title": "Not drawn", "body": [{"figure": figure("never")}]},
+    ]}))
+    workspace = Workspace(folder, trusted=False)
+
+    def drawn() -> tuple[list[str | None], object]:
+        drawing = workspace.drawing_of("talk.yaml")
+        titles = [re.search(r"Curve[^<]*", page.svg) for page in drawing.pages]
+        return [title[0] if title else None for title in titles], drawing
+
+    try:
+        titles, held = drawn()
+        workspace.trust()
+        trusted, drawing = drawn()
+        (folder / "numbers.txt").write_text("3 1 2 5")
+        data, _ = drawn()
+        (folder / "plots.py").write_text(python.replace("Curve of", "Curve through"))
+        code, _ = drawn()
+    finally:
+        workspace.close()
+        worker.stop_all()
+    # Not run in a folder not yet trusted: said once for each slide, for the page to ask.
+    assert titles == [None, None, None]
+    waits = [message for message in held.messages if message.code == "code.untrusted"]
+    assert {message.page for message in waits} == {"slide1", "slide2", "slide3"}
+    assert all("once you trust the folder" in message.text for message in waits)
+    # Trusted, they are drawn -- on the slide and from the figure's file -- and one that is
+    # not says why in its own words, by its name.
+    assert trusted == ["Curve of 3", "Curve of 3", None]
+    said = {message.where: message.text for message in drawing.messages if message.severity != "note"}
+    assert said == {"slides[2] never#p": "never in plots.py failed: ValueError: no data yet"}
+    # Its Python and the data it read are watched, and the slides drawn again for either.
+    watched = {file.name for file in drawing.files}
+    assert {"plots.py", "numbers.txt", "panels.yaml"} <= watched
+    assert data == ["Curve of 4", "Curve of 4", None]
+    assert code == ["Curve through 4", "Curve through 4", None]
 
 
 def test_a_mechanism_block_is_read_and_its_mistakes_said_at_their_place(tmp_path: Path) -> None:
