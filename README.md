@@ -186,6 +186,22 @@ PowerPoint matches the PDF.
 | `deck.agenda(title="Outline")` | The talk's section slides, numbered (wherever they are in the deck) |
 | `deck.statement(words, by=)` | One sentence, large, in the middle of the slide |
 
+A slide of columns (`two-columns` or `columns`) can be set in **rows**, each with a label:
+`deck.slide(title, layout="two-columns", rows=["", "Mechanism", "Geometry"])`. Block *i* of
+every column is then in row *i*: every block of a row starts on one line, a row is as tall
+as its tallest block, and the rows follow one another as a column's blocks do. Each label
+stands beside its row, centred down it, in a gutter at the slide's left (its right, for
+labels read right to left) -- in the deck's face, a step smaller than the body's words,
+semibold and muted, light on a dark slide -- as wide as the widest label needs, one longer
+than a fifth of the body wrapping; the columns share the width left by `split` or `widths`.
+`""` leaves a row without a label (a row of headings), labels past the last row are kept
+and not drawn, and `rows=[]` only lines the rows up. Words take the height they need and
+the rows with pictures share the rest; a picture or table shorter than the words beside it
+in its row is centred against them (pictures side by side share one top), and an object
+asked to stand down its place (`vertical`) stands so in its row. Builds, placeholders,
+footnotes and `align` work as on any slide of columns; without `rows`, each column stacks
+its blocks on its own, as before. In the PowerPoint a label is a text box where it is drawn.
+
 Any slide (title and section slides too) can take `background=`: a colour
 (`"#1b2a41"`) or a picture that fills the slide, cropped rather than stretched
 (a native crop in PowerPoint), with `shade=0.4` to darken it. On a dark
@@ -400,6 +416,11 @@ slides:
   layout: two-columns
   left: [{text: Write what the model *is*}]
   right: [{figure: model.yaml}]        # a flexo figure file, or model.py:figure
+- title: Two ways a nucleophile attacks
+  layout: two-columns
+  rows: ["", Mechanism, Geometry]      # the columns' blocks in rows, a label beside each
+  left: [{text: "**Backside attack**"}, {figure: sn2.yaml}, {image: sigma_star.png}]
+  right: [{text: "**π\\* attack**"}, {figure: addition.yaml}, {image: pi_star.png}]
 - title: Training
   body: [{plot: plots.py:loss}]        # a function returning a matplotlib figure
 ```
@@ -407,6 +428,8 @@ slides:
 Each slide takes `layout` (`content` when left out), the settings its `Deck` call
 takes, and its regions (`body`, `left`/`right`, or `columns`, a list of block
 lists); each block is named by its kind with that call's options beside it. A
+`two-columns` or `columns` slide may take `rows`, a list of its rows' labels (`""`
+for a row without one; `[]` to line the rows up and label none): see *Slides*. A
 figure is a flexo figure file, a figure document written inline, or
 `file.py:function`; a plot is `file.py:function` (called inside
 `deck.plotting()`). Files are found next to the document. A wrong document says
@@ -484,7 +507,14 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   or its document as a flexo figure file (YAML).
 - **Format shows what is selected**: an object's own settings, or, with nothing
   selected, the slide's title, its parts in order (drag to reorder), its layout,
-  background, and footnotes. **Design** holds the theme and, in tabs, the deck's **Colour**
+  background, and footnotes. A slide of columns has **Row Labels** under its layout:
+  switched on, its rows line up and an empty label stands beside each (`rows`), shown
+  faintly as "Label" until it is written -- on the slide, as any words are (click to
+  choose, type to replace, double-click to type in place, Tab to the next), or in the
+  fields under the switch; a row added gets a label of its own, and the last row
+  deleted takes its empty one with it. Switched off, the labels go and each column
+  stacks its objects on its own again. **Design** holds the theme and, in tabs, the
+  deck's **Colour**
   (palette, title colour), **Type** (fonts by role, sizes), **Layout** (the look,
   alignment, slide furniture, spacing) and what is the **Deck**'s own (footer, file
   name, logos); **Customise…** starts a theme file from the deck's theme and opens it

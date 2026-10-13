@@ -42,6 +42,11 @@ inline, or ``file.py:function`` (a function returning a flexo figure); a plot is
 fractions of the whole picture (``[0.1, 0, 0.8, 1]`` keeps the middle 80% across),
 and drawn round with ``mask: circle``.
 
+A slide of columns (``two-columns``, ``columns``) may be set in rows: ``rows`` lists
+the rows' labels (``rows: ["", Mechanism, Geometry]``; ``""`` for a row without one).
+Block *i* of every column is then in row *i*: each row's blocks start on one line, and
+each label stands beside its row, at the slide's edge.
+
 ``read_deck`` makes a ``Deck`` from a file, ``deck_from_document`` from a parsed
 document, and ``deck_document`` writes any deck -- one made in Python too --
 back as a document.
@@ -122,10 +127,12 @@ SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "content": ("title", "subtitle", "dark", "align", "body"),
     "figure": ("title", "subtitle", "dark", "align", "body"),
     "blank": ("title", "subtitle", "dark", "align", "body"),
-    "two-columns": ("title", "subtitle", "dark", "align", "split", "left", "right"),
-    "columns": ("title", "subtitle", "dark", "align", "widths", "columns"),
+    "two-columns": ("title", "subtitle", "dark", "align", "split", "rows", "left", "right"),
+    "columns": ("title", "subtitle", "dark", "align", "widths", "rows", "columns"),
 }
-"""The keys a slide of each layout takes, beside ``COMMON_KEYS``."""
+"""The keys a slide of each layout takes, beside ``COMMON_KEYS``. ``rows`` sets a slide of
+columns in rows, block *i* of every column in row *i*: a list of the rows' labels (``""``
+for a row without one, and none at all only to line the rows up)."""
 
 STYLE_FIELDS = tuple(item.name for item in fields(DeckStyle))
 
@@ -588,6 +595,7 @@ def _slide_of(deck: Deck, data: dict[str, Any], layout: str, background: object,
             shade=shade,
             dark=data.get("dark"),
             align=data.get("align"),
+            rows=data.get("rows"),
         )
         if layout == "columns":
             places = {region.name: blocks for region, blocks in zip(slide.columns, columns, strict=True)}
@@ -1395,7 +1403,7 @@ def _json_value(value: object) -> object:
 
 
 _SLIDE_ORDER = (
-    "layout", "title", "subtitle", "author", "date", "words", "by", "dark", "align", "split", "widths",
+    "layout", "title", "subtitle", "author", "date", "words", "by", "dark", "align", "split", "widths", "rows",
     "background", "shade", "body", "left", "right", "columns", "notes", "footnotes",
 )
 """A slide's keys in the order a person reads them: what it is, its words, its look, its
