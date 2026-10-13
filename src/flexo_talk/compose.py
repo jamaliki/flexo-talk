@@ -3707,7 +3707,11 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         }
         if plotted:
             laid["plots"] = _plots_said(fit.compilation)
-        if keep is not None and fit.layout == keep:
+        if plotted and any(code == _PLOT_WAITING for _, code, _ in laid["plots"]):
+            # (A plot not run yet -- its Python was still starting -- is asked for again
+            # at the next drawing: its figure is not kept as it is.)
+            canvas.settled = False
+        elif keep is not None and fit.layout == keep:
             canvas.settled = False
         else:
             # (Found again as it is seen -- by the next drawing, free to turn as this one is
@@ -3947,26 +3951,24 @@ _PLOTTED: dict[tuple, tuple[dict, tuple]] = {}
 plot does flexo know what data it read, to see that it has changed."""
 
 
+_PLOT_WAITING = "plot.function.waiting"
+"""What is said of a plot not run yet (``flexo.plots.WAITING``): asked for again."""
+
+
 def _plots_from(spec: Any) -> tuple:
     """What a figure's plots are drawn from, as it is now: whether Python may run here, and
-    each file ``flexo.plots`` draws them from (their Python, their data) with when it last
-    changed."""
+    what ``flexo.plots`` draws each from (``flexo.plots.state``: its Python and its data,
+    with when each last changed; the folders it listed, with what is in them)."""
 
-    from flexo.plots import files
+    from flexo.plots import state
     from flexo.studio import code_allowed
 
     found: list[object] = [code_allowed.get()]
     for node in spec.nodes:
         source = str(node.property("source", "") or "")
-        if node.kind != "plot" or not source:
-            continue
-        for file in files(source, str(node.property("function", "") or "")):
-            try:
-                stat = file.stat()
-            except OSError:
-                found.append((str(file), None))
-            else:
-                found.append((str(file), stat.st_mtime_ns, stat.st_size))
+        if node.kind == "plot" and source:
+            function = str(node.property("function", "") or "")
+            found.append(state(source, function, node.property("data")))
     return tuple(found)
 
 

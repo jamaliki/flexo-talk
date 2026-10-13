@@ -982,6 +982,8 @@ def _beside(base: Path, figure: dict) -> dict:
     """A figure written in the deck, the pictures and structures its parts draw found
     beside the deck."""
 
+    from flexo.plots import beside
+
     nodes = figure.get("nodes")
     if not isinstance(nodes, list):
         return figure
@@ -993,6 +995,9 @@ def _beside(base: Path, figure: dict) -> dict:
             if isinstance(value, str) and value and (base / value).is_file():
                 properties = {**properties, key: str((base / value).resolve())}
                 node = {**node, "properties": properties}
+        # (So is the data a plot names: from the deck's folder, as its Python file is.)
+        if isinstance(properties, dict) and node.get("kind") == "plot" and "data" in properties:
+            node = {**node, "properties": {**properties, "data": beside(base, properties["data"])}}
         found.append(node)
     return {**figure, "nodes": found}
 
@@ -1074,8 +1079,11 @@ def _made_apart(
     root: Path, path: Path, name: str, target: str, where: str, kind: str, deck: Deck | None,
     check: Callable[[object], object],
 ) -> object:
-    """A figure or plot made by the studio's worker for ``root`` (``flexo_talk.worker``):
-    a plot that hangs or crashes is said on its slide, and the app goes on."""
+    """A figure or plot made by one of the studio's workers for ``root``
+    (``flexo_talk.worker``): a plot that hangs or crashes is said on its slide, and the app
+    goes on -- as does the drawing of the folder's other documents, while this one waits."""
+
+    from flexo.studio import waiting
 
     from flexo_talk import worker
 
@@ -1083,7 +1091,8 @@ def _made_apart(
 
     def asked(extra: dict[str, Any]) -> dict[str, Any]:
         try:
-            answer = worker.ask(root, {**request, **extra})
+            with waiting():
+                answer = worker.ask(root, {**request, **extra})
         except worker.Stopped as stopped:
             raise DeckDocumentError(where, f"{target} {stopped}") from None
         if "error" in answer:
