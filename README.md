@@ -414,8 +414,10 @@ where: `slides[3].left[1] (table): a table is a list of rows`. A document that
 names Python runs it when drawn, as a Python deck would: open only decks you trust.
 A figure's own plots (a shape of `kind: plot`, in flexo's README) are that Python
 too: in the studio they wait for the folder to be trusted, run in the folder's
-worker as the deck's plots do, and are drawn again when their Python or the data
-it read is saved.
+workers as the deck's plots do, and are drawn again when their Python or the data
+it read is saved. A folder has up to three workers, so a plot that never returns
+holds up no other: it is stopped when its own 30 seconds are up, the rest drawn
+meanwhile.
 
 `flexo-talk build talk.yaml` builds one; `flexo-talk convert talk.py` writes a
 Python deck as a document (its figures inline, its plots saved as SVG pictures);
