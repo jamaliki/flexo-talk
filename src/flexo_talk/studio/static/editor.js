@@ -7,6 +7,7 @@
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan } from "/static/kinds/deck/slidedrop.js";
+import { canRow, rowed, rowCount, labelsOf, setRows, setLabel, keepRows } from "/static/kinds/deck/rows.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
 import { follows, merge3 } from "/static/studio/merge.js";
@@ -102,11 +103,13 @@ const LAYOUT_ORDER = ["content", "two-columns", "columns", "figure", "title", "s
 const WORDLESS = new Set(["title", "section", "statement", "agenda"]);
 // Objects that are words, which typing over (once chosen) replaces.
 const WORDY = new Set(["text", "bullets", "quote", "callout"]);
-// A slide's lines of words by name, as its frame and its menu name them: its own, and those at
-// its foot -- its footnotes ("footnote0"...), and the deck's footer.
+// A slide's lines of words by name, as its frame and its menu name them: its own, those at
+// its foot -- its footnotes ("footnote0"...), and the deck's footer -- and, on a slide set
+// in rows, its rows' labels ("row0"...).
 const FIELD_NAMES = { title: "Title", subtitle: "Subtitle", author: "Author", date: "Date", words: "Text", by: "Attribution", footer: "Footer" };
 const FOOT = /^(footnote\d+|footer)$/;
-const fieldName = (key) => FIELD_NAMES[key] || (FOOT.test(key) ? "Footnote" : "Text");
+const ROW = /^row(\d+)$/;
+const fieldName = (key) => FIELD_NAMES[key] || (FOOT.test(key) ? "Footnote" : ROW.test(key) ? "Row Label" : "Text");
 // An example of a footer, shown while it is empty, on the slide and in Design alike.
 const FOOTER_HINT = "Group meeting · 2026";
 // The lines of words an object has of its own besides its words, typed on the slide too, and
@@ -597,6 +600,21 @@ export function mount(studio, container) {
   studio.mended = (document, notes, base) => laidOut(converted(aligned(document, notes), notes, base));
   const slides = () => doc().slides || [];
   const slideAt = (d = doc()) => (d.slides || [])[state.slide];
+  // Every change made here keeps the labels of a slide set in rows in step with its rows,
+  // however its objects came or went (added, pasted, dragged, deleted): a row more has an
+  // empty label, the last rows gone take theirs with them if empty (rows.js's keepRows) --
+  // one step with the change. (A slide is known by its place: one moved to another's, or
+  // slides added or deleted, are as they were.)
+  const change = studio.change.bind(studio);
+  studio.change = (mutate, options) => change((d) => {
+    const before = doc().slides || [];
+    const made = mutate(d), after = (made === undefined ? d : made)?.slides;
+    if (Array.isArray(after) && after.length === before.length) after.forEach((slide, index) => {
+      const was = before[index];
+      if (rowed(slide) && rowed(was) && rowCount(slide) !== rowCount(was) && !before.some((other) => same(other, slide))) keepRows(was, slide);
+    });
+    return made;
+  }, options);
 
   const editSlide = (mutate, options = {}) => studio.change((d) => { const slide = (d.slides || [])[state.slide]; if (slide) mutate(slide, d); }, options);
   // A placeholder changed (a sample table typed in) is its person's own: presented and exported.
@@ -1900,7 +1918,7 @@ export function mount(studio, container) {
   }
 
   const PART = /^slide(\d+)\.(body|left|right|column(\d+))\.(\d+)(?:\.|$)/;
-  const WORDS = /^slide(\d+)\.(title|subtitle|byline|footer|footnote\d+)$/;
+  const WORDS = /^slide(\d+)\.(title|subtitle|byline|footer|footnote\d+|row\d+)$/;
   const BLOCK_ID = /^slide\d+\.(body|left|right|column\d+)\.\d+$/;
   const LOGO = /^slide(\d+)\.logo(\d+)$/;
 
@@ -2084,7 +2102,7 @@ export function mount(studio, container) {
 
   function labelOf(part) {
     if (part.kind === "logo") return "Logo";
-    if (part.kind === "field") return { title: "Title", subtitle: "Subtitle", byline: "Byline", footer: "Footer" }[part.field] || (FOOT.test(part.field) ? "Footnote" : "Text");
+    if (part.kind === "field") return { title: "Title", subtitle: "Subtitle", byline: "Byline", footer: "Footer" }[part.field] || (FOOT.test(part.field) ? "Footnote" : ROW.test(part.field) ? "Row Label" : "Text");
     const block = blocksAt(slideAt() || {}, part.region)[part.index];
     return block ? blockName(block) : "";
   }
@@ -2283,17 +2301,21 @@ export function mount(studio, container) {
   // its place has to spare (compose's `data-flexo-spare`), where it stands were it not moved
   // down (`data-flexo-down`, nor its place moved, as the slide centres its content), and how
   // far down what is before it stands -- it is never above that. In the window's pixels.
+  // (On a slide set in rows its place is its row: the room that has to spare for it, said on
+  // the object itself, whatever stands in the rows over it -- where the rows stand down the
+  // slide, which an object asked to stand down its own row does not change.)
   function downsOf(from, home) {
     const region = regionsOf(slideAt()).find((item) => item.key === from.region);
     const holder = region && pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`);
     const ratio = holder?.getScreenCTM?.()?.d;
-    const spare = Number(holder?.getAttribute("data-flexo-spare"));
+    const row = carry.element.getAttribute("data-flexo-spare");
+    const spare = Number(row ?? holder?.getAttribute("data-flexo-spare"));
     if (!ratio || !(spare * ratio > 2)) return null;
     const downOf = (element) => Number(element?.closest("g[data-flexo-down]")?.getAttribute("data-flexo-down") || 0) * ratio;
     const lowered = Number(/translate\(\s*[-\d.]+[ ,]+([-\d.]+)/.exec(holder.getAttribute("transform") || "")?.[1] || 0) * ratio;
     const before = from.index > 0 ? blockElement(from.region, from.index - 1) : null;
     const block = blocksAt(slideAt(), from.region)[from.index];
-    return { natural: home.top - downOf(carry.element) - lowered, before: downOf(before), spare: spare * ratio, current: shareOf(block?.vertical, DOWN_NAMES) };
+    return { natural: home.top - downOf(carry.element) - (row != null ? 0 : lowered), before: row != null ? 0 : downOf(before), spare: spare * ratio, current: shareOf(block?.vertical, DOWN_NAMES) };
   }
   // Where a part left behind shows while several are dragged (closed up), as a transform,
   // with `x`, `y` more.
@@ -4628,7 +4650,22 @@ export function mount(studio, container) {
     };
     // (`had`: an own line's words as it is opened -- none, emptied, or written.)
     let editor, idOf, at = null, bullets = false, read = () => undefined, mirror = null, had;
-    if (target.kind === "field" && FOOT.test(target.field)) {
+    if (target.kind === "field" && ROW.test(target.field)) {
+      // A row's label, typed beside its row where it is drawn (its placeholder, not yet
+      // written), as the slide's other words are.
+      const key = target.field, n = Number(ROW.exec(key)[1]);
+      // (Of a row the slide has: undefined once its rows are no more, or fewer.)
+      const written = (s) => (s && rowed(s) && n < rowCount(s) ? labelsOf(s)[n] ?? "" : undefined);
+      if (written(slide) === undefined) return;
+      read = (d) => written(slideNow(d));
+      mirror = `row.${n}`;
+      state.field = { field: key, id: fieldId(key) };
+      if (state.focus) { state.focus = null; leaveFigure(false); renderInspector(); reportFocus(); }
+      const merge = `${state.slide}-row-${n}-${session}`;
+      editor = rich(written(slide), { placeholder: fieldHint(key, slide) },
+        (text) => editSlide((s) => { if (written(s) !== undefined) setLabel(s, n, text); }, { quiet: true, merge, hold: true }));
+      idOf = () => fieldId(key);
+    } else if (target.kind === "field" && FOOT.test(target.field)) {
       // A footnote, or the deck's footer (the same on every slide), typed where it is drawn,
       // as the slide's other words are.
       const key = target.field, note = /^footnote(\d+)$/.exec(key), n = note ? Number(note[1]) : -1;
@@ -4933,7 +4970,7 @@ export function mount(studio, container) {
     title: layoutOf(slide) === "agenda" ? "Outline" : "Title", subtitle: "Subtitle", words: "Text", by: "Who said it", author: "Your name", footer: FOOTER_HINT,
     // An example, not a default: an empty date draws nothing.
     date: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`,
-  })[key] || (FOOT.test(key) ? "Footnote" : "");
+  })[key] || (FOOT.test(key) ? "Footnote" : ROW.test(key) ? "Label" : "");
   // From a gallery's caption typed in on to the next picture's (`back`: the one before), and
   // past the last (or the first) on round the slide (tabOn).
   function nextPicture(target, back) {
@@ -4959,6 +4996,8 @@ export function mount(studio, container) {
         && (String(slide[key] ?? "").trim() || keptEmpty(key) || (key in slide && ["title", "subtitle", "words"].includes(key))
           // (A title slide's author and date, emptied or never written, typed where they go.)
           || (layoutOf(slide) === "title" && (key === "author" || key === "date")))).map((field) => ({ field })),
+      // Its rows' labels, down its edge.
+      ...rowStops(slide),
       // Each object, its own lines in their places among its words (a callout's heading
       // before them, a quote's attribution after them, a caption under its picture).
       ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).flatMap((block, index) => {
@@ -5690,7 +5729,9 @@ export function mount(studio, container) {
     const changed = moved >= 0 ? now[moved] : now.find((item, k) => !old[k] || item.region !== old[k].region || !same(item.block, old[k].block));
     if (!changed) {
       // Words of the slide's own (its title, its author): that field.
-      const field = SLIDE_WORDS.map(([key]) => key).find((key) => !same(before[state.slide]?.[key], after[state.slide]?.[key]));
+      const field = SLIDE_WORDS.map(([key]) => key).find((key) => !same(before[state.slide]?.[key], after[state.slide]?.[key]))
+        // (Or a row's label, of the rows it has.)
+        || rowStops(after[state.slide]).map((stop) => stop.field).find((_, n) => (labelsOf(before[state.slide])[n] ?? "") !== (labelsOf(after[state.slide])[n] ?? ""));
       if (field) { state.focus = null; state.field = { field, id: fieldId(field) }; placeChosen(); return; }
       if (state.focus && !blocksAt(slideAt(), state.focus.region)[state.focus.index]) state.focus = null;
       return;
@@ -7007,10 +7048,11 @@ export function mount(studio, container) {
     return Boolean(box && room && box.width >= room.right - room.left - 2);
   }
   // Whether its place has no room to spare down it (compose's `data-flexo-spare`): it
-  // fills the height left, and has nowhere down it to go.
+  // fills the height left, and has nowhere down it to go. (Its row's, on a slide set in rows.)
   function fillsDown(at) {
     const region = regionsOf(slideAt()).find((item) => item.key === at.region);
-    const spare = pageNode?.querySelector(`[id="slide${state.slide + 1}.${region?.svg}"]`)?.getAttribute("data-flexo-spare");
+    const spare = blockElement(at.region, at.index)?.getAttribute("data-flexo-spare")
+      ?? pageNode?.querySelector(`[id="slide${state.slide + 1}.${region?.svg}"]`)?.getAttribute("data-flexo-spare");
     return spare != null && Number(spare) < 2;
   }
   // What it fills, said under Position, the stops that would not move it greyed: there it
@@ -7267,6 +7309,7 @@ export function mount(studio, container) {
     parts.push(h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layout, (name) => changeLayout(name), layouts, studio.info?.palette),
       layout === "two-columns" ? splitControl(slide) : null,
       layout === "columns" ? columnsControls(slide) : null,
+      canRow(slide) ? rowsControls(slide) : null,
       allowed.has("align") ? alignControl(slide, [slide]) : null));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Footnotes"), footnotesControls(slide)));
@@ -7293,6 +7336,31 @@ export function mount(studio, container) {
       editSlide((s) => setOption(s, "split", Number(range.value), 0.5), { quiet: true, merge: `${state.slide}-split` });
     } });
     return ui.field("Left Column Width", h("div.slider", {}, range, value));
+  }
+
+  // A slide of columns set in rows: Row Labels, switched on or off, and while it is on each
+  // row's label, written here as on the slide (its placeholder, "Label", the same).
+  function rowsControls(slide) {
+    const labels = labelsOf(slide);
+    const fields = rowed(slide) ? Array.from({ length: rowCount(slide) }, (_, n) => h("div.list-row", {},
+      richField({ value: labels[n] ?? "", key: `row.${n}`, placeholder: fieldHint(`row${n}`, slide), short: true,
+        onInput: (value) => editSlide((s) => setLabel(s, n, value), { quiet: true, merge: `${state.slide}-row-${n}`, hold: true }) }))) : [];
+    return [ui.toggle({ value: rowed(slide), label: "Row Labels", onChange: (on) => toggleRows(on) }),
+      fields.length ? h("div.list-rows", {}, fields) : null];
+  }
+  // Row Labels switched on or off, as its switch and its command do it, one step: on, the
+  // slide's rows line up and an empty label stands beside each, to be written; off, its
+  // labels go, and each column stacks its objects on its own again.
+  function toggleRows(on = !rowed(slideAt())) {
+    const slide = slideAt();
+    if (!canRow(slide) || rowed(slide) === on) return;
+    // (The switch as the slide is, should the studio be away.)
+    if (awayFrom(on ? "show row labels" : "hide row labels")) { renderInspector(); return; }
+    closeInline();
+    editSlide((s) => setRows(s, on), { label: on ? "Show Row Labels" : "Hide Row Labels" });
+    if (state.field && ROW.test(state.field.field)) state.field = null;
+    renderInspector();
+    placeChosen();
   }
 
   // A layout tried and left keeps what it could not show: going back to the layout before
@@ -7344,12 +7412,14 @@ export function mount(studio, container) {
     // A layout without room for objects (Statement, Title, Section, Agenda) never takes them
     // away: they go on a new slide after this one, set out and titled as they were -- its
     // title a placeholder to click if it had none -- in the same step (one Undo puts them back).
-    const ownOnly = (list) => (Array.isArray(list) ? structuredClone(list.filter((block) => !blank(block))) : list);
+    // (Set in rows, its placeholders stay with them: each holds its row for what is under it.)
+    const ownOnly = (list) => (Array.isArray(list) ? structuredClone(rowed(before) ? list : list.filter((block) => !blank(block))) : list);
     const kept = lost ? {
       ...(layoutOf(before) === "content" ? {} : { layout: layoutOf(before) }),
       title: before.title ?? before.words ?? "",
       ...Object.fromEntries(["body", "left", "right", "split", "widths", "align"].filter((key) => key in before).map((key) => [key, ownOnly(before[key])])),
       ...(Array.isArray(before.columns) ? { columns: before.columns.map(ownOnly) } : {}),
+      ...(rowed(before) ? { rows: labelsOf(before) } : {}),
     } : null;
     const slide = structuredClone(current);
     for (const [key, value] of Object.entries(before)) if (!(key in slide) && !["layout", "body", "left", "right", "columns"].includes(key)) slide[key] = structuredClone(value);
@@ -9508,10 +9578,14 @@ export function mount(studio, container) {
   }
 
   // -- keys --
+  // The labels of a slide set in rows, as stops: one for each row it has, written or not.
+  const rowStops = (slide) => (rowed(slide) ? Array.from({ length: rowCount(slide) }, (_, n) => ({ field: `row${n}` })) : []);
   // What the slide's keys go round, in order (Tab, ↑ and ↓): its lines of words, placeholders
   // too (an empty title is written, and holds its place), then its objects.
   const slideStops = (slide) => (!slide ? [] : [
     ...["title", "words", "subtitle", "author", "date", "by"].filter((name) => (slide[name] || name in slide) && catalog.slide_keys[layoutOf(slide)].includes(name)).map((name) => ({ field: name })),
+    // (Its rows' labels, down its edge, before what stands in them.)
+    ...rowStops(slide),
     ...regionsOf(slide).flatMap((region) => blocksAt(slide, region.key).map((_, index) => ({ region: region.key, index }))),
     // (Its footnotes last, at its foot -- and the deck's logos, the foot's own.)
     ...notesOf(slide).map((_, n) => ({ field: `footnote${n}` })),
@@ -9802,6 +9876,9 @@ export function mount(studio, container) {
       ...(own ? [{ icon: "duplicate", label: `Duplicate ${shapes ? (shapes > 1 ? `${shapes} Shapes` : "Shape") : blockLabel(block)}`, also: ["Duplicate"], keys: "⌘D", run: () => duplicateChosen() }] : []),
       { icon: "duplicate", label: `Duplicate ${many}`, also: [...(own || typing ? [] : ["Duplicate"]), "Duplicate Slide"], keys: own || typing ? undefined : "⌘D", run: () => duplicateSlide(state.slide) },
       { icon: "eye", label: `${slides()[picked[0]]?.skip === true ? "Don’t Skip" : "Skip"} ${many}`, also: ["Skip Slide", "Don’t Skip Slide"], run: () => skipSlides(picked) },
+      // A slide of columns: its rows lined up and labelled, or each column on its own again.
+      ...(canRow(slideAt()) ? [{ icon: "layout", label: rowed(slideAt()) ? "Hide Row Labels" : "Show Row Labels", also: ["Row Labels"],
+        hint: rowed(slideAt()) ? "Each column stacks its objects on its own" : "The columns’ objects in rows, a label beside each", run: () => toggleRows() }] : []),
       { icon: "trash", label: `Delete ${many}`, also: ["Delete Slide"], keys: railList.contains(document.activeElement) ? "⌫" : undefined, run: () => deleteSlides(picked) },
     ];
   }
@@ -10033,7 +10110,7 @@ export function mount(studio, container) {
     return keys.length === 1 ? `Change ${DECK_NAMES[keys[0]] || keyTitle(keys[0])}` : "Change Design";
   }
   const SLIDE_WORDS = [["title", "Title"], ["subtitle", "Subtitle"], ["words", "Text"], ["by", "Attribution"], ["author", "Author"], ["date", "Date"]];
-  const SLIDE_NAMES = { widths: "Column Widths", split: "Column Widths", align: styleName("align"), dark: "Text Colour", shade: "Background", background: "Background", by: "Attribution" };
+  const SLIDE_NAMES = { widths: "Column Widths", split: "Column Widths", align: styleName("align"), dark: "Text Colour", shade: "Background", background: "Background", by: "Attribution", rows: "Row Labels" };
   function slideChange(a, b) {
     if (layoutOf(a) !== layoutOf(b)) return "Change Layout";
     for (const [key, name] of SLIDE_WORDS) if (!same(a[key], b[key])) return typing(b[key], a[key]) || `Edit ${name}`;
@@ -10061,6 +10138,12 @@ export function mount(studio, container) {
     if (pairs.length > 1) return `Edit ${pairs.length} Objects`;
     const keys = differing(a, b).filter((key) => key !== "body" && key !== "left" && key !== "right" && key !== "columns");
     if (keys.length && keys.every((key) => ["background", "shade", "dark"].includes(key)) && keys.some((key) => key !== "dark")) return "Change Background";
+    // Its rows' labels alone: switched on or off, as the switch says; else the one typed in.
+    if (keys.length === 1 && keys[0] === "rows" && (Array.isArray(a.rows) || Array.isArray(b.rows))) {
+      if (!Array.isArray(a.rows) || !Array.isArray(b.rows)) return Array.isArray(b.rows) ? "Show Row Labels" : "Hide Row Labels";
+      const label = (rows, n) => String(rows[n] ?? ""), n = Array.from(b.rows.length > a.rows.length ? b.rows : a.rows).findIndex((_, i) => label(a.rows, i) !== label(b.rows, i));
+      return (n >= 0 && typing(label(b.rows, n), label(a.rows, n))) || "Edit Row Labels";
+    }
     return keys.length === 1 ? `Change ${SLIDE_NAMES[keys[0]] || keyTitle(keys[0])}` : "Edit Slide";
   }
   const BLOCK_NAMES = { description: "Description", align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering", plain: "Bullets",

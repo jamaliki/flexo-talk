@@ -101,7 +101,9 @@ slides:
 
 A slide takes `layout` (`content` when left out), the options its `Deck` call
 takes, and its regions (`body`, `left`/`right`, or `columns`, a list of block
-lists); each block is named by its kind with that call's options beside it.
+lists); each block is named by its kind with that call's options beside it. A
+`two-columns` or `columns` slide may take `rows: ["", Mechanism, Geometry]`: its
+columns' blocks in rows, a label beside each (see *Slides*).
 Files are found next to the document. A wrong document says where
 (`slides[3].left[1] (table): a table is a list of rows`). Python a document
 names (plots, `file.py:function` figures) runs only in a folder its person has
@@ -126,6 +128,14 @@ Every slide also takes `subtitle=`, `background=` (a `"#hex"` colour, or a
 picture file that fills the slide, cropped not stretched), `shade=0.4` (darkens
 a picture; words turn light), `dark=` (force light words), and `align=` (see
 *Alignment*). Methods called on the slide itself go to its first region.
+
+A `two-columns` or `columns` slide also takes `rows=["", "Mechanism", "Geometry"]`
+(`rows:` in a document): block *i* of every column is in row *i*, each row's blocks
+start on one line (a row as tall as its tallest), and each label stands beside its
+row at the slide's left, small, semibold and muted. `""` is a row without a label (a
+row of headings); `rows=[]` only lines the rows up. Use it to compare things column
+by column -- one a column, what is compared a row -- rather than nudging blocks into
+line; without it each column stacks its blocks on its own.
 
 ## Blocks (on a region, set one under the other)
 

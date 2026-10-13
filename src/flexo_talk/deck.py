@@ -48,6 +48,8 @@ type Layout = Literal[
 LAYOUTS: tuple[str, ...] = (
     "content", "two-columns", "columns", "figure", "title", "section", "statement", "agenda", "blank"
 )
+ROWED: tuple[str, ...] = ("two-columns", "columns")
+"""The layouts whose columns may be set in rows (``Slide.rows``)."""
 
 
 class SettingError(ValueError):
@@ -313,6 +315,21 @@ def _words(value: object, what: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str | int | float):
         raise SettingError(what, f"{what} must be text, not {value!r}.")
     return str(value)
+
+
+def _labels(value: object) -> list[str] | None:
+    """A slide's rows' labels as written, one a row ("" for a row unlabelled, as nothing
+    written for it is); None for a slide not set in rows."""
+
+    if value is None:
+        return None
+    said = "rows must be a list of labels, one for each row (\u201c\u201d for a row without one)"
+    if isinstance(value, str) or not isinstance(value, list | tuple):
+        raise SettingError("rows", f"{said}, not {value!r}.")
+    for label in value:
+        if label is not None and (isinstance(label, bool) or not isinstance(label, str | int | float)):
+            raise SettingError("rows", f"{said}: a label must be text, not {label!r}.")
+    return ["" if label is None else str(label) for label in value]
 
 
 def _caption(value: object) -> str:
@@ -1507,6 +1524,7 @@ class Slide:
         shade: float = 0.0,
         dark: bool | None = None,
         align: str | None = None,
+        rows: Sequence[str] | None = None,
     ) -> None:
         if layout not in LAYOUTS:
             raise ValueError(f"Unknown layout \u201c{layout}\u201d. Available layouts: {', '.join(LAYOUTS)}.")
@@ -1517,6 +1535,9 @@ class Slide:
             dark = _flag(dark, "dark")
         if widths is not None:
             widths = [_number(share, "A column width", 0.01, 100.0, "1 (shares of the width)") for share in widths]
+        labels = _labels(rows)
+        if labels is not None and layout not in ROWED:
+            raise SettingError("rows", "Only a two-columns or columns slide is set in rows.")
         if background is not None and not isinstance(background, str | Path):
             raise SettingError(
                 "background", f"background must be a #rrggbb colour or a picture file, not {background!r}."
@@ -1547,6 +1568,13 @@ class Slide:
             raise SettingError("align", f"align must be auto, top or middle, not {align!r}.")
         self.align = align
         """Where the content sits in the body; the deck style's ``align`` when unset."""
+        self.rows: list[tuple[TextRun, ...]] | None = None if labels is None else [
+            inline(label) if label.strip() else () for label in labels
+        ]
+        """The labels of a slide set in rows, a row each (``()`` for one unlabelled): block
+        *i* of every column is in row *i*, each row's blocks starting on one line, its label
+        beside it in a gutter at the slide's edge. None, each column stacks its blocks on
+        its own."""
         self.byline_runs: tuple[TextRun, ...] = ()
         """Who and when, on a title slide."""
         self.placeholders: frozenset[str] = frozenset()
@@ -1903,11 +1931,17 @@ class Deck:
         shade: float = 0.0,
         dark: bool | None = None,
         align: Literal["auto", "top", "middle"] | None = None,
+        rows: Sequence[str] | None = None,
     ) -> Slide:
         """A slide: ``content`` (a title over one body), ``two-columns`` (``split`` is
         the left column's share of the width), ``columns`` (``columns`` of them, or
         as many as ``widths``, relative: ``(2, 1, 1)``; ``slide.columns[i]``),
         ``figure`` (a title over a figure as large as the slide allows), or ``blank``.
+
+        ``rows`` sets a slide of columns in rows, each column's blocks one a row: every
+        row's blocks start on one line, and each label (``rows=["", "Mechanism",
+        "Geometry"]``; ``""`` for a row without one) stands beside its row, in a gutter at
+        the slide's edge. ``rows=[]`` lines the rows up and labels none.
 
         ``background`` gives this slide its own background: a colour, or a picture
         that fills the slide (cropped, never stretched), darkened by ``shade``; on a
@@ -1919,13 +1953,13 @@ class Deck:
             raise SettingError("columns", f"columns must be a whole number from 1 to 12, not {columns!r}.")
         made = Slide(
             self, len(self.slides) + 1, title, layout, subtitle, split, columns, widths,
-            background, shade, dark, align,
+            background, shade, dark, align, rows,
         )
         made.source = {
             "layout": layout, "title": title, "subtitle": subtitle, "split": split,
             "widths": list(widths) if widths else None, "columns": columns,
             "background": str(background) if background is not None else None, "shade": shade, "dark": dark,
-            "align": align,
+            "align": align, "rows": _labels(rows),
         }
         self.slides.append(made)
         return made

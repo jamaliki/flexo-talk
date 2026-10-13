@@ -264,8 +264,9 @@ _PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
 def _read_in_order(tree, slide: Slide) -> None:
     """A slide's shapes in the order they are read (a slide program's Selection Pane, a
     screen reader), as the PDF reads them: its headings and what is drawn under them, then
-    its body top to bottom (a left column before a right) -- its lists and tables where they
-    are drawn, not after the rest -- then its footnotes, then its number and footer."""
+    its body top to bottom (its rows' labels, then a left column before a right) -- its
+    lists and tables where they are drawn, not after the rest -- then its footnotes, then
+    its number and footer."""
 
     import re
 
@@ -280,6 +281,8 @@ def _read_in_order(tree, slide: Slide) -> None:
             return 3, 0, 0, False
         if rest.startswith("footnote"):
             return 2, 0, 0, False
+        if label := re.fullmatch(r"row(\d+)", rest):
+            return 1, -1, int(label.group(1)), False
         found = block.fullmatch(name)
         if found and found.group(1) in regions:
             # A table's caption after the table, as it is drawn under it.

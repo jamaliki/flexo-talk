@@ -431,6 +431,15 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
         for index, runs in enumerate(kept[-1][2]):
             if not _worded(runs):
                 empty[f"{slide.id}.footnote{index}"] = "Footnote"
+    if slide.rows is not None and PLACEHOLDERS.get():
+        # A row's label not yet written: "Label", faintly, beside its row -- only while
+        # editing: presented or exported, a row without a label has none (and a slide with
+        # none, no gutter for them).
+        count = max(len(region.blocks) for region in slide.regions.values())
+        given = [*slide.rows[:count], *[()] * (count - len(slide.rows))]
+        kept.append((slide, "rows", slide.rows))
+        slide.rows = [runs if _worded(runs) else LABEL_HINT for runs in given]
+        empty |= {f"{slide.id}.row{index}": "Label" for index, runs in enumerate(given) if not _worded(runs)}
     for field, attribute in _PLACEHOLDER_RUNS.items():
         if field in slide.placeholders and not getattr(slide, attribute):
             words = PLACEHOLDER_WORDS[field]
@@ -1133,6 +1142,9 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     starts level with the words.
     """
 
+    if slide.rows is not None:
+        _rows(canvas, slide, body)
+        return
     style = canvas.deck.style
     names = list(slide.regions)
     available = body.width - style.column_gap * (len(names) - 1)
@@ -1205,6 +1217,310 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             shift = 0.0
         if shift > 0.01:
             _shift(group, shift, *owned)
+
+
+def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
+    """A slide set in rows (``Slide.rows``): block *i* of every column in row *i*.
+
+    Every block of a row starts on one line, a row is as tall as its tallest block, and
+    the rows follow one another as a column's blocks do. Words take the height they need
+    and the rows with pictures share what is left. Down its row a block stands where it
+    was asked to (``Region.down``, of the room its row has to spare); else at its top --
+    a picture or table shorter than the words beside it centred against them, as a column
+    of pictures is against a column of words. Each label is set in a gutter at the slide's
+    edge (the right, for labels read from the right), as wide as the widest needs -- one
+    past ``ROW_GUTTER`` of the body wraps -- and centred down its row; the columns share
+    the width left as they would the whole. The rows stand down the body together, as a
+    slide's content does (``DeckStyle.align``).
+    """
+
+    style = canvas.deck.style
+    names = list(slide.regions)
+    regions = [slide.regions[name] for name in names]
+    count = max(len(region.blocks) for region in regions)
+    # A label for each row there is: one written past the last is kept, and not drawn.
+    labels = [*slide.rows[:count], *[()] * (count - len(slide.rows))]
+    size, most = style.body_size * ROW_LABEL, body.width * ROW_GUTTER
+    widths = [canvas.measure(runs, size, most, ROW_WEIGHT).width if runs else 0.0 for runs in labels]
+    # (A hair wider than its widest line: set again that wide, no line of it wraps.)
+    gutter = max(widths) + 0.01 if any(widths) else 0.0
+    taken = gutter + style.column_gap * ROW_GAP if gutter else 0.0
+    editing = PLACEHOLDERS.get()
+    written = [row for row in range(count) if labels[row] and f"{slide.id}.row{row}" not in canvas.hinted]
+    if max((widths[row] for row in written), default=0.0) < max(widths, default=0.0):
+        # Labels not yet written hold a gutter (or a wider one) the slide presented has
+        # not: said, for the studio to present it as it is exported.
+        canvas.layer.set("data-flexo-gutter", "held")
+    # At the right for labels read from the right (as many of them as not: as its title is).
+    leaning = sum(1 if _rtl(labels[row]) else -1 for row in written)
+    rtl = leaning > 0 or (leaning == 0 and bool(slide.title_runs) and _rtl(slide.title_runs))
+    available = body.width - taken - style.column_gap * (len(names) - 1)
+    boxes: list[Box] = []
+    x = body.x if rtl else body.x + taken
+    for share in slide.shares:
+        boxes.append(Box(x, body.y, available * share, body.height))
+        x += available * share + style.column_gap
+    columns = range(len(regions))
+    # While edited every block keeps its cell, a sample too (its row is where it will be);
+    # presented or exported, a placeholder is not there at all.
+    shown = [
+        [row for row in range(len(region.blocks)) if editing or f"{slide.id}.{region.name}.{row}" not in canvas.hinted]
+        for region in regions
+    ]
+
+    # The words of every column shrink together, if that is what it takes to fit (_fitted).
+    capped = [[_capped(canvas, block) for block in region.blocks] for region in regions]
+
+    def real(column: int, row: int) -> bool:
+        return row < len(capped[column]) and row not in regions[column].placeholders
+
+    filled = [row for row in range(count) if any(real(column, row) for column in columns)]
+    pictures = [
+        capped[column][row] for column in columns for row in filled
+        if real(column, row) and isinstance(capped[column][row], _Figure | _Image | _Plot | _Gallery | _Missing)
+    ]
+
+    def needed(scale: float, least: float) -> float:
+        # A row needs what its tallest words do, or the least a picture in it is left
+        # (its caption under it).
+        total = 0.0
+        for row in filled:
+            high = canvas.measure(labels[row], size * scale, most, ROW_WEIGHT).height if labels[row] else 0.0
+            for column in (column for column in columns if real(column, row)):
+                block = capped[column][row]
+                own = 0.0 if isinstance(block, _Gallery) else _height(
+                    canvas, _sized(block, scale, style), boxes[column].width)
+                picture = isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)
+                high = max(high, own + (least if picture else 0.0))
+            total += high
+        return total
+
+    scale = _shrunk(canvas, needed, lambda least: body.height - style.block_gap * max(0, len(filled) - 1), pictures)
+    blocks = [[_sized(block, scale, style) for block in column] for column in capped]
+    size *= scale
+    there = {(column, row): blocks[column][row] for column in columns for row in shown[column]}
+    present = [row for row in range(count) if labels[row] or any((column, row) in there for column in columns)]
+    gaps = style.block_gap * max(0, len(present) - 1)
+
+    # Callouts side by side in a row stand as a row of panels: each as tall as the tallest.
+    panels: dict[int, float] = {}
+    for row in present:
+        callouts = [
+            _height(canvas, there[column, row], boxes[column].width)
+            for column in columns if isinstance(there.get((column, row)), _Callout)
+        ]
+        if len(callouts) > 1:
+            panels[row] = max(callouts)
+    label_tall = [canvas.measure(runs, size, gutter, ROW_WEIGHT).height if runs else 0.0 for runs in labels]
+    # What each row's words need, and whether a picture shares it.
+    needs, pictured = list(label_tall), [False] * count
+    for (column, row), block in there.items():
+        if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing):
+            pictured[row] = True
+        else:
+            needs[row] = max(needs[row], _height(canvas, block, boxes[column].width), panels.get(row, 0.0))
+    # The rows with pictures share the height the others leave -- but one whose words need
+    # more than its share is as tall as they are, and the rest share what that leaves.
+    heights = list(needs)
+    sharing = [row for row in present if pictured[row]]
+    left = body.height - gaps - sum(needs[row] for row in present if not pictured[row])
+    while sharing:
+        each = left / len(sharing)
+        over = [row for row in sharing if needs[row] > each]
+        if not over:
+            heights = [each if row in sharing else high for row, high in enumerate(heights)]
+            break
+        left -= sum(needs[row] for row in over)
+        sharing = [row for row in sharing if row not in over]
+    # A picture is as tall as its row lets it be, its caption under it.
+    shares = {
+        place: heights[place[1]] - _captioned(canvas, block, boxes[place[0]].width)
+        for place, block in there.items() if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)
+    }
+
+    def planned(words: float | None) -> list[tuple[dict[int, _Prepared], dict[int, float]]]:
+        """Each column's figures laid out for their rows, and the scale each takes: those
+        down one column at one scale, as in any one place, each within its own row."""
+
+        plans = []
+        for column in columns:
+            rows = shown[column]
+            figures = [row for row in rows if isinstance(blocks[column][row], _Figure)]
+            if not figures:
+                plans.append(({}, {}))
+                continue
+            found, fits, _ = _plan_figures(
+                canvas, [blocks[column][row] for row in rows], boxes[column], words,
+                each=min(shares[column, row] for row in figures),
+            )
+            prepared = {rows[at]: item for at, item in found.items()}
+            scales = {rows[at]: fit for at, fit in fits.items()}
+            free = [row for row in figures if blocks[column][row].width is None]
+            if len(free) > 1:
+                cap = min(max(shares[column, row], 40.0) / prepared[row].height for row in free)
+                scales |= {row: min(scales[row], cap) for row in free}
+            plans.append((prepared, scales))
+        return plans
+
+    # Figures side by side set their words at one size (_regions): the largest at which
+    # every one of them fits its own place.
+    words = None
+    if sum(any(isinstance(blocks[column][row], _Figure) for row in shown[column]) for column in columns) > 1:
+        # A trial: what it would note or warn of is said when the figures are set.
+        diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
+        sizes = [
+            min(own) for column, (prepared, scales) in enumerate(planned(None))
+            if (own := [item.size * scales[row] for row, item in prepared.items() if blocks[column][row].width is None])
+        ]
+        del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
+        words = min(sizes) if sizes else None
+    plans = planned(words)
+
+    # Each row as tall as its tallest block, as it will be drawn; the rows one under the other.
+    tall = list(label_tall)
+    for (column, row), block in there.items():
+        figure = plans[column][0][row].height * plans[column][1][row] if isinstance(block, _Figure) else 0.0
+        try:
+            own = _cell_tall(
+                canvas, block, f"{slide.id}.{names[column]}.{row}", boxes[column].width,
+                shares.get((column, row), 0.0), figure, panels.get(row, 0.0),
+            )
+        except _FigureFailed:
+            raise
+        except Exception:
+            # (What can't be measured -- a picture that does not read -- is said as it is set.)
+            own = 0.0
+        tall[row] = max(tall[row], own)
+    tops, top = [], body.y
+    for row in range(count):
+        tops.append(top)
+        top += tall[row] + style.block_gap if row in present else 0.0
+    used = max(top - body.y - style.block_gap, 0.0) if present else 0.0
+    spare = max(body.height - used, 0.0)
+
+    align = slide.align or style.align
+    # (The rows whose pictures stand beside words: centred against them, unless at the top.)
+    worded = {row for (_, row), block in there.items() if not isinstance(block, _PICTURES)}
+    outer = canvas.layer
+    placed = []
+    for column, (name, region, box) in enumerate(zip(names, regions, boxes, strict=True)):
+        # Its room, in the slide's units: where an editor drops a part into it, empty too.
+        room = " ".join(number(value) for value in (box.x, box.y, box.width, box.height))
+        group = element(outer, "g", id=f"{slide.id}.{name}", data__flexo__talk="region", data__flexo__box=room)
+        lists, tables, texts = len(canvas.lists), len(canvas.tables), len(canvas.worded)
+        prepared, scales = plans[column]
+        placing = _placing([blocks[column][row] for row in shown[column]])
+        canvas.layer = group
+        try:
+            canvas.alone, canvas.centred = placing != "listed", placing != "listed"
+            _check_legible(canvas, prepared, scales, box)
+            for row in shown[column]:
+                block, identifier = blocks[column][row], f"{slide.id}.{name}.{row}"
+                mark = (len(group), len(canvas.lists), len(canvas.tables), len(canvas.worded))
+                end = _set(
+                    canvas, region, row, block, identifier, box, tops[row], placing, prepared, scales,
+                    shares.get((column, row), 0.0), panels.get(row, 0.0),
+                    builds=canvas.hinted.get(identifier) != "Placeholder",
+                )
+                slack = max(tall[row] - (end - tops[row]), 0.0)
+                if editing and (drawn := _drawn(canvas, identifier)) is not None:
+                    # The room its row has to spare for it, for an editor to say where it
+                    # would stand down it.
+                    drawn.set("data-flexo-spare", number(slack))
+                centred = align != "top" and row in worded and isinstance(block, _PICTURES)
+                _lowered(canvas, mark, slack * region.down.get(row, 0.5 if centred else 0.0))
+        finally:
+            canvas.layer = outer
+        group.set("data-flexo-spare", number(spare))
+        graphic = bool(shown[column]) and (
+            all(isinstance(blocks[column][row], _PICTURES) for row in shown[column]) or placing == "captioned"
+        )
+        owned = (canvas.lists[lists:], canvas.tables[tables:], canvas.worded[texts:])
+        placed.append((group, graphic, bool(shown[column]), owned))
+    # Down the body together: pictures alone a little above its middle, words at its top
+    # (its middle with ``align="middle"``), as columns each on their own are (_regions).
+    shift = 0.0
+    if align != "top" and any(full for _, _, full, _ in placed):
+        alone = all(graphic for _, graphic, full, _ in placed if full)
+        shift = spare * (0.5 if align == "middle" else OPTICAL if alone else 0.0)
+    for group, _, full, owned in placed:
+        if full and shift > 0.01:
+            _shift(group, shift, *owned)
+    # The labels, before the columns, as they are read: each centred down its row.
+    at = len(outer) - len(placed)
+    for row, runs in enumerate(labels):
+        if not runs:
+            continue
+        before = len(outer)
+        y = tops[row] + (shift if shift > 0.01 else 0.0) + (tall[row] - label_tall[row]) / 2.0
+        canvas.words(
+            f"{slide.id}.row{row}", runs, Box(body.x + body.width - gutter if rtl else body.x, y, gutter, 0.0),
+            size=size, weight=ROW_WEIGHT, role="muted-ink",
+        )
+        for drawn in list(outer)[before:]:
+            outer.remove(drawn)
+            outer.insert(at, drawn)
+            at += 1
+
+
+ROW_LABEL = 0.85
+"""A row's label, as a share of the body size: a step smaller, as a table's words are."""
+
+ROW_WEIGHT = 600
+"""The weight a row's label is set in: semibold, in the muted ink."""
+
+ROW_GUTTER = 0.2
+"""The most of the body's width the rows' labels take: a longer one wraps."""
+
+ROW_GAP = 0.6
+"""The room between the rows' labels and the columns, as a share of the room between columns."""
+
+
+def _cell_tall(
+    canvas: _Canvas, block: object, identifier: str, width: float, share: float, figure: float, panel: float
+) -> float:
+    """How tall a block is drawn in a row's cell ``width`` wide (``_block``), before it is:
+    a picture with ``share`` of height for it (a figure, ``figure`` tall as it was laid
+    out), its caption under it; a callout on a panel ``panel`` tall at least."""
+
+    if isinstance(block, _Figure):
+        tall = figure
+    elif isinstance(block, _Image):
+        box = Box(0.0, 0.0, width, max(share, 40.0))
+        _, natural, scale = _image_fit(load_artwork(identifier, block.source), block, box)
+        tall = natural * scale
+    elif isinstance(block, _Plot):
+        own = _own_width(block, width)
+        tall = max(share, 60.0)
+        if block.width is not None and not block.aspect:
+            tall = _plot_tall(own, width, tall)
+        tall = min(tall, own / block.aspect) if block.aspect else tall
+    elif isinstance(block, _Gallery):
+        tall = _gallery(canvas, "", block, Box(0.0, 0.0, _own_width(block, width), max(share, 40.0)), draw=False)
+    elif isinstance(block, _Missing):
+        tall = min(max(share, 40.0), max(width * 0.6, 40.0))
+    elif isinstance(block, _Callout):
+        return max(_height(canvas, block, width), panel)
+    else:
+        return _height(canvas, block, width)
+    return tall + _captioned(canvas, block, width)
+
+
+def _lowered(canvas: _Canvas, mark: tuple[int, int, int, int], down: float) -> None:
+    """What was drawn since ``mark`` (how much its layer, and the slide's native lists,
+    tables and words, held then) moved ``down`` its place, as ``_stand`` moves a block."""
+
+    first, lists, tables, worded = mark
+    children = list(canvas.layer)[first:]
+    if down < 0.01 or not children:
+        return
+    # (How far down it moved, for an editor: where it would stand were it not.)
+    group = ET.Element("g", {"data-flexo-down": number(down)})
+    for child in children:
+        canvas.layer.remove(child)
+        group.append(child)
+    canvas.layer.insert(first, group)
+    _shift(group, down, canvas.lists[lists:], canvas.tables[tables:], canvas.worded[worded:])
 
 
 OPTICAL = 0.4
@@ -1495,10 +1811,11 @@ def _figure_words(canvas: _Canvas, region: Region, box: Box) -> float | None:
 
 
 def _plan_figures(
-    canvas: _Canvas, blocks: list, box: Box, words: float | None
+    canvas: _Canvas, blocks: list, box: Box, words: float | None, each: float | None = None
 ) -> tuple[dict[int, _Prepared], dict[int, float], float]:
     """The region's figures laid out for their places, the scale each takes, and the
-    height each other picture has."""
+    height each other picture has. ``each``: the height every picture has, where that
+    is not the region's to share out (a row's, on a slide set in rows)."""
 
     style = canvas.deck.style
     worded = [block for block in blocks if not isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
@@ -1509,6 +1826,8 @@ def _plan_figures(
     gaps = style.block_gap * max(0, len(blocks) - 1)
     room = box.height - needed - gaps
     share = room / len(pictures) if pictures else 0.0
+    if each is not None:
+        room, share = each * len(pictures), each
     # Figures in one place share one scale, so their words are one size: the
     # largest at which all of them fit the room figures have together.
     count = sum(isinstance(block, _Figure) for block in blocks)
@@ -1598,27 +1917,12 @@ def _region(
             planned, fits, share = _plan_figures(canvas, [blocks[at] for at in aside], room, words)
             prepared |= {aside[at]: item for at, item in planned.items()}
             scales |= {aside[at]: scale for at, scale in fits.items()}
-        block, identifier = blocks[index], ids[index]
-        canvas.place = region.across.get(index)
         # (What it draws, for it to be moved down its place after: see _stand.)
         marks.append((index, len(canvas.layer), len(canvas.lists), len(canvas.tables), len(canvas.worded)))
-        try:
-            top = _block(canvas, region, index, block, identifier, box, top, placing, prepared, scales, share, panel)
-        except _FigureFailed:
-            raise
-        except Exception as error:
-            # One object that fails as it is drawn is a box where it would be, not a slide
-            # that is not drawn (render_slide) -- where it can stand aside.
-            if not STANDING_ASIDE.get():
-                raise
-            raise _object_failed(region.blocks[index], error) from error
-        built = index in region.builds and index not in aside and not getattr(block, "reveal", False)
-        if built and (drawn := _drawn(canvas, identifier)) is not None:
-            # It appears on a click of its own, after what is on the slide before it.
-            canvas.steps += 1
-            canvas.built.append((canvas.steps, identifier))
-            drawn.set("data-flexo-step", str(canvas.steps))
-        canvas.place = None
+        top = _set(
+            canvas, region, index, blocks[index], ids[index], box, top, placing, prepared, scales, share,
+            panel if index == 0 else 0.0, builds=index not in aside,
+        )
         top += style.block_gap
     used = used if used is not None else max(top - box.y - style.block_gap, 0.0)
     # The room it has to spare, for an editor to say where its objects would stand down it.
@@ -1630,11 +1934,41 @@ def _region(
     return used
 
 
+def _set(
+    canvas: _Canvas, region: Region, index: int, block: object, identifier: str, box: Box, top: float,
+    placing: str, prepared: dict, scales: dict, share: float, panel: float, *, builds: bool = True,
+) -> float:
+    """One of a region's blocks set from ``top`` down (``_block``), where it was asked to
+    stand across its place, and marked to build in if it does (``builds``: unless it is a
+    placeholder set aside): where it ends."""
+
+    canvas.place = region.across.get(index)
+    try:
+        top = _block(canvas, region, index, block, identifier, box, top, placing, prepared, scales, share, panel)
+    except _FigureFailed:
+        raise
+    except Exception as error:
+        # One object that fails as it is drawn is a box where it would be, not a slide
+        # that is not drawn (render_slide) -- where it can stand aside.
+        if not STANDING_ASIDE.get():
+            raise
+        raise _object_failed(region.blocks[index], error) from error
+    built = index in region.builds and builds and not getattr(block, "reveal", False)
+    if built and (drawn := _drawn(canvas, identifier)) is not None:
+        # It appears on a click of its own, after what is on the slide before it.
+        canvas.steps += 1
+        canvas.built.append((canvas.steps, identifier))
+        drawn.set("data-flexo-step", str(canvas.steps))
+    canvas.place = None
+    return top
+
+
 def _block(
     canvas: _Canvas, region: Region, index: int, block: object, identifier: str, box: Box, top: float,
     placing: str, prepared: dict, scales: dict, share: float, panel: float,
 ) -> float:
-    """One of a region's blocks drawn from ``top`` down: where the next starts."""
+    """One of a region's blocks drawn from ``top`` down: where the next starts. ``panel``
+    is the least height of the panel a callout is drawn on (the tallest's beside it)."""
 
     style = canvas.deck.style
     # Words under a picture (its caption) are centred under it, unless set otherwise.
@@ -1695,8 +2029,7 @@ def _block(
     elif isinstance(block, _Stats):
         top += _stats(canvas, identifier, block, Box(left, top, wide, 0.0))
     elif isinstance(block, _Callout):
-        least = panel if index == 0 else 0.0
-        top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=least)
+        top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=panel)
     elif isinstance(block, _Math):
         top += _equation(canvas, identifier, block, Box(left, top, wide, 0.0))
     if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
@@ -2118,43 +2451,55 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
     pictures = len(shown)
     gaps = style.block_gap * max(0, len(real) - 1)
 
-    def needed(scale: float) -> float:
+    def needed(scale: float, least: float) -> float:
         # Pictures (and galleries) take what is left: only words are fitted here.
         return sum(
             _height(canvas, _sized(block, scale, style), box.width)
             for block in real if not isinstance(block, _Gallery)
         )
 
+    scale = _shrunk(canvas, needed, lambda least: box.height - gaps - least * pictures, shown)
+    return [_sized(block, scale, style) for block in blocks]
+
+
+def _shrunk(canvas: _Canvas, needed, room, shown: list) -> float:
+    """How much smaller words are set to fit (1.0, as they are): the largest scale, down to
+    the deck's small size, at which the height they need (``needed(scale, least)``) is within
+    the room there is (``room(least)``), each picture beside them (``shown``) left ``least``
+    of height. Set much smaller, or too many for a slide even so, it is said."""
+
+    style = canvas.deck.style
+
     def largest(least: float) -> float:
         """The largest scale (down to the small size) at which the words leave each
         picture ``least`` of height."""
 
-        room = box.height - gaps - least * pictures
+        most = room(least)
         low, high = style.small_size / style.body_size, 1.0
-        if needed(1.0) <= room:
+        if needed(1.0, least) <= most:
             return 1.0
-        if needed(low) > room:
+        if needed(low, least) > most:
             return 0.0
         for _ in range(10):
             middle = (low + high) / 2.0
-            low, high = (middle, high) if needed(middle) <= room else (low, middle)
+            low, high = (middle, high) if needed(middle, least) <= most else (low, middle)
         return low
 
     scale = largest(PICTURE_LEAST)
-    if pictures and scale < WORDS_KEPT:
+    if shown and scale < WORDS_KEPT:
         # A picture added to a full slide gives up room before the words around it do:
         # they shrink to WORDS_KEPT at most while it can still be PICTURE_SMALLEST tall.
         scale = max(scale, min(WORDS_KEPT, largest(PICTURE_SMALLEST)))
     if scale >= 1.0:
-        return blocks
+        return 1.0
     if scale <= 0.0:
         canvas.diagnostics.append(
             f"{canvas.slide.id}: Text does not fit, even at the smallest size. "
             "Duplicate the slide and keep part of the text on each."
         )
-        return [_sized(block, style.small_size / style.body_size, style) for block in blocks]
+        return style.small_size / style.body_size
     if scale >= QUIET_SHRINK:
-        return [_sized(block, scale, style) for block in blocks]
+        return scale
     # The advice names what is there: a figure is not a picture.
     kinds = list(dict.fromkeys(
         "figure" if isinstance(block, _Figure) else "plot" if isinstance(block, _Plot)
@@ -2169,7 +2514,7 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
     canvas.diagnostics.append(
         f"{canvas.slide.id}: Text size reduced to {round(scale * 100)}% to fit the slide.{advice}"
     )
-    return [_sized(block, scale, style) for block in blocks]
+    return scale
 
 
 MOST_ITEMS = 300
@@ -4888,14 +5233,21 @@ def _across(canvas: _Canvas, box: Box, width: float) -> float:
     return box.x + (box.width - width) * share
 
 
-def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
-    art = load_artwork(identifier, block.source)
+def _image_fit(art: Any, block: _Image, box: Box) -> tuple[float, float, float]:
+    """A picture's width and height of itself, and the scale it is drawn at to fit ``box``."""
+
     # Cropped, it is the part kept: its size and proportions are that part's.
-    left, top, kept_w, kept_h = block.crop or (0.0, 0.0, 1.0, 1.0)
+    _, _, kept_w, kept_h = block.crop or (0.0, 0.0, 1.0, 1.0)
     natural_w = (art.width or box.width) * kept_w
     natural_h = (art.height or box.height) * kept_h
     # A width asked for is the most it takes: never wider than its place.
-    scale = min(min(block.width or box.width, box.width) / natural_w, box.height / natural_h)
+    return natural_w, natural_h, min(min(block.width or box.width, box.width) / natural_w, box.height / natural_h)
+
+
+def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
+    art = load_artwork(identifier, block.source)
+    left, top, kept_w, kept_h = block.crop or (0.0, 0.0, 1.0, 1.0)
+    natural_w, natural_h, scale = _image_fit(art, block, box)
     width, height = natural_w * scale, natural_h * scale
     canvas.span = (_across(canvas, box, width), width)
     if block.crop is not None or block.mask is not None:

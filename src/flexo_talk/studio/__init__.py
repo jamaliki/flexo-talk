@@ -153,7 +153,7 @@ FIELD_LABELS = {
     "title": "Title", "subtitle": "Subtitle", "author": "Author", "date": "Date", "words": "Statement",
     "by": "Attribution", "notes": "Notes", "footnotes": "Footnotes", "background": "Background",
     "shade": "Background", "layout": "Layout", "columns": "Columns", "widths": "Columns", "split": "Columns",
-    "dark": "Background", "align": "Content Position", "skip": "Skip Slide",
+    "dark": "Background", "align": "Content Position", "skip": "Skip Slide", "rows": "Row Labels",
     "logos": "Logos", "logos_on": "Logos", "logo_height": "Logos",
 }
 """What the studio calls a slide's settings, where a message names one."""
@@ -2171,7 +2171,13 @@ def _presentable(svg: str, deck: Any, slide: Any) -> str:
     # (An object that can't be drawn, or whose file is not there, says so on the stage, and
     # is a quiet box presented.)
     invalid = 'data-flexo-talk="invalid"' in svg or 'data-flexo-talk="missing"' in svg
-    if not invalid and not any(words != "Placeholder" and block.fullmatch(ident) for ident, words in held):
+    # (So too where rows' labels not yet written hold a gutter the slide presented has not;
+    # and on a slide set in rows a sample holds its cell while edited, as empty words do.)
+    gutter = 'data-flexo-gutter="held"' in svg
+    rows = slide.rows is not None
+    if not invalid and not gutter and not any(
+        (rows or words != "Placeholder") and block.fullmatch(ident) for ident, words in held
+    ):
         return svg
     token = PLACEHOLDERS.set(False)
     try:
