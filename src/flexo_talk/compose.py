@@ -2395,7 +2395,9 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
     a shape or group named in ``stages`` (a group, with all it holds) on the first click
     that names it; a line on the later of its ends' (or its own); a group's own box with
     the first of what it holds, if all of that waits for a click; a frame with the last of
-    what it goes round. A group's box is keyed ``"<id> box"``: its pieces, not what it holds."""
+    what it goes round -- and a line that ends at a frame with the frame, as one that ends
+    at a shape with the shape. A group's box is keyed ``"<id> box"``: its pieces, not what
+    it holds."""
 
     from flexo.frames import FRAME_KIND, around
 
@@ -2417,13 +2419,23 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
             named.setdefault(one, click)
     shapes = [node.id for node in spec.nodes if node.kind != FRAME_KIND]
     steps = {shape: named[shape] for shape in shapes if shape in named}
+    # (When each frame appears, for the lines that end at one: as it is found below.)
+    framed: dict[str, int] = {}
+    for node in spec.nodes:
+        if node.kind == FRAME_KIND:
+            held = [steps.get(one, 0) for one in within(list(around(node))) if one in shapes]
+            framed[node.id] = named.get(node.id) or (max(held) if held and all(held) else 0)
+
+    def at(end: str) -> int:
+        return named.get(end) or framed.get(end, 0)
+
     for edge in spec.edges:
         ends = (edge.source.node_id, edge.target.node_id, edge.id)
-        if (click := max(named.get(end, 0) for end in ends)) > 0:
+        if (click := max(at(end) for end in ends)) > 0:
             steps[edge.id] = click
     for net in spec.nets:
         ends = [port.node_id for port in (*net.sources, *net.targets)] + [net.id]
-        if (click := max(named.get(end, 0) for end in ends)) > 0:
+        if (click := max(at(end) for end in ends)) > 0:
             steps[net.id] = click
     for group in spec.groups:
         if group.id == spec.root:
@@ -2432,12 +2444,9 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
         click = named.get(group.id) or (min(held) if held and all(held) else 0)
         if click:
             steps[f"{group.id} box"] = click
-    for node in spec.nodes:
-        if node.kind == FRAME_KIND:
-            held = [steps.get(one, 0) for one in within(list(around(node))) if one in shapes]
-            click = named.get(node.id) or (max(held) if held and all(held) else 0)
-            if click:
-                steps[node.id] = click
+    for frame, click in framed.items():
+        if click:
+            steps[frame] = click
     return steps
 
 

@@ -3537,3 +3537,75 @@ def test_a_figures_parts_appear_a_click_at_a_time(tmp_path: Path) -> None:
     wrong = {**document, "slides": [{"title": "x", "body": [{"figure": figure, "stages": 3}]}]}
     with pytest.raises(DeckDocumentError, match="stages"):
         deck_from_document(wrong, tmp_path)
+
+
+def test_a_line_to_a_frame_on_a_slide_is_drawn_exported_and_shown_with_its_frame(tmp_path: Path) -> None:
+    """A figure's line may end at a frame. On a slide it is drawn to the frame's outline;
+    the PowerPoint has it as a connector joined to the frame -- and a line between two shapes
+    in the frame joined to those shapes, not to the frame they are in, as it once was; it
+    appears on the click its frame does, and is left out where its frame is hidden."""
+
+    import re
+    import zipfile
+
+    from lxml import etree
+
+    from flexo_talk.compose import render_slide
+
+    figure = {
+        "figure": {"id": "pipeline"},
+        "groups": [
+            {"id": "root", "role": "canvas", "layout": {"kind": "row"}, "children": ["api", "back", "frame"]},
+            {"id": "back", "role": "layout", "layout": {"kind": "column"}, "children": ["queue", "store"]},
+        ],
+        "nodes": [{"id": "api", "label": "API"}, {"id": "queue", "label": "Orders"}, {"id": "store", "label": "Store"},
+                  {"id": "frame", "kind": "frame", "label": "Backend", "line": "dashed",
+                   "properties": {"around": "queue, store", "title_side": "bottom-left"}}],
+        "edges": [{"from": "queue", "to": "store"}, {"from": "api", "to": "frame", "arrive": "south"}],
+    }
+
+    def deck_of(figure: dict, **block: object):
+        document = {"schema_version": 1, "deck": {"id": "framed"},
+                    "slides": [{"title": "Framed", "body": [{"figure": figure, **block}]}]}
+        return deck_from_document(document, tmp_path)
+
+    deck = deck_of(figure)
+    drawn = render_slide(deck, deck.slides[0])
+    name = "slide1.body.0.edge.2.api-to-frame"
+    assert f'id="{name}"' in drawn.svg
+    # Its end is on the frame's bottom outline, at the middle; its title is clear of it.
+    frame = re.search(r'<rect[^>]*id="slide1\.body\.0\.frame\.body"[^>]*>', drawn.svg)[0]
+    x, y, width, height = (float(re.search(rf' {key}="([^"]+)"', frame)[1]) for key in ("x", "y", "width", "height"))
+    shaft = re.search(rf'<path[^>]*id="{re.escape(name)}\.shaft"[^>]*>', drawn.svg)[0]
+    points = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", re.search(r' d="([^"]+)"', shaft)[1])]
+    assert points[-2] == pytest.approx(x + width / 2.0, abs=0.01) and y + height <= points[-1] <= y + height + 8.0
+
+    # In the PowerPoint: connectors, each joined to what it joins and named for it.
+    built = deck.build(tmp_path / "out", formats=("pptx", "pdf"))
+    with zipfile.ZipFile(built.pptx) as pptx:  # type: ignore[arg-type]
+        tree = etree.fromstring(pptx.read("ppt/slides/slide1.xml"))
+    p = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    names = {nv.get("id"): nv.get("name") for nv in tree.iter(f"{p}cNvPr")}
+    joined = {}
+    for line in tree.iter(f"{p}cxnSp"):
+        ends = [line.find(f".//{a}{tag}") for tag in ("stCxn", "endCxn")]
+        joined[line.find(f".//{p}cNvPr").get("name")] = [end is not None and names[end.get("id")] for end in ends]
+    assert joined == {"Line from Orders to Store": ["Orders", "Store"], "Line from API to Backend": ["API", "Backend"]}
+    assert built.pdf.stat().st_size > 1000  # type: ignore[union-attr]
+
+    # Its frame shown on a click (with the last of what it goes round), it comes with it; the
+    # frame hidden, it is not drawn at all.
+    staged = deck_of(figure, stages=[["queue"], ["store"]])
+    svg = render_slide(staged, staged.slides[0]).svg
+    steps = dict(re.findall(r'id="slide1\.body\.0\.([\w.-]+)"[^>]*data-flexo-step="(\d)"', svg))
+    assert steps["frame"] == steps["edge.2.api-to-frame"] == steps["store"] == "3" and steps["queue"] == "2"
+    hidden = deck_of({**figure, "figure": {"id": "pipeline", "hide": ["frame"]}})
+    svg = render_slide(hidden, hidden.slides[0]).svg
+    assert re.search(rf'<g[^>]*id="{re.escape(name)}"[^>]*visibility="hidden"', svg)
+    assert not re.search(r'<g[^>]*id="slide1\.body\.0\.edge\.1\.queue-to-store"[^>]*visibility="hidden"', svg)
+    with zipfile.ZipFile(hidden.build(tmp_path / "hidden", formats=("pptx",)).pptx) as pptx:  # type: ignore[arg-type]
+        tree = etree.fromstring(pptx.read("ppt/slides/slide1.xml"))
+    shown = {nv.get("name") for nv in tree.iter(f"{p}cNvPr")}
+    assert "Line from Orders to Store" in shown and {"API", "Orders", "Store"} <= shown
+    assert not {name for name in shown if name.startswith("Line from API") or name == "Backend"}
