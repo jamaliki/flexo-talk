@@ -4450,7 +4450,7 @@ export function mount(studio, container) {
     const typed = action.do === "update" && Object.keys(action.values || {}).every((key) => key === "label");
     const rows = action.do === "update" && Object.values(action.values || {}).some(Array.isArray);
     const setting = action.do === "update" && !typed && !rows;
-    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather", "delete", "connect", "ungroup"].includes(action.do)
+    let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather", "delete", "connect", "ungroup", "line_up"].includes(action.do)
       || lineLook || groupWords || setting || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -4541,8 +4541,8 @@ export function mount(studio, container) {
     const grip = h("button.btn.ghost.small.icon.figure-grip", { type: "button", title: `Drag to move the ${name.toLowerCase()}`,
       onpointerdown: (event) => { event.stopPropagation(); pressBlock(event, { kind: "block", region: figure.region, index: figure.index }); } }, icon("grip"));
     // (Shapes to group chosen: an empty group is added from the palette's Layout.)
-    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (⌥⌘G)", disabled: !figure.parts.canGroup() });
-    // (Where its menu opens from ⌥⌘G, or Arrange › Group…, too: groupAnchor.)
+    const group = ui.button("Group", (event) => figure.parts.groupMenu(event.currentTarget), { small: true, kind: "ghost", icon: "layout", title: "Group the Selected Shapes (⌘G)", disabled: !figure.parts.canGroup() });
+    // (Where its menu opens from ⌘G, or Arrange › Group…, too: groupAnchor.)
     group.classList.add("group");
     // (A figure of one shape -- a structure added on its own -- is that shape, as a picture is:
     // no tools of a diagram's over it. It grows into a figure from its menu's Add Shape After….)
@@ -9842,12 +9842,15 @@ export function mount(studio, container) {
     if (!block) return [];
     const kind = kindOf(block), name = blockLabel(block), count = blocksAt(slideAt(), at.region).length;
     // A figure's shapes chosen: Group… and Ungroup, as the Mac app's Arrange menu runs them by
-    // name (⌥⌘G and ⇧⌥⌘G, the figure's own keys).
+    // name (⌘G and ⇧⌘G, the figure's own keys) -- and Align in a Row and in a Column.
     const parts = figure && figureBlock() && editable(block) ? figure.parts : null;
     const one = parts?.selected.length === 1 ? parts.selected[0] : null;
     return [
-      ...(parts?.selected.length && parts.canGroup() ? [{ icon: "layout", label: "Group…", keys: "⌥⌘G", run: () => parts.groupMenu(figureBar.querySelector(".group") || figureBar) }] : []),
-      ...(one && parts.groupOf(one) && one !== parts.model?.root ? [{ icon: "layout", label: "Ungroup", keys: "⇧⌥⌘G", run: () => parts.act({ do: "ungroup", id: one }) }] : []),
+      ...(parts?.selected.length && parts.canGroup() ? [{ icon: "layout", label: "Group…", keys: "⌘G", run: () => parts.groupMenu(figureBar.querySelector(".group") || figureBar) }] : []),
+      ...(one && parts.groupOf(one) && one !== parts.model?.root ? [{ icon: "layout", label: "Ungroup", keys: "⇧⌘G", run: () => parts.act({ do: "ungroup", id: one }) }] : []),
+      ...(parts?.canAlign() ? [
+        { icon: "layout", label: "Align in a Row", hint: "The shapes chosen, in one row", run: () => parts.alignChosen("row") },
+        { icon: "layout", label: "Align in a Column", hint: "The shapes chosen, in one column", run: () => parts.alignChosen("column") }] : []),
       ...(kind === "text" ? [{ icon: "list", label: "Convert to List", run: () => restyle(at, "bulleted") }] : []),
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "text") }] : []),
       ...(kind === "image" && pictureAspect(at) ? [{ icon: "crop", label: "Crop Picture…", hint: name, run: () => startCrop(at) }] : []),
