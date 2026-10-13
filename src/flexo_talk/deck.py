@@ -2055,8 +2055,11 @@ class Deck:
         """The type at ``size``: in the title font for a heading, else the words' font."""
 
         typography = self.layout_style.typography
-        if title and self.title_font:
-            typography = typography.with_family(self.title_font)
+        # A heading: in the deck's title font, else -- the deck in no one font of its own --
+        # the family its theme sets titles in (``type: {title_family: ...}``).
+        family = self.title_font or (None if self.font else typography.title_family)
+        if title and family:
+            typography = typography.with_family(family)
         return replace(typography, size=pt(size), minimum_size=pt(min(size, 6.0)))
 
     @property

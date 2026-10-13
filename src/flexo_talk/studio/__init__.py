@@ -1987,14 +1987,19 @@ def _fonts(deck) -> dict[str, str]:
     font choices to show as they are)."""
 
     body = deck.typography(20).family
+    theme, titles, figures = body, "", ""
     try:
         from flexo.themes import resolve_style
 
-        theme = resolve_style(deck.theme, None, None, None).typography.family
+        of_theme = resolve_style(deck.theme, None, None, None).typography
+        theme, titles, figures = of_theme.family, of_theme.title_family or "", of_theme.figure_family or ""
     except Exception:
-        theme = body
+        pass
+    # (What the theme sets titles and figures in apart from its words, if it does: shown
+    # where the deck's own choice of each is made.)
     return {"body": body, "title": deck.typography(20, title=True).family,
-            "figure": deck.figure_font or body, "theme": theme}
+            "figure": deck.figure_font or deck.font or figures or body, "theme": theme,
+            "theme_title": titles, "theme_figure": figures}
 
 
 def _palette(deck) -> dict[str, str]:

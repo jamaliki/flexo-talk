@@ -488,6 +488,59 @@ def test_titles_words_and_figures_each_take_their_own_family(tmp_path: Path) -> 
     assert 'typeface="LM Roman 10"' in slide and 'typeface="IBM Plex Sans"' in slide
 
 
+def test_a_theme_sets_titles_and_figures_in_families_of_their_own(tmp_path: Path) -> None:
+    """Said deck by deck before (``title_font``, ``figure_font``): a theme that sets its
+    figures in a monospace face had no way to say so."""
+
+    import flexo
+
+    from flexo_talk.studio import _fonts
+
+    theme = flexo.register_theme(
+        {
+            "theme": {
+                "name": "talk-in-three-faces",
+                "base": "paper",
+                "font": "IBM Plex Sans",
+                "type": {"figure_family": "IBM Plex Mono", "title_family": "Latin Modern Roman"},
+            }
+        }
+    )
+
+    def drawn(deck: Deck, folder: str) -> dict[str, str]:
+        with deck.slide("A title", layout="two-columns") as slide:
+            slide.left.bullets("Words of the slide")
+            with slide.right.figure() as figure:
+                figure.block("b", label="Block")
+        svg = deck.build(tmp_path / folder, formats=("svg",)).svgs[0].read_text()
+        found = {}
+        for words in ("A title", "Words of the slide", "Block"):
+            text = re.search(
+                r'<text[^>]*font-family="([^"]+)"[^>]*>(?:(?!</text>).)*' + words, svg, re.DOTALL
+            )
+            found[words] = text[1].split(",")[0].strip("'") if text else ""
+        return found
+
+    deck = Deck("themed", theme=theme)
+    assert drawn(deck, "themed") == {
+        "A title": "Latin Modern Roman", "Words of the slide": "IBM Plex Sans", "Block": "IBM Plex Mono",
+    }
+    # (Told to the Design panel, which shows each where the deck's own choice is made.)
+    assert _fonts(deck) == {
+        "body": "IBM Plex Sans", "title": "Latin Modern Roman", "figure": "IBM Plex Mono",
+        "theme": "IBM Plex Sans", "theme_title": "Latin Modern Roman", "theme_figure": "IBM Plex Mono",
+    }
+    # The deck's own choice of each stands over the theme's,
+    own = Deck("own", theme=theme, title_font="Figtree", figure_font="Figtree")
+    assert drawn(own, "own") == {
+        "A title": "Figtree", "Words of the slide": "IBM Plex Sans", "Block": "Figtree",
+    }
+    # and a deck set in one font is in it throughout: its titles and its figures too.
+    one = Deck("one", theme=theme, font="Figtree")
+    assert set(drawn(one, "one").values()) == {"Figtree"}
+    assert _fonts(Deck("plain"))["theme_figure"] == ""
+
+
 def test_a_tall_figure_is_laid_out_for_a_wide_slide(tmp_path: Path) -> None:
     deck = Deck("tall")
     with deck.slide("A stack", layout="figure") as slide, slide.figure() as figure, figure.column(

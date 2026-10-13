@@ -186,7 +186,8 @@ with English words, numbers, and maths inside it kept in order.
   `title_role`, `title_weight`, `numbers`, `align`, and `width`/`height`
   (960x540 pt is 16:9; 720x540 is 4:3). `from flexo_talk import DeckStyle`.
 - **Type by role**: `Deck(font=, title_font=, figure_font=)`; each falls back to
-  `font`, then to the theme's family.
+  `font`, then to the theme's (its `type: {title_family:, figure_family:}`, then its
+  family).
 - **Logos** (an institution's, its funders'): `Deck(logos=["logos/institute.png",
   "logos/funder.svg"], logos_on="title", logo_height=40)` -- PNG, JPEG, SVG or PDF
   files, in order. On a title slide: a row along its foot, the words above making room;
@@ -264,7 +265,8 @@ again at the size of its place.
 flexo studio: the slide is where you work (click to choose, double-click words to
 type on the slide), figures are edited on their slides part by part, the
 inspector holds a part's settings or, with nothing chosen, the slide's, and
-**Design** holds look, theme, palette and type. It presents full screen and
+**Design** holds the theme and tabs for colour, type, layout and the deck's own
+settings. It presents full screen and
 exports PPTX, PDF, SVG and PNG. People and agents edit the same document live.
 
 As an agent: `claude mcp add flexo-studio -- flexo studio mcp` (once, in the

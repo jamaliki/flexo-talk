@@ -686,7 +686,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
             canvas.tables = [layout for layout in canvas.tables if layout.id not in empty]
     stylesheet = element(canvas.defs, "style", id=f"{slide.id}.fonts", type="text/css")
     embed_fonts(stylesheet, canvas.root, deck.layout_style)
-    if deck.title_font:
+    if deck.typography(12, title=True).family != deck.layout_style.typography.family:
         headings = element(canvas.defs, "style", id=f"{slide.id}.title-fonts", type="text/css")
         embed_fonts(headings, canvas.root, replace(deck.layout_style, typography=deck.typography(12, title=True)))
     # One line for each thing said, however many places on the slide said it.
