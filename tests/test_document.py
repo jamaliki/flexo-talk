@@ -2895,3 +2895,49 @@ def test_a_slide_hides_dims_and_highlights_parts_of_a_figure_where_they_stand(tm
     wrong = {**document, "slides": [{"title": "x", "body": [{"figure": "pipeline.yaml", "hide": "queue"}]}]}
     with pytest.raises(DeckDocumentError, match="list of the names"):
         deck_from_document(wrong, tmp_path)
+
+
+def test_hiding_parts_of_a_figure_file_on_a_slide_is_that_slides_alone(tmp_path: Path) -> None:
+    """A figure kept in a file is other slides' figure too: parts hidden where one slide
+    shows it are written on that slide, and the file is left as it was."""
+
+    from flexo_talk.studio import DeckKind
+
+    figure = {
+        "figure": {"id": "pipeline"},
+        "nodes": [{"id": "api", "label": "API"}, {"id": "queue", "label": "Orders"},
+                  {"id": "store", "kind": "database", "label": "Store"}],
+        "edges": [{"from": "api", "to": "queue"}, {"from": "queue", "to": "store"}],
+    }
+    file = tmp_path / "pipeline.yaml"
+    file.write_text(dump_document(figure), encoding="utf-8")
+    was = file.read_text(encoding="utf-8")
+    document = {
+        "schema_version": 1,
+        "deck": {"id": "reveal"},
+        "slides": [{"title": "One", "body": [{"figure": "pipeline.yaml"}]},
+                   {"title": "Two", "body": [{"figure": "pipeline.yaml"}]}],
+    }
+    kind = DeckKind()
+
+    def show(document: dict, how: str, ids: list[str], **more: object) -> dict:
+        at = {"slide": 0, "region": "body", "index": 0}
+        edit = {"do": "show", "ids": ids, "as": how, **more}
+        return kind.act(document, {"do": "figure", "at": at, "edit": edit}, tmp_path)
+
+    hidden = show(document, "hidden", ["queue", "store"])
+    blocks = [slide["body"][0] for slide in hidden["document"]["slides"]]
+    assert blocks[0] == {"figure": "pipeline.yaml", "hide": ["queue", "store"]}
+    assert blocks[1] == {"figure": "pipeline.yaml"} and file.read_text(encoding="utf-8") == was
+    # The page is told the figure as this slide shows it, to say so in its Show control.
+    assert hidden["model"]["figure"]["hide"] == ["queue", "store"]
+    lit = show(hidden["document"], "highlighted", ["store"])
+    block = lit["document"]["slides"][0]["body"][0]
+    assert block == {"figure": "pipeline.yaml", "hide": ["queue"], "highlight": ["store"]}
+    # Read again (the slide shown anew), it is still as the slide has it; all shown, no list.
+    at = {"slide": 0, "region": "body", "index": 0}
+    read = kind.act(lit["document"], {"do": "figure", "at": at, "edit": {"do": "read"}}, tmp_path)
+    assert read["model"]["figure"]["highlight"] == ["store"]
+    plain = show(lit["document"], "shown", [], all=True)
+    assert plain["document"]["slides"][0]["body"][0] == {"figure": "pipeline.yaml"}
+    deck_from_document(lit["document"], tmp_path)
