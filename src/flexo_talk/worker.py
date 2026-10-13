@@ -8,6 +8,9 @@ that folder (so a plot's relative paths mean what its author meant), and leaving
 itself after ``IDLE`` seconds without work. ``flexo-talk`` on the command line runs a
 person's own scripts in its own process, as before.
 
+A figure's plots (``kind: plot``, ``flexo.plots``) are drawn here too, in a figure's own
+file as on a slide: ``figure_plot`` is who flexo asks to run one apart.
+
 Requests and answers travel as pickles framed by their length, on the worker's standard
 input and output; what a deck's Python prints goes to standard error.
 """
@@ -143,6 +146,24 @@ class RemotePlot:
         return svg
 
 
+def figure_plot(asked: dict[str, Any]) -> dict[str, Any] | None:
+    """A plot in a figure, drawn by the worker of the studio's folder (``flexo.plots.RUNNER``):
+    what ``flexo.plots.run`` answers there -- or, of one that hung or took the worker down,
+    what to say. ``None`` outside the studio, where flexo runs it in this process."""
+
+    folder = root()
+    if folder is None:
+        return None
+    target = f"{asked['function']} in {Path(asked['file']).name}"
+    try:
+        answer = ask(folder, {"do": "figure-plot", **asked})
+    except Stopped as stopped:
+        return {"said": f"{target} {stopped}", "code": "plot.function.stopped"}
+    if "error" in answer:
+        return {"said": f"{target} failed: {answer['error']}", "code": "plot.function.failed"}
+    return answer
+
+
 def deck_view(deck: Any) -> dict[str, Any]:
     """What a worker needs to stand in for ``deck`` in a plot function (see ``DeckView``)."""
 
@@ -270,6 +291,11 @@ def _answer(request: dict[str, Any]) -> dict[str, Any]:
     if Path.cwd() != file.parent:
         os.chdir(file.parent)
     name = request["function"]
+    if request["do"] == "figure-plot":
+        from flexo.plots import run
+
+        # (In the look it was sent, the figure's; flexo's faces registered there.)
+        return run(request)
     if request["do"] == "plot":
         from flexo_talk.compose import plot_svg
 
