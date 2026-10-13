@@ -430,10 +430,58 @@ def test_the_theme_editor_shows_a_theme_on_slides_and_on_a_deck(tmp_path: Path) 
     from flexo_talk.studio import SlideSamples
 
     samples = SlideSamples().pages("paper", tmp_path, {})
-    assert len(samples) == 5 and "<svg" in samples[1][2]()
+    assert len(samples) == 6 and "<svg" in samples[1][2]()
     (tmp_path / "talk.yaml").write_text(dump_document({"schema_version": 1, **_small()}), encoding="utf-8")
     own = SlideSamples().pages("tikz", tmp_path, {"deck": "talk.yaml"})
     assert [label for _, label, _ in own][:2] == ["A talk", "Part one"]
+
+
+def test_the_theme_editor_leads_with_a_slide_of_every_kind_of_words(tmp_path: Path) -> None:
+    """A theme was shown on figures first, and its sample slides had no code and no maths:
+    a typeface changed for titles, text, code or maths showed nowhere."""
+
+    import re
+
+    import flexo
+    from flexo.studio.theme_kind import ThemeKind
+
+    from flexo_talk.studio import SAMPLE_DECK, TYPE_SLIDE, SlideSamples
+
+    theme = flexo.register_theme(
+        {
+            "theme": {
+                "name": "type-shown",
+                "base": "paper",
+                "font": "IBM Plex Sans",
+                "type": {"title_family": "Latin Modern Roman", "mono_family": "IBM Plex Mono",
+                         "math_family": "Latin Modern Math"},
+            }
+        }
+    )
+    [(identifier, label, make)] = SlideSamples().lead(theme, tmp_path, {})
+    assert (identifier, label) == ("type-slide", "Type on a slide")
+    svg = make()
+
+    def family(words: str) -> str:
+        # The family of the innermost run the words are in, else of their text.
+        run = re.search(r'<tspan[^>]*font-family="([^"]+)"[^>]*>' + re.escape(words), svg)
+        text = re.search(
+            r'<text[^>]*font-family="([^"]+)"[^>]*>(?:(?!</text>).)*' + re.escape(words), svg, re.DOTALL
+        )
+        return (run or text)[1].split(",")[0].strip("'")
+
+    assert family("Titles, text, code and maths") == "Latin Modern Roman"
+    assert family("Text is set in") == "IBM Plex Sans"
+    assert family("inline_code()") == "IBM Plex Mono"
+    assert family("def reply(request):") == "IBM Plex Mono"
+    # Maths in line (its Greek in the maths family) and displayed.
+    assert family("\U0001d70b") == "Latin Modern Math" and 'id="slide1.body.2' in svg
+    # It is one of the sample slides too, and the first thing the theme editor shows.
+    assert SAMPLE_DECK["slides"][1] is TYPE_SLIDE
+    kind = ThemeKind()
+    drawing = kind.draw({"theme": {"name": "led-by-a-slide", "base": "paper"}}, tmp_path, {})
+    assert drawing.pages[0].id == "type-slide" and drawing.pages[0].extra == {"slide": True}
+    assert kind.catalog()["specimens"][0]["title"] == "Overview"
 
 
 def test_a_deck_redraws_when_its_theme_file_changes(tmp_path: Path) -> None:

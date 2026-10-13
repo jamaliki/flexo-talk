@@ -1741,12 +1741,38 @@ class SlideSamples:
             for slide, data in list(zip(deck.slides, document.get("slides") or [], strict=True))[:8]
         ]
 
+    def lead(self, theme: str, base: Path, hints: dict[str, Any]) -> list[tuple[str, str, Any]]:
+        """What the theme editor shows first, with the theme's figures: the slide of every
+        kind of words (``TYPE_SLIDE``), so a typeface changed is seen on a title, on text,
+        on code and on maths."""
+
+        from flexo_talk.compose import render_slide
+
+        document = {"deck": {"id": "sample", "theme": theme}, "slides": [TYPE_SLIDE]}
+        deck = deck_from_document(document, base, errors=[])
+        return [("type-slide", "Type on a slide", lambda: render_slide(deck, deck.slides[0]).svg)]
+
+
+TYPE_SLIDE: dict[str, Any] = {
+    "title": "Titles, text, code and maths",
+    "body": [
+        {"text": "Text is set in the theme\u2019s font: **bold**, *italic*, `inline_code()`, and maths "
+                 "such as $e^{i\\pi} + 1 = 0$ in line with it."},
+        {"code": "def reply(request):\n    return cache.get(request) or compute(request)"},
+        {"math": "\\hat{y} = \\sigma(W x + b), \\qquad "
+                 "\\mathcal{L} = -\\sum_{i} y_i \\log \\hat{y}_i"},
+    ],
+}
+"""A slide with every kind of words on it, each in the family a theme sets it in: its title,
+its text, code in line and in a listing, maths in line and displayed."""
+
 
 SAMPLE_DECK: dict[str, Any] = {
     "deck": {"id": "sample", "footer": "A sample · 2026"},
     "slides": [
         {"layout": "title", "title": "Making the service fast", "subtitle": "What we changed, and what it bought us",
          "author": "Ada Lovelace", "date": "2026"},
+        TYPE_SLIDE,
         {"layout": "two-columns", "title": "From request to reply",
          "left": [{"bullets": ["A cache answers most reads", "A queue takes the slow writes",
                                ["drained by four workers"]]}],
