@@ -40,6 +40,13 @@ and `sketch=` exactly as a flexo `Figure` takes them. Titles, bullets, and
 figures share its typeface and colours: bullet marks and title rules take the
 palette's first colour, captions and footers its muted ink.
 
+One figure can be shown on several slides with parts of it hidden, faint or highlighted,
+and nothing moved from slide to slide: `{figure: pipeline.yaml, hide: [store],
+highlight: [api]}` (or `dim: [...]`) on a slide's figure, each a list of the figure's
+shapes and groups by id; a figure written in the slide says the same in its own
+`figure: {hide: [...]}`. In the studio, choose shapes in a slide's figure and set
+**Show** to Highlight, Dimmed or Hidden.
+
 Type can be set by role: `Deck(font="IBM Plex Sans", title_font="Latin Modern
 Roman", figure_font="Figtree")` sets the words, the titles and section headings,
 and the figures each in their own family (each falls back to `font`, then the

@@ -2798,3 +2798,52 @@ def test_a_crop_that_keeps_no_part_of_the_picture_says_what_a_crop_is(tmp_path: 
     document["slides"][0]["body"][0] = {"image": "wide.png", "mask": "oval"}
     with pytest.raises(DeckDocumentError, match="mask must be one of circle, not 'oval'"):
         deck_from_document(document, tmp_path)
+
+
+def test_a_slide_hides_dims_and_highlights_parts_of_a_figure_where_they_stand(tmp_path: Path) -> None:
+    """A talk shows one figure many times -- all of it, then a part with the rest faint,
+    then that part alone -- and each slide once had to hold a figure of its own, redrawn
+    (and so laid out anew) with the rest taken out."""
+
+    import re
+    import zipfile
+
+    figure = {
+        "figure": {"id": "pipeline"},
+        "nodes": [{"id": "api", "label": "API"}, {"id": "queue", "label": "Orders"},
+                  {"id": "store", "kind": "database", "label": "Store"}],
+        "edges": [{"from": "api", "to": "queue"}, {"from": "queue", "to": "store"}],
+    }
+    (tmp_path / "pipeline.yaml").write_text(dump_document(figure), encoding="utf-8")
+    document = {
+        "schema_version": 1,
+        "deck": {"id": "reveal"},
+        "slides": [
+            {"title": "All of it", "body": [{"figure": "pipeline.yaml"}]},
+            {"title": "The front", "body": [{"figure": "pipeline.yaml", "hide": ["queue", "store"]}]},
+            {"title": "The queue", "body": [{"figure": "pipeline.yaml", "highlight": ["queue"]}]},
+            {"title": "Written here", "body": [{"figure": {**figure, "figure": {"id": "own", "dim": ["api"]}}}]},
+        ],
+    }
+    deck = deck_from_document(document, tmp_path)
+    built = deck.build(tmp_path / "out", formats=("svg", "pptx"))
+    drawn = [path.read_text(encoding="utf-8") for path in built.svgs]
+
+    def marked(svg: str) -> dict[str, str]:
+        found = re.findall(r'<g id="[^"]*?\.(api|queue|store)"[^>]*data-flexo-show="(\w+)"', svg)
+        return dict(found)
+
+    assert [marked(svg) for svg in drawn] == [
+        {}, {"queue": "hidden", "store": "hidden"}, {"api": "dimmed", "store": "dimmed"}, {"api": "dimmed"},
+    ]
+    # Nothing moves from slide to slide: the figure is laid out with all of it each time.
+    places = [re.search(r'<rect[^>]*id="[^"]*api\.body"[^>]*>', svg)[0] for svg in drawn[:3]]
+    assert len({tuple(re.findall(r'\b(?:x|y|width)="([\d.]+)"', place)) for place in places}) == 1
+    # And what is hidden is in no export: not a word of it on the PowerPoint's slide.
+    with zipfile.ZipFile(built.pptx) as pptx:  # type: ignore[arg-type]
+        words = [re.findall(r"<a:t>([^<]+)</a:t>", pptx.read(f"ppt/slides/slide{n}.xml").decode()) for n in (1, 2)]
+    assert {"API", "Orders", "Store"} <= set(words[0])
+    assert "API" in words[1] and not {"Orders", "Store"} & set(words[1])
+    wrong = {**document, "slides": [{"title": "x", "body": [{"figure": "pipeline.yaml", "hide": "queue"}]}]}
+    with pytest.raises(DeckDocumentError, match="list of the names"):
+        deck_from_document(wrong, tmp_path)

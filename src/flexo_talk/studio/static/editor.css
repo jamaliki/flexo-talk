@@ -652,3 +652,9 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .font-tile-name { font-size: 10px; line-height: 1.2; color: var(--ink-3); max-width: 100%; overflow: hidden; text-align: center; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .font-tile.on .font-tile-name { color: var(--ink); }
+
+/* A part a figure hides on this slide is a ghost on the slide being edited (there to be
+   chosen and shown again), and gone from its thumbnail and from the slideshow. */
+.deck-stage { --flexo-ghosts: visible; --flexo-ghost: 0.2; }
+.deck-stage svg [data-flexo-show="hidden"] { visibility: visible; opacity: 0.2; }
+.present.ss-root { --flexo-ghosts: hidden; --flexo-ghost: 1; }
