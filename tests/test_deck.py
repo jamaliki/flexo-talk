@@ -284,6 +284,62 @@ def test_a_dot_or_diamond_head_is_a_slide_programs_own_line_end_round_the_lines_
     assert line is not None and "<a:custGeom>" not in line.group(0)
 
 
+def test_a_frames_part_in_a_group_is_the_frame_cut_to_the_group_in_powerpoint(tmp_path: Path) -> None:
+    """A frame behind shapes in filled groups is drawn again in each, over its fill: the whole
+    frame, clipped to the group. PowerPoint cannot clip, so each part is the frame cut to its
+    group -- whole, the part in the right one would cover the left one's shapes."""
+
+    from flexo_talk.document import deck_from_document
+
+    figure = {
+        "figure": {"id": "framed"},
+        "groups": [
+            {"id": "root", "role": "canvas", "layout": {"kind": "row", "gap": 24},
+             "children": ["left", "right", "shared"]},
+            {"id": "left", "role": "module", "label": "Encoder side", "layout": {"kind": "column"},
+             "children": ["x", "enc"]},
+            {"id": "right", "role": "module", "label": "Decoder side", "layout": {"kind": "column"},
+             "children": ["dec", "y"]},
+        ],
+        "nodes": [
+            {"id": "x", "kind": "text", "label": "Input"}, {"id": "enc", "label": "Encoder"},
+            {"id": "dec", "label": "Decoder"}, {"id": "y", "kind": "text", "label": "Output"},
+            {"id": "shared", "kind": "frame", "label": "Shared weights",
+             "properties": {"around": "enc, dec", "tone": 2}},
+        ],
+    }
+    slides = [{"title": "Framed", "body": [{"figure": figure}]}]
+    deck = deck_from_document({"deck": {"id": "framed"}, "slides": slides}, tmp_path)
+    xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
+    shapes = re.findall(r"<p:sp>.*?</p:sp>", xml, re.S)
+
+    def box(shape: str) -> tuple[int, int, int, int]:
+        x, y, width, height = map(int, re.search(  # type: ignore[union-attr]
+            r'<a:off x="(-?\d+)" y="(-?\d+)"/><a:ext cx="(\d+)" cy="(\d+)"/>', shape).groups())
+        return x, y, x + width, y + height
+
+    def paint(shape: str) -> tuple[str | None, str | None]:
+        fill = re.search(r'</a:(?:custGeom|prstGeom)><a:solidFill><a:srgbClr val="(\w+)"', shape)
+        line = re.search(r'<a:ln[^>]*><a:solidFill><a:srgbClr val="(\w+)"', shape)
+        return (fill.group(1) if fill else None), (line.group(1) if line else None)
+
+    (frame,) = [shape for shape in shapes if 'name="Shared weights"' in shape]
+    tone, stroke = paint(frame)
+    modules = [box(shape) for shape in shapes if 'name="Container"' in shape]
+    parts = [shape for shape in shapes if shape is not frame and (paint(shape)[0] == tone or (
+        paint(shape)[1] == stroke and paint(shape)[0] is None))]
+    def within(part: str, module: tuple[int, int, int, int]) -> bool:
+        left, top, right, bottom = box(part)
+        # (To a hundredth of a point.)
+        return left >= module[0] - 127 and top >= module[1] - 127 and right <= module[2] + 127 and (
+            bottom <= module[3] + 127)
+
+    # Each part of the frame lies within its module, and each module has its part.
+    assert len(modules) == 2 and parts
+    assert [part[:60] for part in parts if not any(within(part, module) for module in modules)] == []
+    assert all(any(within(part, module) for part in parts) for module in modules)
+
+
 def test_a_decks_arrowheads_draw_every_arrow_of_its_figures_in_that_shape(tmp_path: Path) -> None:
     from flexo.drawing import read_drawing
 
