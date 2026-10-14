@@ -461,7 +461,7 @@ def _structures_said(block: _Figure) -> dict[str, str]:
             continue
         source = str(node.property("source") or "").strip()
         name = Path(source).name
-        stem = re.sub(r"\.(pdb|cif|mmcif|ent)$", "", name, flags=re.IGNORECASE)
+        stem = re.sub(r"\.(pdb|cif|mmcif|ent|json)$", "", name, flags=re.IGNORECASE)
         entry = stem.upper() if re.fullmatch(r"[0-9][A-Za-z0-9]{3}", stem) else ""
         title = _structure_title(source)
         label = _said_words(node.label)

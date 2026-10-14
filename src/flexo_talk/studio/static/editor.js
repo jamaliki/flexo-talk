@@ -18,7 +18,7 @@ const BLOCKS = {
   bullets: { icon: "list", label: "List", hint: "A bulleted or numbered list" },
   figure: { icon: "figure", label: "Figure", hint: "A diagram of shapes and lines" },
   flow: { icon: "flow", label: "Flow Chart", hint: "Steps and decisions connected by arrows" },
-  structure: { icon: "structure", label: "Structure", hint: "A protein structure from a PDB or mmCIF file, or a PDB ID" },
+  structure: { icon: "structure", label: "Structure", hint: "A protein structure from a PDB or mmCIF file or a PDB ID, or a mol-sketch scene" },
   image: { icon: "image", label: "Picture", hint: "PNG, JPEG or SVG (SVG stays as vectors)" },
   table: { icon: "table", label: "Table", hint: "Rows and columns with simple rules" },
   stats: { icon: "stats", label: "Numbers", hint: "Key numbers, shown large" },
@@ -163,8 +163,11 @@ const NEW_BLOCKS = {
 
 // A structure file, as a figure's part: named for its file or PDB ID, its id made from that.
 const STRUCTURE_FILE = /\.(pdb|cif|mmcif|ent)$/i;
+// A .json is a structure when it is a mol-sketch scene (it has steps): a reaction drawn with
+// its orbitals, say -- not a figure or a theme written in JSON.
+const sceneFile = async (file) => /\.json$/i.test(file.name) && (await file.slice(0, 4_000_000).text()).includes('"keyframes"');
 function structureNode(source, taken = new Set(), name = null) {
-  const stem = source.split("/").pop().replace(STRUCTURE_FILE, "");
+  const stem = source.split("/").pop().replace(/\.(pdb|cif|mmcif|ent|json)$/i, "");
   let slug = stem.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 24) || "structure";
   if (!/^[a-z]/.test(slug)) slug = `pdb-${slug}`;
   let id = slug;
@@ -6504,7 +6507,7 @@ export function mount(studio, container) {
     event.preventDefault();
     const room = regionsOf(slideAt()).length > 0, logos = logoRoom(slideAt());
     if (!room && !logos) event.dataTransfer.dropEffect = "none";
-    const said = room ? "Drop pictures or structure files (PDB, mmCIF) to add them to the slide"
+    const said = room ? "Drop pictures, structure files (PDB, mmCIF) or mol-sketch scenes to add them to the slide"
       : logos ? "Drop pictures to add them as logos"
         : `The ${LAYOUT_NAMES[layoutOf(slideAt())]} layout has no room for pictures: choose one with room, such as Content`;
     if (dropNote?.textContent !== said) { dropNote?.remove(); dropNote = h("div.drop-note", {}, said); center.append(dropNote); }
@@ -6539,7 +6542,9 @@ export function mount(studio, container) {
   // `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
   async function addFiles(all, part, at = null) {
     const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|pdf|ai)$/i.test(file.name));
-    const structures = all.filter((file) => STRUCTURE_FILE.test(file.name));
+    const scenes = new Set();
+    for (const file of all) if (await sceneFile(file)) scenes.add(file);
+    const structures = all.filter((file) => STRUCTURE_FILE.test(file.name) || scenes.has(file));
     // On a title slide, pictures are logos: in the row where they are let go (`at`, a drop),
     // else after the logo chosen.
     if (logoRoom(slideAt())) {
@@ -6556,7 +6561,7 @@ export function mount(studio, container) {
       return true;
     }
     if (!pictures.length && !structures.length) {
-      if (all.length) toast("Only pictures and structure files (PDB, mmCIF) can be added to a slide.", { icon: "info" });
+      if (all.length) toast("Only pictures, structure files (PDB, mmCIF) and mol-sketch scenes can be added to a slide.", { icon: "info" });
       return all.length > 0;
     }
     // One picture let go on a picture takes its place.
@@ -8643,7 +8648,7 @@ export function mount(studio, container) {
   listFiles(["image"]).catch(() => {});
   // `action`: its default button's name (Insert, as Keynote's; else Choose).
   function chooseFile({ title, types, create, action = "Choose" }) {
-    const accept = types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent" : ".yaml,.yml,.json";
+    const accept = types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent,.json" : ".yaml,.yml,.json";
     // A picture asked for in a folder known to have none: the Mac's file panel at once, as
     // Keynote's Choose… is, and no sheet. It is opened in the click that asked: a web view
     // opens none after the folder has been listed, the click long done.
