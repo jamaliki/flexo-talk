@@ -658,3 +658,43 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .deck-stage { --flexo-ghosts: visible; --flexo-ghost: 0.2; }
 .deck-stage svg [data-flexo-show="hidden"] { visibility: visible; opacity: 0.2; }
 .present.ss-root { --flexo-ghosts: hidden; --flexo-ghost: 1; }
+
+/* -- shapes drawn where they are put (shapes.js): their frames, handles and guides over the
+   slide, in its own units; the popover of their kinds; their words typed in them. -- */
+.shape-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 6; }
+.shape-mark { fill: none; stroke: var(--accent); }
+.shape-mark.hover { stroke: var(--accent-line); stroke-dasharray: 5 3; }
+.shape-mark.along { stroke: var(--accent); stroke-opacity: 0.3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: none; }
+.shape-mark.along.hover { stroke-opacity: 0.15; }
+.shape-mark.group-frame { stroke-dasharray: 4 3; }
+.shape-handle { fill: #ffffff; stroke: var(--accent); pointer-events: all; touch-action: none; }
+.shape-handle:hover { fill: var(--accent); }
+.shape-handle.adjust { fill: #ffc21a; stroke: #8a5d00; }
+.shape-handle.adjust:hover { fill: #ffdc6b; }
+.shape-handle.bend { fill: var(--accent); stroke: #ffffff; }
+.shape-stalk { stroke: var(--accent); }
+.shape-guide { stroke: #e8590c; }
+.shape-target { fill: color-mix(in srgb, var(--accent) 10%, transparent); stroke: var(--accent); }
+.shape-site { fill: #ffffff; stroke: var(--accent); }
+.shape-site.on { fill: var(--accent); }
+.shape-lock { color: var(--ink-3); }
+.slide-page.shape-drawing, .slide-page.shape-drawing * { cursor: crosshair !important; }
+.slide-page.shape-dragging .hit.hover, .slide-page.shape-drawing .hit.hover { visibility: hidden; }
+.shape-menu { width: 348px; }
+.shape-grid { display: grid; gap: 2px; max-height: min(70vh, 560px); overflow: auto; padding: 0 2px 4px; }
+.shape-section { padding-top: 6px; }
+.shape-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+.shape-pick { display: grid; justify-items: center; gap: 1px; padding: 6px 2px 5px; border: 0; background: none; border-radius: 7px; color: var(--ink); font: 500 10.5px/1.2 var(--font); cursor: pointer; }
+.shape-pick:hover, .shape-pick:focus-visible { background: var(--accent-soft); color: var(--accent); outline: none; }
+.shape-icon { width: 32px; height: 24px; overflow: visible; }
+.shape-name { max-width: 78px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inline-editor.shape-words { display: flex; flex-direction: column; justify-content: flex-start; box-sizing: border-box; }
+.inline-editor.shape-words.middle { justify-content: center; }
+.inline-editor.shape-words.bottom { justify-content: flex-end; }
+.inline-editor.shape-words .rich { line-height: 1.22; }
+.range-row { gap: 8px; align-items: center; }
+.range-row .range { flex: 1; min-width: 0; accent-color: var(--accent); }
+.range-value { min-width: 38px; text-align: right; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.row.heads { gap: 8px; align-items: end; }
+.row.heads .field { flex: 1; }
+.arrange-row { gap: 2px; flex-wrap: wrap; }
