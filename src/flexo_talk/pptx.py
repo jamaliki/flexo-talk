@@ -31,7 +31,7 @@ from functools import cache
 from itertools import pairwise
 from xml.sax.saxutils import escape
 
-from flexo.drawing import Drawing, Group, Image, Paint, Segment, Shape, Text
+from flexo.drawing import Drawing, Group, Image, Paint, Segment, Shape, Text, cut_to_clips
 from lxml import etree
 
 EMU_PER_POINT = 12700
@@ -227,6 +227,10 @@ def _parts(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids) 
     """What ``item`` is on the slide: a group that only lays its shapes out (``_wrapper``)
     as those shapes; anything else as itself."""
 
+    if isinstance(item, Group) and item.clip is not None:
+        # A slide program cannot clip: what the group shows of what it holds is cut to that
+        # (the part of a figure's frame drawn again in a group, the frame cut to the group).
+        item = cut_to_clips(item)
     if isinstance(item, Group) and _wrapper(item):
         return [part for child in item.items for part in _parts(child, placement, ids)]
     if isinstance(item, Group) and item.data.get("data-flexo-entity") in {"connector", "net"}:
