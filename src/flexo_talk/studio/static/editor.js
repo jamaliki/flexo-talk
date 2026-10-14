@@ -5,7 +5,8 @@
 // the slides they touch flash in their colour.
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing } from "/static/studio/studio.js";
-import { figureParts, widenLines, fileLabel, markupOf, oneLine } from "/static/kinds/figure/parts.js";
+import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
+import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
 import { canRow, rowed, rowCount, labelsOf, setRows, setLabel, keepRows } from "/static/kinds/deck/rows.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
@@ -2030,7 +2031,7 @@ export function mount(studio, container) {
   function boxOf(id) {
     const target = pageNode?.querySelector(`[id="${CSS.escape(id)}"]`);
     if (!target) return null;
-    const outer = pageNode.getBoundingClientRect(), inner = target.getBoundingClientRect();
+    const outer = pageNode.getBoundingClientRect(), inner = drawnRect(target);
     if (!inner.width && !inner.height) return null;
     return { left: inner.left - outer.left - 5, top: inner.top - outer.top - 5, width: inner.width + 10, height: inner.height + 10 };
   }
@@ -4273,6 +4274,9 @@ export function mount(studio, container) {
           && /can\u2019t be drawn yet/.test(message.text) ? [{ id: named[1], text: message.text, what: named[2] }] : [];
       }),
       chooseFile: async (options) => relativeTo(figureFolder(), await chooseFile(options)),
+      // What an SVG picture's file has of words and colours, for its panel (found beside the
+      // figure's file, as its pictures are).
+      drawing: (source) => describeDrawing(studio, /^(\/|[a-z]+:)/i.test(source) ? source : figureFolder() + source),
       tones: () => studio.info?.tones,
       palette: () => studio.info?.palette,
       // Edits held while the studio is away: the deck is not saved meanwhile.
@@ -7184,6 +7188,7 @@ export function mount(studio, container) {
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at),
         // (A figure's and a picture's is among their own settings.)
         SIDEWAYS.has(kind) || CORNERED.has(kind) || kind === "mechanism" ? widthField(block, at) : null),
+      kind === "image" ? pictureSections(block, at) : null,
       buildSection(block, at),
     ];
   }
@@ -8415,11 +8420,44 @@ export function mount(studio, container) {
       size()];
   }
 
+  // An SVG picture's words and colours, restyled (drawing.js): its font, each text's words and
+  // look, and each colour it is painted in -- kept in its object (font, texts, colours), never
+  // in its file.
+  function pictureSections(block, at) {
+    const now = () => blocksAt(slideAt() || {}, at.region)[at.index];
+    return drawingSections({ source: block.image, describe: (source) => describeDrawing(studio, source),
+      scope: `block:${state.slide}:${at.region}:${at.index}`, family: studio.info?.fonts?.figure, fonts: catalog.fonts || [], owner: "Deck",
+      current: () => { const b = now() || {}; return { font: b.font, texts: b.texts, colours: b.colours }; },
+      write: (values, { label, merge = null, hold = false, quiet = false }) => {
+        editBlock(at, (b) => { for (const [key, value] of Object.entries(values)) setOption(b, key, value); }, { label, merge, hold });
+        // (A button pressed shows what it did; words typed and a colour dragged show it as they
+        // go -- the thumbnail follows them, a moment after.)
+        if (quiet) refreshPreview(now());
+        else renderInspector();
+      } });
+  }
+  // The thumbnail of the picture chosen, drawn again as the slide will draw it.
+  let previewTimer = 0;
+  function refreshPreview(block) {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      const preview = inspectorBody.querySelector("img.preview-pic");
+      if (preview && block?.image) preview.src = drawnUrl(studio, block, studio.info?.fonts?.figure || "");
+    }, 400);
+  }
+  // A picture's thumbnail drawn before the deck's figure font was known (the deck not drawn
+  // yet) is drawn again once it is: it shows the picture as the slide does.
+  studio.on("drawn", () => {
+    if (inspectorBody.querySelector("img.preview-pic[data-family='']") && studio.info?.fonts?.figure) setTimeout(renderInspector, 0);
+  });
+
   function imageForm(block, at) {
     // A picture put back by Redo may be asked for a moment before its file is: it is asked
     // for again, a few times, rather than left blank.
     let tries = 0;
-    const preview = h("img.preview-pic", { src: block.image ? studio.raw(block.image) : "", alt: "", hidden: !block.image,
+    // (As the slide draws it: an SVG's words in the deck's figure font, or as it says.)
+    const family = studio.info?.fonts?.figure || "";
+    const preview = h("img.preview-pic", { src: block.image ? drawnUrl(studio, block, family) : "", alt: "", hidden: !block.image, dataset: { family },
       onload: () => { tries = 0; },
       onerror: () => { if (preview.getAttribute("src") && tries < 4) { tries += 1; const src = preview.src.replace(/&again=\d+$/, ""); setTimeout(() => { preview.src = `${src}&again=${tries}`; }, 400 * tries); } } });
     // Shown as the slide shows it: cropped, and round -- by the picture's proportions as the

@@ -1590,7 +1590,7 @@ def _cell_tall(
         tall = figure
     elif isinstance(block, _Image):
         box = Box(0.0, 0.0, width, max(share, 40.0))
-        _, natural, scale = _image_fit(load_artwork(identifier, block.source), block, box)
+        _, natural, scale = _image_fit(_picture_art(canvas, identifier, block), block, box)
         tall = natural * scale
     elif isinstance(block, _Plot):
         own = _own_width(block, width)
@@ -5356,8 +5356,19 @@ def _image_fit(art: Any, block: _Image, box: Box) -> tuple[float, float, float]:
     return natural_w, natural_h, min(min(block.width or box.width, box.width) / natural_w, box.height / natural_h)
 
 
+def _picture_art(canvas: _Canvas, identifier: str, block: _Image, *, apart: bool = False) -> Any:
+    """A picture's file as the slide draws it: an SVG's words in the deck's figure font (or
+    as it says), its texts and colours as it says, grown to hold its words. ``apart``: for
+    drawing as a picture of its own, which none of the page's faces reach -- carrying those
+    it is drawn in (``flexo.restyle``)."""
+
+    from flexo.restyle import restyled
+
+    return restyled(load_artwork(identifier, block.source), block.restyle, canvas.deck.figure_family, embed=apart)
+
+
 def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
-    art = load_artwork(identifier, block.source)
+    art = _picture_art(canvas, identifier, block)
     left, top, kept_w, kept_h = block.crop or (0.0, 0.0, 1.0, 1.0)
     natural_w, natural_h, scale = _image_fit(art, block, box)
     width, height = natural_w * scale, natural_h * scale
@@ -5373,11 +5384,14 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         _place_svg(canvas, identifier, art.markup, _across(canvas, box, width), box.y, scale * units, width)
         _described(canvas.layer[-1], block.description)
         _whole(canvas.layer[-1], Box(_across(canvas, box, width), box.y, width, height))
+        _faces_carried(canvas, identifier, block)
         return height
     if art.format == "svg":
         import base64
 
-        href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+        # (Drawn as a picture of its own, where the page's faces do not reach: it carries its own.)
+        markup = _picture_art(canvas, identifier, block, apart=True).markup
+        href = "data:image/svg+xml;base64," + base64.b64encode(markup.encode()).decode()
     else:
         href = picture_href(art)
     picture = element(
@@ -5387,6 +5401,22 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
     _described(picture, block.description)
     _whole(picture, Box(_across(canvas, box, width), box.y, width, height))
     return height
+
+
+def _faces_carried(canvas: _Canvas, identifier: str, block: _Image) -> None:
+    """The bundled faces a picture's words are drawn in, carried by the slide where it is
+    drawn for others to open (an export), as the slide's own words' faces are."""
+
+    from flexo.svg_resources import fonts_are_linked
+
+    if fonts_are_linked():
+        return
+    drawn = ET.fromstring(_picture_art(canvas, identifier, block).markup)
+    carried = ET.fromstring(_picture_art(canvas, identifier, block, apart=True).markup)
+    # (Its faces' stylesheet, put first: never a stylesheet of the drawing's own, whose rules
+    # would reach the whole slide.)
+    if len(carried) == len(drawn) + 1 and local_name(carried[0].tag) == "style" and carried[0].text:
+        element(canvas.defs, "style", id=f"{identifier}.fonts", type="text/css").text = carried[0].text
 
 
 def _cropped_image(
@@ -5403,7 +5433,9 @@ def _cropped_image(
     left, top, kept_w, kept_h = crop
     whole_w, whole_h = kept.width / kept_w, kept.height / kept_h
     if art.format == "svg":
-        href = "data:image/svg+xml;base64," + base64.b64encode(_as_picture(art.markup).encode()).decode()
+        # (Its words outlines where the reader draws it, else carrying their faces.)
+        markup = art.markup if _drawable(art.markup) else _picture_art(canvas, identifier, block, apart=True).markup
+        href = "data:image/svg+xml;base64," + base64.b64encode(_as_picture(markup).encode()).decode()
     else:
         href = picture_href(art)
     # One tile, as large as the picture: drawn once, where the crop puts it.
