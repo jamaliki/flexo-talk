@@ -40,7 +40,14 @@ inline, or ``file.py:function`` (a function returning a flexo figure); a plot is
 ``deck.plotting()`` (and given the deck, if it takes an argument). A picture
 (``image``) may be cropped: ``crop: [x, y, width, height]``, the part kept as
 fractions of the whole picture (``[0.1, 0, 0.8, 1]`` keeps the middle 80% across),
-and drawn round with ``mask: circle``.
+and drawn round with ``mask: circle``. An SVG picture's words are set in the deck's figure
+font, the same on the slide and in every export: ``font: drawn`` keeps the faces its file
+names (as found, Flexo's fallback face where none is), and a family's name sets them in that
+one. ``texts`` changes its texts, each named by its id in the file -- or, with none, by its
+place among the file's texts (``text: 3``): ``[{id: text1, words: "Encoder\nblock", size:
+20, bold: true, italic: false, colour: "#c0392b"}]``, its size in points at the drawing's own
+size. ``colours`` draws a colour in another wherever it is used: ``{"#4a90d9": "#2e7d32"}``.
+The file is never changed: a text it no longer has is passed over.
 
 A figure block may show its figure differently on each slide, nothing in it moved:
 ``hide``, ``dim`` and ``highlight`` list the figure's parts left out, drawn faint, or
@@ -114,7 +121,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
     "text": ("size", "align", "muted", "colour", "width"),
     "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight", "stages"),
-    "image": ("width", "crop", "mask", "description", "caption"),
+    "image": ("width", "crop", "mask", "description", "caption", "font", "texts", "colours"),
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),
     "gallery": ("columns", "height", "crop", "size", "align", "width"),

@@ -33,6 +33,7 @@ from typing import Literal
 import flexo
 from flexo.ir.semantic import FigureSpec, TextRun
 from flexo.markup import math_spans
+from flexo.restyle import Restyle, restyle_of
 from flexo.style import LayoutStyle, Palette, TypographyStyle
 from flexo.themes import resolve_palette, resolve_style, with_tone_roles
 from flexo.units import pt
@@ -505,6 +506,9 @@ class _Image:
     (Keynote's mask): its size and proportions are that part's. ``None`` keeps it whole."""
     mask: str | None = None
     """``circle``: what is kept drawn round -- a circle, kept square; an oval, else."""
+    restyle: Restyle = field(default_factory=Restyle)
+    """An SVG's words and colours as they are drawn (``flexo.restyle``): its font -- the
+    deck's figure font unless it says -- and its texts and colours changed."""
 
 
 @dataclass(slots=True)
@@ -1313,6 +1317,7 @@ class Region:
     def image(
         self, source: str | Path, *, width: float | None = None, description: str | None = None,
         caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | None = None,
+        font: str | None = None, texts: Sequence[dict] | None = None, colours: dict[str, str] | None = None,
     ) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture.
@@ -1324,17 +1329,35 @@ class Region:
         The part kept is the picture then -- its size, its proportions, what ``width``
         sizes -- the rest is there still, to be shown again (a native crop in PowerPoint;
         a cropped SVG is drawn as a picture, not as shapes). ``mask="circle"`` draws it
-        round: a circle where what is kept is square, an oval where it is not."""
+        round: a circle where what is kept is square, an oval where it is not.
+
+        An SVG's words are set in the deck's figure font, the same in every output (the
+        fonts its file names are found nowhere else); ``font="drawn"`` keeps the faces it
+        names, as Flexo finds them, and a family's name sets them in that one. ``texts``
+        changes its texts, each named by its id in the file (or, with none, its place
+        among them, ``{"text": 3}``): ``[{"id": "text1", "words": "Encoder\\nblock", "size":
+        20, "bold": True, "italic": False, "colour": "#c0392b"}]``, its size in points at
+        the drawing's own size; ``colours`` draws a colour in another wherever it is used:
+        ``{"#4a90d9": "#2e7d32"}``. The file is never changed: a text it no longer has is
+        passed over."""
 
         width = _width(width)
         description = " ".join(str(description).split()) if description is not None else ""
         held, caption = caption == "", _caption(caption)
         crop = _crop(crop)
         mask = None if mask is None else _choice(mask, "mask", ("circle",))
-        self.blocks.append(_Image(str(source), width, description, inline(caption), held, crop, mask))
+        try:
+            restyle = restyle_of(font, texts, colours)
+        except ValueError as error:
+            said = str(error)
+            key = "font" if said.startswith("font") else "colours" if said.startswith("colours") else "texts"
+            raise SettingError(key, f"{said[:1].upper()}{said[1:]}.") from None
+        self.blocks.append(_Image(str(source), width, description, inline(caption), held, crop, mask, restyle))
         kept = [int(item) if item.is_integer() else item for item in crop] if crop else None
         self._record("image", str(source), width=width, crop=kept, mask=mask, description=description or None,
-                     caption=caption or None)
+                     caption=caption or None, font=restyle.font,
+                     texts=[change.record() for change in restyle.texts] or None,
+                     colours=dict(restyle.colours) or None)
         return self
 
     def build_in(self) -> Region:
@@ -1678,9 +1701,11 @@ class Slide:
     def image(
         self, source: str | Path, *, width: float | None = None, description: str | None = None,
         caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | None = None,
+        font: str | None = None, texts: Sequence[dict] | None = None, colours: dict[str, str] | None = None,
     ) -> Slide:
         next(iter(self.regions.values())).image(
-            source, width=width, description=description, caption=caption, crop=crop, mask=mask
+            source, width=width, description=description, caption=caption, crop=crop, mask=mask, font=font,
+            texts=texts, colours=colours,
         )
         return self
 
@@ -2030,6 +2055,15 @@ class Deck:
         """Whether ``slide`` shows the deck's logos: a title slide, or any as ``logos_on`` says."""
 
         return bool(self.logos) and (self.logos_on == "every" or slide.layout == "title")
+
+    @property
+    def figure_family(self) -> str:
+        """The family the deck's figures' words are set in: its figure font, else its font,
+        else the one its theme sets figures in (or its words)."""
+
+        from flexo.themes import figure_family
+
+        return figure_family(self.theme, self.figure_font or self.font) or self.layout_style.typography.family
 
     def figure_options(self) -> dict[str, object]:
         options: dict[str, object] = {"theme": self.theme, "palette": self.palette_name}
