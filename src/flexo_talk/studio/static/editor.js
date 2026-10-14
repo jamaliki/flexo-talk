@@ -10277,15 +10277,20 @@ export function mount(studio, container) {
       if (keys.length && keys.every((key) => ["yaw", "pitch", "roll"].includes(key))) return `Rotate ${call(id)}`;
       if (keys.length && keys.every((key) => key === "zoom")) return `Zoom ${call(id)}`;
       if (keys.length && keys.every((key) => key === "width" || key === "height")) return `Resize ${call(id)}`;
-      // mol-sketch's settings, by name: "Change Line Width".
+      // mol-sketch's settings, by name: "Change Line Width"; a section's given back to the
+      // look, by its title: "Reset Pen".
       if (keys.length === 1 && keys[0] === "style") {
         const flat = (value, prefix = "") => Object.entries(value || {}).flatMap(([key, part]) =>
           (part && typeof part === "object" && !Array.isArray(part) ? flat(part, `${prefix}${key}.`) : [[`${prefix}${key}`, part]]));
         const before = new Map(flat(was.properties?.style)), after = new Map(flat(now.properties?.style));
         const changed = [...new Set([...before.keys(), ...after.keys()])].filter((key) => !same(before.get(key), after.get(key)));
-        if (!after.size) return "Reset Rendering";
         if (changed.length === 1) return `Change ${fieldLabel(now.kind, changed[0], true)}`;
-        if (changed.length) return "Change Rendering";
+        if (changed.length > 1 && changed.every((key) => !after.has(key))) {
+          const sections = catalog.figure_editor?.parts?.[now.kind || "block"]?.fields?.find((field) => field.key === "properties.style")?.sections || [];
+          const section = sections.find((each) => changed.every((key) => (each.fields || []).some((field) => field.key === key)));
+          return section ? `Reset ${titled(section.title)}` : after.size ? "Reset Settings" : "Reset All Settings";
+        }
+        if (changed.length) return "Change Settings";
       }
       if (keys.length === 1 && keys[0] === "palette") return now.properties?.palette ? "Change Palette" : "Reset Palette";
       if (keys.length === 1 && keys[0] === "density") return now.properties?.density ? "Add Density Map" : "Remove Density Map";
