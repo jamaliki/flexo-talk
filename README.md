@@ -257,6 +257,72 @@ region, so a one-region slide reads simply. `slide.notes(text)` keeps the
 speaker notes; `slide.footnote(text)` sets a reference small and muted at the
 foot of the slide.
 
+## Shapes
+
+A slide's words and objects flow in its regions; **shapes** are drawn where they are put,
+over them -- the arrow at part of a figure, the ring round a structure's pocket, the brace
+and its words beside a list, a highlight behind a phrase, "3.1 Å" between two atoms, a
+speech bubble, a box of words anywhere -- so a slide is marked up without leaving for
+Inkscape. In Python:
+
+```python
+with deck.slide("The pocket", layout="figure") as slide:
+    slide.add(figure)
+    slide.shape("ring", at=[540, 230], size=[150, 90])
+    slide.shape("arrow", from_=[760, 420], to={"shape": "note", "side": "left"})
+    slide.shape("rounded-rectangle", id="note", at=[700, 150], size=[200, 70],
+                fill="accent2-fill", line="accent2", text="**Binding** pocket")
+    slide.shape("dimension", from_=[300, 470], to=[420, 470], text="3.1 Å")
+```
+
+and in a deck document, a slide's `shapes` list:
+
+```yaml
+shapes:
+- {kind: arrow, from: [520, 300], to: {object: "body[0]", side: right}}
+- {kind: brace, from: [470, 140], to: [470, 400], text: 3 steps}
+- {kind: text, at: [80, 470], width: 300, text: Measured at 4 K, font_size: 14}
+```
+
+Places are points from the slide's top left on its 960 by 540 points; a slide of another
+size has its shapes scaled with it, 960 across, so each keeps its place and proportions.
+The kinds: lines from one point to another (`line`, `arrow`, `double-arrow`,
+`curved-arrow` with its `bend`, `elbow`, `arc`, and the measures `brace`, `bracket`,
+`dimension`, `scale-bar`), `polyline` and `pen` through `points`, closed shapes in a box
+(`at`, `size`) -- `rectangle`, `rounded-rectangle`, `ellipse`, `triangle`,
+`right-triangle`, `diamond`, `polygon`, `star`, `parallelogram`, `trapezoid`, five block
+arrows, `chevron`, `plus`, `cross`, `check`, `cloud`, a speech `bubble` whose `tail`
+points anywhere, `highlight` and `ring` -- `text`, and a `group` of them. Each is painted
+by the theme unless it says otherwise (`fill`, `line`: `accent`, `accent2-fill`, `muted`,
+`ink`, `paper`, `grey`, `#rrggbb`, `none`), with its line's width and dash, an arrowhead
+at either end (`triangle`, `open`, `stealth`, `dot`, `circle`, `bar`, `diamond`), its
+opacities, the theme's shadow, a turn and a flip; its `text` (slide markup) is set in it
+in the deck's font. An end of a line glued to a shape (`{shape: note, side: left}`) or to
+one of the slide's objects (`{object: "body[0]"}`) follows it when it moves. `behind`
+draws a shape under the slide's words, `build` makes it appear on a click (after the
+objects that do), `hidden` keeps it out of the show, `locked` keeps it in place in the
+studio.
+
+Shapes are drawn into the slide's SVG at their place and stacking, so the PDF, the PNG,
+the SVG, the show (their builds too) and the studio's thumbnails have them. In the
+PowerPoint each is PowerPoint's own shape: a preset where it has one -- rectangles,
+rounded ones, ovals, triangles, diamonds, pentagons, four- and five-pointed stars,
+parallelograms, trapezoids, the block arrows, chevrons, plus signs, clouds, speech
+bubbles, braces and brackets -- its settings as the preset's adjustments, any other a
+freeform of the same outline; its words in it; a straight or elbowed line a connector
+joined to the shapes it is glued to; a build a click.
+
+In the studio, **Shape** in the toolbar (or Insert › Shapes, or the palette's Add Arrow…)
+draws one: drag on the slide, or click for its usual size; a polyline is clicked point by
+point, the pen drawn by hand. Chosen, a shape is moved by a drag (⇧ along one way, ⌥ a
+copy), sized by its handles (⇧ its proportions kept, ⌥ about its middle), turned by the
+handle over it (⇧ by 15°); a line by its ends, let go on a shape or an object to glue
+them, and a curve by its middle; a corner, a tail or a star's points by their own
+handles. Everything catches at the slide's edges and middles and at the other shapes' and
+objects', a guide drawn (⌘: none). The arrows nudge (⇧: ten points), a double-click types
+its words in it, ⇧-click or a band chooses several -- to align, distribute, group (⌘G),
+stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the inspector restyles them.
+
 ## Tables
 
 ```python

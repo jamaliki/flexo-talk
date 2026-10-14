@@ -237,6 +237,26 @@ with flexo's own measurer so every output wraps identically.
   whichever sets its words largest, never above the body size.
   `add(figure, turn=False)` keeps it from turning (it may still be folded).
 
+## Shapes (the one thing placed by hand)
+
+Marking a slide up -- an arrow at part of a figure, a ring round a pocket, a brace and its
+words beside a list, a highlight, "3.1 Å", a speech bubble, a box of words -- is a
+**shape**, drawn where it is put, over the slide's words (`behind=True`: under them).
+Never edit a figure or a picture to annotate it: draw shapes over it.
+
+```python
+slide.shape("arrow", from_=[760, 420], to={"object": "body[0]", "side": "right"})
+slide.shape("ring", at=[540, 230], size=[150, 90], line="accent2")
+slide.shape("brace", from_=[470, 140], to=[470, 400], text="3 steps")
+```
+
+Places are points on the 960 by 540 slide (`deck.slide(...)` shapes in a document: a
+slide's `shapes` list, `{kind: arrow, from: [x, y], to: [x, y]}`). The kinds, their keys
+and their defaults are in the deck document's guide (`flexo_talk.document`). Glue a line's
+end to a shape's `id` or an object (`body[0]`, `left[1]`, `columns[2][0]`) rather than
+guessing its edge, and look at the PNG afterwards: a shape is where you put it, so it
+does not move out of the way of words.
+
 ## Plots
 
 ```python

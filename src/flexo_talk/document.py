@@ -65,6 +65,58 @@ be a placeholder, drawn as written, for a reaction in general: ``{smiles: "[X:1]
 arrows: ["1 -> 2", "2-3 -> 3"]}``, ``[Nu-]``, ``[E]``, ``[LG]``, ``[R1]`` (``[*Ar]``,
 ``[*B]`` where the letters are an element's). ``math`` is LaTeX set as an equation.
 
+Any slide may have ``shapes``, drawn where they are put, over its words and objects: an
+arrow at part of a figure, a ring round a structure's pocket, a brace and its words beside a
+list, a highlight, a box of words anywhere. Places are points from the slide's top left (a
+slide is 960 by 540; one of another size has its shapes scaled with it, 960 across)::
+
+  shapes:
+  - {kind: arrow, from: [520, 300], to: [640, 230]}
+  - {kind: rounded-rectangle, id: note, at: [660, 120], size: [220, 80], fill: accent2-fill,
+     line: accent2, text: "**Binding** pocket"}
+  - {kind: arrow, from: [770, 200], to: {object: "body[0]", side: right}}  # glued to the figure
+  - {kind: ring, at: [300, 220], size: [120, 80]}
+  - {kind: brace, from: [470, 140], to: [470, 400], text: "3 steps"}
+  - {kind: dimension, from: [120, 450], to: [260, 450], text: "3.1 Å"}
+  - {kind: text, at: [80, 470], width: 300, text: "Measured at 4 K", font_size: 14}
+
+The kinds: lines from one point to another (``from``, ``to``) -- ``line``, ``arrow``,
+``double-arrow``, ``curved-arrow`` (``bend``, a share of its length, left of the way it
+runs; ``lean``), ``elbow`` (``elbow``, ``route: across`` or ``down``), ``arc`` (``bend``),
+``brace`` and ``bracket`` (their tip ``depth`` points off the span, to the left of the way it
+runs; a brace's ``curl`` and ``tip``), ``dimension`` and ``scale-bar``; ``polyline`` and
+``pen`` through ``points`` (``closed: true`` fills them); closed shapes in a box (``at``, its
+top left, and ``size``) -- ``rectangle``, ``rounded-rectangle`` (``corner``, points),
+``ellipse``, ``triangle`` (``apex``), ``right-triangle``, ``diamond``, ``polygon``
+(``sides``), ``star`` (``tips``, ``ratio``), ``parallelogram`` (``slant``), ``trapezoid``
+(``inset``), ``arrow-right``, ``arrow-left``, ``arrow-up``, ``arrow-down`` and
+``arrow-left-right`` (``shaft``, ``head``), ``chevron`` (``point``), ``plus``, ``cross``
+(``arm``), ``check``, ``cloud``, ``bubble`` (a speech bubble: ``tail``, the point it points
+at; ``body: rounded``, ``rectangle`` or ``oval``), ``highlight`` (a translucent box) and
+``ring``; and ``text``, a box of words (``at``, and ``width`` to wrap them). A box turns
+(``rotate``, degrees clockwise) and mirrors (``flip: horizontal``, ``vertical``, ``both``);
+``group`` holds ``shapes`` moved and built together.
+
+Each is painted by the theme unless it says: ``fill`` and ``line`` are ``accent``
+(``accent2``...), ``accent-fill`` (``accent2-fill``...: a tone's light tint), ``muted``,
+``ink``, ``paper``, ``grey``, any palette role, ``#rrggbb`` or ``none`` -- a theme's colour
+repainted with the theme. ``line_width``, ``dash`` (``solid``, ``dashed``, ``dotted``),
+``cap``, ``join``, the arrowheads at each end ``start`` and ``end`` (``none``, ``triangle``,
+``open``, ``stealth``, ``dot``, ``circle``, ``bar``, ``diamond``) and ``head_size``,
+``fill_opacity``, ``opacity`` and ``shadow: true`` say the rest. ``text`` is markup, set
+inside a closed shape (beside a line): ``font_size``, ``bold``, ``italic``, ``colour``,
+``font``, ``align`` (``start``, ``middle``, ``end``), ``valign`` (``top``, ``middle``,
+``bottom``), ``padding``. An end of a line may be glued -- to a shape by its ``id``
+(``{shape: note, side: left}``) or to an object of the slide (``{object: "body[0]"}``,
+``left[1]``, ``columns[2][0]``), at a side's middle (``top``, ``right``, ``bottom``,
+``left``), its ``centre`` (stopping at its outline), or, left out, the side facing the
+other end -- and follows it when it moves. ``behind: true`` draws a shape under the slide's
+words and objects; ``build: true`` makes it appear on a click, after the slide's objects
+that do, in the order the shapes are listed; ``hidden: true`` keeps it out of the show and
+the exports; ``locked: true`` keeps it where it is in the studio. In a PowerPoint each is
+PowerPoint's own shape -- a preset where it has one, its words in it, a glued line a
+connector joined to its shapes.
+
 A slide of columns (``two-columns``, ``columns``) may be set in rows: ``rows`` lists
 the rows' labels (``rows: ["", Mechanism, Geometry]``; ``""`` for a row without one).
 Block *i* of every column is then in row *i*: each row's blocks start on one line, and
@@ -112,6 +164,8 @@ from flexo_talk.deck import (
     _Plot,
     displayed,
     named_colour,
+    shape_of,
+    shape_problems,
     share_of,
 )
 
@@ -139,9 +193,10 @@ DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
     "conventions", "sketch", "style", "logos", "logos_on", "logo_height",
 )
-COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip")
+COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes")
 """The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
-and edited, but the studio neither presents nor exports it."""
+and edited, but the studio neither presents nor exports it. ``shapes`` are drawn where they
+are put, over its words and objects (see the module's docs)."""
 SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "title": ("title", "subtitle", "author", "date"),
     "section": ("title", "subtitle"),
@@ -543,6 +598,7 @@ def add_slide(
         raise DeckDocumentError(f"{where}.footnotes", "footnotes must be text or a list of text.")
     for note in footnotes:
         slide.footnote(str(note))
+    _add_shapes(slide, data.get("shapes"), where, missing)
     slide.placeholders = frozenset(
         key for key in ("title", "subtitle", "words") if key in data and not str(data[key] or "").strip()
     )
@@ -550,6 +606,41 @@ def add_slide(
     if layout == "columns":
         slide.source.pop("columns", None)
     return slide
+
+
+def _add_shapes(slide: Slide, value: object, where: str, missing: list[DeckDocumentError] | None) -> None:
+    """A slide's shapes, each checked as written (``deck.shape_of``). With ``missing`` given,
+    one that can't be drawn is said there and left out -- the rest drawn, each keeping its
+    place in the list -- and a list that is no list is said and drawn as none; without it,
+    either is an error."""
+
+    if value is None:
+        return
+    if not isinstance(value, list):
+        error = DeckDocumentError(f"{where}.shapes", "shapes must be a list of shapes, such as "
+                                                   "[{kind: arrow, from: [100, 100], to: [260, 100]}].")
+        if missing is None:
+            raise error
+        missing.append(InvalidObject(error.where, error.message))
+        return
+    for index, data in enumerate(value):
+        here = f"{where}.shapes[{index}]"
+        try:
+            made = shape_of(data)
+        except SettingError as error:
+            failure = DeckDocumentError(f"{here}.{error.key}" if error.key else here, str(error))
+            if missing is None:
+                raise failure from None
+            missing.append(InvalidObject(failure.where, failure.message))
+            made = None
+        slide.shapes.append(made)
+        slide.shape_sources.append(data)
+    for index, key, message in shape_problems(slide):
+        failure = DeckDocumentError(f"{where}.shapes[{index}].{key}", message)
+        if missing is None:
+            raise failure
+        missing.append(InvalidObject(failure.where, failure.message))
+        slide.shapes[index] = None
 
 
 def _as_content(data: dict[str, Any]) -> dict[str, Any]:
@@ -1364,6 +1455,8 @@ def _slide_data(
         data[key] = value
     if slide.footnote_sources:
         data["footnotes"] = list(slide.footnote_sources)
+    if slide.shape_sources:
+        data["shapes"] = [dict(shape) if isinstance(shape, dict) else shape for shape in slide.shape_sources]
     if slide.notes_text:
         data["notes"] = slide.notes_text
     if layout == "columns":
@@ -1427,7 +1520,7 @@ def _json_value(value: object) -> object:
 
 _SLIDE_ORDER = (
     "layout", "title", "subtitle", "author", "date", "words", "by", "dark", "align", "split", "widths", "rows",
-    "background", "shade", "body", "left", "right", "columns", "notes", "footnotes",
+    "background", "shade", "body", "left", "right", "columns", "shapes", "notes", "footnotes",
 )
 """A slide's keys in the order a person reads them: what it is, its words, its look, its
 content, then its notes."""

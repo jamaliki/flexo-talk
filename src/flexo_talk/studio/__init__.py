@@ -18,11 +18,24 @@ from pathlib import Path
 from typing import Any, get_args
 
 from flexo import plots
+from flexo.freeform import COMMON_KEYS as COMMON_SHAPE_KEYS
+from flexo.freeform import KINDS, SECTIONS, keys_of
+from flexo.freeform import catalogue as freeform_catalogue
 from flexo.studio import Drawing, Message, Page
 from flexo.studio.plain import explain
 
 from flexo_talk import worker
-from flexo_talk.deck import FOOTER_LOGOS, LAYOUTS, LOGO_HEIGHT, LOGO_HEIGHTS, LOGO_SUFFIXES, LOOKS, DeckStyle
+from flexo_talk.deck import (
+    FOOTER_LOGOS,
+    LAYOUTS,
+    LOGO_HEIGHT,
+    LOGO_HEIGHTS,
+    LOGO_SUFFIXES,
+    LOOKS,
+    SHAPE_FRAME,
+    SHAPE_KEYS,
+    DeckStyle,
+)
 from flexo_talk.document import (
     BLOCKS,
     COMMON_KEYS,
@@ -291,6 +304,17 @@ class DeckKind:
             "slide's footer too); logo_height: how tall on the title slide, in points (40).\n"
             + f"Looks: {', '.join(LOOKS)}. Colours for words and panels: accent, accent2, ..., muted, #rrggbb.\n"
             "Slide words are markup: **strong**, *emphasis*, $maths$, `code`, [link](url), [words]{accent}.\n"
+            + "Shapes (a slide's shapes: list, drawn where they are put, points from its top left on a 960 by 540 "
+            "slide): " + "; ".join(f"{name}: {', '.join(kinds)}" for name, kinds in SECTIONS)
+            + f". Every shape takes {', '.join(COMMON_SHAPE_KEYS)} and on a slide {', '.join(SHAPE_KEYS)}; "
+            "lines from, to; polyline and pen points, closed; boxes at, size, rotate, flip; text at, width, rotate; "
+            "group shapes. Each kind's own: "
+            + "; ".join(f"{kind}: {', '.join(own)}" for kind in KINDS
+                        if (own := [key for key in keys_of(kind) if key not in COMMON_SHAPE_KEYS and key not in
+                                    ("kind", "id", "from", "to", "points", "closed", "at", "size", "rotate", "flip",
+                                     "width")]))
+            + ". To point at, ring, bracket or label part of a figure or picture, draw a shape over it rather "
+            "than change the figure.\n"
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )
@@ -496,6 +520,9 @@ class DeckKind:
                       "types": list(LOGO_SUFFIXES)},
             # What the figure editor offers, for figures edited on their slides.
             "figure_editor": _figure_editor(),
+            # The shapes a slide may have drawn where they are put (flexo.freeform): their kinds
+            # by section, names, defaults and sizes, and what a slide says of one besides.
+            "shapes": {**freeform_catalogue(), "slide_keys": list(SHAPE_KEYS), "frame": SHAPE_FRAME},
         }
 
     # -- drawing --
@@ -650,8 +677,8 @@ class DeckKind:
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
         return Drawing(pages, _placed(messages, document), sorted(watched),
                        {"palette": _palette(deck), "tones": _tones(deck), "order": _palette_order(deck),
-                        "own": _palette_order(deck, own=True), "fonts": _fonts(deck),
-                        "unsettled": unsettled})
+                        "own": _palette_order(deck, own=True), "fonts": _fonts(deck), "roles": _roles(deck),
+                        "sizes": _sizes(deck), "width": deck.style.width, "unsettled": unsettled})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck
@@ -1676,6 +1703,21 @@ def _what_changed(old: Any, new: Any) -> tuple[str, str]:
     # A slide's layout changed is what it is, whatever its objects did with it.
     if "layout" in keys:
         return "changed", "the layout"
+    # Its shapes drawn where they are put: one added or deleted by its name ("added an arrow").
+    if keys == ["shapes"]:
+        from flexo.freeform import LABELS
+
+        was, now = (slide.get("shapes") if isinstance(slide.get("shapes"), list) else [] for slide in (old, new))
+
+        def called(shape: object) -> str:
+            kind = shape.get("kind") if isinstance(shape, dict) else None
+            return _a(LABELS.get(str(kind), "Shape")).lower()
+
+        if len(now) == len(was) + 1:
+            return "added", called(next((shape for shape in now if shape not in was), now[-1]))
+        if len(now) == len(was) - 1:
+            return "deleted", called(next((shape for shape in was if shape not in now), was[-1]))
+        return "edited", "the shapes"
     # An object made another kind in its place ("- " typed in a text): "made the text a list".
     bodies = [slide.get("body") if isinstance(slide.get("body"), list) else [] for slide in (old, new)]
     if "body" in keys and len(bodies[0]) == len(bodies[1]):
@@ -2116,6 +2158,20 @@ def _fonts(deck) -> dict[str, str]:
             "theme_title": titles, "theme_figure": figures}
 
 
+def _roles(deck) -> dict[str, str]:
+    """Every colour of the deck's palette by its role, for shapes drawn by the editor as the
+    slide will draw them (``flexo.freeform``: ``accent2-fill`` is ``tone-2-fill``)."""
+
+    return dict(deck.palette.paints)
+
+
+def _sizes(deck) -> dict[str, float]:
+    """The deck's sizes the editor draws a shape's words at as the slide will: its body's and its
+    footnotes' (compose._shape_size)."""
+
+    return {"body": deck.style.body_size, "small": deck.style.small_size}
+
+
 def _palette(deck) -> dict[str, str]:
     palette = deck.palette
     colours = {"ink": palette.get("ink"), "muted": palette.get("muted-ink"), "canvas": palette.get("canvas")}
@@ -2175,8 +2231,9 @@ def _presentable(svg: str, deck: Any, slide: Any) -> str:
     # and on a slide set in rows a sample holds its cell while edited, as empty words do.)
     gutter = 'data-flexo-gutter="held"' in svg
     rows = slide.rows is not None
+    # (A shape hidden, drawn faintly while edited, takes no room: Present leaves it out as it is.)
     if not invalid and not gutter and not any(
-        (rows or words != "Placeholder") and block.fullmatch(ident) for ident, words in held
+        (rows or words != "Placeholder") and block.fullmatch(ident) and ".shapes." not in ident for ident, words in held
     ):
         return svg
     token = PLACEHOLDERS.set(False)

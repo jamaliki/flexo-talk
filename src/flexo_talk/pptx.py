@@ -1788,11 +1788,13 @@ _GENERIC = {
 }
 
 
-def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
+def plain_names(tree: etree._Element, blocks: dict[str, str], *, shapes: dict[str, str] | None = None) -> None:
     """Every shape on a slide named as a person would name it in PowerPoint's Selection
     Pane -- "Title", "Purify CA", "Label “yes”", "Equation" -- not by the ids the writers
     here found it by (``slide8.body.0.purify-ca.body``). ``blocks`` names each block by its
-    id (``slide3.body.0``: "List"). Run last, once nothing looks a shape up by its name."""
+    id (``slide3.body.0``: "List"), and ``shapes`` each shape drawn where it was put
+    (``slide3.shapes.0``: "Arrow"), its words after its name. Run last, once nothing looks a
+    shape up by its name."""
 
     import re
 
@@ -1833,12 +1835,21 @@ def plain_names(tree: etree._Element, blocks: dict[str, str]) -> None:
             return f"{_OF_PIECES[kind]} {part}"
         label = labels.get(f"{name}.label", "") or (number if kind == "tick" else "")
         return f"{_PIECES.get(kind, kind.capitalize())} {label}".strip()
+    shapes = shapes or {}
     for properties in tree.iter(f"{{{_P}}}cNvPr"):
         name = properties.get("name") or ""
         element = properties.getparent().getparent()
         tag = etree.QName(element).localname
         said = ""
-        if name in _GENERIC:
+        owner_shape = next((key for key in sorted(shapes, key=len, reverse=True) if name.startswith(f"{key}.")), None)
+        if name in shapes:
+            said = f"{shapes[name]} “{words(element)}”" if words(element) else shapes[name]
+        elif owner_shape is not None:
+            # A shape's words beside it (a line's label), its line, or an arrowhead drawn apart.
+            last = name.rsplit(".", 1)[-1]
+            said = (f"Label “{words(element)}”" if last == "caption" and words(element)
+                    else "Arrowhead" if last.startswith("head-") else shapes[owner_shape])
+        elif name in _GENERIC:
             said = _GENERIC[name]
             if name in {"text", "run"} and words(element):
                 said = f"Text “{words(element)}”"

@@ -44,13 +44,16 @@ from flexo.units import MILLIMETRES_PER_INCH, POINTS_PER_INCH
 from flexo_talk.deck import (
     FOOTER_LOGOS,
     PLACED,
+    SHAPE_FRAME,
     Deck,
     ListLayout,
     Reference,
     Region,
     RenderedSlide,
+    ShapeLayout,
     Slide,
     TableLayout,
+    WordsInShape,
     WordsLayout,
     _Bullets,
     _Callout,
@@ -70,6 +73,7 @@ from flexo_talk.deck import (
     link_colour,
     list_numbers,
     made,
+    object_named,
     paint_role,
 )
 
@@ -629,6 +633,10 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
     _held_back(canvas, slide)
     style = deck.style
     width, height, margin = style.width, style.height, style.margin
+    # Shapes drawn behind the slide's words and objects have their place under them now, and
+    # are drawn there once the rest is set (an end may be glued to an object).
+    behind = (element(canvas.layer, "g", id=f"{slide.id}.shapes-behind", data__flexo__talk="shapes")
+              if any(shape and shape.get("behind") for shape in slide.shapes) else None)
     if style.edge and slide.layout != "title":
         # Down the edge the slide's words start from: the right, for a right-to-left title.
         x = width - 6.0 if slide.title_runs and _rtl(slide.title_runs) else 0.0
@@ -677,6 +685,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         canvas.layer.append(note)
     _furniture(canvas, slide)
     _logos(canvas, slide, logos)
+    shapes = _draw_shapes(canvas, slide, behind)
     if f"{slide.id}.title" in empty and (not slide.subtitle_runs or f"{slide.id}.subtitle" in empty):
         # With no heading shown, the band or rule a heading is set on is not shown either.
         # While editing it stays, round the title's place, but marked as a placeholder is,
@@ -703,7 +712,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
     return RenderedSlide(
         slide, xml_document(canvas.root), canvas.lists, list(dict.fromkeys(canvas.diagnostics)), canvas.tables,
         canvas.notes,
-        canvas.steps, canvas.held, canvas.worded, canvas.settled, builds=canvas.built,
+        canvas.steps, canvas.held, canvas.worded, canvas.settled, builds=canvas.built, shapes=shapes,
     )
 
 
@@ -1881,6 +1890,277 @@ def _logos(canvas: _Canvas, slide: Slide, row: list[_Logo]) -> None:
 
 
 # -- regions ---------------------------------------------------------------------------
+
+
+# -- shapes drawn where they are put ------------------------------------------------------
+
+
+def _draw_shapes(canvas: _Canvas, slide: Slide, behind: ET.Element | None) -> list[ShapeLayout]:
+    """The slide's shapes (``Slide.shape``), each where it is put: those ``behind`` in the group
+    kept for them under the slide's words and objects, the rest over everything, in the order
+    they are listed. A line's end glued to a shape or an object is drawn where that is now; a
+    shape that builds in appears on a click after the objects that do; a hidden one is drawn
+    faintly while editing and left out of the show and the exports."""
+
+    from flexo import freeform
+
+    listed = [(index, shape) for index, shape in enumerate(slide.shapes) if shape]
+    if not listed:
+        return []
+    scale = canvas.deck.style.width / SHAPE_FRAME
+    look = canvas.deck.layout_style
+    shadow = freeform.Shadow(look.shadow_offset.points / scale, look.shadow_spread.points / scale,
+                             look.shadow_opacity, look.shadow_style)
+    above = element(canvas.layer, "g", id=f"{slide.id}.shapes", data__flexo__talk="shapes")
+    for group in (above, behind):
+        if group is not None and abs(scale - 1.0) > 1e-9:
+            group.set("transform", f"scale({number(scale)})")
+    ids = {f"{slide.id}.shapes.{index}": shape for index, shape in listed}
+    named = {str(shape["id"]): ident for ident, shape in _shape_names(ids).items() if shape.get("id") is not None}
+    targets: dict[str, freeform.Target] = {}
+    objects: dict[str, freeform.Target] | None = None
+
+    def find(end: dict) -> freeform.Target | None:
+        nonlocal objects
+        if end.get("shape") is not None:
+            ident = named.get(str(end["shape"]))
+            return targets.get(ident) if ident else None
+        if objects is None:
+            objects = _object_targets(canvas, slide, scale)
+        found = object_named(slide, str(end.get("object")))
+        return objects.get(f"{slide.id}.{found[0]}.{found[1]}") if found else None
+
+    # What lines are glued to is drawn first, as far as its place goes: its box, its words'.
+    sized: dict[str, tuple[float, float]] = {}
+    for ident, shape in _shape_names(ids).items():
+        if freeform.family(str(shape["kind"])) in ("box", "text"):
+            if shape["kind"] == "text":
+                sized[ident] = _text_box_size(canvas, freeform.normalised(shape), scale)
+            targets[ident] = freeform.target_of(shape, freeform.geometry(shape, size=sized.get(ident)))
+    layouts: list[ShapeLayout] = []
+    editing = PLACEHOLDERS.get()
+    for index, shape in listed:
+        ident = f"{slide.id}.shapes.{index}"
+        parent = behind if shape.get("behind") and behind is not None else above
+        layout = _draw_shape(canvas, parent, ident, shape, find, named, sized, scale, shadow)
+        drawn = layout.drawn
+        drawn.set("data-flexo-talk", "shape")
+        drawn.set("data-flexo-index", str(index))
+        if shape.get("locked"):
+            drawn.set("data-flexo-locked", "")
+        layout.layout.behind = bool(shape.get("behind"))
+        if shape.get("hidden"):
+            # Drawn faintly while edited, as a placeholder is; never presented or exported.
+            canvas.hinted[ident] = "Hidden"
+            if not editing:
+                continue
+        elif shape.get("build"):
+            canvas.steps += 1
+            canvas.built.append((canvas.steps, ident))
+            drawn.set("data-flexo-step", str(canvas.steps))
+        layouts.append(layout.layout)
+    if not len(above):
+        canvas.layer.remove(above)
+    return layouts
+
+
+def _shape_names(shapes: dict[str, dict]) -> dict[str, dict]:
+    """Every shape by the id it is drawn with, a group's own (``slide3.shapes.2.0``) too."""
+
+    found: dict[str, dict] = {}
+    for ident, shape in shapes.items():
+        found[ident] = shape
+        if shape.get("kind") == "group":
+            found |= _shape_names({f"{ident}.{n}": child for n, child in enumerate(shape.get("shapes") or [])})
+    return found
+
+
+def _object_targets(canvas: _Canvas, slide: Slide, scale: float) -> dict[str, object]:
+    """The slide's objects as what a shape's line may be glued to: each one's box as it is
+    drawn (its ink), in the shapes' units."""
+
+    from flexo import freeform
+    from flexo.drawing import Drawing, Group, ink_bounds, read_drawing
+
+    drawing = read_drawing(xml_document(canvas.root))
+    wanted = {f"{slide.id}.{name}.{index}" for name, region in slide.regions.items()
+              for index in range(len(region.blocks))}
+    found: dict[str, object] = {}
+
+    def walk(group: Group) -> None:
+        for item in group.items:
+            # (An object of one line of words is drawn as its words alone, not a group.)
+            if getattr(item, "id", None) in wanted:
+                left, top, right, bottom = ink_bounds(Drawing(0.0, 0.0, Group(None, [item])))
+                if right > left or bottom > top:
+                    found[item.id] = freeform.Target((left / scale, top / scale, (right - left) / scale,
+                                                      (bottom - top) / scale))
+            elif isinstance(item, Group):
+                walk(item)
+
+    walk(drawing.root)
+    return found
+
+
+def _shape_runs(shape: dict) -> tuple[TextRun, ...]:
+    """A shape's words as runs, made bold or italic as a whole where it says so."""
+
+    text = str(shape.get("text") or "")
+    if not text.strip():
+        return ()
+    runs = inline(text)
+    if shape.get("bold") or shape.get("italic"):
+        runs = tuple(replace(run, weight=700 if shape.get("bold") and not run.maths else run.weight,
+                             italic=run.italic or bool(shape.get("italic"))) for run in runs)
+    return runs
+
+
+def _shape_size(canvas: _Canvas, shape: dict, scale: float) -> float:
+    """How large a shape's words are set, in its units: as it says, else as the slide's words
+    are -- a box of words at the body's size, a shape's a little smaller, a line's label as a
+    footnote is, a little larger -- in points on the slide whatever its size."""
+
+    if shape.get("font_size"):
+        return float(shape["font_size"])
+    from flexo.freeform import BOXED
+
+    style = canvas.deck.style
+    kind = shape.get("kind")
+    points = style.body_size if kind == "text" else style.body_size * 0.9 if kind in BOXED else style.small_size * 1.1
+    return round(points / scale, 2)
+
+
+def _text_box_size(canvas: _Canvas, shape: dict, scale: float) -> tuple[float, float]:
+    """A box of words' width and height: as wide as it is written, else as its words are;
+    as tall as its words, its padding round them."""
+
+    runs = _shape_runs(shape) or (TextRun("Text"),)
+    pad = float(shape.get("padding") or 0.0)
+    size = _shape_size(canvas, shape, scale)
+    family = shape.get("font") or None
+    width = shape.get("width")
+    metrics = canvas.measure(runs, size, float(width) - 2 * pad if width else None, family=family)
+    return (float(width) if width else metrics.width + 2 * pad, metrics.height + 2 * pad)
+
+
+@dataclass(slots=True)
+class _Drawn:
+    drawn: ET.Element
+    layout: ShapeLayout
+
+
+def _draw_shape(canvas: _Canvas, parent: ET.Element, ident: str, shape: dict, find, named: dict[str, str],
+                sized: dict[str, tuple[float, float]], scale: float, shadow: object) -> _Drawn:
+    """One shape drawn into ``parent`` with its words: a group's shapes each in turn."""
+
+    from flexo import freeform
+
+    spec = freeform.normalised(shape)
+    kind = str(spec["kind"])
+    if kind == "group":
+        group = element(parent, "g", id=ident, data__flexo__shape="group")
+        if float(spec.get("opacity", 1.0)) < 1.0:
+            group.set("opacity", number(float(spec["opacity"])))
+        children = [_draw_shape(canvas, group, f"{ident}.{n}", child, find, named, sized, scale, shadow)
+                    for n, child in enumerate(shape.get("shapes") or [])]
+        made = freeform.geometry(shape)
+        group.set("data-flexo-box", " ".join(number(value) for value in made.box))
+        for child in children:
+            child.drawn.set("data-flexo-talk", "shape")
+        return _Drawn(group, ShapeLayout(ident, spec, made, scale, children=[child.layout for child in children]))
+    form = freeform.family(kind)
+    ends = freeform.glued(shape, find) if form == "line" else None
+    made = freeform.geometry(shape, ends, sized.get(ident))
+    drawn = freeform.draw(parent, spec, made, ident, canvas.palette, shadow if spec.get("shadow") else None)
+    drawn.set("data-flexo-shape", kind)
+    drawn.set("data-flexo-box", " ".join(number(value) for value in made.box))
+    if made.turn:
+        drawn.set("data-flexo-turn", number(made.turn))
+    if made.ends:
+        drawn.set("data-flexo-ends", " ".join(number(value) for point in made.ends for value in point))
+    words = _shape_words(canvas, drawn, ident, spec, made, scale)
+    glue: list[tuple[str, str] | None] = [None, None]
+    if form == "line" and made.ends:
+        for at, key in enumerate(("from", "to")):
+            end = shape.get(key)
+            if not isinstance(end, dict) or end.get("shape") is None or str(end["shape"]) not in named:
+                continue
+            target = find(end)
+            if target is None:
+                continue
+            side = end.get("side") or freeform.facing(target, made.ends[1 - at])
+            if side == "centre":
+                side = freeform.facing(target, made.ends[1 - at])
+            glue[at] = (named[str(end["shape"])], str(side))
+    return _Drawn(drawn, ShapeLayout(ident, spec, made, scale, words=words, glue=(glue[0], glue[1])))
+
+
+def _shape_words(canvas: _Canvas, drawn: ET.Element, ident: str, spec: dict, made: object, scale: float
+                 ) -> WordsInShape | None:
+    """A shape's words, set in it -- in its room, turned with it -- or beside a line: where
+    each was put, for writers that set them natively."""
+
+    from flexo.colour import contrast
+
+    runs = _shape_runs(spec)
+    if not runs and spec.get("kind") == "text" and PLACEHOLDERS.get():
+        # A box of words not yet written: "Text", faintly, while it is edited.
+        runs = (TextRun("Text"),)
+        canvas.hinted[f"{ident}.text"] = "Text"
+    if not runs:
+        return None
+    size = _shape_size(canvas, spec, scale)
+    pad = float(spec.get("padding") or 0.0)
+    family = spec.get("font") or None
+    role, fill = "ink", None
+    if spec.get("colour"):
+        from flexo import freeform
+
+        colour, named_role = freeform.paint(spec["colour"], canvas.palette)
+        role, fill = (named_role, None) if named_role else ("ink", colour)
+    elif made.closed and spec.get("fill") not in (None, "none") and float(spec.get("fill_opacity", 1.0)) > 0.5:
+        # On a fill of their shape's own, its words are the ink or the page's colour, whichever reads.
+        from flexo import freeform
+
+        ground = freeform.paint(spec["fill"], canvas.palette)[0]
+        if ground:
+            ink, page = canvas.palette.get("ink"), canvas.palette.get("canvas")
+            role = "canvas" if contrast(page, ground) > contrast(ink, ground) else "ink"
+    colour = fill or canvas.palette.get(role)
+    worded = len(canvas.worded)
+    align = str(spec.get("align") or "middle")
+    if made.area is not None:
+        x, y, w, h = made.area
+        inner = Box(x + pad, y + pad, max(w - 2 * pad, 1.0), max(h - 2 * pad, 1.0))
+        height = canvas.measure(runs, size, inner.width, family=family).height
+        valign = str(spec.get("valign") or "middle")
+        top = inner.y + {"top": 0.0, "middle": (inner.height - height) / 2.0, "bottom": inner.height - height}[valign]
+        canvas.words(f"{ident}.text", runs, Box(inner.x, top, inner.width, 0.0), size=size, align=align, role=role,
+                     fill=fill, parent=drawn, family=family)
+        made_words = WordsInShape(runs, (x, y, w, h), size, align, valign, family or "", colour, pad)
+    else:
+        label = made.label
+        if label is None:
+            return None
+        metrics = canvas.measure(runs, size, None, family=family)
+        w, h = metrics.width + 2 * pad, metrics.height + 2 * pad
+        left = label.x - {"start": 0.0, "middle": w / 2.0, "end": w}[label.align]
+        top = label.y - {"top": 0.0, "middle": h / 2.0, "bottom": h}[label.valign]
+        holder = element(drawn, "g", id=f"{ident}.label")
+        if label.angle:
+            holder.set("transform", f"rotate({number(label.angle)} {number(label.x)} {number(label.y)})")
+        canvas.words(f"{ident}.text", runs, Box(left + pad, top + pad, metrics.width + 1.0, 0.0), size=size,
+                     align="middle" if label.align == "middle" else label.align, role=role, fill=fill,
+                     parent=holder, family=family)
+        made_words = WordsInShape(runs, (left, top, w, h), size, label.align, "middle", family or "", colour, pad,
+                                  label.angle, (label.x, label.y), wrap=False)
+        drawn.set("data-flexo-label", " ".join(number(value) for value in (left, top, w, h, label.angle, label.x,
+                                                                             label.y)))
+    # (Words with maths set in a shape are its own, not the slide's to write natively: they are
+    # the shape's words in a PowerPoint.)
+    del canvas.worded[worded:]
+    made_words.family = made_words.family or canvas.deck.typography(size).family
+    return made_words
 
 
 def _panel_row(canvas: _Canvas, slide: Slide, names: list[str], boxes: list[Box]) -> dict[str, float]:
