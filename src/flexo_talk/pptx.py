@@ -120,6 +120,9 @@ class _Body:
     sites: dict[str, int]
     own: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     """The shape's own box, whose sides' middles its connection sites are at."""
+    hollow: bool = False
+    """Whether it is a frame: a box round other shapes, which a line meets at its outline
+    -- what is inside it is those shapes' to meet."""
 
 
 @dataclass(slots=True)
@@ -331,7 +334,8 @@ def _group(group: Group, placement: Placement, ids: _Ids) -> etree._Element | No
         down = [((box[1] + side * box[3]) / EMU_PER_POINT - placement.y) / placement.scale
                 for box in boxes for side in (0, 1)]
         largest = max(ids.bodies[first:], key=lambda body: (body.box[2] - body.box[0]) * (body.box[3] - body.box[1]))
-        ids.bodies[first:] = [replace(largest, box=(min(across), min(down), max(across), max(down)))]
+        hollow = group.data.get("data-flexo-kind") == "frame"
+        ids.bodies[first:] = [replace(largest, box=(min(across), min(down), max(across), max(down)), hollow=hollow)]
     if len(children) == 1 and not group.id:
         return children[0]
     # A formula within words is an equation; a displayed one keeps its id, which its
@@ -498,6 +502,10 @@ def _met(
     for body in bodies:
         left, top, right, bottom = body.box
         gap = math.hypot(max(left - point[0], 0.0, point[0] - right), max(top - point[1], 0.0, point[1] - bottom))
+        if body.hollow and gap == 0.0:
+            # (Within a frame, how far from its outline: a line between two of the shapes it
+            # goes round meets them, not the frame they are in.)
+            gap = min(point[0] - left, right - point[0], point[1] - top, bottom - point[1])
         area = (right - left) * (bottom - top)
         if gap <= reach and (best is None or (gap, -area) < (best[0], best[1])):
             best = (gap, -area, body)
