@@ -8457,7 +8457,10 @@ export function mount(studio, container) {
     let tries = 0;
     // (As the slide draws it: an SVG's words in the deck's figure font, or as it says.)
     const family = studio.info?.fonts?.figure || "";
-    const preview = h("img.preview-pic", { src: block.image ? drawnUrl(studio, block, family) : "", alt: "", hidden: !block.image, dataset: { family },
+    // On the slide's own paper, as it is drawn there -- a drawing's dark words on no paper of
+    // its own were lost on the window's panel in dark mode.
+    const paper = pageNode?.querySelector('[id="canvas.background"]')?.getAttribute("fill") || studio.info?.palette?.canvas || "#ffffff";
+    const preview = h("img.preview-pic", { src: block.image ? drawnUrl(studio, block, family) : "", alt: "", hidden: !block.image, dataset: { family }, style: { background: paper },
       onload: () => { tries = 0; },
       onerror: () => { if (preview.getAttribute("src") && tries < 4) { tries += 1; const src = preview.src.replace(/&again=\d+$/, ""); setTimeout(() => { preview.src = `${src}&again=${tries}`; }, 400 * tries); } } });
     // Shown as the slide shows it: cropped, and round -- by the picture's proportions as the
