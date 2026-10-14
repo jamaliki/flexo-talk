@@ -1863,10 +1863,11 @@ def test_a_figure_arranged_by_hand_is_turned_to_fit_when_its_person_asks(tmp_pat
              "receipt": ("document", "Receipt email"), "feed": ("cloud", "Warehouse feed"),
              "db": ("database", "Orders DB")}
     nodes = [{"id": id, "kind": kind, "label": label} for id, (kind, label) in parts.items()]
-    # As the studio writes them: the parts' places, which may be turned, not groups of meaning.
+    # As the studio writes them: the parts' places, which may be turned, not groups of meaning
+    # -- the steps in a column, the two they feed beside it: tall, on a wide slide.
     groups = [
-        {"id": "root", "layout": {"kind": "column"}, "role": "canvas", "children": ["row", "feed", "db"]},
-        {"id": "row", "layout": {"kind": "row"}, "role": "layout",
+        {"id": "root", "layout": {"kind": "row"}, "role": "canvas", "children": ["steps", "feed", "db"]},
+        {"id": "steps", "layout": {"kind": "column"}, "role": "layout",
          "children": ["customer", "form", "api", "queue", "worker", "receipt"]},
     ]
     lines = [("customer", "form", "fills in"), ("form", "api", "POST /orders"), ("api", "queue", "publishes"),
@@ -1881,7 +1882,7 @@ def test_a_figure_arranged_by_hand_is_turned_to_fit_when_its_person_asks(tmp_pat
         DeckKind().draw(document, tmp_path, {"settle": True})
         return compose._LAYOUTS[next(key for key in compose._LAYOUTS if key[0] == "orders")]
 
-    # Arranged by hand (a row with parts under it), it is drawn as arranged...
+    # Arranged by hand (a column with parts beside it), it is drawn as arranged...
     assert not layout().startswith("turned")
     # ...unless its person turns "Turn to Fit the Slide" on for it.
     assert layout(turn=True).startswith("turned")
