@@ -494,7 +494,10 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   square, 4:3, 16:9 or a circle at once (`mask: circle`), or back to the whole
   (**Original**). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
-  slide -- and paste pictures, structure files and words copied elsewhere. The bar
+  slide -- and paste pictures, structure files and words copied elsewhere: a drawing
+  copied in Inkscape is pasted as the SVG it is (in the Mac app), its lines and words
+  drawn as lines and words (in the PowerPoint as shapes, where they can be), not as a
+  picture of it. The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
   a figure, a flow chart, a structure, a picture, a table, and more -- after the
   one chosen. Pictures dropped on the slide are added to it, and so are structures

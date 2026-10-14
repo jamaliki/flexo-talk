@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine } from "/static/kinds/figure/parts.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
 import { canRow, rowed, rowCount, labelsOf, setRows, setLabel, keepRows } from "/static/kinds/deck/rows.js";
@@ -6695,8 +6695,16 @@ export function mount(studio, container) {
     // A clipboard that keeps only words: what was copied here, if they are its words.
     if (!clip && clipboard && data?.getData("text/plain") === plainOf(clipboard)) clip = clipboard;
     if (clip) { event.preventDefault(); pasteClip(clip); return; }
-    const files = [...(data?.files || [])];
-    if (files.length) { event.preventDefault(); await addFiles(files, state.focus ? { kind: "block", ...state.focus } : null); return; }
+    const files = [...(data?.files || [])], at = state.focus ? { kind: "block", ...state.focus } : null;
+    // A drawing copied in another app (Inkscape's) is pasted as its SVG -- its lines and words
+    // drawn as lines and words -- not as the picture of it the web view hands over.
+    const drawing = pastedDrawing(data);
+    if (drawing) {
+      event.preventDefault();
+      const drawn = await drawing;
+      if (drawn) { await addFiles([drawn], at); return; }
+    }
+    if (files.length) { event.preventDefault(); await addFiles(files, at); return; }
     const text = (data?.getData("text/plain") || "").replace(/\r/g, "").trim();
     // Another app's formatted words keep their bold, italic, code, links and levels, as
     // they do pasted in an editor.
