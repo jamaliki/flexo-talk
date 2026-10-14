@@ -46,6 +46,9 @@ A figure block may show its figure differently on each slide, nothing in it move
 ``hide``, ``dim`` and ``highlight`` list the figure's parts left out, drawn faint, or
 kept while the rest is drawn faint; ``stages`` lists the clicks its parts appear on
 (``stages: [[encoder, decoder], [loss]]``: two parts on the first click, one on the next).
+A figure is drawn in the deck's theme; its own ``spacing``, ``shape_padding``,
+``line_width`` and ``head_size`` (in its ``figure:``, each a share of the theme's) make it
+tighter, or its arrowheads smaller, than the deck's other figures: ``spacing: 0.6``.
 
 A ``mechanism`` is a reaction drawn with its curly arrows: a SMILES, or a list of steps,
 each ``{smiles, arrows, label, reagents, conditions}``. The atoms the arrows name are

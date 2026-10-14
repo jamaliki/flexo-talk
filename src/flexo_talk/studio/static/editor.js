@@ -8548,6 +8548,9 @@ export function mount(studio, container) {
     // (Kept up with each drawing as it lands: the panel is drawn at the change -- an undo, say
     // -- and the slide a moment later.)
     if (turn) turn.drawn = () => now().turn ?? drawnTurned(at);
+    // Its own room and lines -- spacing, shapes' padding, lines' width, arrowheads -- as its
+    // theme's made smaller or larger, kept where the figure is written (parts.js's Sizes).
+    const sizes = mode !== "python" && figure && figureBlock() === block ? figure.parts.sizes?.() : null;
     const parts = [ui.field("Source", ui.segmented({ value: mode, options: [
       { value: "inline", label: "In Deck" }, { value: "file", label: "File" }, { value: "python", label: "Python" }],
     onChange: async (next) => {
@@ -8583,7 +8586,7 @@ export function mount(studio, container) {
       parts.push(h("details.more", {}, h("summary", {}, icon("chevron"), "JSON"), h("div.inner", {}, area)));
       // Written in the deck, it is edited where it is drawn: where it is kept is put by, under
       // Advanced, as a figure's shape keeps its name in the file.
-      return [exports, widthField(block, at), turn, captionField(block, at), figureDescription(block, at), h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
+      return [exports, widthField(block, at), turn, captionField(block, at), figureDescription(block, at), sizes, h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
       parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"));
     } else {
@@ -8591,7 +8594,7 @@ export function mount(studio, container) {
       named.title ||= "file.py:function, returning a flexo.Figure. It runs again when its file changes.";
       parts.push(named);
     }
-    parts.push(widthField(block, at), turn, captionField(block, at), figureDescription(block, at));
+    parts.push(widthField(block, at), turn, captionField(block, at), figureDescription(block, at), sizes);
     return [exports, ...parts];
   }
 
