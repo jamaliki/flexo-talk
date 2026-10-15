@@ -13,7 +13,8 @@ import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
 import { follows, merge3 } from "/static/studio/merge.js";
 import { sizer } from "/static/kinds/deck/resize.js";
-import { slideShapes } from "/static/kinds/deck/shapes.js";
+import { shapeEditor } from "/static/studio/shapes.js";
+import { BOXED } from "/static/studio/freeform.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -884,10 +885,45 @@ export function mount(studio, container) {
   clear(container, root);
 
   // The slide's shapes, drawn where they are put (shapes.js): what it needs of the editor.
-  const freeShapes = slideShapes({
-    studio, center, stage,
-    doc: () => doc(), slide: () => slideAt(), slideIndex: () => state.slide, pageNode: () => pageNode,
-    editSlide: (mutate, options) => editSlide(mutate, options), select: (index) => select(index),
+  // (Their places are points on a slide 960 across, the slide's own size scaled to that.)
+  const SHAPE_FRAME = 960;
+  const slideView = () => { const box = pageNode?.querySelector(":scope > svg")?.viewBox?.baseVal; return box && box.width ? { width: box.width, height: box.height } : { width: 960, height: 540 }; };
+  const shapeScale = () => slideView().width / SHAPE_FRAME;
+  const everyShape = (picks, key) => picks.every((index) => slideAt()?.shapes?.[index]?.[key]);
+  const freeShapes = shapeEditor({
+    studio, center, stage, catalog: studio.catalog?.shapes,
+    page: () => state.slide,
+    list: () => (Array.isArray(slideAt()?.shapes) ? slideAt().shapes : []),
+    pageNode: () => pageNode,
+    idOf: (index, at = state.slide) => `slide${at + 1}.shapes.${index}`,
+    frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()],
+    edit: (mutate, options) => {
+      let made = false;
+      editSlide((s) => {
+        const next = mutate(Array.isArray(s.shapes) ? s.shapes : []);
+        if (next.length) s.shapes = next; else delete s.shapes;
+        made = true;
+      }, options);
+      return made;
+    },
+    mark: (said) => { const entry = studio.past[studio.past.length - 1]; if (entry) studio.said(entry).shapes = said; },
+    goTo: (index) => { if (index < (doc().slides || []).length) select(index); },
+    // The slide's objects, as drawn, a shape's line may be glued to (`{object: "body[0]"}`).
+    glueKey: "object",
+    objects: (toFrame) => {
+      const found = new Map();
+      for (const region of regionsDrawn()) {
+        for (const block of region.blocks) {
+          if (!block.element) continue;
+          const box = block.element.getBoundingClientRect();
+          if (!box.width && !box.height) continue;
+          const a = toFrame(box.left, box.top), b = toFrame(box.right, box.bottom);
+          const name = region.key.startsWith("columns.") ? `columns[${region.key.split(".")[1]}][${block.index}]` : `${region.key}[${block.index}]`;
+          found.set(name, { box: [a[0], a[1], b[0] - a[0], b[1] - a[1]], turn: 0, outline: null, name, label: block.label });
+        }
+      }
+      return found;
+    },
     // Shapes chosen, nothing else is: no object, line of words or logo, no figure edited.
     leaveOthers: () => {
       closeInline(); leaveFigure(false); offRail();
@@ -895,8 +931,31 @@ export function mount(studio, container) {
     },
     renderInspector: () => renderInspector(), placeChosen: () => placeChosen(), reportFocus: () => reportFocus(),
     swallowRelease: (held) => swallowRelease(held), undoNote: (text, options) => undoNote(text, options),
-    awayFrom: (what) => awayFrom(what), regions: () => regionsDrawn(), partAt: (event) => partAt(event),
+    awayFrom: (what) => awayFrom(what), partAt: (event) => partAt(event),
     clipItems: () => clipItems(), canDraw: () => Boolean(slideAt()), shapeButton: () => shapeButton,
+    // Words typed in a shape in the slide's own editor, at the slide's sizes: a box of words at
+    // the body's, a shape's a little smaller, a line's label as a footnote is, a little larger.
+    words: (options) => richText(options),
+    wordSize: (spec) => {
+      const sizes = studio.info?.sizes || { body: 20, small: 14 }, k = shapeScale();
+      return spec.kind === "text" ? sizes.body / k : BOXED.includes(spec.kind) ? sizes.body * 0.9 / k : sizes.small * 1.1 / k;
+    },
+    verb: "Add", noun: "slide", crumb: () => `Slide ${state.slide + 1}`, source: () => `slide:${state.slide}`,
+    ownKeys: ["behind", "build", "hidden", "locked"],
+    grouped: (specs) => (specs.every((spec) => spec?.behind) ? { behind: true } : {}),
+    ungrouped: (group) => ({ ...(group.behind ? { behind: true } : {}), ...(group.locked ? { locked: true } : {}), ...(group.hidden ? { hidden: true } : {}) }),
+    // A slide's own: built in on a click, hidden from the show.
+    commands: (picks, name, { set }) => [
+      { icon: "reveal", label: everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click", hint: name, run: () => set({ build: !everyShape(picks, "build") }, everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click") },
+      { icon: "eye", label: everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape", hint: name, run: () => set({ hidden: !everyShape(picks, "hidden") }, everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape") },
+    ],
+    panel: (picks, specs, { set }) => [h("div.section", {},
+      ui.toggle({ value: everyShape(picks, "build"), label: "Build In on Click", key: "shape.build",
+        onChange: (on) => set({ build: on }, on ? "Build In on Click" : "Don’t Build In") }),
+      h("div.hint-line", {}, "Appears on a click when presenting, after the slide’s objects that build in"),
+      ui.toggle({ value: everyShape(picks, "hidden"), label: "Hidden", key: "shape.hidden",
+        onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
+      h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
   });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula

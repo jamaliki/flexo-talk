@@ -257,6 +257,14 @@ end to a shape's `id` or an object (`body[0]`, `left[1]`, `columns[2][0]`) rathe
 guessing its edge, and look at the PNG afterwards: a shape is where you put it, so it
 does not move out of the way of words.
 
+A figure's own marks -- those that belong to it wherever it is shown, on any slide or in a
+paper -- are the figure's `shapes` (flexo's, the same kinds and keys), drawn over it and
+attached to its parts so they follow its layout: `{kind: ring, around: [encoder]}`,
+`{kind: arrow, from: [20, 10], to: {part: decoder, side: top}}`, `{kind: text, on:
+decoder, at: [0, -16], text: bottleneck}`, in the figure file or in a figure written in the
+deck. A figure laid out for a slide's box is not turned to fit while it has shapes attached
+to none of its parts.
+
 ## Plots
 
 ```python

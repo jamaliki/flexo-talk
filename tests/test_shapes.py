@@ -318,3 +318,76 @@ def test_a_line_is_joined_to_a_shape_written_after_it(tmp_path: Path) -> None:
     joined = arrow._element.find(".//{http://schemas.openxmlformats.org/drawingml/2006/main}endCxn")
     # An oval's left is its third site, as PowerPoint numbers them.
     assert joined is not None and (joined.get("id"), joined.get("idx")) == (str(oval.shape_id), "2")
+
+
+# -- a figure's own shapes, on its slide --
+
+
+FIGURE = {
+    "figure": {"id": "pipeline"},
+    "nodes": [{"id": "encoder", "label": "Encoder"}, {"id": "decoder", "label": "Decoder"}],
+    "edges": [{"from": "encoder", "to": "decoder"}],
+    "shapes": [{"kind": "ring", "id": "ring", "around": ["decoder"]},
+               {"kind": "arrow", "from": [-30, -20], "to": {"part": "encoder", "side": "top"}, "text": "in"}],
+}
+
+
+def test_a_figures_own_shapes_are_drawn_with_it_on_its_slide() -> None:
+    _, root = drawn(deck_of(body=[{"figure": FIGURE}]))
+    figure = next(item for item in root.iter() if item.get("data-flexo-talk") == "figure")
+    drawn_over = [item for item in figure.iter() if item.get("data-flexo-shape")]
+    assert {item.get("data-flexo-shape") for item in drawn_over} == {"ring", "arrow"}
+    # (Its words too, in the figure's drawing.)
+    assert any("".join(item.itertext()).strip() == "in" for item in figure.iter(f"{SVG}text"))
+
+
+def test_a_figure_with_shapes_is_in_every_output(tmp_path: Path) -> None:
+    written = DeckKind().export(deck_of(body=[{"figure": FIGURE}]), tmp_path, "talk", ["svg", "pdf", "pptx"],
+                                into=tmp_path / "out")
+    svg = next(path for path in written if path.suffix == ".svg").read_text()
+    assert 'data-flexo-shape="ring"' in svg
+    assert next(path for path in written if path.suffix == ".pdf").stat().st_size > 1000
+    slide = Presentation(str(next(path for path in written if path.suffix == ".pptx"))).slides[0]
+
+    def names(shapes) -> list[str]:
+        return [name for shape in shapes
+                for name in (shape.name, *(names(shape.shapes) if shape.shape_type == 6 else ()))]
+
+    # The figure is drawn in the PowerPoint as its own shapes: the ring and the arrow among
+    # them, each named for its kind (and words), as the studio names it.
+    found = names(slide.shapes)
+    assert "Highlight Ring" in found and "Arrow “in”" in found and "Arrowhead" in found
+
+
+def test_a_figures_shapes_build_in_with_the_parts_they_are_on() -> None:
+    from flexo.serialization import parse_figure
+
+    from flexo_talk.compose import part_steps
+
+    note = {"kind": "text", "id": "note", "at": [0, 0], "text": "late"}
+    spec = parse_figure({**FIGURE, "shapes": [*FIGURE["shapes"], note]})
+    steps = part_steps(spec, [["encoder"], ["decoder"], ["note"]])
+    # The ring with the decoder it goes round, the arrow with the encoder it points at, the
+    # note on the click that names it.
+    assert (steps["ring"], steps["shapes.1"], steps["note"]) == (2, 1, 3)
+    _, root = drawn(deck_of(body=[{"figure": {**FIGURE}, "stages": [["encoder"], ["decoder"]]}]))
+    ring = next(item for item in root.iter() if item.get("data-flexo-shape") == "ring")
+    assert ring.get("data-flexo-step") is not None
+
+
+def test_a_figures_shape_behind_its_parts_is_under_them_on_the_slide_and_in_the_powerpoint(tmp_path: Path) -> None:
+    behind = {**FIGURE, "shapes": [{"kind": "ellipse", "around": ["decoder"], "behind": True}]}
+    _, root = drawn(deck_of(body=[{"figure": behind}]))
+    order = [item.get("data-flexo-shape") or item.get("id") for item in root.iter() if item.get("id")]
+    oval = order.index("ellipse")
+    assert oval < next(at for at, name in enumerate(order) if str(name).endswith(".decoder"))
+    written = DeckKind().export(deck_of(body=[{"figure": behind}]), tmp_path, "talk", ["pptx"], into=tmp_path / "out")
+    slide = Presentation(str(written[0])).slides[0]
+
+    def names(shapes) -> list[str]:
+        return [name for shape in shapes
+                for name in (shape.name, *(names(shape.shapes) if shape.shape_type == 6 else ()))]
+
+    found = names(slide.shapes)
+    # Drawn first, it is under the decoder in the PowerPoint too: not hiding it.
+    assert found.index("Oval") < found.index("Decoder")
