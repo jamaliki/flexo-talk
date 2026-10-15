@@ -3,7 +3,8 @@ its kind -- a rectangle, a rounded one, an oval, a triangle, a diamond, a pentag
 a parallelogram, a trapezoid, a block arrow, a chevron, a plus, a cloud, a speech bubble, a
 brace, a bracket -- its settings (a corner, a slant, a callout's tail) as PowerPoint's
 adjustments, so it is edited there as what it is; any other kind a freeform of the same
-outline. Its words are its own text, in it, as PowerPoint sets words in that shape. A
+outline, a path too (its pieces, holes and all, filled as it fills them). Its words are its
+own text, in it, as PowerPoint sets words in that shape. A
 straight line or an elbow is a connector, joined to the shapes its ends are glued to, its
 arrowheads its line ends; any other line a freeform with the same ends. A shape that builds
 in is named as the slide's drawing names it, so its click finds it (``export.write_pptx``).
@@ -114,6 +115,8 @@ class ShapeWriter:
         form = freeform.family(kind)
         if form in ("box", "text"):
             return [self._boxed(layout, placement)]
+        if form == "path":
+            return [self._path(layout, placement)]
         made = [self._line(layout, placement)]
         if layout.words is not None:
             made.append(self._label(layout, placement))
@@ -236,6 +239,70 @@ class ShapeWriter:
         return (f"<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst>{joins}</a:cxnLst>{rect}<a:pathLst>"
                 f'<a:path w="{width}" h="{height}"{"" if filled else " fill=\"none\""}>{"".join(body)}</a:path>'
                 f"</a:pathLst></a:custGeom>")
+
+    def _path(self, layout: ShapeLayout, placement: Placement) -> etree._Element:
+        """A path as a freeform of its outline in its box, turned as it is (mirrored already),
+        its words in it, a connector's sites at its sides' middles; its pieces gathered into
+        the paths PowerPoint fills each even-odd, so it is filled as its fill rule fills it.
+        Open at an end, its arrowheads are its line's ends -- or, where PowerPoint has none
+        of that kind, shapes of their own, with it in a group."""
+
+        from flexo import freeform, pathdata
+
+        spec, made = layout.spec, layout.geometry
+        heads = [spec.get(end) or "none" for end in ("start", "end")]
+        native = all(head == "none" or head in _HEADS for head in heads)
+        bare = made if not made.heads else freeform.geometry({**spec, "start": "none", "end": "none"})
+        number = self.number()
+        self.numbers[layout.id] = number
+        self.sites[layout.id] = _BOX_SITES
+        x, y, w, h = made.box
+        left, top = placement.point(x, y)
+        width, height = max(1, placement.length(w)), max(1, placement.length(h))
+
+        def point(px: float, py: float) -> str:
+            return f'<a:pt x="{placement.length(px - x)}" y="{placement.length(py - y)}"/>'
+
+        paths = []
+        drawn = bare if native else made
+        for group in pathdata.fill_groups(drawn.segments, str(spec.get("fill_rule") or "nonzero")):
+            body = []
+            for segment in group:
+                if segment[0] == "M":
+                    body.append(f"<a:moveTo>{point(segment[1], segment[2])}</a:moveTo>")
+                elif segment[0] == "L":
+                    body.append(f"<a:lnTo>{point(segment[1], segment[2])}</a:lnTo>")
+                elif segment[0] == "C":
+                    body.append(f"<a:cubicBezTo>{point(*segment[1:3])}{point(*segment[3:5])}"
+                                f"{point(*segment[5:7])}</a:cubicBezTo>")
+                else:
+                    body.append("<a:close/>")
+            paths.append(f'<a:path w="{width}" h="{height}">{"".join(body)}</a:path>')
+        joins = "".join(f'<a:cxn ang="{angle}"><a:pos x="{px}" y="{py}"/></a:cxn>' for angle, px, py in (
+            ("3cd4", "hc", "t"), ("cd2", "l", "vc"), ("cd4", "hc", "b"), ("0", "r", "vc")))
+        geometry = (f'<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst>{joins}</a:cxnLst>'
+                    f'<a:rect l="0" t="0" r="{width}" b="{height}"/><a:pathLst>{"".join(paths)}</a:pathLst>'
+                    f"</a:custGeom>")
+        turn = f' rot="{round(made.turn * 60000) % 21600000}"' if made.turn else ""
+        name = layout.id if native else f"{layout.id}.outline"
+        shape = etree.fromstring(
+            f'<p:sp {_NS}><p:nvSpPr><p:cNvPr id="{number}" name="{escape(name)}"/><p:cNvSpPr/><p:nvPr/>'
+            f'</p:nvSpPr><p:spPr><a:xfrm{turn}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/>'
+            f"</a:xfrm>{geometry}{self._fill(spec, closed=True)}"
+            f"{self._ln(spec, placement, heads if native else None)}{self._shadow(spec, placement)}</p:spPr>"
+            f"{self._body(layout, placement)}</p:sp>"
+        )
+        if native:
+            return shape
+        # (Heads drawn as shapes, turned as the path is about its box's middle.)
+        parts = [shape]
+        for head in made.heads:
+            turned = [(segment[0], *(value for index in range(1, len(segment), 2)
+                                     for value in freeform._turned(segment[index:index + 2], made.centre, made.turn)))
+                      for segment in head.segments]
+            parts.append(self._head(layout.id, freeform.Head(head.end, head.kind, turned, head.filled, head.stroked,
+                                                              head.tip, head.angle), spec, placement))
+        return self._group(parts, layout.id)
 
     # -- lines --
 
