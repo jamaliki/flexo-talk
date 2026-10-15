@@ -373,3 +373,21 @@ def test_a_figures_shapes_build_in_with_the_parts_they_are_on() -> None:
     _, root = drawn(deck_of(body=[{"figure": {**FIGURE}, "stages": [["encoder"], ["decoder"]]}]))
     ring = next(item for item in root.iter() if item.get("data-flexo-shape") == "ring")
     assert ring.get("data-flexo-step") is not None
+
+
+def test_a_figures_shape_behind_its_parts_is_under_them_on_the_slide_and_in_the_powerpoint(tmp_path: Path) -> None:
+    behind = {**FIGURE, "shapes": [{"kind": "ellipse", "around": ["decoder"], "behind": True}]}
+    _, root = drawn(deck_of(body=[{"figure": behind}]))
+    order = [item.get("data-flexo-shape") or item.get("id") for item in root.iter() if item.get("id")]
+    oval = order.index("ellipse")
+    assert oval < next(at for at, name in enumerate(order) if str(name).endswith(".decoder"))
+    written = DeckKind().export(deck_of(body=[{"figure": behind}]), tmp_path, "talk", ["pptx"], into=tmp_path / "out")
+    slide = Presentation(str(written[0])).slides[0]
+
+    def names(shapes) -> list[str]:
+        return [name for shape in shapes
+                for name in (shape.name, *(names(shape.shapes) if shape.shape_type == 6 else ()))]
+
+    found = names(slide.shapes)
+    # Drawn first, it is under the decoder in the PowerPoint too: not hiding it.
+    assert found.index("Oval") < found.index("Decoder")
