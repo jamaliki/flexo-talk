@@ -61,6 +61,24 @@ def test_shapes_are_read_and_written_back_as_written() -> None:
     assert text.index("shapes:") > text.index("body:")
 
 
+def test_a_shape_in_a_group_may_be_locked_and_says_nothing_else_of_the_slide(tmp_path: Path) -> None:
+    # Locked while its group is entered in the studio (groups.js): kept, drawn, exported.
+    group = {"kind": "group", "build": True, "shapes": [
+        {"kind": "star", "at": [30, 30], "size": [50, 50], "locked": True},
+        {"kind": "group", "shapes": [{"kind": "ellipse", "at": [90, 30], "size": [40, 40], "locked": True}]},
+    ]}
+    document = deck_of(group)
+    written = deck_document(deck_from_document(document, "."))
+    assert written["slides"][0]["shapes"] == [group]
+    _, root = drawn(document)
+    assert element(root, "slide1.shapes.0.1.0") is not None
+    DeckKind().export(document, tmp_path, "talk", ["pptx"], into=tmp_path / "out")
+    # A build, behind or hidden is the group's to say, not its shapes'.
+    with pytest.raises(DeckDocumentError) as raised:
+        deck_from_document(deck_of({"kind": "group", "shapes": [{**group["shapes"][0], "build": True}]}), ".")
+    assert raised.value.where == "slides[0].shapes[0].shapes[0].build"
+
+
 def test_a_shape_written_wrong_is_said_under_its_key() -> None:
     with pytest.raises(DeckDocumentError) as raised:
         deck_from_document(deck_of({"kind": "arrow", "from": [0, 0], "to": [1, 1], "end": "spear"}), ".")
