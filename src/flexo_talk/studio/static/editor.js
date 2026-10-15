@@ -5,6 +5,7 @@
 // the slides they touch flash in their colour.
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing } from "/static/studio/studio.js";
+import { copyOut, copiedHere, pastedOwn } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
@@ -6821,7 +6822,22 @@ export function mount(studio, container) {
     clipboard = clip;
     event.clipboardData?.setData(CLIP, JSON.stringify(clip));
     event.clipboardData?.setData("text/plain", plainOf(clip));
+    copyOut(studio, drawingOf(clip));
     return clip;
+  }
+  // What is copied, drawn for other apps (copyout.js): the slide's drawing, and the ids in it of
+  // what is copied -- the shapes, the figure's parts (with the lines between them), the objects
+  // or the logo chosen; none, the whole slide. (Several slides are no one drawing.)
+  function drawingOf(clip) {
+    const slide = `slide${state.slide + 1}`, prefix = clip.what === "parts" ? figurePrefix() : null;
+    const keep = clip.what === "shapes" ? freeShapes.chosen().map((index) => `${slide}.shapes.${index}`)
+      : clip.what === "parts" && prefix ? [...clip.parts.top, ...(clip.parts.edges || []).map((edge) => edge.id), ...(clip.parts.nets || []).map((net) => net.id)].filter(Boolean).map((id) => prefix + id)
+        : clip.what === "block" && clip.logo !== undefined ? [`${slide}.logo${clip.logo}`]
+          : clip.what === "block" && state.focus ? [blockElement(state.focus.region, state.focus.index)?.id]
+            : clip.what === "blocks" ? allBlocks().map(({ region, index }) => blockElement(region.key, index)?.id) : [];
+    const whole = clip.what === "slide";
+    const svg = clip.what === "slides" || (!whole && !keep.filter(Boolean).length) ? "" : pages[state.slide]?.svg || "";
+    return { svg, keep: keep.filter(Boolean), text: plainOf(clip), clip, title: whole ? plainOf(clip) || "Slide" : clip.label };
   }
   // (Copied again, the note says so again in its place: notes do not pile up.)
   let copiedNote = null;
@@ -6875,7 +6891,8 @@ export function mount(studio, container) {
       const clip = clipOf();
       if (!clip) { uncopied(letter === "x"); return; }
       clipboard = clip;
-      navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
+      const wrote = navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
+      copyOut(studio, drawingOf(clip), wrote);
       if (letter === "c") copied(clip); else cutAway(clip);
     }, 80);
   }
@@ -6889,13 +6906,18 @@ export function mount(studio, container) {
     try { clip = JSON.parse(data?.getData(CLIP) || "null"); } catch { clip = null; }
     // A clipboard that keeps only words: what was copied here, if they are its words.
     if (!clip && clipboard && data?.getData("text/plain") === plainOf(clipboard)) clip = clipboard;
+    // (Copied in another of the studio's documents, where the clipboard keeps its words alone.)
+    if (!clip) clip = copiedHere(data);
     if (clip) { event.preventDefault(); pasteClip(clip); return; }
     const files = [...(data?.files || [])], at = state.focus ? { kind: "block", ...state.focus } : null;
     // A drawing copied in another app (Inkscape's) is pasted as its SVG -- its lines and words
-    // drawn as lines and words -- not as the picture of it the web view hands over.
-    const drawing = pastedDrawing(data);
+    // drawn as lines and words -- not as the picture of it the web view hands over. Flexo's own
+    // copy, made in a window of another folder, is what it is, not the picture beside it.
+    const drawing = pastedDrawing(data), own = pastedOwn(data);
     if (drawing) {
       event.preventDefault();
+      const theirs = await own;
+      if (theirs) { pasteClip(theirs); return; }
       const drawn = await drawing;
       if (drawn) { await addFiles([drawn], at); return; }
     }
