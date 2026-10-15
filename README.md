@@ -316,14 +316,22 @@ joined to the shapes it is glued to; a build a click.
 
 In the studio, **Shape** in the toolbar (or Insert › Shapes, or the palette's Add Arrow…)
 draws one: drag on the slide, or click for its usual size; a polyline is clicked point by
-point, the pen drawn by hand. Chosen, a shape is moved by a drag (⇧ along one way, ⌥ a
+point, the pencil drawn by hand, and the **Pen** draws a path point by point (a click for a
+corner, a drag for a curve, a click on its first point to close it, Return to leave it open).
+Chosen, a shape is moved by a drag (⇧ along one way, ⌥ a
 copy), sized by its handles (⇧ its proportions kept, ⌥ about its middle), turned by the
 handle over it (⇧ by 15°); a line by its ends, let go on a shape or an object to glue
 them, and a curve by its middle; a corner, a tail or a star's points by their own
 handles. Everything catches at the slide's edges and middles and at the other shapes' and
 objects', a guide drawn (⌘: none). The arrows nudge (⇧: ten points), a double-click types
 its words in it, ⇧-click or a band chooses several -- to align, distribute, group (⌘G),
-stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the inspector restyles them.
+stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the inspector restyles them. A path's
+points are edited where it is (a double-click on it, or Format › Edit Points): its points and
+handles dragged (⌥: one handle alone), a point double-clicked made smooth or a corner, a
+click on its outline adding one, ⌫ deleting those chosen. Format › Make Editable makes any
+shape a path of the same outline, and Arrange › Combine Shapes makes two or more one path:
+their union, the one at the back less the others, their intersection, or what one or other
+covers but not both.
 
 ## Tables
 
