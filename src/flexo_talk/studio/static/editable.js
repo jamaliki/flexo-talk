@@ -3,8 +3,10 @@
 // chosen -- its boxes, lines and words dragged and edited one by one. The studio makes it
 // (editable.py); here it is offered and done in one step of the history. With the picture
 // chosen: Make Editable (the palette, its right-click menu, the inspector's button and the Mac
-// app's Format › Make Editable, which a path's Make Editable shares). For the whole deck: Make
-// All Drawings Editable, in the palette, said in a toast with how many.
+// app's Format › Make Editable, which a path's Make Editable shares) -- or a double-click on it,
+// which enters the group made where it was double-clicked (groups.js), so that the next click
+// chooses one box, line or word of it. For the whole deck: Make All Drawings Editable, in the
+// palette, said in a toast with how many.
 
 import { toast } from "/static/studio/studio.js";
 
@@ -15,7 +17,9 @@ export const isDrawing = (block) => typeof block?.image === "string" && DRAWING.
 // `editor`: what this needs of the deck's editor -- studio, slideIndex() (the slide shown),
 // regions(slide) (its regions' keys), blocksAt(slide, key), apply(document, label) (the deck the
 // studio answers with, as one step, its glue as the studio wrote it), chooseShapes(slide,
-// indexes) and away(what) (true, and said, while the deck can't be changed: being presented).
+// indexes), enterShape(index, point) (the group made, entered at a point on the screen:
+// { clientX, clientY }) and away(what) (true, and said, while the deck can't be changed: being
+// presented).
 export function editableTools(editor) {
   const { studio } = editor;
   let busy = false;
@@ -32,23 +36,32 @@ export function editableTools(editor) {
     return { pictures, slides: slides.size };
   }
 
-  async function make(action, label) {
+  async function make(action, label, { enter = null } = {}) {
     if (busy || editor.away("make pictures editable")) return false;
     busy = true;
     const before = studio.doc;
-    // (A large drawing, or all of them, takes a moment: said while it is made.)
-    const waiting = setTimeout(() => toast(action.all ? "Making the drawings editable…" : "Making the drawing editable…", { icon: "shape", seconds: 3 }), 400);
+    // (A large drawing, or all of them, takes a moment: said while it is made, until it is.)
+    let saying = null;
+    const waiting = setTimeout(() => { saying = toast(action.all ? "Making the drawings editable…" : "Making the drawing editable…", { icon: "shape", seconds: 3 }); }, 400);
     try {
       const result = await studio.api("/api/act", { file: studio.file, document: before, action });
       clearTimeout(waiting);
+      saying?.remove();
       // (Changed here meanwhile -- typed in, another's edit come: not put over it.)
       if (studio.doc !== before) { toast("The deck changed while the drawing was made editable: try again.", { icon: "info", seconds: 5 }); return false; }
       editor.apply(result.document, label);
-      if (result.select && result.select.slide === editor.slideIndex()) editor.chooseShapes(result.select.slide, [result.select.shape]);
-      toast(result.said || "Made editable", { icon: "shape", seconds: result.failed?.length ? 10 : 6 });
+      let said = result.said || "Made editable";
+      if (result.select && result.select.slide === editor.slideIndex()) {
+        editor.chooseShapes(result.select.slide, [result.select.shape]);
+        // (Double-clicked: the group entered there, as deep as its groups go under the point --
+        // its pieces a click away, as said.)
+        if (enter && editor.enterShape?.(result.select.shape, enter) !== false && result.hint) said = said.replace(result.hint, "Click a piece to choose it, Esc to step out");
+      }
+      toast(said, { icon: "shape", seconds: result.failed?.length ? 10 : 6 });
       return true;
     } catch (error) {
       clearTimeout(waiting);
+      saying?.remove();
       console.error("Make Editable:", error);
       toast(String(error?.message || error), { kind: "error", icon: "error", seconds: 8 });
       return false;
@@ -57,8 +70,9 @@ export function editableTools(editor) {
     }
   }
 
-  // The picture at `at` ({ region, index }) on the slide shown, made its shapes.
-  const one = (at) => make({ do: "editable", at: { slide: editor.slideIndex(), region: at.region, index: at.index } }, "Make Editable");
+  // The picture at `at` ({ region, index }) on the slide shown, made its shapes (`enter`: the
+  // point it was double-clicked at, { clientX, clientY }, where the group is entered).
+  const one = (at, { enter = null } = {}) => make({ do: "editable", at: { slide: editor.slideIndex(), region: at.region, index: at.index } }, "Make Editable", { enter });
   // Every picture of a drawing in the deck.
   const all = () => make({ do: "editable", all: true }, "Make All Drawings Editable");
 

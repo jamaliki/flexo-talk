@@ -345,6 +345,27 @@ shape a path of the same outline, and Arrange › Combine Shapes makes two or mo
 their union, the one at the back less the others, their intersection, or what one or other
 covers but not both.
 
+A group is entered as Inkscape enters one: double-click it (or choose it and press Return,
+or Enter Group). Its shapes are then the slide's to click, drag, size, turn, restyle in the
+inspector, retype (a double-click on their words), copy, duplicate, nudge, lock and delete
+one by one, each change written back into the group as one step. A group in it is entered by
+another double-click, and ⌥-click chooses the shape under the pointer however deep in groups
+it is. A dotted frame shows the group, and a chip over the slide names where one is (Slide 3 ›
+Group › Group): each level a way back to it, ✕ out a level. Esc steps out a level once nothing
+in it is chosen, the group then chosen; a click on the slide's empty space (or a double-click)
+leaves it, and a click on a shape outside it chooses that shape instead. Undo and redo keep
+one inside while the group is there. **Ungroup All** (the right-click menu, the palette,
+Arrange › Ungroup All) takes the groups chosen apart at every level in one step; a shape in a
+group may be written `locked: true`.
+
+A drawing placed as a picture -- an Inkscape SVG, a PDF's or an Illustrator file's page,
+placed before the studio read drawings as shapes, or with Paste as Picture -- is made the
+slide's own shapes by a double-click on it: one group, exactly where the picture was, entered
+where it was double-clicked, so that the next click chooses one box, arrow or word of it (one
+step to undo). Format › Make Editable, its right-click menu and its inspector's button do the
+same, the group chosen; Make All Drawings Editable does every one in the deck. Such a picture
+is still cropped by Crop… in its right-click menu, its inspector or the palette, or by Return.
+
 ## Tables
 
 ```python

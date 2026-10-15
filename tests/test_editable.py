@@ -117,6 +117,10 @@ def test_a_picture_is_made_its_shapes_where_the_slide_drew_it(tmp_path: Path) ->
     assert not any(shape.get("kind") == "inset" for shape in slide["shapes"])
     assert "A zoom inset of it is taken away" in result["said"]
     assert result["said"].startswith("Made editable: 3 shapes, where the picture was")
+    # Its pieces a double-click away: the group entered, as Inkscape's (the studio says so
+    # instead, having entered it at the double-click that made it).
+    assert result["hint"] == "Double-click it to choose its pieces one by one"
+    assert result["said"].endswith(result["hint"] + ".")
     assert result["select"] == {"slide": 1, "shape": 0}
     # The drawing's file stays.
     assert (base / "assets" / "module.svg").is_file()
@@ -147,6 +151,7 @@ def test_every_drawing_in_the_deck_at_once(tmp_path: Path) -> None:
     assert drawings_in(result["document"]) == []
     assert [shape["id"] for shape in (slides[1]["shapes"][0], slides[2]["shapes"][0])] == ["module", "other"]
     assert result["made"] == 2 and result["said"].startswith("2 drawings on 2 slides made editable")
+    assert result["hint"] == "Double-click one to choose its pieces one by one"
     assert slides[0] == document["slides"][0]
     with pytest.raises(EditError, match="No slide has a drawing"):
         DeckKind().act(result["document"], {"do": "editable", "all": True}, base)
