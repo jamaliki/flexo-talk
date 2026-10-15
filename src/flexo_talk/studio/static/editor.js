@@ -1931,6 +1931,8 @@ export function mount(studio, container) {
     const room = stage.getBoundingClientRect();
     const width = Math.max(320, Math.min(room.width - 80, (room.height - 110) * 16 / 9));
     stage.style.setProperty("--slide-max", `${width}px`);
+    // (Its width inside its padding: under 820 points, nothing said under the slide. editor.css)
+    stage.classList.toggle("narrow", room.width - 80 <= 820);
   }
   new ResizeObserver(() => { fitStage(); placeChosen(); placeOthers(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline(); }).observe(stage);
 
