@@ -1933,7 +1933,7 @@ def _draw_shapes(canvas: _Canvas, slide: Slide, behind: ET.Element | None) -> li
     # What lines are glued to is drawn first, as far as its place goes: its box, its words'.
     sized: dict[str, tuple[float, float]] = {}
     for ident, shape in _shape_names(ids).items():
-        if freeform.family(str(shape["kind"])) in ("box", "text"):
+        if freeform.family(str(shape["kind"])) in ("box", "text", "path"):
             if shape["kind"] == "text":
                 sized[ident] = _text_box_size(canvas, freeform.normalised(shape), scale)
             targets[ident] = freeform.target_of(shape, freeform.geometry(shape, size=sized.get(ident)))
@@ -2026,7 +2026,8 @@ def _shape_size(canvas: _Canvas, shape: dict, scale: float) -> float:
 
     style = canvas.deck.style
     kind = shape.get("kind")
-    points = style.body_size if kind == "text" else style.body_size * 0.9 if kind in BOXED else style.small_size * 1.1
+    inside = kind in BOXED or kind == "path"
+    points = style.body_size if kind == "text" else style.body_size * 0.9 if inside else style.small_size * 1.1
     return round(points / scale, 2)
 
 

@@ -308,7 +308,8 @@ class DeckKind:
             "slide): " + "; ".join(f"{name}: {', '.join(kinds)}" for name, kinds in SECTIONS)
             + f". Every shape takes {', '.join(COMMON_SHAPE_KEYS)} and on a slide {', '.join(SHAPE_KEYS)}; "
             "lines from, to; polyline and pen points, closed; boxes at, size, rotate, flip; text at, width, rotate; "
-            "group shapes. Each kind's own: "
+            "path d (SVG path data, every command, holes as further pieces; no at or size: its box is what it "
+            "draws), fill_rule (nonzero, evenodd), rotate, flip; group shapes. Each kind's own: "
             + "; ".join(f"{kind}: {', '.join(own)}" for kind in KINDS
                         if (own := [key for key in keys_of(kind) if key not in COMMON_SHAPE_KEYS and key not in
                                     ("kind", "id", "from", "to", "points", "closed", "at", "size", "rotate", "flip",

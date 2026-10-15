@@ -951,7 +951,7 @@ export function mount(studio, container) {
     words: (options) => richText(options),
     wordSize: (spec) => {
       const sizes = studio.info?.sizes || { body: 20, small: 14 }, k = shapeScale();
-      return spec.kind === "text" ? sizes.body / k : BOXED.includes(spec.kind) ? sizes.body * 0.9 / k : sizes.small * 1.1 / k;
+      return spec.kind === "text" ? sizes.body / k : BOXED.includes(spec.kind) || spec.kind === "path" ? sizes.body * 0.9 / k : sizes.small * 1.1 / k;
     },
     verb: "Add", noun: "slide", crumb: () => `Slide ${state.slide + 1}`, source: () => `slide:${state.slide}`,
     ownKeys: ["behind", "build", "hidden", "locked"],
