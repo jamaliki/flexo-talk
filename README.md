@@ -561,7 +561,17 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   Return, **Done** or a click elsewhere keeps the crop (`crop: [x, y, width, height]`,
   fractions of the whole picture), Esc leaves it as it was. Its panel crops it to a
   square, 4:3, 16:9 or a circle at once (`mask: circle`), or back to the whole
-  (**Original**). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  (**Original**). **Mask with Shape** (Format) shows a picture only inside the closed
+  shape drawn over it, as Keynote's does -- the shape is the picture's then (`mask:
+  {kind: star}`), moved, sized and cropped again with it -- and **Unmask** shows it whole.
+  **Add Zoom Inset** (Insert), a picture, a figure or a plot chosen, puts a box beside it
+  showing its middle magnified, a frame round that region and two lines joining them
+  (`{kind: inset, of: "body[0]", region: [x, y, w, h]}`): drag the region's corners or its
+  middle on the object, and the box as any shape; its panel draws the frame and the lines
+  in their own colours, widths and dashes. **Copy Style** and **Paste Style** (⌥⌘C, ⌥⌘V)
+  put one shape's fill, line, dash, arrowheads, shadow, opacity and words' look on the
+  shapes chosen -- and a figure's part's tone, own colours, outline and words' look on
+  other parts, or either on the other where it maps (an accent is a tone). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere: a drawing
   copied in Inkscape is pasted as the SVG it is (in the Mac app), its lines and words

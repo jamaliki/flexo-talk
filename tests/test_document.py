@@ -3379,7 +3379,7 @@ def test_a_crop_that_keeps_no_part_of_the_picture_says_what_a_crop_is(tmp_path: 
         deck_from_document(document, tmp_path)
     assert re.search(said, str(caught.value))
     document["slides"][0]["body"][0] = {"image": "wide.png", "mask": "oval"}
-    with pytest.raises(DeckDocumentError, match="mask must be one of circle, not 'oval'"):
+    with pytest.raises(DeckDocumentError, match="mask must be circle, or a closed shape such as"):
         deck_from_document(document, tmp_path)
 
 

@@ -117,6 +117,21 @@ the exports; ``locked: true`` keeps it where it is in the studio. In a PowerPoin
 PowerPoint's own shape -- a preset where it has one, its words in it, a glued line a
 connector joined to its shapes.
 
+A zoom inset is a shape too: part of a picture, a figure or a plot (``of``, named as an end
+glued to an object is) shown magnified in its box, a frame round that ``region`` (x, y, width,
+height, fractions of it) and two lines joining them::
+
+  - {kind: inset, of: "left[0]", region: [0.55, 0.3, 0.2, 0.15], at: [600, 280], size: [280, 210],
+     frame_line: accent2, connector_dash: dashed, text: b}
+
+Its ``line``, ``line_width`` and ``dash`` are its box's outline; ``frame_line``,
+``frame_width``, ``frame_dash`` and ``connector_line`` (``none``: no lines), ``connector_width``,
+``connector_dash`` draw its pieces, as its outline unless said. In a PowerPoint what it shows is
+a picture -- a photograph cropped natively, anything else a picture of its vectors -- and its
+pieces PowerPoint's own shapes. A picture's ``mask`` may be a closed shape instead of
+``circle`` (``mask: {kind: star, tips: 6}``), its places fractions of the part kept: the
+picture shows only inside it, in every output (in a PowerPoint, a picture in a freeform).
+
 A slide of columns (``two-columns``, ``columns``) may be set in rows: ``rows`` lists
 the rows' labels (``rows: ["", Mechanism, Geometry]``; ``""`` for a row without one).
 Block *i* of every column is then in row *i*: each row's blocks start on one line, and

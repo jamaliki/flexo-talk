@@ -308,6 +308,18 @@ def _crop(value: object) -> tuple[float, float, float, float] | None:
     return x, y, min(width, 1.0 - x), min(height, 1.0 - y)
 
 
+def _mask(value: object) -> str | dict | None:
+    """A picture's mask: ``circle``, a closed shape it is shown within (``flexo.masks``), or none."""
+
+    from flexo.freeform import ShapeError
+    from flexo.masks import checked
+
+    try:
+        return checked(value)
+    except ShapeError as error:
+        raise SettingError(error.key, error.message) from None
+
+
 def _flag(value: object, what: str) -> bool:
     if not isinstance(value, bool):
         raise SettingError(what, f"{what} must be true or false, not {value!r}.")
@@ -516,8 +528,9 @@ class _Image:
     crop: tuple[float, float, float, float] | None = None
     """The part of it kept, ``(x, y, width, height)`` as fractions of the whole picture
     (Keynote's mask): its size and proportions are that part's. ``None`` keeps it whole."""
-    mask: str | None = None
-    """``circle``: what is kept drawn round -- a circle, kept square; an oval, else."""
+    mask: str | dict | None = None
+    """``circle``: what is kept drawn round -- a circle, kept square; an oval, else. Or a
+    closed shape (``flexo.masks``) it is shown within: Keynote's Mask with Shape."""
     restyle: Restyle = field(default_factory=Restyle)
     """An SVG's words and colours as they are drawn (``flexo.restyle``): its font -- the
     deck's figure font unless it says -- and its texts and colours changed."""
@@ -1328,7 +1341,7 @@ class Region:
 
     def image(
         self, source: str | Path, *, width: float | None = None, description: str | None = None,
-        caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | None = None,
+        caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | dict | None = None,
         font: str | None = None, texts: Sequence[dict] | None = None, colours: dict[str, str] | None = None,
     ) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
@@ -1341,7 +1354,11 @@ class Region:
         The part kept is the picture then -- its size, its proportions, what ``width``
         sizes -- the rest is there still, to be shown again (a native crop in PowerPoint;
         a cropped SVG is drawn as a picture, not as shapes). ``mask="circle"`` draws it
-        round: a circle where what is kept is square, an oval where it is not.
+        round: a circle where what is kept is square, an oval where it is not. A closed
+        shape shows it within that shape instead, as Keynote's Mask with Shape does
+        (``flexo.masks``): ``mask={"kind": "star", "tips": 6}`` fills the part kept;
+        its places are fractions of that part (``{"kind": "polyline", "points": [[0, 0],
+        [1, 0], [0.5, 1]]}``).
 
         An SVG's words are set in the deck's figure font, the same in every output (the
         fonts its file names are found nowhere else); ``font="drawn"`` keeps the faces it
@@ -1357,7 +1374,7 @@ class Region:
         description = " ".join(str(description).split()) if description is not None else ""
         held, caption = caption == "", _caption(caption)
         crop = _crop(crop)
-        mask = None if mask is None else _choice(mask, "mask", ("circle",))
+        mask = _mask(mask)
         try:
             restyle = restyle_of(font, texts, colours)
         except ValueError as error:
@@ -1718,7 +1735,7 @@ class Slide:
 
     def image(
         self, source: str | Path, *, width: float | None = None, description: str | None = None,
-        caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | None = None,
+        caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | dict | None = None,
         font: str | None = None, texts: Sequence[dict] | None = None, colours: dict[str, str] | None = None,
     ) -> Slide:
         next(iter(self.regions.values())).image(
@@ -2488,6 +2505,9 @@ class ShapeLayout:
     the id it is drawn with, and the side -- else ``None``."""
     children: list[ShapeLayout] = field(default_factory=list)
     """A group's shapes."""
+    inset: object = None
+    """A zoom inset as it was placed (``flexo.insets.Placed``): its box, its region, the
+    lines joining them -- ``None`` for any other shape, or an inset of nothing."""
 
 
 @dataclass(slots=True)

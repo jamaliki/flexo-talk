@@ -318,7 +318,10 @@ class DeckKind:
             "written in a slide takes a shapes list too, each attached to its parts (on: part, around: [parts], an "
             "end's {part: id}) so they follow them as it is laid out for the slide. A diagram pasted onto a slide as "
             "shapes (boxes with words, arrows between them) becomes a figure on it, in the deck's theme, with the "
-            "convert_to_figure_parts tool.\n"
+            "convert_to_figure_parts tool. A zoom inset (kind: inset, of: "
+            "body[0], region: [x, y, width, height] as fractions of that picture, figure or plot, at, size) shows "
+            "that region magnified in its box, joined to it by two lines; a picture's mask may be a closed shape "
+            "({kind: star}, its places fractions of the part kept) as well as circle.\n"
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )
