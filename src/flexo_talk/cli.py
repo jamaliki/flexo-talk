@@ -10,6 +10,7 @@ or a function called ``talk`` by default) or as a module-level ``deck``; a
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import os
 import sys
@@ -55,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("-o", "--output", default="build", help="directory to write into (default: build)")
     build.add_argument("--theme", help="pass a theme name to the deck function")
     build.add_argument("--formats", default=",".join(FORMATS), help=f"comma-separated: {', '.join(FORMATS)}")
+    build.add_argument("--trust", action="store_true",
+                       help="run the Python a bundle (.flexo) brings: only for a bundle you trust")
     convert = commands.add_parser("convert", help="write a Python deck as a deck document (YAML or JSON)")
     convert.add_argument("deck", help="deck.py, or deck.py:function")
     convert.add_argument("-o", "--output", help="the document to write (default: the deck's file, as .yaml)")
@@ -72,12 +75,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command == "convert":
             return _convert(arguments)
-        deck = load_deck(arguments.deck, arguments.theme)
-        # A slide skipped (Keynote's Skip Slide) is left out, as the studio's export leaves it.
-        deck.slides = [slide for slide in deck.slides if not (getattr(slide, "source", None) or {}).get("skip")]
-        if not deck.slides:
-            raise ValueError("Every slide is skipped: there is nothing to build.")
-        result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
+        with _bundled(arguments) as target:
+            deck = load_deck(target, arguments.theme)
+            # A slide skipped (Keynote's Skip Slide) is left out, as the studio's export leaves it.
+            deck.slides = [slide for slide in deck.slides if not (getattr(slide, "source", None) or {}).get("skip")]
+            if not deck.slides:
+                raise ValueError("Every slide is skipped: there is nothing to build.")
+            result = deck.build(arguments.output, formats=tuple(arguments.formats.split(",")))
     except KeyboardInterrupt:
         return 130
     except Exception as error:
@@ -88,6 +92,39 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(result.summary())
     return 0
+
+
+@contextlib.contextmanager
+def _bundled(arguments: argparse.Namespace):
+    """The deck to build: as named, or a bundle's (``talk.flexo``), unpacked aside for the
+    while, read there and nowhere else, its Python run only with ``--trust``."""
+
+    if not arguments.deck.lower().endswith(".flexo"):
+        yield arguments.deck
+        return
+    import tempfile
+
+    from flexo.bundle import Bundle, runs_python
+    from flexo.confine import folder_root
+    from flexo.studio import code_allowed
+
+    source = Path(arguments.deck)
+    with tempfile.TemporaryDirectory(prefix="flexo-bundle-") as aside:
+        with Bundle(source) as opened:
+            python = runs_python(opened)
+            if python and not arguments.trust:
+                raise ValueError(
+                    f"{source.name} runs Python ({', '.join(python[:3])}). Build it with --trust if you trust "
+                    "where it came from."
+                )
+            opened.extract(aside)
+            document = Path(aside) / opened.document
+        root, allowed = folder_root.set(Path(aside).resolve()), code_allowed.set(bool(arguments.trust))
+        try:
+            yield str(document)
+        finally:
+            folder_root.reset(root)
+            code_allowed.reset(allowed)
 
 
 def _said(error: BaseException, target: str) -> str:

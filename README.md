@@ -674,7 +674,16 @@ flexo-talk build talk.py:results -o out --formats pptx,pdf --theme dark
 flexo-talk build talk.yaml            # a deck document
 flexo-talk convert talk.py            # talk.py's deck as talk.yaml
 flexo-talk studio talk.yaml           # edit it in the browser (made if missing)
+flexo bundle talk.yaml -o talk.flexo  # the deck and every file it names, as one file to send
+flexo-talk build talk.flexo --trust   # built straight from a bundle, its plots' Python run
+flexo-talk studio talk.flexo          # edited as a folder, saved back into the bundle
 ```
+
+A bundle (`.flexo`, see flexo's README) holds the deck and every file it names: its theme
+and palette files, pictures, logos and backgrounds, figure files (and theirs), plots' Python
+(and the modules and data it reads), structures, maps, scenes and the pictures kept from
+drawings pasted in. In Flexo Studio, File › Save as Bundle… makes one, File › New Bundle…
+starts a talk as one, and a bundle double-clicked in the Finder opens as a folder does.
 
 ## Development
 

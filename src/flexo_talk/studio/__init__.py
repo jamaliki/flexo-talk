@@ -290,6 +290,13 @@ class DeckKind:
     def parse(self, text: str) -> Any:
         return parse_document(text)
 
+    def references(self, data: Any, base: Path) -> list[Any]:
+        """The files a deck document (as it reads) names, for a bundle of it."""
+
+        from flexo_talk.bundling import references
+
+        return references(data, base)
+
     def guide(self) -> str:
         import flexo_talk.document as module
 
