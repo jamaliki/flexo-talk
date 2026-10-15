@@ -2676,8 +2676,9 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
     that names it; a line on the later of its ends' (or its own); a group's own box with
     the first of what it holds, if all of that waits for a click; a frame with the last of
     what it goes round -- and a line that ends at a frame with the frame, as one that ends
-    at a shape with the shape. A group's box is keyed ``"<id> box"``: its pieces, not what
-    it holds."""
+    at a shape with the shape; a shape drawn over the figure (``shapes.2``, or its id) with
+    the last of the parts it is attached to, or on its own click. A group's box is keyed
+    ``"<id> box"``: its pieces, not what it holds."""
 
     from flexo.frames import FRAME_KIND, around
 
@@ -2727,6 +2728,24 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
     for frame, click in framed.items():
         if click:
             steps[frame] = click
+    # A shape drawn over the figure (flexo.figure_shapes) on the click that names it, else with
+    # the last of the parts it is on, round or glued to (a piece of one, with its part).
+    from flexo.figure_shapes import attached, name_of
+
+    nodes = [node.id for node in spec.nodes]
+
+    def part(name: str) -> str:
+        if name in named or name in framed:
+            return name
+        return next((node for node in nodes if name.startswith(f"{node}.")), name)
+
+    for index, shape in enumerate(getattr(spec, "shapes", ()) or ()):
+        written = shape.spec
+        if not written:
+            continue
+        name = name_of(written, index)
+        if (click := max(at(part(end)) for end in [*attached(written), name])) > 0:
+            steps[name] = click
     return steps
 
 

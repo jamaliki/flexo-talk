@@ -314,7 +314,9 @@ class DeckKind:
                                     ("kind", "id", "from", "to", "points", "closed", "at", "size", "rotate", "flip",
                                      "width")]))
             + ". To point at, ring, bracket or label part of a figure or picture, draw a shape over it rather "
-            "than change the figure.\n"
+            "than change the figure. A figure's own marks, which go wherever it is shown, are its shapes: a figure "
+            "written in a slide takes a shapes list too, each attached to its parts (on: part, around: [parts], an "
+            "end's {part: id}) so they follow them as it is laid out for the slide.\n"
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )

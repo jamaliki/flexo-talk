@@ -184,6 +184,8 @@ def write_pptx(
         formulas = _drop_lists(drawing.root)
         # The slide's shapes are PowerPoint's own (pptx_shapes): their drawing goes.
         _drop_shapes(drawing.root)
+        # (Those drawn over a figure on it are the figure's drawing: named for their kinds.)
+        drawn_over = _drawn_over(drawing.root)
         _dissolve_regions(drawing.root)
         under, headings = _take_headings(drawing.root, item)
         # The layout the slide's headings come from: a content slide's titled, or blank.
@@ -260,7 +262,7 @@ def write_pptx(
             # Last, as nothing more finds a shape by its id: each named as a person would.
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
                                for region in item.slide.regions.values() for index, block in enumerate(region.blocks)},
-                        shapes=_shape_names(item.shapes))
+                        shapes={**drawn_over, **_shape_names(item.shapes)})
     buffer = BytesIO()
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())
@@ -314,6 +316,22 @@ def _drop_shapes(group: Group) -> None:
     for item in group.items:
         if isinstance(item, Group):
             _drop_shapes(item)
+
+
+def _drawn_over(group: Group) -> dict[str, str]:
+    """The shapes drawn over the slide's figures (``flexo.figure_shapes``), by the ids their
+    drawing has here: each named for its kind, as the studio names it ("Highlight Ring")."""
+
+    from flexo.freeform import LABELS
+
+    names: dict[str, str] = {}
+    for item in group.items:
+        kind = item.data.get("data-flexo-shape") if isinstance(item, Group) else None
+        if kind and item.id:
+            names[item.id] = LABELS.get(kind, "Shape")
+        if isinstance(item, Group):
+            names |= _drawn_over(item)
+    return names
 
 
 def _shape_names(layouts: list) -> dict[str, str]:
