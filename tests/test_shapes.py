@@ -275,7 +275,8 @@ def test_the_studio_offers_every_kind_and_says_how_to_write_them() -> None:
     offered = [name for section in shapes["sections"] for name in section["kinds"]]
     from flexo.freeform import KINDS
 
-    assert sorted(offered) == sorted(KINDS)
+    # (All but a zoom inset, added for what it magnifies: Add Zoom Inset.)
+    assert sorted(offered) == sorted(kind for kind in KINDS if kind != "inset")
     assert shapes["frame"] == 960 and "build" in shapes["slide_keys"]
     guide = kind.guide()
     assert "Shapes (a slide's shapes" in guide and "curved-arrow: bend, lean" in guide

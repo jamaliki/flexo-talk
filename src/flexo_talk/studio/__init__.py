@@ -316,7 +316,10 @@ class DeckKind:
             + ". To point at, ring, bracket or label part of a figure or picture, draw a shape over it rather "
             "than change the figure. A figure's own marks, which go wherever it is shown, are its shapes: a figure "
             "written in a slide takes a shapes list too, each attached to its parts (on: part, around: [parts], an "
-            "end's {part: id}) so they follow them as it is laid out for the slide.\n"
+            "end's {part: id}) so they follow them as it is laid out for the slide. A zoom inset (kind: inset, of: "
+            "body[0], region: [x, y, width, height] as fractions of that picture, figure or plot, at, size) shows "
+            "that region magnified in its box, joined to it by two lines; a picture's mask may be a closed shape "
+            "({kind: star}, its places fractions of the part kept) as well as circle.\n"
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )

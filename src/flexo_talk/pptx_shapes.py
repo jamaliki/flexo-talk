@@ -63,6 +63,10 @@ class ShapeWriter:
         """Connectors' ends waiting for the shape they are glued to to be written (one later
         in the list, or over the slide's words where the line is behind them): the
         connector's properties, which end, the shape, and its side."""
+        self.views: dict = {}
+        """What each zoom inset shows, by its id: its view, as the slide's drawing reads it."""
+        self.pictures = None
+        """Adds a picture to the slide (``pptx.slide_pictures``): a zoom inset's view."""
 
     def number(self) -> int:
         self.next += 1
@@ -111,6 +115,11 @@ class ShapeWriter:
         if kind == "group":
             parts = [part for child in layout.children for part in self._shape(child)]
             return [self._group(parts, layout.id)] if parts else []
+        if kind == "inset":
+            from flexo_talk.pptx_insets import inset_parts
+
+            parts = inset_parts(self, layout, placement)
+            return [self._group(parts, layout.id)] if len(parts) > 1 else parts
         form = freeform.family(kind)
         if form in ("box", "text"):
             return [self._boxed(layout, placement)]

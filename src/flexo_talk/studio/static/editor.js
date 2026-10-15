@@ -15,6 +15,9 @@ import { follows, merge3 } from "/static/studio/merge.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import { shapeEditor } from "/static/studio/shapes.js";
 import { BOXED } from "/static/studio/freeform.js";
+import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
+import { outline as maskOutline } from "/static/studio/masks.js";
+import { pathData } from "/static/studio/freeform.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -631,12 +634,18 @@ export function mount(studio, container) {
   function keepGlue(was, slide) {
     if (!was || !slide || was === slide || !Array.isArray(slide.shapes)) return;
     const glued = (end) => end && typeof end === "object" && !Array.isArray(end) && end.object !== undefined;
-    const lines = (list) => list.flatMap((shape) => (shape?.kind === "group" ? lines(shape.shapes || []) : [shape])).filter((shape) => shape && (glued(shape.from) || glued(shape.to)));
+    const lines = (list) => list.flatMap((shape) => (shape?.kind === "group" ? lines(shape.shapes || []) : [shape])).filter((shape) => shape && (glued(shape.from) || glued(shape.to) || shape.kind === "inset"));
     if (!lines(slide.shapes).length) return;
     const old = partsOf(was), now = partsOf(slide);
     if (old.length === now.length && old.every((part, n) => part.region === now[n].region && part.block === now[n].block)) return;
     const map = follows(old.map((part) => part.block), now.map((part) => part.block));
     for (const line of lines(slide.shapes)) {
+      // (A zoom inset of an object follows it so: gone, it shows nothing.)
+      if (line.kind === "inset") {
+        const at = glueKey(line.of), k = at ? old.findIndex((part) => part.region === at.region && part.index === at.index) : -1;
+        if (k >= 0 && map[k] >= 0) line.of = glueName(now[map[k]]);
+        continue;
+      }
       for (const key of ["from", "to"]) {
         const end = line[key];
         if (!glued(end)) continue;
@@ -944,8 +953,11 @@ export function mount(studio, container) {
     ownKeys: ["behind", "build", "hidden", "locked"],
     grouped: (specs) => (specs.every((spec) => spec?.behind) ? { behind: true } : {}),
     ungrouped: (group) => ({ ...(group.behind ? { behind: true } : {}), ...(group.locked ? { locked: true } : {}), ...(group.hidden ? { hidden: true } : {}) }),
+    // What a zoom inset magnifies, and Mask with Shape with a shape over a picture (zoom.js).
+    insetSource: (spec) => pictureTools.insetSource(spec),
     // A slide's own: built in on a click, hidden from the show.
     commands: (picks, name, { set }) => [
+      ...(picks.length === 1 && pictureTools.maskPair({ shape: picks[0] }) ? [{ icon: "image", label: "Mask with Shape", hint: "The picture under it, shown only inside it", run: () => pictureTools.maskWith(pictureTools.maskPair({ shape: picks[0] })) }] : []),
       { icon: "reveal", label: everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click", hint: name, run: () => set({ build: !everyShape(picks, "build") }, everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click") },
       { icon: "eye", label: everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape", hint: name, run: () => set({ hidden: !everyShape(picks, "hidden") }, everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape") },
     ],
@@ -956,6 +968,15 @@ export function mount(studio, container) {
       ui.toggle({ value: everyShape(picks, "hidden"), label: "Hidden", key: "shape.hidden",
         onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
       h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
+  });
+
+  // A slide's zoom insets, and its pictures masked by shapes: what they need of the editor.
+  const pictureTools = slideTools({
+    slideAt: () => slideAt(), blocksAt: (slide, key) => blocksAt(slide, key), kindOf: (block) => kindOf(block), regionsOf: (slide) => regionsOf(slide),
+    blockElement: (region, index) => blockElement(region, index), pictureOf: (element) => pictureOf(element), glueKey, glueName,
+    shapeScale: () => shapeScale(), frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()],
+    editSlide: (mutate, options) => editSlide(mutate, options), setOption, widthWithin: (at, width) => widthWithin(at, width),
+    chooseShape: (index) => { freeShapes.choose([index]); placeChosen(); },
   });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
@@ -3141,7 +3162,9 @@ export function mount(studio, container) {
     const crop = cropOf(block);
     const keep = { x: whole.x + crop.x * whole.w, y: whole.y + crop.y * whole.h, w: crop.w * whole.w, h: crop.h * whole.h };
     const shown = { x: whole.x, y: whole.y, w: whole.w, h: whole.h };
-    cropping = { at: { ...at }, slide: state.slide, block, element, whole: shown, keep, mask: block.mask === "circle" ? "circle" : null,
+    // (Masked by a shape, the shape goes with what is kept: flexo.masks.)
+    const mask = block.mask === "circle" ? "circle" : block.mask && typeof block.mask === "object" ? block.mask : null;
+    cropping = { at: { ...at }, slide: state.slide, block, element, whole: shown, keep, mask,
       started: { whole: { ...shown }, keep: { ...keep } }, drawn: whole.drawn, base: whole.w, drag: null, done: false };
     cropMount();
     window.addEventListener("keydown", cropKey, true);
@@ -3157,8 +3180,9 @@ export function mount(studio, container) {
     const root = pageNode?.querySelector("svg");
     if (!was || !root) return;
     was.element.style.visibility = "hidden";
-    const kept = was.mask ? svgNode("ellipse") : svgNode("rect");
-    const outline = was.mask ? svgNode("ellipse", { class: "crop-oval" }) : null;
+    const shaped = was.mask && typeof was.mask === "object";
+    const kept = shaped ? svgNode("path") : was.mask ? svgNode("ellipse") : svgNode("rect");
+    const outline = shaped ? svgNode("path", { class: "crop-oval" }) : was.mask ? svgNode("ellipse", { class: "crop-oval" }) : null;
     // (The picture as it was drawn, moved and scaled to where it is panned and zoomed to.)
     const shifts = [svgNode("g", {}, was.drawn), svgNode("g", {}, was.drawn.cloneNode(true))];
     const faint = svgNode("g", { class: "crop-faint" }, shifts[0]);
@@ -3169,7 +3193,7 @@ export function mount(studio, container) {
     for (const type of ["click", "dblclick", "contextmenu"]) svg.addEventListener(type, (event) => event.stopPropagation());
     was.view = { svg, kept, outline, root, shifts };
     pageNode.append(svg, cropFrame, cropBar);
-    cropFrame.classList.toggle("round", Boolean(was.mask));
+    cropFrame.classList.toggle("round", was.mask === "circle");
     placeCrop();
   }
 
@@ -3180,9 +3204,10 @@ export function mount(studio, container) {
     const { keep, whole } = was, { kept, outline, root, shifts } = was.view, start = was.started.whole;
     const shift = `translate(${whole.x} ${whole.y}) scale(${whole.w / start.w}) translate(${-start.x} ${-start.y})`;
     for (const node of shifts) node.setAttribute("transform", shift);
-    const shape = was.mask
-      ? { cx: keep.x + keep.w / 2, cy: keep.y + keep.h / 2, rx: keep.w / 2, ry: keep.h / 2 }
-      : { x: keep.x, y: keep.y, width: keep.w, height: keep.h };
+    const shape = was.mask && typeof was.mask === "object" ? { d: pathData(maskOutline(was.mask, [keep.x, keep.y, keep.w, keep.h])) }
+      : was.mask
+        ? { cx: keep.x + keep.w / 2, cy: keep.y + keep.h / 2, rx: keep.w / 2, ry: keep.h / 2 }
+        : { x: keep.x, y: keep.y, width: keep.w, height: keep.h };
     for (const [name, value] of Object.entries(shape)) { kept.setAttribute(name, value); outline?.setAttribute(name, value); }
     if (was.done) { cropFrame.remove(); cropBar.remove(); return; }
     const matrix = root.getScreenCTM(), outer = pageNode.getBoundingClientRect();
@@ -3322,7 +3347,7 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt() || {}, was.at.region)[was.at.index];
     const before = cropOf(block);
     const after = { crop: whole ? null : crop, mask: whole ? null : was.mask };
-    if (!block || kindOf(block) !== "image" || (same(after.crop ?? null, block.crop ?? null) && (after.mask ?? null) === (block.mask ?? null))) { cropCancel(); return; }
+    if (!block || kindOf(block) !== "image" || (same(after.crop ?? null, block.crop ?? null) && same(after.mask ?? null, block.mask ?? null))) { cropCancel(); return; }
     // Sized by the frame, the part kept is drawn as large as the frame was; a crop taken away
     // leaves the picture at the scale it was drawn.
     const sized = Math.abs(was.keep.w - was.started.keep.w) > 0.5 || Math.abs(was.keep.h - was.started.keep.h) > 0.5;
@@ -3889,7 +3914,10 @@ export function mount(studio, container) {
       // (Not a picture whose file is missing: there is nothing drawn to crop.)
       if (pictureAspect(at)) items.push({ icon: "crop", label: "Crop…", run: () => startCrop(at) });
       if (block.crop != null || block.mask != null) items.push({ icon: "refresh", label: "Reset Crop", run: () => resetCrop(at) });
+      if (pictureTools.maskPair({ place: at })) items.push({ icon: "image", label: "Mask with Shape", run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) });
+      if (pictureTools.masked(at)) items.push({ icon: "refresh", label: "Unmask", run: () => pictureTools.unmask(at) });
     }
+    if (MAGNIFIED.has(kind) && pictureTools.canInset(at)) items.push({ icon: "plus", label: "Add Zoom Inset", run: () => pictureTools.addInset(at) });
     if (items.length) items.push("-");
     items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => duplicateBlock(at) });
     items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
@@ -10144,6 +10172,13 @@ export function mount(studio, container) {
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "text") }] : []),
       ...(kind === "image" && pictureAspect(at) ? [{ icon: "crop", label: "Crop Picture…", hint: name, run: () => startCrop(at) }] : []),
       ...(kind === "image" && (block.crop != null || block.mask != null) ? [{ icon: "refresh", label: "Reset Crop", hint: name, run: () => resetCrop(at) }] : []),
+      // Insert › Zoom Inset and Format › Mask with Shape, Unmask (zoom.js).
+      ...(MAGNIFIED.has(kind) && pictureTools.canInset(at) ? [{ icon: "plus", label: "Add Zoom Inset", hint: name, run: () => pictureTools.addInset(at) }] : []),
+      ...(kind === "image" && pictureTools.maskPair({ place: at }) ? [{ icon: "image", label: "Mask with Shape", hint: `${name}, by the shape over it`, run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) }] : []),
+      ...(kind === "image" && pictureTools.masked(at) ? [{ icon: "refresh", label: "Unmask", hint: name, run: () => pictureTools.unmask(at) }] : []),
+      // Format › Copy Style and Paste Style, of a figure's shapes chosen.
+      ...(parts?.canCopyStyle?.() ? [{ icon: "copy", label: "Copy Style", keys: "⌥⌘C", run: () => parts.copyStyle() }] : []),
+      ...(parts?.canPasteStyle?.() ? [{ icon: "paste", label: "Paste Style", keys: "⌥⌘V", run: () => parts.pasteStyle() }] : []),
       ...((SIZED.has(kind) || SIDEWAYS.has(kind) || CORNERED.has(kind)) && block.width != null ? [{ icon: "refresh", label: "Reset Size", hint: name, run: () => sizeFit() }] : []),
       // As the Mac app's Arrange menu names them; the hint says what they move.
       ...(at.index > 0 ? [{ icon: "up", label: "Move Up", keys: "⌥↑", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),
