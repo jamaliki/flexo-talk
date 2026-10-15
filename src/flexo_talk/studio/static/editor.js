@@ -962,6 +962,9 @@ export function mount(studio, container) {
     ungrouped: (group) => ({ ...(group.behind ? { behind: true } : {}), ...(group.locked ? { locked: true } : {}), ...(group.hidden ? { hidden: true } : {}) }),
     // What a zoom inset magnifies, and Mask with Shape with a shape over a picture (zoom.js).
     insetSource: (spec) => pictureTools.insetSource(spec),
+    // Format's inspector shown, where it was hidden or showing Design: Align and Distribute's
+    // ⇧⌘A goes there.
+    showPanel: () => { if (inspectorHidden || state.tab === "design") formatButton.click(); },
     // A slide's own: built in on a click, hidden from the show; and a diagram drawn of them
     // made a figure on the slide.
     commands: (picks, name, { set }) => [
