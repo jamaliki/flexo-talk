@@ -212,6 +212,7 @@ def write_pptx(
                 add_drawing(tree, Drawing(drawing.width, drawing.height, Group(None, [shape])), Placement(), **drawn)
             # Shapes behind the slide's words and objects, under them; those over them, last.
             shaped = ShapeWriter(tree, deck, _slide_palette(deck, item.slide))
+            shaped.pictures = drawn["pictures"]
             shaped.write([layout for layout in item.shapes if layout.behind])
             worded = {words.id: words for words in item.worded}
             span = (deck.style.margin, deck.style.width - deck.style.margin)

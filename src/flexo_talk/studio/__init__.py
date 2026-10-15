@@ -309,7 +309,11 @@ class DeckKind:
             + f". Every shape takes {', '.join(COMMON_SHAPE_KEYS)} and on a slide {', '.join(SHAPE_KEYS)}; "
             "lines from, to; polyline and pen points, closed; boxes at, size, rotate, flip; text at, width, rotate; "
             "path d (SVG path data, every command, holes as further pieces; no at or size: its box is what it "
-            "draws), fill_rule (nonzero, evenodd), rotate, flip; group shapes. Each kind's own: "
+            "draws), fill_rule (nonzero, evenodd), rotate, flip; picture at, size, source (a drawing's part kept "
+            "as drawn: an SVG or a bitmap beside the deck); group shapes. A fill may be a gradient: {gradient: "
+            "linear, angle: 90, stops: [[0, accent], [1, '#ffffff']]} or {gradient: radial, centre: [0.5, 0.5], "
+            "radius: 0.5, stops: ...}; a dash solid, dashed, dotted or its own lengths, [6, 3]; line_opacity a "
+            "line fainter than its fill. Each kind's own: "
             + "; ".join(f"{kind}: {', '.join(own)}" for kind in KINDS
                         if (own := [key for key in keys_of(kind) if key not in COMMON_SHAPE_KEYS and key not in
                                     ("kind", "id", "from", "to", "points", "closed", "at", "size", "rotate", "flip",

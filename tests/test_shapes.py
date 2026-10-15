@@ -276,8 +276,9 @@ def test_the_studio_offers_every_kind_and_says_how_to_write_them() -> None:
     offered = [name for section in shapes["sections"] for name in section["kinds"]]
     from flexo.freeform import KINDS
 
-    # (A path is drawn by a tool of its own, or written: it is not offered among the others.)
-    assert sorted([*offered, "path"]) == sorted(KINDS)
+    # (A path is drawn by a tool of its own, or written, and a picture is a drawing's part made
+    # by its paste: neither is offered among the others.)
+    assert sorted([*offered, "path", "picture"]) == sorted(KINDS)
     assert shapes["frame"] == 960 and "build" in shapes["slide_keys"]
     guide = kind.guide()
     assert "Shapes (a slide's shapes" in guide and "curved-arrow: bend, lean" in guide
