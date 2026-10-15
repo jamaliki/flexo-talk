@@ -24,7 +24,8 @@ in a slide of columns, the other column stays as it was. The drawing's file stay
 folder. ``{"do": "editable", "at": {"slide", "region", "index"}}`` makes one picture
 editable; ``{"do": "editable", "all": true}`` every drawing placed as a picture in the deck.
 One step either way, answered with the deck as it is then, the group chosen (``select``) and
-what was done in words (``said``).
+what was done in words (``said``), ending with how its pieces are reached (``hint``: a
+double-click enters the group, as Inkscape's).
 """
 
 from __future__ import annotations
@@ -131,13 +132,15 @@ def editable(document: dict[str, Any], action: Mapping[str, Any], base: Path) ->
     words = [said, *dict.fromkeys(notes)]
     if failed:
         words.append(f"{len(failed)} could not be: " + "; ".join(failed))
-    # (Each drawing is one group, chosen: its pieces are a step away.)
-    words.append("Ungroup (\u21e7\u2318G) to move its pieces one by one")
+    # (Each drawing is one group, chosen: its pieces a double-click away, the group entered.)
+    hint = f"Double-click {'one' if action.get('all') else 'it'} to choose its pieces one by one"
+    words.append(hint)
     first = made[0]
     return {
         "document": changed,
         "select": {"slide": first["slide"], "shape": first["at"]},
         "said": ". ".join(word.rstrip(".") for word in words) + ".",
+        "hint": hint,
         "made": len(made),
         "shapes": shapes,
         "failed": failed,

@@ -1024,6 +1024,8 @@ export function mount(studio, container) {
     studio, slideIndex: () => state.slide, regions: (slide) => regionsOf(slide).map((region) => region.key), blocksAt: (slide, key) => blocksAt(slide, key),
     apply: (document, label) => { state.focus = null; studio.change(() => document, { label, glued: true }); renderInspector(); reportFocus(); },
     chooseShapes: (_, indexes) => { freeShapes.choose(indexes); placeChosen(); },
+    // (Made by a double-click: the group entered where it was double-clicked, groups.js.)
+    enterShape: (index, at) => { const entered = freeShapes.enter(index, { at, deep: true }); placeChosen(); return entered; },
     away: (what) => awayFrom(what),
   });
 
@@ -3124,9 +3126,10 @@ export function mount(studio, container) {
   }
 
   // -- a picture, cropped as Keynote masks one --
-  // A picture double-clicked -- or chosen and Return pressed, or Crop… chosen from its menu or
-  // the inspector -- shows whole, faintly, round the part of it kept, which is framed with a
-  // handle at each corner and side. A handle crops that side (⇧ keeps the part's
+  // A picture double-clicked (but a drawing's, which is made its shapes: editable.js) -- or
+  // chosen and Return pressed, or Crop… chosen from its menu or the inspector -- shows whole,
+  // faintly, round the part of it kept, which is framed with a handle at each corner and
+  // side. A handle crops that side (⇧ keeps the part's
   // proportions); the frame dragged moves over the picture, the picture dragged moves under
   // the frame; the bar's slider zooms the picture in the frame. Return, Done or a click
   // elsewhere keeps the crop, one step in the history (Crop Picture); Esc leaves it as it
@@ -3852,7 +3855,11 @@ export function mount(studio, container) {
         if (cell) openInline({ kind: "cell", region: part.region, index: part.index, ...cell }, { at: point });
       }
       else if (block && kindOf(block) === "figure") focusBlock(part.region, part.index, () => figure.parts.dblclick(event));
-      // A picture is cropped, as Keynote's is masked.
+      // A drawing's picture is made its own shapes, and the group they are entered where it was
+      // double-clicked, its boxes, lines and words then chosen one by one (editable.js; Crop…
+      // is in its menu, its inspector and the palette, and Return crops it too).
+      else if (block && kindOf(block) === "image" && isDrawing(block)) editables.one({ region: part.region, index: part.index }, { enter: { clientX: event.clientX, clientY: event.clientY } });
+      // Any other picture is cropped, as Keynote's is masked.
       else if (block && kindOf(block) === "image") startCrop({ region: part.region, index: part.index });
       // A number, or its label, typed in where it is drawn.
       else if (block && kindOf(block) === "stats") {
@@ -6869,7 +6876,7 @@ export function mount(studio, container) {
   // or the logo chosen; none, the whole slide. (Several slides are no one drawing.)
   function drawingOf(clip) {
     const slide = `slide${state.slide + 1}`, prefix = clip.what === "parts" ? figurePrefix() : null;
-    const keep = clip.what === "shapes" ? freeShapes.chosen().map((index) => `${slide}.shapes.${index}`)
+    const keep = clip.what === "shapes" ? freeShapes.ids()
       : clip.what === "parts" && prefix ? [...clip.parts.top, ...(clip.parts.edges || []).map((edge) => edge.id), ...(clip.parts.nets || []).map((net) => net.id)].filter(Boolean).map((id) => prefix + id)
         : clip.what === "block" && clip.logo !== undefined ? [`${slide}.logo${clip.logo}`]
           : clip.what === "block" && state.focus ? [blockElement(state.focus.region, state.focus.index)?.id]
@@ -8730,7 +8737,7 @@ export function mount(studio, container) {
     return [shown,
       fileRow(block.image, ["image"], (path) => replacePicture(at, path), "picture.png"),
       // A drawing's picture, made its own shapes where it is (editable.js).
-      isDrawing(block) && ui.field("Shapes", ui.button("Make Editable", () => editables.one(at), { small: true, icon: "shape", title: "The drawing as its own shapes, where it is" }),
+      isDrawing(block) && ui.field("Shapes", ui.button("Make Editable", () => editables.one(at), { small: true, icon: "shape", title: "The drawing as its own shapes, where it is (or double-click it)" }),
         { hint: "Its boxes, lines and words, to drag and edit one by one" }),
       // As Keynote's mask: a quick shape, or the picture cropped by hand on the slide.
       aspect && ui.field("Crop", h("div.crop-field", {},
