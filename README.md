@@ -331,9 +331,13 @@ copy), sized by its handles (⇧ its proportions kept, ⌥ about its middle), tu
 handle over it (⇧ by 15°); a line by its ends, let go on a shape or an object to glue
 them, and a curve by its middle; a corner, a tail or a star's points by their own
 handles. Everything catches at the slide's edges and middles and at the other shapes' and
-objects', a guide drawn (⌘: none). The arrows nudge (⇧: ten points), a double-click types
-its words in it, ⇧-click or a band chooses several -- to align, distribute, group (⌘G),
-stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the inspector restyles them. A path's
+objects', a guide drawn (⌘: none). The magnet in the zoom bar -- or %, or the Mac app's
+View › Snap to Guides and Objects -- turns that off: nothing catches, and a line's end let
+go on a shape stays a point of its own (one glued before stays glued), ⌘ held catching and
+gluing for that drag. The studio remembers it, for every deck and figure. The arrows nudge
+(⇧: ten points), a double-click types its words in it, ⇧-click or a band chooses several --
+to align, distribute, group (⌘G), stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the
+inspector restyles them. A path's
 points are edited where it is (a double-click on it, or Format › Edit Points): its points and
 handles dragged (⌥: one handle alone), a point double-clicked made smooth or a corner, a
 click on its outline adding one, ⌫ deleting those chosen. Format › Make Editable makes any

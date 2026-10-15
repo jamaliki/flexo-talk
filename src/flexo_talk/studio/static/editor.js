@@ -19,8 +19,11 @@ import { BOXED } from "/static/studio/freeform.js";
 import { convertible, convertCommand } from "/static/studio/toparts.js";
 import { slideToParts } from "/static/kinds/deck/toparts.js";
 import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
+import { editableTools, isDrawing } from "/static/kinds/deck/editable.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
+import { magnetButton } from "/static/studio/magnet.js";
+import * as Snap from "/static/studio/snapping.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -1015,6 +1018,14 @@ export function mount(studio, container) {
     editSlide: (mutate, options) => editSlide(mutate, options), setOption, widthWithin: (at, width) => widthWithin(at, width),
     chooseShape: (index) => { freeShapes.choose([index]); placeChosen(); },
   });
+  // Make Editable: a drawing placed as a picture made the slide's own shapes, where it was
+  // drawn, and chosen -- one picture, or every one in the deck (editable.js).
+  const editables = editableTools({
+    studio, slideIndex: () => state.slide, regions: (slide) => regionsOf(slide).map((region) => region.key), blocksAt: (slide, key) => blocksAt(slide, key),
+    apply: (document, label) => { state.focus = null; studio.change(() => document, { label, glued: true }); renderInspector(); reportFocus(); },
+    chooseShapes: (_, indexes) => { freeShapes.choose(indexes); placeChosen(); },
+    away: (what) => awayFrom(what),
+  });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
   // half written does not read) waits until the typing pauses, or stops: it does not flash
@@ -1975,7 +1986,9 @@ export function mount(studio, container) {
     zoomValue,
     ui.button("", () => zoomIn(), { kind: "ghost", icon: "plus", small: true, title: "Zoom In (⌘+)" }),
     ui.button("Fit", () => fitSlide(), { kind: "ghost", small: true, title: "Fit Slide (⇧⌘0)" }),
-    ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }));
+    ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }),
+    // Snapping, on or off (%): the shapes', and objects' sizes (snapping.js).
+    h("span.zoom-sep"), magnetButton());
   // Clicked, a zoom button does not keep the keys (as a Mac window's toolbar buttons don't).
   for (const button of zoomBar.querySelectorAll("button")) button.addEventListener("mousedown", (event) => event.preventDefault());
   function showZoom() {
@@ -3023,10 +3036,11 @@ export function mount(studio, container) {
     if (!sizing.moved && Math.hypot(event.clientX - sizing.start.x, event.clientY - sizing.start.y) < 3) return;
     sizing.moved = true;
     let scale = scaleFor(event.clientX, event.clientY);
-    // It catches at the width of its place, and at the size it was -- ⌘ held, at neither.
-    const full = across / box.width;
-    if (!event.metaKey && full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
-    if (!event.metaKey && Math.abs(scale - 1) * box.width < 4) scale = 1;
+    // It catches at the width of its place, and at the size it was -- ⌘ held, at neither (with
+    // snapping off, only while ⌘ is held: snapping.js).
+    const full = across / box.width, caught = !Snap.free(event.metaKey);
+    if (caught && full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
+    if (caught && Math.abs(scale - 1) * box.width < 4) scale = 1;
     sizing.scale = scale;
     const at = sizing.place(scale), k = scaleOf(sizing.wrap);
     sizing.stand = at.stand;
@@ -3689,7 +3703,7 @@ export function mount(studio, container) {
     if (!it) return;
     if (!it.moved && Math.hypot(event.clientX - it.start.x, event.clientY - it.start.y) < 3) return;
     it.moved = true;
-    it.pointer = { x: event.clientX, y: event.clientY, free: event.metaKey };
+    it.pointer = { x: event.clientX, y: event.clientY, free: Snap.free(event.metaKey) };
     resizeDraw();
   }
   // It drawn at the width the pointer gives it, what follows it moved with it, its frame round
@@ -3771,7 +3785,7 @@ export function mount(studio, container) {
   function resizeKey(event) {
     // ⌘ pressed or let go: its catches off or on again, where the pointer is.
     if (event.key === "Meta") {
-      if (resizing?.moved && resizing.pointer) { resizing.pointer.free = event.type === "keydown"; resizeDraw(); }
+      if (resizing?.moved && resizing.pointer) { resizing.pointer.free = Snap.free(event.type === "keydown"); resizeDraw(); }
       return;
     }
     if (event.type !== "keydown" || event.key !== "Escape") return;
@@ -3953,6 +3967,8 @@ export function mount(studio, container) {
       if (block.crop != null || block.mask != null) items.push({ icon: "refresh", label: "Reset Crop", run: () => resetCrop(at) });
       if (pictureTools.maskPair({ place: at })) items.push({ icon: "image", label: "Mask with Shape", run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) });
       if (pictureTools.masked(at)) items.push({ icon: "refresh", label: "Unmask", run: () => pictureTools.unmask(at) });
+      // A drawing's picture, as its shapes to drag one by one (editable.js).
+      if (isDrawing(block)) items.push({ icon: "shape", label: "Make Editable", run: () => editables.one(at) });
     }
     if (MAGNIFIED.has(kind) && pictureTools.canInset(at)) items.push({ icon: "plus", label: "Add Zoom Inset", run: () => pictureTools.addInset(at) });
     if (items.length) items.push("-");
@@ -8713,6 +8729,9 @@ export function mount(studio, container) {
     const shape = aspect ? cropShapeOf(block, aspect) : "original";
     return [shown,
       fileRow(block.image, ["image"], (path) => replacePicture(at, path), "picture.png"),
+      // A drawing's picture, made its own shapes where it is (editable.js).
+      isDrawing(block) && ui.field("Shapes", ui.button("Make Editable", () => editables.one(at), { small: true, icon: "shape", title: "The drawing as its own shapes, where it is" }),
+        { hint: "Its boxes, lines and words, to drag and edit one by one" }),
       // As Keynote's mask: a quick shape, or the picture cropped by hand on the slide.
       aspect && ui.field("Crop", h("div.crop-field", {},
         ui.segmented({ value: shape, options: cropShapes(aspect || 1).map(({ value, label }) => ({ value, label, title: value === "original" ? "The Whole Picture" : `Crop to ${label}` })),
@@ -9680,8 +9699,9 @@ export function mount(studio, container) {
     const reach = ax * ax + ay * ay;
     const scale = reach > 0 ? Math.max(((point.x - far.x) * ax + (point.y - far.y) * ay) / reach, 0) : 1;
     let height = Math.round(Math.min(LOGO_MOST, Math.max(LOGO_LEAST, sizing.height * scale)));
-    // It catches at the deck's default (a few pixels either side of it), unless ⌘ is held.
-    const snapped = !(event.metaKey || event.ctrlKey) && Math.abs(height - LOGO_DEFAULT) * sizing.pixels < 6;
+    // It catches at the deck's default (a few pixels either side of it), unless ⌘ is held (with
+    // snapping off, only while it is).
+    const snapped = !Snap.free(event) && Math.abs(height - LOGO_DEFAULT) * sizing.pixels < 6;
     if (snapped) height = LOGO_DEFAULT;
     sizing.now = height;
     const k = height / sizing.height;
@@ -10124,6 +10144,8 @@ export function mount(studio, container) {
     ...clipCommands(),
     // A drawing on the clipboard, as one picture or in its own colours (drawingpaste.js).
     ...(typingNow() ? [] : drawings.commands()),
+    // Every drawing placed as a picture, made the slides' own shapes (editable.js).
+    ...(typingNow() ? [] : [editables.allCommand()].filter(Boolean)),
     ...chosenCommands(),
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js).
     ...(typingNow() ? [] : freeShapes.commands()),
@@ -10245,6 +10267,8 @@ export function mount(studio, container) {
       ...(MAGNIFIED.has(kind) && pictureTools.canInset(at) ? [{ icon: "plus", label: "Add Zoom Inset", hint: name, run: () => pictureTools.addInset(at) }] : []),
       ...(kind === "image" && pictureTools.maskPair({ place: at }) ? [{ icon: "image", label: "Mask with Shape", hint: `${name}, by the shape over it`, run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) }] : []),
       ...(kind === "image" && pictureTools.masked(at) ? [{ icon: "refresh", label: "Unmask", hint: name, run: () => pictureTools.unmask(at) }] : []),
+      // Format › Make Editable, of a drawing's picture (editable.js).
+      ...(kind === "image" && isDrawing(block) ? [editables.command(block, at, name)] : []),
       // Format › Copy Style and Paste Style, of a figure's shapes chosen.
       ...(parts?.canCopyStyle?.() ? [{ icon: "copy", label: "Copy Style", keys: "⌥⌘C", run: () => parts.copyStyle() }] : []),
       ...(parts?.canPasteStyle?.() ? [{ icon: "paste", label: "Paste Style", keys: "⌥⌘V", run: () => parts.pasteStyle() }] : []),
