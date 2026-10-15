@@ -15,6 +15,8 @@ import { follows, merge3 } from "/static/studio/merge.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import { shapeEditor } from "/static/studio/shapes.js";
 import { BOXED } from "/static/studio/freeform.js";
+import { convertible, convertCommand } from "/static/studio/toparts.js";
+import { slideToParts } from "/static/kinds/deck/toparts.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -618,7 +620,8 @@ export function mount(studio, container) {
     if (Array.isArray(after) && after.length === before.length) after.forEach((slide, index) => {
       const was = before[index];
       if (rowed(slide) && rowed(was) && rowCount(slide) !== rowCount(was) && !before.some((other) => same(other, slide))) keepRows(was, slide);
-      keepGlue(was, slide);
+      // (A deck the studio made, glue and all -- Convert to Figure Parts's -- as it is.)
+      if (!options?.glued) keepGlue(was, slide);
     });
     return made;
   }, options);
@@ -944,8 +947,10 @@ export function mount(studio, container) {
     ownKeys: ["behind", "build", "hidden", "locked"],
     grouped: (specs) => (specs.every((spec) => spec?.behind) ? { behind: true } : {}),
     ungrouped: (group) => ({ ...(group.behind ? { behind: true } : {}), ...(group.locked ? { locked: true } : {}), ...(group.hidden ? { hidden: true } : {}) }),
-    // A slide's own: built in on a click, hidden from the show.
+    // A slide's own: built in on a click, hidden from the show; and a diagram drawn of them
+    // made a figure on the slide.
     commands: (picks, name, { set }) => [
+      ...(convertible(picks.map((index) => slideAt()?.shapes?.[index])) ? [convertCommand(() => shapesToFigure(picks), name)] : []),
       { icon: "reveal", label: everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click", hint: name, run: () => set({ build: !everyShape(picks, "build") }, everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click") },
       { icon: "eye", label: everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape", hint: name, run: () => set({ hidden: !everyShape(picks, "hidden") }, everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape") },
     ],
@@ -957,6 +962,21 @@ export function mount(studio, container) {
         onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
       h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
   });
+
+  // Convert to Figure Parts: the shapes chosen made a figure on the slide, where they were
+  // drawn (toparts.js), and chosen.
+  function shapesToFigure(picks) {
+    if (awayFrom("add objects")) return;
+    closeInline();
+    const rect = pageNode?.querySelector(":scope > svg")?.getBoundingClientRect(), k = rect ? rect.width / SHAPE_FRAME : 1;
+    const shapes = slideAt()?.shapes || [];
+    freeShapes.clear({ quiet: true });
+    slideToParts({ studio, slide: state.slide, picks, shapes, regions: regionsDrawn(),
+      toScreen: ([x, y]) => [(rect?.left || 0) + x * k, (rect?.top || 0) + y * k],
+      placeholder: (region, index) => layoutPlaceholder(slideAt(), blocksAt(slideAt(), region)[index]),
+      apply: (document, label) => studio.change(() => document, { label, glued: true }),
+      chosen: (at) => { if (at?.slide === state.slide) focusBlock(at.region, at.index); } });
+  }
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
   // half written does not read) waits until the typing pauses, or stops: it does not flash
