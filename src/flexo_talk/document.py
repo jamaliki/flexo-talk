@@ -613,7 +613,7 @@ def add_slide(
         raise DeckDocumentError(f"{where}.footnotes", "footnotes must be text or a list of text.")
     for note in footnotes:
         slide.footnote(str(note))
-    _add_shapes(slide, data.get("shapes"), where, missing)
+    _add_shapes(slide, data.get("shapes"), where, missing, base)
     slide.placeholders = frozenset(
         key for key in ("title", "subtitle", "words") if key in data and not str(data[key] or "").strip()
     )
@@ -623,7 +623,8 @@ def add_slide(
     return slide
 
 
-def _add_shapes(slide: Slide, value: object, where: str, missing: list[DeckDocumentError] | None) -> None:
+def _add_shapes(slide: Slide, value: object, where: str, missing: list[DeckDocumentError] | None,
+                base: Path | None = None) -> None:
     """A slide's shapes, each checked as written (``deck.shape_of``). With ``missing`` given,
     one that can't be drawn is said there and left out -- the rest drawn, each keeping its
     place in the list -- and a list that is no list is said and drawn as none; without it,
@@ -648,6 +649,8 @@ def _add_shapes(slide: Slide, value: object, where: str, missing: list[DeckDocum
                 raise failure from None
             missing.append(InvalidObject(failure.where, failure.message))
             made = None
+        if made is not None and base is not None:
+            made = _pictures_found(made, base, here, missing)
         slide.shapes.append(made)
         slide.shape_sources.append(data)
     for index, key, message in shape_problems(slide):
@@ -656,6 +659,25 @@ def _add_shapes(slide: Slide, value: object, where: str, missing: list[DeckDocum
             raise failure
         missing.append(InvalidObject(failure.where, failure.message))
         slide.shapes[index] = None
+
+
+def _pictures_found(shape: dict, base: Path, where: str, missing: list[DeckDocumentError] | None) -> dict:
+    """A shape whose pictures (``picture``, a drawing's part kept as drawn) name their files
+    from the deck's folder: each found there, as an image's is. One that is not is said,
+    and drawn as its box."""
+
+    if shape.get("kind") == "group":
+        return {**shape, "shapes": [_pictures_found(child, base, f"{where}.shapes[{n}]", missing)
+                                    for n, child in enumerate(shape.get("shapes") or [])]}
+    if shape.get("kind") != "picture":
+        return shape
+    try:
+        return {**shape, "source": str(_file(base, str(shape["source"]), f"{where}.source"))}
+    except DeckDocumentError as error:
+        if missing is None:
+            raise
+        missing.append(error)
+        return shape
 
 
 def _as_content(data: dict[str, Any]) -> dict[str, Any]:

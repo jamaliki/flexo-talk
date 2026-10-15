@@ -276,8 +276,9 @@ def test_the_studio_offers_every_kind_and_says_how_to_write_them() -> None:
     offered = [name for section in shapes["sections"] for name in section["kinds"]]
     from flexo.freeform import KINDS
 
-    # (All but a zoom inset, added for what it magnifies: Add Zoom Inset.)
-    assert sorted(offered) == sorted(kind for kind in KINDS if kind != "inset")
+    # (All but a zoom inset, added for what it magnifies (Add Zoom Inset), and a picture, a
+    # drawing's part made by its paste.)
+    assert sorted(offered) == sorted(kind for kind in KINDS if kind not in ("inset", "picture"))
     assert shapes["tools"] == {"path": "Pen"}
     assert shapes["frame"] == 960 and "build" in shapes["slide_keys"]
     guide = kind.guide()
