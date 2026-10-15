@@ -13,6 +13,7 @@ import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
 import { follows, merge3 } from "/static/studio/merge.js";
 import { sizer } from "/static/kinds/deck/resize.js";
+import { slideShapes } from "/static/kinds/deck/shapes.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -616,9 +617,35 @@ export function mount(studio, container) {
     if (Array.isArray(after) && after.length === before.length) after.forEach((slide, index) => {
       const was = before[index];
       if (rowed(slide) && rowed(was) && rowCount(slide) !== rowCount(was) && !before.some((other) => same(other, slide))) keepRows(was, slide);
+      keepGlue(was, slide);
     });
     return made;
   }, options);
+  // So too a shape's line glued to one of the slide's objects (`{object: "body[2]"}`): the
+  // object followed by what it holds wherever it went on the slide (added before, moved to
+  // another column), and gone, the end staying where it was drawn (its `at`).
+  const OBJECT = /^(body|left|right|columns\.(\d+)|columns\[(\d+)\])\[(\d+)\]$/;
+  const glueKey = (name) => { const found = OBJECT.exec(String(name ?? "").trim()); return found ? { region: found[2] ?? found[3] ? `columns.${found[2] ?? found[3]}` : found[1], index: Number(found[4]) } : null; };
+  const glueName = ({ region, index }) => (region.startsWith("columns.") ? `columns[${region.split(".")[1]}][${index}]` : `${region}[${index}]`);
+  function keepGlue(was, slide) {
+    if (!was || !slide || was === slide || !Array.isArray(slide.shapes)) return;
+    const glued = (end) => end && typeof end === "object" && !Array.isArray(end) && end.object !== undefined;
+    const lines = (list) => list.flatMap((shape) => (shape?.kind === "group" ? lines(shape.shapes || []) : [shape])).filter((shape) => shape && (glued(shape.from) || glued(shape.to)));
+    if (!lines(slide.shapes).length) return;
+    const old = partsOf(was), now = partsOf(slide);
+    if (old.length === now.length && old.every((part, n) => part.region === now[n].region && part.block === now[n].block)) return;
+    const map = follows(old.map((part) => part.block), now.map((part) => part.block));
+    for (const line of lines(slide.shapes)) {
+      for (const key of ["from", "to"]) {
+        const end = line[key];
+        if (!glued(end)) continue;
+        const at = glueKey(end.object), k = at ? old.findIndex((part) => part.region === at.region && part.index === at.index) : -1;
+        if (k < 0) continue;
+        if (map[k] >= 0) line[key] = { ...end, object: glueName(now[map[k]]) };
+        else line[key] = Array.isArray(end.at) ? [...end.at] : end;
+      }
+    }
+  }
 
   const editSlide = (mutate, options = {}) => studio.change((d) => { const slide = (d.slides || [])[state.slide]; if (slide) mutate(slide, d); }, options);
   // A placeholder changed (a sample table typed in) is its person's own: presented and exported.
@@ -856,6 +883,22 @@ export function mount(studio, container) {
   const root = h("div.deck", {}, rail, center, inspector);
   clear(container, root);
 
+  // The slide's shapes, drawn where they are put (shapes.js): what it needs of the editor.
+  const freeShapes = slideShapes({
+    studio, center, stage,
+    doc: () => doc(), slide: () => slideAt(), slideIndex: () => state.slide, pageNode: () => pageNode,
+    editSlide: (mutate, options) => editSlide(mutate, options), select: (index) => select(index),
+    // Shapes chosen, nothing else is: no object, line of words or logo, no figure edited.
+    leaveOthers: () => {
+      closeInline(); leaveFigure(false); offRail();
+      state.focus = null; state.field = null; state.logo = null; allChosen = null; state.tab = "slide";
+    },
+    renderInspector: () => renderInspector(), placeChosen: () => placeChosen(), reportFocus: () => reportFocus(),
+    swallowRelease: (held) => swallowRelease(held), undoNote: (text, options) => undoNote(text, options),
+    awayFrom: (what) => awayFrom(what), regions: () => regionsDrawn(), partAt: (event) => partAt(event),
+    clipItems: () => clipItems(), canDraw: () => Boolean(slideAt()), shapeButton: () => shapeButton,
+  });
+
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
   // half written does not read) waits until the typing pauses, or stops: it does not flash
   // on and off at each key. (`messages` is what is shown; `drawnMessages`, all there is.)
@@ -884,13 +927,16 @@ export function mount(studio, container) {
   // -- the bar --
   const insertButtons = MAIN_BLOCKS.map((kind) => ui.button(BLOCKS[kind].label, () => insertBlock(kind), { kind: "ghost", icon: BLOCKS[kind].icon, title: `Add ${BLOCKS[kind].label}: ${BLOCKS[kind].hint}` }));
   const moreButton = ui.button("More", (event) => menu(event.currentTarget, MORE_BLOCKS.map((kind) => ({ icon: BLOCKS[kind].icon, label: `${BLOCKS[kind].label}${CHOOSE.has(kind) ? "…" : ""}`, hint: BLOCKS[kind].hint, run: () => insertBlock(kind) }))), { kind: "ghost", icon: "more" });
+  // Shape: lines, arrows, shapes, callouts, braces, measures and text boxes, drawn on the slide
+  // where they are wanted -- on a slide of any layout.
+  const shapeButton = ui.button("Shape", (event) => freeShapes.chooser(event.currentTarget), { kind: "ghost", icon: "shape", title: "Add Shape: lines, arrows, shapes, callouts, braces, measures and text boxes, drawn where you want them" });
   moreButton.classList.add("pulldown");
   const newSlideButton = ui.button("Add Slide", (event) => newSlidePopover(event.currentTarget), { kind: "ghost", icon: "plus", title: "Add Slide (⇧⌘N)" });
   newSlideButton.classList.add("keep-label");
   // As Keynote's toolbar: Add Slide at the left (its menu the layouts), what adds to a slide
   // in the middle. A slide's own layout is changed in Format.
   studio.tools.append(newSlideButton);
-  studio.inserts.append(...insertButtons, moreButton);
+  studio.inserts.append(...insertButtons, shapeButton, moreButton);
   // Export lists what File › Export To does in the Mac app (`studio.exports`); each asks
   // where to save once. A deck with no slides has nothing to present or export.
   const presentButton = ui.button("Present", () => present(), { kind: "ghost", icon: "play" });
@@ -921,6 +967,7 @@ export function mount(studio, container) {
   const renderBar = () => {
     const slide = slideAt();
     const room = regionsOf(slide).length > 0;
+    shapeButton.disabled = !slide;
     // Greyed out, each says why: the layout has no room (a title slide, a section) -- but for
     // Picture on a title slide, which adds a logo.
     for (const button of [...insertButtons, moreButton]) {
@@ -1231,6 +1278,8 @@ export function mount(studio, container) {
     state.focus = focus;
     state.field = null;
     state.logo = null;
+    freeShapes.clear({ quiet: true });
+    freeShapes.disarm();
     renderRail();
     renderStage();
     renderInspector();
@@ -1260,11 +1309,11 @@ export function mount(studio, container) {
     const slide = slideAt();
     if (!slide) { studio.focus(null); return; }
     const block = state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
-    const part = block ? ` · ${blockName(block)}` : "";
+    const part = block ? ` · ${blockName(block)}` : freeShapes.any() ? ` · ${freeShapes.label()}` : "";
     // Typed in -- on the slide (a figure's shape's words too), or in the panel's fields -- it is
     // shown the others as being edited.
     const keys = document.activeElement;
-    const editing = Boolean(inline) || Boolean(figure?.parts.inline) || Boolean(inspectorBody.contains(keys) && keys.matches("input, textarea, [contenteditable=true]"));
+    const editing = Boolean(inline) || Boolean(figure?.parts.inline) || freeShapes.typing() || Boolean(inspectorBody.contains(keys) && keys.matches("input, textarea, [contenteditable=true]"));
     studio.focus({ page: state.slide + 1, label: `Slide ${state.slide + 1}${part}`, block: state.focus ? `${state.focus.region}[${state.focus.index}]` : null,
       field: !state.focus && state.field ? state.field.field : null, part: block ? partWithin(block) : null, editing });
   }
@@ -1520,7 +1569,7 @@ export function mount(studio, container) {
     // of -- or, changed, the drawing of it changed.
     // So does a figure's part being carried: the slide drawn in full a moment after a change
     // (folded to fit, say) would take the figure from under it and end the drag, nothing done.
-    if ((sizing || resizing || logoSizing || logoDrag?.started || figure?.parts.dragging) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
+    if ((sizing || resizing || logoSizing || logoDrag?.started || figure?.parts.dragging || freeShapes.busy()) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
     else if (!pageNode || pageNode.dataset.shows !== shows) {
       renewed = true;
       drawingHeld = false;
@@ -1547,7 +1596,7 @@ export function mount(studio, container) {
       hover.hidden = true;
       pageNode.append(hover, chosen, target);
       pageNode.addEventListener("mousemove", onHover);
-      pageNode.addEventListener("mouseleave", () => { hover.hidden = true; });
+      pageNode.addEventListener("mouseleave", () => { hover.hidden = true; freeShapes.leave(); });
       pageNode.addEventListener("click", onPick);
       pageNode.addEventListener("dblclick", onEdit);
       // A link's words are chosen and edited as any words: a click never goes to its page.
@@ -1581,6 +1630,7 @@ export function mount(studio, container) {
     fitStage();
     if (renewed && cropping) cropRedrawn();
     if (renewed) cropDrawn();
+    if (renewed) freeShapes.drawn();
     placeChosen();
     placeOthers(here);
     if (inline) positionInline();
@@ -2112,6 +2162,8 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
+    // A shape pointed at frames itself (shapes.js).
+    if (freeShapes.hover(event)) { hover.hidden = true; return; }
     // A picture being cropped: nothing else is pointed at meanwhile.
     if (cropping && !cropping.done) { hover.hidden = true; return; }
     if (figure?.parts.inline) hover.hidden = true;
@@ -2142,6 +2194,9 @@ export function mount(studio, container) {
   function onPress(event) {
     if (outOfStep(true)) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
+    // A shape over the slide's words and objects (or behind them, where none is) is pressed
+    // before them; a shape being drawn, wherever the press is.
+    if (freeShapes.press(event)) return;
     if (figureBlock() && editable(figureBlock()) && inFigure(event) && figure.parts.model) {
       const id = figure.parts.idAt(event);
       const holder = id && figure.parts.parentOf(id);
@@ -3607,7 +3662,7 @@ export function mount(studio, container) {
 
   function onPick(event) {
     if (outOfStep(true)) return;
-    if (figure?.parts.justDragged || swallowClick) return;
+    if (figure?.parts.justDragged || swallowClick || freeShapes.armed()) return;
     if (event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size")) return;
     if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
     const part = partAt(event);
@@ -3616,8 +3671,9 @@ export function mount(studio, container) {
     // ⇧-click or ⌘-click adds an object to what is chosen, or takes it out, as in Keynote.
     if ((event.shiftKey || event.metaKey) && part?.kind === "block" && (state.focus || allOn())) { pickAlso(part); return; }
     if (part?.kind === "logo") { chooseLogo(part.index); return; }
-    if (!part) { state.focus = null; state.field = null; state.logo = null; placeChosen(); renderInspector(); reportFocus(); return; }
+    if (!part) { state.focus = null; state.field = null; state.logo = null; freeShapes.clear({ quiet: true }); placeChosen(); renderInspector(); reportFocus(); return; }
     state.field = null;
+    freeShapes.clear({ quiet: true });
     // A click on a figure's part chooses that part, the figure not chosen first.
     if (part.kind === "block") focusBlock(part.region, part.index, () => figure.parts.click(event));
     else {
@@ -3642,6 +3698,7 @@ export function mount(studio, container) {
     if (outOfStep(true)) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     hover.hidden = true;
+    if (freeShapes.dblclick(event)) return;
     const part = partAt(event);
     const block = part?.kind === "block" ? blocksAt(slideAt(), part.region)[part.index] : null;
     // Its own line double-clicked (a quote's attribution, a picture's caption): that line --
@@ -3684,6 +3741,8 @@ export function mount(studio, container) {
     if (outOfStep(true)) return;
     closeInline();
     hover.hidden = true;
+    if (freeShapes.context(event)) return;
+    freeShapes.clear({ quiet: true });
     const point = { x: event.clientX, y: event.clientY };
     const part = partAt(event);
     // One of several chosen: they stay chosen, and its menu acts on them all.
@@ -3749,7 +3808,7 @@ export function mount(studio, container) {
     if (cut) cutAway(clip); else copied(clip);
   }
   // What is copied, by name, for a command: "Table", "2 Shapes", "Slide".
-  const clipName = (clip) => (clip.what === "block" ? (clip.logo !== undefined ? "Logo" : blockLabel(clip.block)) : clip.label.replace(/(^|\s)\p{L}/gu, (first) => first.toUpperCase()));
+  const clipName = (clip) => (clip.what === "block" ? (clip.logo !== undefined ? "Logo" : blockLabel(clip.block)) : String(clip.label).replace(/(^|\s)\p{L}/gu, (first) => first.toUpperCase()));
   function blockMenu(point, at, cell = null) {
     const slide = slideAt(), block = blocksAt(slide, at.region)[at.index];
     if (!block) return;
@@ -3849,6 +3908,7 @@ export function mount(studio, container) {
 
   function placeChosen() {
     const focus = state.focus;
+    freeShapes.place();
     placeAll();
     placeLogo();
     if (sizing || resizing) return;  // its frame follows it as it is sized
@@ -4023,6 +4083,8 @@ export function mount(studio, container) {
   let band = null;
   stage.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || !pageNode || !slideAt() || carry || figure?.parts.dragging || outOfStep()) return;
+    // (A shape pressed, or one being drawn, is the shapes': shapes.js.)
+    if (event.shapes || freeShapes.armed() || event.target.closest?.(".shape-handle")) return;
     const desk = event.target === stage || event.target.classList?.contains("slide-wrap");
     const onPage = pageNode.contains(event.target) && !event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size, .inline-editor") && !partAt(event);
     if (!desk && !onPage) return;
@@ -4045,6 +4107,10 @@ export function mount(studio, container) {
     const left = Math.min(band.start.x, event.clientX), right = Math.max(band.start.x, event.clientX);
     const top = Math.min(band.start.y, event.clientY), bottom = Math.max(band.start.y, event.clientY);
     Object.assign(band.node.style, { left: `${left - origin.left}px`, top: `${top - origin.top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
+    // Shapes it touches are what it chooses, where it touches any (shapes.js); else the objects.
+    const shaped = freeShapes.touched(left, top, right, bottom);
+    if (shaped.length) { state.field = null; state.logo = null; allChosen = null; state.focus = null; freeShapes.choose(shaped, { quiet: true }); placeChosen(); return; }
+    freeShapes.clear({ quiet: true });
     const touched = regionsOf(slideAt()).flatMap((region) => blocksAt(slideAt(), region.key).map((_, index) => ({ region: region.key, index })))
       .filter((at) => { const box = drawnBox(blockElement(at.region, at.index)); return box && box.right >= left && box.left <= right && box.bottom >= top && box.top <= bottom; });
     const picks = [...band.keep, ...touched.filter((at) => !band.keep.some((kept) => samePlace(kept, at)))];
@@ -4084,6 +4150,7 @@ export function mount(studio, container) {
   // parts) is done to it as soon as its parts are known.
   function focusBlock(region, index, then = null) {
     closeInline();
+    freeShapes.clear({ quiet: true });
     offRail();
     state.tab = "slide";
     state.focus = { region, index };
@@ -5688,6 +5755,13 @@ export function mount(studio, container) {
   // After an undo or a redo, the object it changed is chosen, as Keynote does: the first
   // on the slide shown that is not as it was.
   function chooseChanged(was, entry) {
+    // The slide's shapes drawn, moved or restyled: undone or redone, they are chosen again.
+    if (entry?.shapes) {
+      const undone = studio.future[studio.future.length - 1]?.said === entry;
+      state.focus = null; state.field = null; state.logo = null; allChosen = null;
+      freeShapes.restore(entry, undone);
+      return;
+    }
     // A logo added, moved, sized or deleted: undone or redone, it is chosen (none, gone).
     if (entry?.logos) {
       const undone = studio.future[studio.future.length - 1]?.said === entry;
@@ -6601,6 +6675,9 @@ export function mount(studio, container) {
   const typingNow = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable
     || Boolean(document.querySelector(".scrim, .present"));
   function clipOf() {
+    // The slide's shapes chosen (shapes.js): those.
+    const shaped = freeShapes.clip();
+    if (shaped) return shaped;
     // A figure's shapes being edited are what is copied -- and only they: lines chosen alone
     // (copied with the shapes they join), or nothing chosen in it, copy nothing, never the
     // whole figure in their place.
@@ -6621,6 +6698,7 @@ export function mount(studio, container) {
     return { what: "slide", slide: structuredClone(slide), label: "slide" };
   }
   function plainOf(clip) {
+    if (clip.what === "shapes") return clip.shapes.map((shape) => plain(String(shape?.text ?? ""))).filter(Boolean).join("\n") || clip.label;
     if (clip.what === "slide") return plain(slideTitle(clip.slide));
     if (clip.what === "slides") return clip.slides.map((slide) => plain(slideTitle(slide))).join("\n");
     if (clip.what === "parts") return clip.parts.nodes.map((node) => plain(Array.isArray(node.label) ? node.label.map((run) => run?.text ?? "").join("") : node.label || node.id)).join("\n");
@@ -6647,6 +6725,7 @@ export function mount(studio, container) {
   // The object cut last, as it was cut: pasted, it is moved (see pasteClip).
   let cutLast = null;
   function cutAway(clip) {
+    if (clip.what === "shapes") { freeShapes.remove("cut"); return; }
     if (clip.what === "parts") { figureCut = true; figure.parts.remove(); }
     else if (clip.what === "block" && clip.logo !== undefined) deleteLogo(clip.logo, "Cut Logo");
     else if (clip.what === "block") { cutLast = { block: structuredClone(clip.block), at: Date.now() }; deleteBlock(state.focus, "cut"); }
@@ -6782,6 +6861,8 @@ export function mount(studio, container) {
     });
   }
   function pasteClip(clip) {
+    // Shapes, on the slide shown, whatever its layout: a slide of any kind may have them.
+    if (clip.what === "shapes" && Array.isArray(clip.shapes) && clip.shapes.length) { freeShapes.paste(clip); return; }
     if (clip.what === "slides") {
       const at = Math.min(Math.max(...chosenSlides()) + 1, slides().length);
       studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => copyOf(slide))); },
@@ -7027,6 +7108,7 @@ export function mount(studio, container) {
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else if (logoChosen()) clear(inspectorBody, logoPanel(slide));
+      else if (freeShapes.any()) clear(inspectorBody, freeShapes.panel());
       else if (allOn()) clear(inspectorBody, manyPanel(slide));
       else if (chosenSlides().length > 1) clear(inspectorBody, slidesPanel(slide));
       else clear(inspectorBody, slidePanel(slide));
@@ -9155,6 +9237,7 @@ export function mount(studio, container) {
     markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
   }
   function duplicateChosen() {
+    if (freeShapes.any()) { freeShapes.duplicate(); return; }
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
     if (logoChosen() && !state.focus) return;
     if ((state.focus || allOn()) && awayFrom("duplicate objects")) return;
@@ -9216,6 +9299,7 @@ export function mount(studio, container) {
   }
   function chooseLogo(index) {
     closeInline();
+    freeShapes.clear({ quiet: true });
     leaveFigure(false);
     offRail();
     allChosen = null;
@@ -9726,6 +9810,8 @@ export function mount(studio, container) {
       return;
     }
     if (figure && figureBlock() && figure.parts.key(event)) return;
+    // Shapes chosen (or one being drawn): their keys -- the arrows nudge, ⌫ deletes, ⌘G groups.
+    if (freeShapes.key(event)) { event.preventDefault(); return; }
     if (mod && event.shiftKey && key.toLowerCase() === "n") { event.preventDefault(); newSlideLike(state.slide); }
     else if (mod && key.toLowerCase() === "d") { event.preventDefault(); duplicateChosen(); }
     // ⌘A outside a text field selects nothing on the page's own words.
@@ -9883,6 +9969,8 @@ export function mount(studio, container) {
     // The object chosen, by name: what its right-click menu does; then the slide's.
     ...clipCommands(),
     ...chosenCommands(),
+    // Shapes to draw, and the shapes chosen: what they can do (shapes.js).
+    ...(typingNow() ? [] : freeShapes.commands()),
     ...(slides().length ? slideCommands() : []),
     // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
     // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the
@@ -9930,7 +10018,7 @@ export function mount(studio, container) {
   function slideCommands() {
     const typing = typingNow(), shapes = !typing && figure && figureBlock() && figure.parts.selected.length;
     const block = !typing && state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
-    const picked = chosenSlides(), many = picked.length > 1 ? `${picked.length} Slides` : "Slide", own = Boolean(shapes || block);
+    const picked = chosenSlides(), many = picked.length > 1 ? `${picked.length} Slides` : "Slide", own = Boolean(shapes || block || freeShapes.any());
     return [
       ...(own ? [{ icon: "duplicate", label: `Duplicate ${shapes ? (shapes > 1 ? `${shapes} Shapes` : "Shape") : blockLabel(block)}`, also: ["Duplicate"], keys: "⌘D", run: () => duplicateChosen() }] : []),
       { icon: "duplicate", label: `Duplicate ${many}`, also: [...(own || typing ? [] : ["Duplicate"]), "Duplicate Slide"], keys: own || typing ? undefined : "⌘D", run: () => duplicateSlide(state.slide) },
@@ -10196,6 +10284,17 @@ export function mount(studio, container) {
     if (pairs.length === 1) return blockChange(pairs[0][0].block, pairs[0][1].block);
     if (pairs.length > 1) return `Edit ${pairs.length} Objects`;
     const keys = differing(a, b).filter((key) => key !== "body" && key !== "left" && key !== "right" && key !== "columns");
+    // Its shapes alone (an agent's, another's): one added or deleted by its name, words typed
+    // in one as words are, else what was done to them.
+    if (keys.length === 1 && keys[0] === "shapes") {
+      const was = Array.isArray(a.shapes) ? a.shapes : [], now = Array.isArray(b.shapes) ? b.shapes : [];
+      const name = (shape) => (shape?.kind === "group" ? "Group" : catalog.shapes?.labels?.[shape?.kind] || "Shape");
+      if (now.length === was.length + 1) return `Add ${name(now.find((shape) => !was.some((old) => same(old, shape))) || now.at(-1))}`;
+      if (now.length === was.length - 1) return `Delete ${name(was.find((shape) => !now.some((other) => same(other, shape))) || was.at(-1))}`;
+      const changed = now.map((shape, n) => [was[n], shape]).filter(([old, shape]) => !same(old, shape));
+      if (changed.length === 1 && changed[0][0] && String(changed[0][0].text ?? "") !== String(changed[0][1].text ?? "")) return typing(changed[0][1].text, changed[0][0].text) || "Edit Shape";
+      return changed.length === 1 ? `Edit ${name(changed[0][1])}` : "Edit Shapes";
+    }
     if (keys.length && keys.every((key) => ["background", "shade", "dark"].includes(key)) && keys.some((key) => key !== "dark")) return "Change Background";
     // Its rows' labels alone: switched on or off, as the switch says; else the one typed in.
     if (keys.length === 1 && keys[0] === "rows" && (Array.isArray(a.rows) || Array.isArray(b.rows))) {

@@ -14,6 +14,7 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.util import Pt
 
+from flexo_talk.compose import _slide_palette
 from flexo_talk.deck import Deck, DeckBuild, RenderedSlide, Slide, _Figure, _Image
 from flexo_talk.pptx import (
     Placement,
@@ -27,6 +28,7 @@ from flexo_talk.pptx import (
     slide_pictures,
 )
 from flexo_talk.pptx import editable_maths as editable_maths_of
+from flexo_talk.pptx_shapes import ShapeWriter
 
 FORMATS = ("pptx", "pdf", "svg", "png")
 
@@ -180,6 +182,8 @@ def write_pptx(
     for item in rendered:
         drawing = read_drawing(clicks_lifted(item.svg, item.builds))
         formulas = _drop_lists(drawing.root)
+        # The slide's shapes are PowerPoint's own (pptx_shapes): their drawing goes.
+        _drop_shapes(drawing.root)
         _dissolve_regions(drawing.root)
         under, headings = _take_headings(drawing.root, item)
         # The layout the slide's headings come from: a content slide's titled, or blank.
@@ -204,6 +208,9 @@ def write_pptx(
                      "backdrop": deck.palette.get("canvas")}
             for shape in under:
                 add_drawing(tree, Drawing(drawing.width, drawing.height, Group(None, [shape])), Placement(), **drawn)
+            # Shapes behind the slide's words and objects, under them; those over them, last.
+            shaped = ShapeWriter(tree, deck, _slide_palette(deck, item.slide))
+            shaped.write([layout for layout in item.shapes if layout.behind])
             worded = {words.id: words for words in item.worded}
             span = (deck.style.margin, deck.style.width - deck.style.margin)
             # The headings' words as written, for the breaks typed in them.
@@ -235,6 +242,7 @@ def write_pptx(
                     clicks += [(step, shape_id, one) for step, one in zip(steps, ranges, strict=True)]
             for layout in item.tables:
                 add_table(tree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths)
+            over = set(shaped.write([layout for layout in item.shapes if not layout.behind]))
             # A block that builds in appears whole, on its click: a table with its caption.
             # Only a shape on the slide itself: one within a group is not animated by itself.
             shapes: dict[str, int] = {}
@@ -248,10 +256,11 @@ def write_pptx(
             steps = sorted({step for step, _, _ in clicks})
             add_reveals(slide._element, [[(shape_id, one) for at, shape_id, one in clicks if at == step]
                                          for step in steps])
-            _read_in_order(tree, item.slide)
+            _read_in_order(tree, item.slide, over)
             # Last, as nothing more finds a shape by its id: each named as a person would.
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
-                               for region in item.slide.regions.values() for index, block in enumerate(region.blocks)})
+                               for region in item.slide.regions.values() for index, block in enumerate(region.blocks)},
+                        shapes=_shape_names(item.shapes))
     buffer = BytesIO()
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())
@@ -261,12 +270,13 @@ def write_pptx(
 _PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
 
-def _read_in_order(tree, slide: Slide) -> None:
+def _read_in_order(tree, slide: Slide, over: set[str] = frozenset()) -> None:
     """A slide's shapes in the order they are read (a slide program's Selection Pane, a
     screen reader), as the PDF reads them: its headings and what is drawn under them, then
     its body top to bottom (its rows' labels, then a left column before a right) -- its
     lists and tables where they are drawn, not after the rest -- then its footnotes, then
-    its number and footer."""
+    its number and footer; and the shapes drawn over it all (``over``), last, in the order
+    they are drawn, which is the order they stack in."""
 
     import re
 
@@ -277,6 +287,8 @@ def _read_in_order(tree, slide: Slide) -> None:
         named = next(child.iter(f"{{{_PML}}}cNvPr"), None)
         name = named.get("name", "") if named is not None else ""
         rest = name.removeprefix(f"{slide.id}.")
+        if name in over:
+            return 4, 0, 0, False
         if rest in {"number", "footer"} or re.fullmatch(r"logo\d+", rest):
             return 3, 0, 0, False
         if rest.startswith("footnote"):
@@ -292,6 +304,29 @@ def _read_in_order(tree, slide: Slide) -> None:
     shapes = [child for child in tree if child.tag not in {f"{{{_PML}}}nvGrpSpPr", f"{{{_PML}}}grpSpPr"}]
     for child in sorted(shapes, key=rank):
         tree.append(child)
+
+
+def _drop_shapes(group: Group) -> None:
+    """The slide's shapes taken out of its drawing: they are written natively (pptx_shapes)."""
+
+    group.items = [item for item in group.items
+                   if not (isinstance(item, Group) and item.data.get("data-flexo-talk") == "shapes")]
+    for item in group.items:
+        if isinstance(item, Group):
+            _drop_shapes(item)
+
+
+def _shape_names(layouts: list) -> dict[str, str]:
+    """What each of a slide's shapes is called, by the id it is drawn with: its kind, as the
+    studio names it."""
+
+    from flexo_talk.pptx_shapes import shape_name
+
+    names: dict[str, str] = {}
+    for layout in layouts:
+        names[layout.id] = shape_name(layout.spec)
+        names |= _shape_names(layout.children)
+    return names
 
 
 def _spec_of(block: _Figure):

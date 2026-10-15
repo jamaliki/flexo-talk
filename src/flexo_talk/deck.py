@@ -222,6 +222,18 @@ LOGOS_ON = ("title", "every")
 LOGO_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai")
 """The pictures a logo may be: a photograph's kinds, and vectors (SVG, a PDF's page)."""
 
+SHAPE_FRAME = 960.0
+"""How wide a slide is in the units its shapes are placed in. On the deck's own slide, 960
+points wide (16:9, 960 by 540), they are its points, as every size in a deck is; on a slide
+of another size they are scaled with it, 960 of them across -- so a shape keeps its place
+and its proportions, a circle a circle, when the slide is made larger or smaller."""
+SHAPE_KEYS = ("behind", "build", "hidden", "locked")
+"""What a shape on a slide says besides how it is drawn (``flexo.freeform``): whether it is
+drawn behind the slide's words and objects rather than over them, whether it appears on a
+click when presenting (after the slide's objects that do, in the order the shapes are
+listed), whether it is hidden (drawn faintly while editing, never presented or exported),
+and whether it is locked where it is."""
+
 _STYLE_NUMBERS: dict[str, tuple[float, float]] = {
     # PowerPoint's slides are 1 to 56 inches each way.
     "width": (72.0, 4032.0), "height": (72.0, 4032.0), "margin": (0.0, 2016.0),
@@ -1605,6 +1617,12 @@ class Slide:
         its own."""
         self.byline_runs: tuple[TextRun, ...] = ()
         """Who and when, on a title slide."""
+        self.shapes: list[dict[str, object] | None] = []
+        """The shapes drawn on it where they are put (``shape``), in the order they are drawn,
+        each as ``flexo.freeform`` reads it; ``None`` where one written cannot be drawn (said,
+        and left out, the others keeping their places in the list)."""
+        self.shape_sources: list[object] = []
+        """Each shape as a deck document writes it."""
         self.placeholders: frozenset[str] = frozenset()
         """The fields written but left empty (title, subtitle, words): each holds its place."""
         if layout == "columns":
@@ -1759,6 +1777,22 @@ class Slide:
         next(iter(self.regions.values())).mechanism(steps, **options)  # type: ignore[arg-type]
         return self
 
+    def shape(self, kind: str, **options: object) -> Slide:
+        """A shape drawn where it is put, over the slide's words and objects (``behind=True``:
+        under them) -- an arrow at part of a figure, a ring round a structure's pocket, a
+        brace and its words beside a list, a highlight, a box of words anywhere:
+        ``slide.shape("arrow", from_=[120, 300], to=[260, 220])``,
+        ``slide.shape("rounded-rectangle", at=[600, 80], size=[200, 90], text="Encoder")``.
+        Places are points on the slide (``SHAPE_FRAME``); every kind and setting is
+        ``flexo.freeform``'s. ``build=True`` makes it appear on a click (after the slide's
+        objects that do); ``hidden=True`` keeps it out of the show; ``locked=True`` keeps it
+        where it is while the deck is edited."""
+
+        written = {"kind": kind, **{("from" if key == "from_" else key): value for key, value in options.items()}}
+        self.shapes.append(shape_of(written))
+        self.shape_sources.append(written)
+        return self
+
     def notes(self, text: str) -> Slide:
         """What to say: kept as the slide's speaker notes."""
 
@@ -1772,6 +1806,95 @@ class Slide:
         self.footnotes.append(inline(text))
         self.footnote_sources.append(text)
         return self
+
+
+def shape_of(written: object) -> dict[str, object]:
+    """A shape on a slide as written, checked (``flexo.freeform.checked``, with what a slide
+    says of it besides: ``SHAPE_KEYS``): what is wrong said under its key."""
+
+    from flexo.freeform import ShapeError, checked
+
+    try:
+        made = checked(written, extra=SHAPE_KEYS)
+    except ShapeError as error:
+        raise SettingError(error.key, error.message) from None
+    for key in SHAPE_KEYS:
+        if key in made and not isinstance(made[key], bool):
+            raise SettingError(key, f"{key} must be true or false, not {made[key]!r}.")
+    return made
+
+
+_OBJECT = re.compile(r"(body|left|right|columns\.(\d+)|columns\[(\d+)\])\[(\d+)\]")
+"""An object of a slide named as a shape's end is glued to it: ``body[0]``, ``left[2]``,
+``columns[1][0]`` (``columns.1[0]`` too)."""
+
+
+def object_named(slide: Slide, name: str) -> tuple[str, int] | None:
+    """The region and index of the object a shape's end names (``body[0]``), if the slide
+    has it."""
+
+    found = _OBJECT.fullmatch(str(name).strip())
+    if not found:
+        return None
+    region, column = found.group(1), found.group(2) or found.group(3)
+    if column is not None:
+        region = f"column{int(column) + 1}"
+    index = int(found.group(4))
+    blocks = slide.regions.get(region)
+    return (region, index) if blocks is not None and index < len(blocks.blocks) else None
+
+
+def shape_ids(shapes: Sequence[object]) -> dict[str, dict[str, object]]:
+    """A slide's shapes by their ids, those in groups too."""
+
+    found: dict[str, dict[str, object]] = {}
+
+    def walk(items: Sequence[object]) -> None:
+        for item in items:
+            if isinstance(item, dict):
+                if item.get("id") is not None:
+                    found.setdefault(str(item["id"]), item)
+                if item.get("kind") == "group":
+                    walk(item.get("shapes") or [])
+
+    walk(shapes)
+    return found
+
+
+def shape_problems(slide: Slide) -> list[tuple[int, str, str]]:
+    """What a slide's shapes name that it has none of, or name twice: ``(index, key,
+    message)`` for each -- an id two shapes have, an end glued to a shape or an object the
+    slide has none of (with no ``at`` to stand where it was)."""
+
+    problems: list[tuple[int, str, str]] = []
+    seen: set[str] = set()
+    ids = shape_ids([item for item in slide.shapes if item])
+
+    def walk(item: dict[str, object], index: int, path: str) -> None:
+        if item.get("id") is not None:
+            name = str(item["id"])
+            if name in seen:
+                problems.append((index, f"{path}id", f"Two shapes are called {name}: each needs a name of its own."))
+            seen.add(name)
+        for key in ("from", "to"):
+            end = item.get(key)
+            if not isinstance(end, dict) or end.get("at") is not None:
+                continue
+            if end.get("shape") is not None and str(end["shape"]) not in ids:
+                problems.append((index, f"{path}{key}", f"{key} is glued to a shape called {end['shape']}, and the "
+                                                         "slide has none of that name."))
+            elif end.get("object") is not None and object_named(slide, str(end["object"])) is None:
+                problems.append((index, f"{path}{key}", f"{key} is glued to {end['object']}, and the slide "
+                                                         "has no such object (name one as body[0], left[1] or "
+                                                         "columns[2][0])."))
+        for number, child in enumerate(item.get("shapes") or [] if item.get("kind") == "group" else []):
+            if isinstance(child, dict):
+                walk(child, index, f"{path}shapes[{number}].")
+
+    for index, item in enumerate(slide.shapes):
+        if item:
+            walk(item, index, "")
+    return problems
 
 
 THEME_SLIDE_KEYS = ("look", "style", "background", "font", "title_font", "figure_font")
@@ -2347,6 +2470,47 @@ class WordsLayout:
 
 
 @dataclass(slots=True)
+class ShapeLayout:
+    """A shape on a slide as it was drawn (``Slide.shape``), for writers that draw shapes
+    natively (PowerPoint's own): in the slide's shape units (``SHAPE_FRAME``), each
+    ``scale`` points."""
+
+    id: str
+    spec: dict[str, object]
+    """The shape as drawn: what it says over its kind's defaults (``flexo.freeform.normalised``)."""
+    geometry: object
+    """Its ``flexo.freeform.Geometry``: its outline, heads, frame and turn, its ends where glued."""
+    scale: float = 1.0
+    behind: bool = False
+    words: WordsInShape | None = None
+    glue: tuple[tuple[str, str] | None, tuple[str, str] | None] = (None, None)
+    """What each end of a line is glued to that is drawn natively too -- another shape, by
+    the id it is drawn with, and the side -- else ``None``."""
+    children: list[ShapeLayout] = field(default_factory=list)
+    """A group's shapes."""
+
+
+@dataclass(slots=True)
+class WordsInShape:
+    """A shape's words as they were set: in ``box`` (unturned, in the shape's units, with
+    ``padding`` round them inside it) -- a closed shape's, or a line's label beside it,
+    turned ``angle`` degrees about ``pivot``."""
+
+    runs: tuple[TextRun, ...]
+    box: tuple[float, float, float, float]
+    size: float
+    align: str
+    valign: str
+    family: str
+    colour: str
+    padding: float
+    angle: float = 0.0
+    pivot: tuple[float, float] = (0.0, 0.0)
+    wrap: bool = True
+    line_height: float = 0.0
+
+
+@dataclass(slots=True)
 class RenderedSlide:
     slide: Slide
     svg: str
@@ -2366,6 +2530,8 @@ class RenderedSlide:
     than the best one being found (``compose.EDITING``): drawn again once edits stop."""
     builds: list[tuple[int, str]] = field(default_factory=list)
     """``(step, id)`` of each block that builds in: the step it appears at."""
+    shapes: list[ShapeLayout] = field(default_factory=list)
+    """The shapes drawn where they were put, in the order they are drawn (see ``ShapeLayout``)."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""
