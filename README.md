@@ -566,7 +566,10 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   slide -- and paste pictures, structure files and words copied elsewhere: a drawing
   copied in Inkscape is pasted as the SVG it is (in the Mac app), its lines and words
   drawn as lines and words (in the PowerPoint as shapes, where they can be), not as a
-  picture of it. The bar
+  picture of it. What is copied goes to other apps as the drawing it is: Keynote, Word and
+  Pages paste a PDF in the deck's fonts, PowerPoint its own editable shapes, Inkscape and
+  Illustrator an SVG, the rest a picture four times its size (in a browser, the picture
+  and the SVG, where the browser takes them). The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
   a figure, a flow chart, a structure, a picture, a table, and more -- after the
   one chosen. Pictures dropped on the slide are added to it, and so are structures
