@@ -745,6 +745,12 @@ class DeckKind:
             from flexo_talk.studio.convert import convert
 
             return convert(document, action, base)
+        if action.get("do") == "editable":
+            # A drawing placed as a picture made the slide's own shapes: Make Editable
+            # (editable.py), one picture or every one in the deck.
+            from flexo_talk.studio.editable import editable
+
+            return editable(document, action, base)
         if action.get("do") != "figure":
             raise EditError(f"Unknown deck edit “{action.get('do')}”.")
         at = action.get("at") or {}

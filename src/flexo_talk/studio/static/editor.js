@@ -19,6 +19,7 @@ import { BOXED } from "/static/studio/freeform.js";
 import { convertible, convertCommand } from "/static/studio/toparts.js";
 import { slideToParts } from "/static/kinds/deck/toparts.js";
 import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
+import { editableTools, isDrawing } from "/static/kinds/deck/editable.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
 import { magnetButton } from "/static/studio/magnet.js";
@@ -1016,6 +1017,14 @@ export function mount(studio, container) {
     shapeScale: () => shapeScale(), frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()],
     editSlide: (mutate, options) => editSlide(mutate, options), setOption, widthWithin: (at, width) => widthWithin(at, width),
     chooseShape: (index) => { freeShapes.choose([index]); placeChosen(); },
+  });
+  // Make Editable: a drawing placed as a picture made the slide's own shapes, where it was
+  // drawn, and chosen -- one picture, or every one in the deck (editable.js).
+  const editables = editableTools({
+    studio, slideIndex: () => state.slide, regions: (slide) => regionsOf(slide).map((region) => region.key), blocksAt: (slide, key) => blocksAt(slide, key),
+    apply: (document, label) => { state.focus = null; studio.change(() => document, { label, glued: true }); renderInspector(); reportFocus(); },
+    chooseShapes: (_, indexes) => { freeShapes.choose(indexes); placeChosen(); },
+    away: (what) => awayFrom(what),
   });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
@@ -3958,6 +3967,8 @@ export function mount(studio, container) {
       if (block.crop != null || block.mask != null) items.push({ icon: "refresh", label: "Reset Crop", run: () => resetCrop(at) });
       if (pictureTools.maskPair({ place: at })) items.push({ icon: "image", label: "Mask with Shape", run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) });
       if (pictureTools.masked(at)) items.push({ icon: "refresh", label: "Unmask", run: () => pictureTools.unmask(at) });
+      // A drawing's picture, as its shapes to drag one by one (editable.js).
+      if (isDrawing(block)) items.push({ icon: "shape", label: "Make Editable", run: () => editables.one(at) });
     }
     if (MAGNIFIED.has(kind) && pictureTools.canInset(at)) items.push({ icon: "plus", label: "Add Zoom Inset", run: () => pictureTools.addInset(at) });
     if (items.length) items.push("-");
@@ -8718,6 +8729,9 @@ export function mount(studio, container) {
     const shape = aspect ? cropShapeOf(block, aspect) : "original";
     return [shown,
       fileRow(block.image, ["image"], (path) => replacePicture(at, path), "picture.png"),
+      // A drawing's picture, made its own shapes where it is (editable.js).
+      isDrawing(block) && ui.field("Shapes", ui.button("Make Editable", () => editables.one(at), { small: true, icon: "shape", title: "The drawing as its own shapes, where it is" }),
+        { hint: "Its boxes, lines and words, to drag and edit one by one" }),
       // As Keynote's mask: a quick shape, or the picture cropped by hand on the slide.
       aspect && ui.field("Crop", h("div.crop-field", {},
         ui.segmented({ value: shape, options: cropShapes(aspect || 1).map(({ value, label }) => ({ value, label, title: value === "original" ? "The Whole Picture" : `Crop to ${label}` })),
@@ -10130,6 +10144,8 @@ export function mount(studio, container) {
     ...clipCommands(),
     // A drawing on the clipboard, as one picture or in its own colours (drawingpaste.js).
     ...(typingNow() ? [] : drawings.commands()),
+    // Every drawing placed as a picture, made the slides' own shapes (editable.js).
+    ...(typingNow() ? [] : [editables.allCommand()].filter(Boolean)),
     ...chosenCommands(),
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js).
     ...(typingNow() ? [] : freeShapes.commands()),
@@ -10251,6 +10267,8 @@ export function mount(studio, container) {
       ...(MAGNIFIED.has(kind) && pictureTools.canInset(at) ? [{ icon: "plus", label: "Add Zoom Inset", hint: name, run: () => pictureTools.addInset(at) }] : []),
       ...(kind === "image" && pictureTools.maskPair({ place: at }) ? [{ icon: "image", label: "Mask with Shape", hint: `${name}, by the shape over it`, run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) }] : []),
       ...(kind === "image" && pictureTools.masked(at) ? [{ icon: "refresh", label: "Unmask", hint: name, run: () => pictureTools.unmask(at) }] : []),
+      // Format › Make Editable, of a drawing's picture (editable.js).
+      ...(kind === "image" && isDrawing(block) ? [editables.command(block, at, name)] : []),
       // Format › Copy Style and Paste Style, of a figure's shapes chosen.
       ...(parts?.canCopyStyle?.() ? [{ icon: "copy", label: "Copy Style", keys: "⌥⌘C", run: () => parts.copyStyle() }] : []),
       ...(parts?.canPasteStyle?.() ? [{ icon: "paste", label: "Paste Style", keys: "⌥⌘V", run: () => parts.pasteStyle() }] : []),
