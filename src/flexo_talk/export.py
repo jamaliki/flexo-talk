@@ -28,6 +28,7 @@ from flexo_talk.pptx import (
     slide_pictures,
 )
 from flexo_talk.pptx import editable_maths as editable_maths_of
+from flexo_talk.pptx_insets import inset_views
 from flexo_talk.pptx_shapes import ShapeWriter
 
 FORMATS = ("pptx", "pdf", "svg", "png")
@@ -182,6 +183,8 @@ def write_pptx(
     for item in rendered:
         drawing = read_drawing(clicks_lifted(item.svg, item.builds))
         formulas = _drop_lists(drawing.root)
+        # (What a zoom inset among them shows is drawn from their drawing: a picture.)
+        views = inset_views(drawing.root)
         # The slide's shapes are PowerPoint's own (pptx_shapes): their drawing goes.
         _drop_shapes(drawing.root)
         # (Those drawn over a figure on it are the figure's drawing: named for their kinds.)
@@ -212,6 +215,7 @@ def write_pptx(
                 add_drawing(tree, Drawing(drawing.width, drawing.height, Group(None, [shape])), Placement(), **drawn)
             # Shapes behind the slide's words and objects, under them; those over them, last.
             shaped = ShapeWriter(tree, deck, _slide_palette(deck, item.slide))
+            shaped.views, shaped.pictures = views, drawn["pictures"]
             shaped.write([layout for layout in item.shapes if layout.behind])
             worded = {words.id: words for words in item.worded}
             span = (deck.style.margin, deck.style.width - deck.style.margin)

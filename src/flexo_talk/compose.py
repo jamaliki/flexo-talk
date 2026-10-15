@@ -735,7 +735,7 @@ def _held_back(canvas: _Canvas, slide: Slide) -> None:
                 file, _, function = str(reference.target).rpartition(":")
                 named = f"*{function}* from {file}" if file and function else f"*{reference.target}*"
                 region.blocks[index] = _Words(
-                    inline(f"{named} will appear when you trust this folder"),
+                    inline(f"{named} will appear once its Python is trusted"),
                     align="middle", muted=True,
                 )
             except Exception as error:
@@ -1933,7 +1933,7 @@ def _draw_shapes(canvas: _Canvas, slide: Slide, behind: ET.Element | None) -> li
     # What lines are glued to is drawn first, as far as its place goes: its box, its words'.
     sized: dict[str, tuple[float, float]] = {}
     for ident, shape in _shape_names(ids).items():
-        if freeform.family(str(shape["kind"])) in ("box", "text"):
+        if freeform.family(str(shape["kind"])) in ("box", "text", "path"):
             if shape["kind"] == "text":
                 sized[ident] = _text_box_size(canvas, freeform.normalised(shape), scale)
             targets[ident] = freeform.target_of(shape, freeform.geometry(shape, size=sized.get(ident)))
@@ -2026,7 +2026,8 @@ def _shape_size(canvas: _Canvas, shape: dict, scale: float) -> float:
 
     style = canvas.deck.style
     kind = shape.get("kind")
-    points = style.body_size if kind == "text" else style.body_size * 0.9 if kind in BOXED else style.small_size * 1.1
+    inside = kind in BOXED or kind == "path"
+    points = style.body_size if kind == "text" else style.body_size * 0.9 if inside else style.small_size * 1.1
     return round(points / scale, 2)
 
 
@@ -2071,7 +2072,11 @@ def _draw_shape(canvas: _Canvas, parent: ET.Element, ident: str, shape: dict, fi
     form = freeform.family(kind)
     ends = freeform.glued(shape, find) if form == "line" else None
     made = freeform.geometry(shape, ends, sized.get(ident))
-    drawn = freeform.draw(parent, spec, made, ident, canvas.palette, shadow if spec.get("shadow") else None)
+    shown = None
+    if kind == "inset":
+        drawn, shown = _draw_inset(canvas, parent, ident, spec, made, scale, shadow)
+    else:
+        drawn = freeform.draw(parent, spec, made, ident, canvas.palette, shadow if spec.get("shadow") else None)
     drawn.set("data-flexo-shape", kind)
     drawn.set("data-flexo-box", " ".join(number(value) for value in made.box))
     if made.turn:
@@ -2092,7 +2097,53 @@ def _draw_shape(canvas: _Canvas, parent: ET.Element, ident: str, shape: dict, fi
             if side == "centre":
                 side = freeform.facing(target, made.ends[1 - at])
             glue[at] = (named[str(end["shape"])], str(side))
-    return _Drawn(drawn, ShapeLayout(ident, spec, made, scale, words=words, glue=(glue[0], glue[1])))
+    return _Drawn(drawn, ShapeLayout(ident, spec, made, scale, words=words, glue=(glue[0], glue[1]), inset=shown))
+
+
+def _draw_inset(canvas: _Canvas, parent: ET.Element, ident: str, spec: dict, made: object, scale: float,
+                shadow: object) -> tuple[ET.Element, object]:
+    """A zoom inset (``flexo.insets``): the object of the slide it names (``of``) drawn again,
+    magnified, in its box -- its frame round the region on that object, and the lines joining
+    them. Of an object the slide has none of (or one that draws nothing), its box alone."""
+
+    from flexo import insets
+
+    of = str(spec.get("of") or "")
+    target, source = _magnified(canvas, of, scale)
+    if target is None:
+        canvas.diagnostics.append(f"{canvas.slide.id}: the zoom inset of {of} shows nothing: the slide has no "
+                                  "picture, figure or plot there.")
+    drawn = insets.draw(parent, spec, made, ident, canvas.palette, source=source, target=target, unit=scale,
+                        shadow=shadow)
+    drawn.set("data-flexo-of", of)
+    return drawn, insets.placed(spec, source) if source is not None else None
+
+
+def _magnified(canvas: _Canvas, name: str, scale: float) -> tuple[str | None, tuple | None]:
+    """What a zoom inset of the slide's object ``name`` (``body[0]``) draws again: the id of
+    its drawing -- a picture, without its caption -- and its box in the shapes' units."""
+
+    found = object_named(canvas.slide, name)
+    if found is None:
+        return None, None
+    ident = f"{canvas.slide.id}.{found[0]}.{found[1]}"
+    holder = next((item for item in canvas.layer.iter() if item.get("id") == ident), None)
+    if holder is None:
+        return None, None
+    inner = next((item for item in holder.iter() if item.get("id") == f"{ident}.picture"), holder)
+    values = (inner.get("data-flexo-box") or "").split()
+    if len(values) != 4:
+        return None, None
+    x, y, w, h = (float(value) / scale for value in values)
+    return str(inner.get("id")), (x, y, w, h)
+
+
+def _framed(drawn: ET.Element | None, box: Box | tuple[float, float, float, float]) -> None:
+    """Where an object a zoom inset may show part of is drawn: ``x y width height``."""
+
+    if drawn is not None:
+        values = (box.x, box.y, box.width, box.height) if isinstance(box, Box) else box
+        drawn.set("data-flexo-box", " ".join(number(value) for value in values))
 
 
 def _shape_words(canvas: _Canvas, drawn: ET.Element, ident: str, spec: dict, made: object, scale: float
@@ -4795,6 +4846,7 @@ def _place_figure(canvas: _Canvas, identifier: str, item: _Prepared, box: Box, s
     canvas.span = (_across(canvas, box, item.width * scale), item.width * scale)
     inks = _slide_inks(item.svg, canvas.deck.palette, canvas.palette, black=False)
     _place_svg(canvas, identifier, inks, x, y, scale, item.width * scale)
+    _framed(canvas.layer[-1], (x + item.left * scale, y + item.top * scale, item.width * scale, item.height * scale))
     return box.height
 
 
@@ -4890,6 +4942,7 @@ def _plot(canvas: _Canvas, identifier: str, block: _Plot, box: Box) -> float:
             canvas.diagnostics.append(f"{canvas.slide.id}: {problem}")
     block.drawn = svg
     _place_svg(canvas, identifier, _slide_inks(svg, canvas.deck.palette, canvas.palette), box.x, box.y, 1.0)
+    _framed(canvas.layer[-1], (box.x, box.y, width, height))
     return height
 
 
@@ -5683,6 +5736,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         _place_svg(canvas, identifier, art.markup, _across(canvas, box, width), box.y, scale * units, width)
         _described(canvas.layer[-1], block.description)
         _whole(canvas.layer[-1], Box(_across(canvas, box, width), box.y, width, height))
+        _framed(canvas.layer[-1], Box(_across(canvas, box, width), box.y, width, height))
         _faces_carried(canvas, identifier, block)
         return height
     if art.format == "svg":
@@ -5699,6 +5753,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
     )
     _described(picture, block.description)
     _whole(picture, Box(_across(canvas, box, width), box.y, width, height))
+    _framed(picture, Box(_across(canvas, box, width), box.y, width, height))
     return height
 
 
@@ -5738,13 +5793,35 @@ def _cropped_image(
     else:
         href = picture_href(art)
     # One tile, as large as the picture: drawn once, where the crop puts it.
+    tile = Box(kept.x - left * whole_w, kept.y - top * whole_h, whole_w, whole_h)
+    outline = None
+    if isinstance(block.mask, dict):
+        from flexo.masks import outline as masked
+
+        # Masked by a shape: the tile as large as the shape too, should it reach past the
+        # picture, so the picture is never repeated in it.
+        outline = masked(block.mask, (kept.x, kept.y, kept.width, kept.height))
+        xs = [value for segment in outline for value in segment[1::2]]
+        ys = [value for segment in outline for value in segment[2::2]]
+        if xs and ys:
+            reach = (min(tile.x, *xs), min(tile.y, *ys), max(tile.x + whole_w, *xs), max(tile.y + whole_h, *ys))
+            tile = Box(reach[0], reach[1], reach[2] - reach[0], reach[3] - reach[1])
     pattern = element(
         canvas.layer, "pattern", id=f"{identifier}.crop", patternUnits="userSpaceOnUse",
-        x=kept.x - left * whole_w, y=kept.y - top * whole_h, width=whole_w, height=whole_h,
+        x=tile.x, y=tile.y, width=tile.width, height=tile.height,
     )
-    element(pattern, "image", width=whole_w, height=whole_h, href=href)
+    element(pattern, "image", x=None if tile.x == kept.x - left * whole_w else kept.x - left * whole_w - tile.x,
+            y=None if tile.y == kept.y - top * whole_h else kept.y - top * whole_h - tile.y,
+            width=whole_w, height=whole_h, href=href)
     filled = f"url(#{identifier}.crop)"
-    if block.mask == "circle":
+    if outline is not None:
+        from flexo.freeform import path_data
+
+        picture = element(
+            canvas.layer, "path", id=identifier, d=path_data(outline), fill=filled,
+            data__flexo__width=number(kept.width),
+        )
+    elif block.mask == "circle":
         picture = element(
             canvas.layer, "ellipse", id=identifier, cx=kept.x + kept.width / 2.0, cy=kept.y + kept.height / 2.0,
             rx=kept.width / 2.0, ry=kept.height / 2.0, fill=filled, data__flexo__width=number(kept.width),
@@ -5756,6 +5833,7 @@ def _cropped_image(
         )
     _described(picture, block.description)
     _whole(picture, Box(kept.x - left * whole_w, kept.y - top * whole_h, whole_w, whole_h))
+    _framed(picture, kept)
 
 
 @functools.lru_cache(maxsize=32)

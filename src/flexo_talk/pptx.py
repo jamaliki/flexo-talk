@@ -230,6 +230,12 @@ def _parts(item: Shape | Text | Image | Group, placement: Placement, ids: _Ids) 
     """What ``item`` is on the slide: a group that only lays its shapes out (``_wrapper``)
     as those shapes; anything else as itself."""
 
+    if isinstance(item, Group) and item.data.get("data-flexo-inset") == "view":
+        # A zoom inset's view: what it shows, as one picture, cropped to its box.
+        from flexo_talk.pptx_insets import view_picture
+
+        element = view_picture(item, placement, ids)
+        return [] if element is None else [element]
     if isinstance(item, Group) and item.clip is not None:
         # A slide program cannot clip: what the group shows of what it holds is cut to that
         # (the part of a figure's frame drawn again in a group, the frame cut to the group).
@@ -786,6 +792,10 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
         x, y, width, height = shown[0], shown[1], shown[2] - shown[0], shown[3] - shown[1]
     # Cropped round, it is an oval picture: PowerPoint's Crop to Shape, Oval.
     geometry = "ellipse" if image.oval else "rect"
+    shaped = f'<a:prstGeom prst="{geometry}"><a:avLst/></a:prstGeom>'
+    if image.outline:
+        # Masked by a shape: the picture in that shape, a freeform of its outline.
+        shaped = _outlined(image.outline, (x, y, width, height), placement)
     left, top = placement.point(x, y)
     flips = (' flipH="1"' if image.flip_x else "") + (' flipV="1"' if image.flip_y else "")
     label = escape(image.id or "picture", {'"': "&quot;"})
@@ -801,8 +811,31 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
         f"<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
         f'<p:spPr><a:xfrm{flips}><a:off x="{left}" y="{top}"/>'
         f'<a:ext cx="{placement.length(width)}" cy="{placement.length(height)}"/></a:xfrm>'
-        f'<a:prstGeom prst="{geometry}"><a:avLst/></a:prstGeom></p:spPr></p:pic>'
+        f"{shaped}</p:spPr></p:pic>"
     )
+
+
+def _outlined(outline: tuple[Segment, ...], box: tuple[float, float, float, float], placement: Placement) -> str:
+    """A picture's shape as a freeform: ``outline`` (on the drawing) in its box."""
+
+    x, y, w, h = box
+
+    def point(px: float, py: float) -> str:
+        return f'<a:pt x="{placement.length(px - x)}" y="{placement.length(py - y)}"/>'
+
+    body = []
+    for segment in outline:
+        if segment.kind == "M":
+            body.append(f"<a:moveTo>{point(*segment.points[0])}</a:moveTo>")
+        elif segment.kind == "L":
+            body.append(f"<a:lnTo>{point(*segment.points[0])}</a:lnTo>")
+        elif segment.kind == "C":
+            body.append(f"<a:cubicBezTo>{''.join(point(*p) for p in segment.points)}</a:cubicBezTo>")
+        else:
+            body.append("<a:close/>")
+    width, height = max(1, placement.length(w)), max(1, placement.length(h))
+    return (f'<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="{width}" b="{height}"/>'
+            f'<a:pathLst><a:path w="{width}" h="{height}">{"".join(body)}</a:path></a:pathLst></a:custGeom>')
 
 
 # -- shapes ----------------------------------------------------------------------------

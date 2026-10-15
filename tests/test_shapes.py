@@ -5,6 +5,7 @@ PowerPoint each PowerPoint's own shape."""
 
 from __future__ import annotations
 
+import math
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -275,7 +276,10 @@ def test_the_studio_offers_every_kind_and_says_how_to_write_them() -> None:
     offered = [name for section in shapes["sections"] for name in section["kinds"]]
     from flexo.freeform import KINDS
 
-    assert sorted(offered) == sorted(KINDS)
+    # (All but a zoom inset, added for what it magnifies (Add Zoom Inset), and a picture, a
+    # drawing's part made by its paste.)
+    assert sorted(offered) == sorted(kind for kind in KINDS if kind not in ("inset", "picture"))
+    assert shapes["tools"] == {"path": "Pen"}
     assert shapes["frame"] == 960 and "build" in shapes["slide_keys"]
     guide = kind.guide()
     assert "Shapes (a slide's shapes" in guide and "curved-arrow: bend, lean" in guide
@@ -391,3 +395,60 @@ def test_a_figures_shape_behind_its_parts_is_under_them_on_the_slide_and_in_the_
     found = names(slide.shapes)
     # Drawn first, it is under the decoder in the PowerPoint too: not hiding it.
     assert found.index("Oval") < found.index("Decoder")
+
+
+# -- paths --
+
+HOLED = "M 100 100 h 100 v 100 h -100 z m 20 20 h 60 v 60 h -60 z"
+PATHS = (
+    {"kind": "path", "id": "donut", "d": "M 300 100 A 50 50 0 1 1 300 200 A 50 50 0 1 1 300 100 Z "
+     "M 300 125 A 25 25 0 1 0 300 175 A 25 25 0 1 0 300 125 Z", "fill": "accent", "text": "Pore", "rotate": 15},
+    {"kind": "path", "d": HOLED, "fill_rule": "evenodd", "fill": "accent2"},
+    {"kind": "path", "d": HOLED.replace("100 100", "500 100"), "fill": "accent2"},
+    {"kind": "path", "d": "M 600 300 C 650 250 700 350 750 300", "fill": "none", "start": "dot", "end": "triangle",
+     "line_width": 3},
+    {"kind": "path", "d": "M 600 400 C 650 350 700 450 750 400", "fill": "none", "end": "bar", "line_width": 3},
+    {"kind": "arrow", "from": [100, 450], "to": {"shape": "donut", "side": "left"}},
+)
+
+
+def test_a_path_is_read_drawn_and_written_back_as_written() -> None:
+    document = deck_of(*PATHS)
+    assert deck_document(deck_from_document(document, "."))["slides"][0]["shapes"] == list(PATHS)
+    rendered, root = drawn(document)
+    donut = element(root, "slide1.shapes.0")
+    assert donut.get("data-flexo-shape") == "path" and "rotate(15" in donut.get("transform")
+    assert element(root, "slide1.shapes.1").get("fill-rule") == "evenodd"
+    # Its words in its box, the size a shape's are.
+    assert "Pore" in "".join(element(root, "slide1.shapes.0.text").itertext())
+    assert rendered.shapes[0].words.box == pytest.approx(rendered.shapes[0].geometry.box)
+    # The arrow is glued to the ring's outline, at its left -- level with its middle -- turned
+    # as it is.
+    ends = [float(value) for value in element(root, "slide1.shapes.5").get("data-flexo-ends").split()]
+    turn = math.radians(15)
+    assert ends[2:] == pytest.approx([300 - 50 * math.cos(turn), 150 - 50 * math.sin(turn)], abs=0.1)
+    with pytest.raises(DeckDocumentError, match=r"a path starts with M"):
+        deck_from_document(deck_of({"kind": "path", "d": "L 1 1"}), ".")
+
+
+def test_a_path_is_a_powerpoint_freeform_filled_as_it_fills(tmp_path: Path) -> None:
+    written = DeckKind().export(deck_of(*PATHS), tmp_path, "talk", ["pptx"], into=tmp_path / "out")
+    slide = Presentation(str(written[0])).slides[0]
+    drawing = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    paths = [shape for shape in slide.shapes if shape.name.startswith("Path")]
+    assert [shape.name for shape in paths] == ["Path “Pore”", "Path", "Path", "Path", "Path"]
+    donut, evenodd, nonzero, headed, barred = paths
+    for shape in (donut, evenodd, nonzero, headed):
+        assert shape._element.find(f".//{drawing}custGeom") is not None
+    # Its pieces, gathered as PowerPoint fills them: a hole that winds the other way, or any
+    # even-odd, one path; a piece winding as the one round it does, filled, a path of its own.
+    assert [len(shape._element.findall(f".//{drawing}path")) for shape in (donut, evenodd, nonzero)] == [1, 1, 2]
+    assert donut.rotation == pytest.approx(15.0) and "Pore" in donut.text_frame.text
+    xml = ET.tostring(headed._element).decode()
+    assert 'headEnd type="oval"' in xml and 'tailEnd type="triangle"' in xml
+    # A bar, which PowerPoint has no line end for, is a shape of its own, with the path.
+    assert barred.shape_type == 6  # a group
+    # A connector glued to it is joined to its side.
+    arrow = next(shape for shape in slide.shapes if shape.name == "Arrow")
+    joined = arrow._element.find(f".//{drawing}endCxn")
+    assert joined is not None and joined.get("id") == str(donut.shape_id) and joined.get("idx") == "1"

@@ -3,7 +3,8 @@ its kind -- a rectangle, a rounded one, an oval, a triangle, a diamond, a pentag
 a parallelogram, a trapezoid, a block arrow, a chevron, a plus, a cloud, a speech bubble, a
 brace, a bracket -- its settings (a corner, a slant, a callout's tail) as PowerPoint's
 adjustments, so it is edited there as what it is; any other kind a freeform of the same
-outline. Its words are its own text, in it, as PowerPoint sets words in that shape. A
+outline, a path too (its pieces, holes and all, filled as it fills them). Its words are its
+own text, in it, as PowerPoint sets words in that shape. A
 straight line or an elbow is a connector, joined to the shapes its ends are glued to, its
 arrowheads its line ends; any other line a freeform with the same ends. A shape that builds
 in is named as the slide's drawing names it, so its click finds it (``export.write_pptx``).
@@ -24,6 +25,8 @@ from flexo_talk.pptx import (
     Placement,
     _colour,
     _fitted,
+    _Ids,
+    _picture,
     _runs_xml,
 )
 
@@ -43,6 +46,18 @@ def _hundred(value: float) -> int:
     return round(value * 100000)
 
 
+def _custom_dash(dashes: object, width: float) -> str:
+    """A dash pattern of its own lengths as PowerPoint's: each a share of the line's width."""
+
+    if isinstance(dashes, str) or not isinstance(dashes, list | tuple) or len(dashes) < 2 or width <= 0:
+        return ""
+    pairs = list(zip(dashes[0::2], dashes[1::2], strict=False))
+    return "<a:custDash>" + "".join(
+        f'<a:ds d="{max(1, round(on / width * 100000))}" sp="{max(1, round(off / width * 100000))}"/>'
+        for on, off in pairs
+    ) + "</a:custDash>"
+
+
 class ShapeWriter:
     """Writes a slide's shapes into its shape tree, numbering each as it goes, so a line
     written later is joined to a shape written earlier -- behind the slide's words, or over
@@ -59,10 +74,17 @@ class ShapeWriter:
         self.sites: dict[str, dict[str, int]] = {}
         """Where a connector may be joined to each shape, by side: those PowerPoint draws
         sites on as these are drawn."""
+        self.pictures = None
+        """How a picture's bytes are added to the slide (``pptx.slide_pictures``): a picture
+        shape (a drawing's part kept as drawn) is left out without it."""
         self.pending: list[tuple[etree._Element, str, str, str]] = []
         """Connectors' ends waiting for the shape they are glued to to be written (one later
         in the list, or over the slide's words where the line is behind them): the
         connector's properties, which end, the shape, and its side."""
+        self.views: dict = {}
+        """What each zoom inset shows, by its id: its view, as the slide's drawing reads it."""
+        self.pictures = None
+        """Adds a picture to the slide (``pptx.slide_pictures``): a zoom inset's view."""
 
     def number(self) -> int:
         self.next += 1
@@ -111,9 +133,19 @@ class ShapeWriter:
         if kind == "group":
             parts = [part for child in layout.children for part in self._shape(child)]
             return [self._group(parts, layout.id)] if parts else []
+        if kind == "inset":
+            from flexo_talk.pptx_insets import inset_parts
+
+            parts = inset_parts(self, layout, placement)
+            return [self._group(parts, layout.id)] if len(parts) > 1 else parts
         form = freeform.family(kind)
+        if kind == "picture":
+            made = self._picture(layout, placement)
+            return [made] if made is not None else []
         if form in ("box", "text"):
             return [self._boxed(layout, placement)]
+        if form == "path":
+            return [self._path(layout, placement)]
         made = [self._line(layout, placement)]
         if layout.words is not None:
             made.append(self._label(layout, placement))
@@ -148,6 +180,47 @@ class ShapeWriter:
             f"{geometry}{self._fill(spec, closed=True)}{self._ln(spec, placement)}{self._shadow(spec, placement)}"
             f"</p:spPr>{self._body(layout, placement)}</p:sp>"
         )
+
+    def _picture(self, layout: ShapeLayout, placement: Placement) -> etree._Element | None:
+        """A picture shape (a drawing's part kept as drawn) as a picture: its file's bitmap,
+        or an SVG with its picture beside it, as a slide's pictures are written."""
+
+        import base64
+        from pathlib import Path
+
+        from flexo.drawing import Image
+
+        spec, made = layout.spec, layout.geometry
+        source = Path(str(spec.get("source") or ""))
+        if self.pictures is None or not source.is_file():
+            return None
+        kind = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(
+            source.suffix.lower())
+        if kind is None:
+            return None
+        data = source.read_bytes()
+        if kind == "image/svg+xml":
+            from flexo.artwork import load_artwork
+
+            data = load_artwork("picture", str(source)).markup.encode("utf-8")
+        x, y, w, h = made.box
+        flip = spec.get("flip")
+        image = Image(layout.id, x, y, w, h, f"data:{kind};base64,{base64.b64encode(data).decode()}", "none",
+                      flip_x=flip in ("horizontal", "both"), flip_y=flip in ("vertical", "both"))
+        ids = _Ids(self.next, self.pictures)
+        drawn = _picture(image, placement, ids)
+        self.next = ids.next
+        if drawn is None:
+            return None
+        frame = drawn.find(f".//{{{_A}}}xfrm")
+        if made.turn and frame is not None:
+            frame.set("rot", str(round(made.turn * 60000) % 21600000))
+        alpha = float(spec.get("opacity", 1.0))
+        blip = drawn.find(f".//{{{_A}}}blip")
+        if alpha < 0.999 and blip is not None:
+            blip.insert(0, etree.fromstring(f'<a:alphaModFix xmlns:a="{_A}" amt="{_hundred(alpha)}"/>'))
+        self.numbers[layout.id] = int(drawn.find(f".//{{{_P}}}cNvPr").get("id"))
+        return drawn
 
     def _geometry(self, spec: dict, made, placement: Placement) -> tuple[str, dict[str, int] | None]:
         """PowerPoint's preset of the shape's kind, with its settings as adjustments -- or, where
@@ -236,6 +309,70 @@ class ShapeWriter:
         return (f"<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst>{joins}</a:cxnLst>{rect}<a:pathLst>"
                 f'<a:path w="{width}" h="{height}"{"" if filled else " fill=\"none\""}>{"".join(body)}</a:path>'
                 f"</a:pathLst></a:custGeom>")
+
+    def _path(self, layout: ShapeLayout, placement: Placement) -> etree._Element:
+        """A path as a freeform of its outline in its box, turned as it is (mirrored already),
+        its words in it, a connector's sites at its sides' middles; its pieces gathered into
+        the paths PowerPoint fills each even-odd, so it is filled as its fill rule fills it.
+        Open at an end, its arrowheads are its line's ends -- or, where PowerPoint has none
+        of that kind, shapes of their own, with it in a group."""
+
+        from flexo import freeform, pathdata
+
+        spec, made = layout.spec, layout.geometry
+        heads = [spec.get(end) or "none" for end in ("start", "end")]
+        native = all(head == "none" or head in _HEADS for head in heads)
+        bare = made if not made.heads else freeform.geometry({**spec, "start": "none", "end": "none"})
+        number = self.number()
+        self.numbers[layout.id] = number
+        self.sites[layout.id] = _BOX_SITES
+        x, y, w, h = made.box
+        left, top = placement.point(x, y)
+        width, height = max(1, placement.length(w)), max(1, placement.length(h))
+
+        def point(px: float, py: float) -> str:
+            return f'<a:pt x="{placement.length(px - x)}" y="{placement.length(py - y)}"/>'
+
+        paths = []
+        drawn = bare if native else made
+        for group in pathdata.fill_groups(drawn.segments, str(spec.get("fill_rule") or "nonzero")):
+            body = []
+            for segment in group:
+                if segment[0] == "M":
+                    body.append(f"<a:moveTo>{point(segment[1], segment[2])}</a:moveTo>")
+                elif segment[0] == "L":
+                    body.append(f"<a:lnTo>{point(segment[1], segment[2])}</a:lnTo>")
+                elif segment[0] == "C":
+                    body.append(f"<a:cubicBezTo>{point(*segment[1:3])}{point(*segment[3:5])}"
+                                f"{point(*segment[5:7])}</a:cubicBezTo>")
+                else:
+                    body.append("<a:close/>")
+            paths.append(f'<a:path w="{width}" h="{height}">{"".join(body)}</a:path>')
+        joins = "".join(f'<a:cxn ang="{angle}"><a:pos x="{px}" y="{py}"/></a:cxn>' for angle, px, py in (
+            ("3cd4", "hc", "t"), ("cd2", "l", "vc"), ("cd4", "hc", "b"), ("0", "r", "vc")))
+        geometry = (f'<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst>{joins}</a:cxnLst>'
+                    f'<a:rect l="0" t="0" r="{width}" b="{height}"/><a:pathLst>{"".join(paths)}</a:pathLst>'
+                    f"</a:custGeom>")
+        turn = f' rot="{round(made.turn * 60000) % 21600000}"' if made.turn else ""
+        name = layout.id if native else f"{layout.id}.outline"
+        shape = etree.fromstring(
+            f'<p:sp {_NS}><p:nvSpPr><p:cNvPr id="{number}" name="{escape(name)}"/><p:cNvSpPr/><p:nvPr/>'
+            f'</p:nvSpPr><p:spPr><a:xfrm{turn}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/>'
+            f"</a:xfrm>{geometry}{self._fill(spec, closed=True)}"
+            f"{self._ln(spec, placement, heads if native else None)}{self._shadow(spec, placement)}</p:spPr>"
+            f"{self._body(layout, placement)}</p:sp>"
+        )
+        if native:
+            return shape
+        # (Heads drawn as shapes, turned as the path is about its box's middle.)
+        parts = [shape]
+        for head in made.heads:
+            turned = [(segment[0], *(value for index in range(1, len(segment), 2)
+                                     for value in freeform._turned(segment[index:index + 2], made.centre, made.turn)))
+                      for segment in head.segments]
+            parts.append(self._head(layout.id, freeform.Head(head.end, head.kind, turned, head.filled, head.stroked,
+                                                              head.tip, head.angle), spec, placement))
+        return self._group(parts, layout.id)
 
     # -- lines --
 
@@ -393,8 +530,38 @@ class ShapeWriter:
         if colour is None:
             return "<a:noFill/>"
         alpha = float(spec.get("fill_opacity", 1.0)) * float(spec.get("opacity", 1.0))
+        if isinstance(spec.get("fill"), dict):
+            return self._gradient(spec["fill"], alpha)
         extra = f'<a:alpha val="{_hundred(alpha)}"/>' if alpha < 0.999 else ""
         return f'<a:solidFill><a:srgbClr val="{_colour(colour)}">{extra}</a:srgbClr></a:solidFill>'
+
+    def _gradient(self, fill: dict, alpha: float) -> str:
+        """A gradient fill as PowerPoint's: its stops, its way (a linear one's angle, which
+        PowerPoint measures as Flexo does, clockwise from left to right) or its middle (a
+        radial one's, out to the box's corners, where Flexo's reaches its radius)."""
+
+        from flexo import freeform, gradients
+
+        stops = gradients.stops_of(fill, lambda colour: freeform.paint(colour, self.palette))
+        reach = 1.0
+        if fill.get("gradient") == "radial":
+            centre = fill.get("centre") or [0.5, 0.5]
+            rx, ry = gradients.radii(fill)
+            far = max(math.hypot(max(centre[0], 1 - centre[0]), max(centre[1], 1 - centre[1])), 1e-6)
+            reach = min(1.0, math.hypot(rx, ry) / math.sqrt(2.0) / far) if rx and ry else 1.0
+        listed = "".join(
+            f'<a:gs pos="{round(min(1.0, offset * reach) * 100000)}"><a:srgbClr val="{_colour(colour)}">'
+            + (f'<a:alpha val="{_hundred(opacity * alpha)}"/>' if opacity * alpha < 0.999 else "")
+            + "</a:srgbClr></a:gs>"
+            for offset, colour, opacity, _ in stops
+        )
+        if fill.get("gradient") == "radial":
+            u, v = fill.get("centre") or [0.5, 0.5]
+            way = (f'<a:path path="circle"><a:fillToRect l="{_hundred(u)}" t="{_hundred(v)}" '
+                   f'r="{_hundred(1 - u)}" b="{_hundred(1 - v)}"/></a:path>')
+        else:
+            way = f'<a:lin ang="{round(float(fill.get("angle", 0.0)) * 60000) % 21600000}" scaled="0"/>'
+        return f'<a:gradFill rotWithShape="1"><a:gsLst>{listed}</a:gsLst>{way}</a:gradFill>'
 
     def _ln(self, spec: dict, placement: Placement, heads: list[str] | None = None) -> str:
         from flexo import freeform
@@ -403,9 +570,10 @@ class ShapeWriter:
         width = float(spec.get("line_width") or 0.0)
         if colour is None or width <= 0:
             return "<a:ln><a:noFill/></a:ln>"
-        alpha = float(spec.get("opacity", 1.0))
+        alpha = float(spec.get("opacity", 1.0)) * float(spec.get("line_opacity", 1.0))
         extra = f'<a:alpha val="{_hundred(alpha)}"/>' if alpha < 0.999 else ""
-        dash = _DASHES.get(str(spec.get("dash") or "solid"))
+        written = spec.get("dash") or "solid"
+        dash = _DASHES.get(str(written)) if isinstance(written, str) else None
         join = {"round": "<a:round/>", "bevel": "<a:bevel/>"}.get(str(spec.get("join")), '<a:miter lim="800000"/>')
         ends = ""
         length, breadth = freeform.head_size(spec)
@@ -414,7 +582,7 @@ class ShapeWriter:
                 ends += f'<a:{tag} type="{_HEADS[kind]}" w="{_size(breadth, width)}" len="{_size(length, width)}"/>'
         return (f'<a:ln w="{placement.length(width)}" cap="{_CAPS.get(str(spec.get("cap")), "flat")}">'
                 f'<a:solidFill><a:srgbClr val="{_colour(colour)}">{extra}</a:srgbClr></a:solidFill>'
-                f'{f"<a:prstDash val=\"{dash}\"/>" if dash else ""}{join}{ends}</a:ln>')
+                f'{f"<a:prstDash val=\"{dash}\"/>" if dash else _custom_dash(written, width)}{join}{ends}</a:ln>')
 
     def _shadow(self, spec: dict, placement: Placement) -> str:
         if not spec.get("shadow"):

@@ -4,7 +4,8 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE } from "/static/studio/studio.js";
+import { copyOut, copiedHere, pastedOwn } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
@@ -15,6 +16,11 @@ import { follows, merge3 } from "/static/studio/merge.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import { shapeEditor } from "/static/studio/shapes.js";
 import { BOXED } from "/static/studio/freeform.js";
+import { convertible, convertCommand } from "/static/studio/toparts.js";
+import { slideToParts } from "/static/kinds/deck/toparts.js";
+import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
+import { outline as maskOutline } from "/static/studio/masks.js";
+import { pathData } from "/static/studio/freeform.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -618,7 +624,8 @@ export function mount(studio, container) {
     if (Array.isArray(after) && after.length === before.length) after.forEach((slide, index) => {
       const was = before[index];
       if (rowed(slide) && rowed(was) && rowCount(slide) !== rowCount(was) && !before.some((other) => same(other, slide))) keepRows(was, slide);
-      keepGlue(was, slide);
+      // (A deck the studio made, glue and all -- Convert to Figure Parts's -- as it is.)
+      if (!options?.glued) keepGlue(was, slide);
     });
     return made;
   }, options);
@@ -631,12 +638,18 @@ export function mount(studio, container) {
   function keepGlue(was, slide) {
     if (!was || !slide || was === slide || !Array.isArray(slide.shapes)) return;
     const glued = (end) => end && typeof end === "object" && !Array.isArray(end) && end.object !== undefined;
-    const lines = (list) => list.flatMap((shape) => (shape?.kind === "group" ? lines(shape.shapes || []) : [shape])).filter((shape) => shape && (glued(shape.from) || glued(shape.to)));
+    const lines = (list) => list.flatMap((shape) => (shape?.kind === "group" ? lines(shape.shapes || []) : [shape])).filter((shape) => shape && (glued(shape.from) || glued(shape.to) || shape.kind === "inset"));
     if (!lines(slide.shapes).length) return;
     const old = partsOf(was), now = partsOf(slide);
     if (old.length === now.length && old.every((part, n) => part.region === now[n].region && part.block === now[n].block)) return;
     const map = follows(old.map((part) => part.block), now.map((part) => part.block));
     for (const line of lines(slide.shapes)) {
+      // (A zoom inset of an object follows it so: gone, it shows nothing.)
+      if (line.kind === "inset") {
+        const at = glueKey(line.of), k = at ? old.findIndex((part) => part.region === at.region && part.index === at.index) : -1;
+        if (k >= 0 && map[k] >= 0) line.of = glueName(now[map[k]]);
+        continue;
+      }
       for (const key of ["from", "to"]) {
         const end = line[key];
         if (!glued(end)) continue;
@@ -938,14 +951,19 @@ export function mount(studio, container) {
     words: (options) => richText(options),
     wordSize: (spec) => {
       const sizes = studio.info?.sizes || { body: 20, small: 14 }, k = shapeScale();
-      return spec.kind === "text" ? sizes.body / k : BOXED.includes(spec.kind) ? sizes.body * 0.9 / k : sizes.small * 1.1 / k;
+      return spec.kind === "text" ? sizes.body / k : BOXED.includes(spec.kind) || spec.kind === "path" ? sizes.body * 0.9 / k : sizes.small * 1.1 / k;
     },
     verb: "Add", noun: "slide", crumb: () => `Slide ${state.slide + 1}`, source: () => `slide:${state.slide}`,
     ownKeys: ["behind", "build", "hidden", "locked"],
     grouped: (specs) => (specs.every((spec) => spec?.behind) ? { behind: true } : {}),
     ungrouped: (group) => ({ ...(group.behind ? { behind: true } : {}), ...(group.locked ? { locked: true } : {}), ...(group.hidden ? { hidden: true } : {}) }),
-    // A slide's own: built in on a click, hidden from the show.
+    // What a zoom inset magnifies, and Mask with Shape with a shape over a picture (zoom.js).
+    insetSource: (spec) => pictureTools.insetSource(spec),
+    // A slide's own: built in on a click, hidden from the show; and a diagram drawn of them
+    // made a figure on the slide.
     commands: (picks, name, { set }) => [
+      ...(convertible(picks.map((index) => slideAt()?.shapes?.[index])) ? [convertCommand(() => shapesToFigure(picks), name)] : []),
+      ...(picks.length === 1 && pictureTools.maskPair({ shape: picks[0] }) ? [{ icon: "image", label: "Mask with Shape", hint: "The picture under it, shown only inside it", run: () => pictureTools.maskWith(pictureTools.maskPair({ shape: picks[0] })) }] : []),
       { icon: "reveal", label: everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click", hint: name, run: () => set({ build: !everyShape(picks, "build") }, everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click") },
       { icon: "eye", label: everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape", hint: name, run: () => set({ hidden: !everyShape(picks, "hidden") }, everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape") },
     ],
@@ -956,6 +974,46 @@ export function mount(studio, container) {
       ui.toggle({ value: everyShape(picks, "hidden"), label: "Hidden", key: "shape.hidden",
         onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
       h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
+  });
+  // A drawing pasted, dropped or chosen (Inkscape's): the slide's own shapes, centred where
+  // the pointer is on the slide (else in its middle), made smaller to fit it -- or, as asked
+  // or too large, the picture it was (drawingpaste.js).
+  let pointer = null;
+  for (const name of ["pointermove", "dragover"]) stage.addEventListener(name, (event) => { pointer = [event.clientX, event.clientY]; }, { passive: true });
+  const drawings = drawingPaster({
+    studio, shapes: freeShapes, markup: "slide",
+    place: () => {
+      const width = SHAPE_FRAME, height = slideView().height / shapeScale();
+      const box = pageNode?.querySelector("svg")?.getBoundingClientRect();
+      const over = pointer && box && pointer[0] >= box.left && pointer[0] <= box.right && pointer[1] >= box.top && pointer[1] <= box.bottom;
+      return { centre: over ? freeShapes.pointAt(...pointer) : [width / 2, height / 2], fit: [width * 0.92, height * 0.92] };
+    },
+    asPicture: (file) => (file instanceof File ? addFiles([file], state.focus ? { kind: "block", ...state.focus } : null, null, { pictures: true }) : insertBlock("image", { image: file.path })),
+  });
+  document.addEventListener("keydown", (event) => { if (studio.active && !typingNow()) drawings.key(event); });
+
+  // Convert to Figure Parts: the shapes chosen made a figure on the slide, where they were
+  // drawn (toparts.js), and chosen.
+  function shapesToFigure(picks) {
+    if (awayFrom("add objects")) return;
+    closeInline();
+    const rect = pageNode?.querySelector(":scope > svg")?.getBoundingClientRect(), k = rect ? rect.width / SHAPE_FRAME : 1;
+    const shapes = slideAt()?.shapes || [];
+    freeShapes.clear({ quiet: true });
+    slideToParts({ studio, slide: state.slide, picks, shapes, regions: regionsDrawn(),
+      toScreen: ([x, y]) => [(rect?.left || 0) + x * k, (rect?.top || 0) + y * k],
+      placeholder: (region, index) => layoutPlaceholder(slideAt(), blocksAt(slideAt(), region)[index]),
+      apply: (document, label) => studio.change(() => document, { label, glued: true }),
+      chosen: (at) => { if (at?.slide === state.slide) focusBlock(at.region, at.index); } });
+  }
+
+  // A slide's zoom insets, and its pictures masked by shapes: what they need of the editor.
+  const pictureTools = slideTools({
+    slideAt: () => slideAt(), blocksAt: (slide, key) => blocksAt(slide, key), kindOf: (block) => kindOf(block), regionsOf: (slide) => regionsOf(slide),
+    blockElement: (region, index) => blockElement(region, index), pictureOf: (element) => pictureOf(element), glueKey, glueName,
+    shapeScale: () => shapeScale(), frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()],
+    editSlide: (mutate, options) => editSlide(mutate, options), setOption, widthWithin: (at, width) => widthWithin(at, width),
+    chooseShape: (index) => { freeShapes.choose([index]); placeChosen(); },
   });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
@@ -3141,7 +3199,9 @@ export function mount(studio, container) {
     const crop = cropOf(block);
     const keep = { x: whole.x + crop.x * whole.w, y: whole.y + crop.y * whole.h, w: crop.w * whole.w, h: crop.h * whole.h };
     const shown = { x: whole.x, y: whole.y, w: whole.w, h: whole.h };
-    cropping = { at: { ...at }, slide: state.slide, block, element, whole: shown, keep, mask: block.mask === "circle" ? "circle" : null,
+    // (Masked by a shape, the shape goes with what is kept: flexo.masks.)
+    const mask = block.mask === "circle" ? "circle" : block.mask && typeof block.mask === "object" ? block.mask : null;
+    cropping = { at: { ...at }, slide: state.slide, block, element, whole: shown, keep, mask,
       started: { whole: { ...shown }, keep: { ...keep } }, drawn: whole.drawn, base: whole.w, drag: null, done: false };
     cropMount();
     window.addEventListener("keydown", cropKey, true);
@@ -3157,8 +3217,9 @@ export function mount(studio, container) {
     const root = pageNode?.querySelector("svg");
     if (!was || !root) return;
     was.element.style.visibility = "hidden";
-    const kept = was.mask ? svgNode("ellipse") : svgNode("rect");
-    const outline = was.mask ? svgNode("ellipse", { class: "crop-oval" }) : null;
+    const shaped = was.mask && typeof was.mask === "object";
+    const kept = shaped ? svgNode("path") : was.mask ? svgNode("ellipse") : svgNode("rect");
+    const outline = shaped ? svgNode("path", { class: "crop-oval" }) : was.mask ? svgNode("ellipse", { class: "crop-oval" }) : null;
     // (The picture as it was drawn, moved and scaled to where it is panned and zoomed to.)
     const shifts = [svgNode("g", {}, was.drawn), svgNode("g", {}, was.drawn.cloneNode(true))];
     const faint = svgNode("g", { class: "crop-faint" }, shifts[0]);
@@ -3169,7 +3230,7 @@ export function mount(studio, container) {
     for (const type of ["click", "dblclick", "contextmenu"]) svg.addEventListener(type, (event) => event.stopPropagation());
     was.view = { svg, kept, outline, root, shifts };
     pageNode.append(svg, cropFrame, cropBar);
-    cropFrame.classList.toggle("round", Boolean(was.mask));
+    cropFrame.classList.toggle("round", was.mask === "circle");
     placeCrop();
   }
 
@@ -3180,9 +3241,10 @@ export function mount(studio, container) {
     const { keep, whole } = was, { kept, outline, root, shifts } = was.view, start = was.started.whole;
     const shift = `translate(${whole.x} ${whole.y}) scale(${whole.w / start.w}) translate(${-start.x} ${-start.y})`;
     for (const node of shifts) node.setAttribute("transform", shift);
-    const shape = was.mask
-      ? { cx: keep.x + keep.w / 2, cy: keep.y + keep.h / 2, rx: keep.w / 2, ry: keep.h / 2 }
-      : { x: keep.x, y: keep.y, width: keep.w, height: keep.h };
+    const shape = was.mask && typeof was.mask === "object" ? { d: pathData(maskOutline(was.mask, [keep.x, keep.y, keep.w, keep.h])) }
+      : was.mask
+        ? { cx: keep.x + keep.w / 2, cy: keep.y + keep.h / 2, rx: keep.w / 2, ry: keep.h / 2 }
+        : { x: keep.x, y: keep.y, width: keep.w, height: keep.h };
     for (const [name, value] of Object.entries(shape)) { kept.setAttribute(name, value); outline?.setAttribute(name, value); }
     if (was.done) { cropFrame.remove(); cropBar.remove(); return; }
     const matrix = root.getScreenCTM(), outer = pageNode.getBoundingClientRect();
@@ -3322,7 +3384,7 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt() || {}, was.at.region)[was.at.index];
     const before = cropOf(block);
     const after = { crop: whole ? null : crop, mask: whole ? null : was.mask };
-    if (!block || kindOf(block) !== "image" || (same(after.crop ?? null, block.crop ?? null) && (after.mask ?? null) === (block.mask ?? null))) { cropCancel(); return; }
+    if (!block || kindOf(block) !== "image" || (same(after.crop ?? null, block.crop ?? null) && same(after.mask ?? null, block.mask ?? null))) { cropCancel(); return; }
     // Sized by the frame, the part kept is drawn as large as the frame was; a crop taken away
     // leaves the picture at the scale it was drawn.
     const sized = Math.abs(was.keep.w - was.started.keep.w) > 0.5 || Math.abs(was.keep.h - was.started.keep.h) > 0.5;
@@ -3889,7 +3951,10 @@ export function mount(studio, container) {
       // (Not a picture whose file is missing: there is nothing drawn to crop.)
       if (pictureAspect(at)) items.push({ icon: "crop", label: "Crop…", run: () => startCrop(at) });
       if (block.crop != null || block.mask != null) items.push({ icon: "refresh", label: "Reset Crop", run: () => resetCrop(at) });
+      if (pictureTools.maskPair({ place: at })) items.push({ icon: "image", label: "Mask with Shape", run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) });
+      if (pictureTools.masked(at)) items.push({ icon: "refresh", label: "Unmask", run: () => pictureTools.unmask(at) });
     }
+    if (MAGNIFIED.has(kind) && pictureTools.canInset(at)) items.push({ icon: "plus", label: "Add Zoom Inset", run: () => pictureTools.addInset(at) });
     if (items.length) items.push("-");
     items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => duplicateBlock(at) });
     items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
@@ -6677,7 +6742,7 @@ export function mount(studio, container) {
 
   // Files added to the slide, dropped or pasted: pictures, and structures into the figure
   // `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
-  async function addFiles(all, part, at = null) {
+  async function addFiles(all, part, at = null, { pictures: asPictures = false } = {}) {
     const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|pdf|ai)$/i.test(file.name));
     const scenes = new Set();
     for (const file of all) if (await sceneFile(file)) scenes.add(file);
@@ -6708,6 +6773,13 @@ export function mount(studio, container) {
       toast("Picture replaced", { icon: "image" });
       return true;
     }
+    // A drawing (an SVG, a PDF's page) is the slide's own shapes, unless it is too large or
+    // a picture was asked for (drawingpaste.js).
+    for (const file of asPictures ? [] : pictures.filter((one) => DRAWING_FILE.test(one.name))) {
+      await drawings.add(file);
+      pictures.splice(pictures.indexOf(file), 1);
+    }
+    if (!pictures.length && !structures.length) return true;
     for (const file of pictures) await insertBlock("image", { image: await studio.upload(file) });
     if (structures.length) {
       const sources = [];
@@ -6773,7 +6845,22 @@ export function mount(studio, container) {
     clipboard = clip;
     event.clipboardData?.setData(CLIP, JSON.stringify(clip));
     event.clipboardData?.setData("text/plain", plainOf(clip));
+    copyOut(studio, drawingOf(clip));
     return clip;
+  }
+  // What is copied, drawn for other apps (copyout.js): the slide's drawing, and the ids in it of
+  // what is copied -- the shapes, the figure's parts (with the lines between them), the objects
+  // or the logo chosen; none, the whole slide. (Several slides are no one drawing.)
+  function drawingOf(clip) {
+    const slide = `slide${state.slide + 1}`, prefix = clip.what === "parts" ? figurePrefix() : null;
+    const keep = clip.what === "shapes" ? freeShapes.chosen().map((index) => `${slide}.shapes.${index}`)
+      : clip.what === "parts" && prefix ? [...clip.parts.top, ...(clip.parts.edges || []).map((edge) => edge.id), ...(clip.parts.nets || []).map((net) => net.id)].filter(Boolean).map((id) => prefix + id)
+        : clip.what === "block" && clip.logo !== undefined ? [`${slide}.logo${clip.logo}`]
+          : clip.what === "block" && state.focus ? [blockElement(state.focus.region, state.focus.index)?.id]
+            : clip.what === "blocks" ? allBlocks().map(({ region, index }) => blockElement(region.key, index)?.id) : [];
+    const whole = clip.what === "slide";
+    const svg = clip.what === "slides" || (!whole && !keep.filter(Boolean).length) ? "" : pages[state.slide]?.svg || "";
+    return { svg, keep: keep.filter(Boolean), text: plainOf(clip), clip, title: whole ? plainOf(clip) || "Slide" : clip.label };
   }
   // (Copied again, the note says so again in its place: notes do not pile up.)
   let copiedNote = null;
@@ -6827,7 +6914,8 @@ export function mount(studio, container) {
       const clip = clipOf();
       if (!clip) { uncopied(letter === "x"); return; }
       clipboard = clip;
-      navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
+      const wrote = navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
+      copyOut(studio, drawingOf(clip), wrote);
       if (letter === "c") copied(clip); else cutAway(clip);
     }, 80);
   }
@@ -6841,15 +6929,20 @@ export function mount(studio, container) {
     try { clip = JSON.parse(data?.getData(CLIP) || "null"); } catch { clip = null; }
     // A clipboard that keeps only words: what was copied here, if they are its words.
     if (!clip && clipboard && data?.getData("text/plain") === plainOf(clipboard)) clip = clipboard;
+    // (Copied in another of the studio's documents, where the clipboard keeps its words alone.)
+    if (!clip) clip = copiedHere(data);
     if (clip) { event.preventDefault(); pasteClip(clip); return; }
     const files = [...(data?.files || [])], at = state.focus ? { kind: "block", ...state.focus } : null;
     // A drawing copied in another app (Inkscape's) is pasted as its SVG -- its lines and words
-    // drawn as lines and words -- not as the picture of it the web view hands over.
-    const drawing = pastedDrawing(data);
+    // drawn as lines and words -- not as the picture of it the web view hands over. Flexo's own
+    // copy, made in a window of another folder, is what it is, not the picture beside it.
+    const drawing = pastedDrawing(data), own = pastedOwn(data);
     if (drawing) {
       event.preventDefault();
+      const theirs = await own;
+      if (theirs) { pasteClip(theirs); return; }
       const drawn = await drawing;
-      if (drawn) { await addFiles([drawn], at); return; }
+      if (drawn) { await drawings.shapesOf(drawn); return; }
     }
     if (files.length) { event.preventDefault(); await addFiles(files, at); return; }
     const text = (data?.getData("text/plain") || "").replace(/\r/g, "").trim();
@@ -7013,6 +7106,8 @@ export function mount(studio, container) {
     if (!given && kind === "image") {
       const path = await chooseFile({ title: "Choose a Picture", types: ["image"], action: "Insert" });
       if (!path) return;
+      // A drawing chosen is the slide's own shapes, as one dropped is (drawingpaste.js).
+      if (DRAWING_FILE.test(path) && await drawings.add({ path, name: path })) return;
       block = { image: path };
     } else if (!given && kind === "plot") {
       const target = await chooseFunction();
@@ -10027,6 +10122,8 @@ export function mount(studio, container) {
     { icon: "plus", label: "New Slide", keys: "⇧⌘N", run: () => newSlideLike(state.slide) },
     // The object chosen, by name: what its right-click menu does; then the slide's.
     ...clipCommands(),
+    // A drawing on the clipboard, as one picture or in its own colours (drawingpaste.js).
+    ...(typingNow() ? [] : drawings.commands()),
     ...chosenCommands(),
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js).
     ...(typingNow() ? [] : freeShapes.commands()),
@@ -10144,6 +10241,13 @@ export function mount(studio, container) {
       ...(kind === "bullets" ? [{ icon: "text", label: "Convert to Text", run: () => restyle(at, "text") }] : []),
       ...(kind === "image" && pictureAspect(at) ? [{ icon: "crop", label: "Crop Picture…", hint: name, run: () => startCrop(at) }] : []),
       ...(kind === "image" && (block.crop != null || block.mask != null) ? [{ icon: "refresh", label: "Reset Crop", hint: name, run: () => resetCrop(at) }] : []),
+      // Insert › Zoom Inset and Format › Mask with Shape, Unmask (zoom.js).
+      ...(MAGNIFIED.has(kind) && pictureTools.canInset(at) ? [{ icon: "plus", label: "Add Zoom Inset", hint: name, run: () => pictureTools.addInset(at) }] : []),
+      ...(kind === "image" && pictureTools.maskPair({ place: at }) ? [{ icon: "image", label: "Mask with Shape", hint: `${name}, by the shape over it`, run: () => pictureTools.maskWith(pictureTools.maskPair({ place: at })) }] : []),
+      ...(kind === "image" && pictureTools.masked(at) ? [{ icon: "refresh", label: "Unmask", hint: name, run: () => pictureTools.unmask(at) }] : []),
+      // Format › Copy Style and Paste Style, of a figure's shapes chosen.
+      ...(parts?.canCopyStyle?.() ? [{ icon: "copy", label: "Copy Style", keys: "⌥⌘C", run: () => parts.copyStyle() }] : []),
+      ...(parts?.canPasteStyle?.() ? [{ icon: "paste", label: "Paste Style", keys: "⌥⌘V", run: () => parts.pasteStyle() }] : []),
       ...((SIZED.has(kind) || SIDEWAYS.has(kind) || CORNERED.has(kind)) && block.width != null ? [{ icon: "refresh", label: "Reset Size", hint: name, run: () => sizeFit() }] : []),
       // As the Mac app's Arrange menu names them; the hint says what they move.
       ...(at.index > 0 ? [{ icon: "up", label: "Move Up", keys: "⌥↑", hint: name, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) }] : []),

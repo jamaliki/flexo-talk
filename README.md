@@ -292,12 +292,22 @@ The kinds: lines from one point to another (`line`, `arrow`, `double-arrow`,
 (`at`, `size`) -- `rectangle`, `rounded-rectangle`, `ellipse`, `triangle`,
 `right-triangle`, `diamond`, `polygon`, `star`, `parallelogram`, `trapezoid`, five block
 arrows, `chevron`, `plus`, `cross`, `check`, `cloud`, a speech `bubble` whose `tail`
-points anywhere, `highlight` and `ring` -- `text`, and a `group` of them. Each is painted
+points anywhere, `highlight` and `ring` -- `text`, any outline as a `path` (SVG path data,
+`d: "M 10 10 C 20 0 40 0 50 10 L 50 40 Z"`, its pieces -- holes too -- filled by its
+`fill_rule`, `nonzero` or `evenodd`; its box is what it draws), a `picture` (a box holding
+an SVG or a bitmap, `source: assets/drawing-part-1.svg`: what a drawing pasted as shapes keeps
+of what no shape draws), and a `group` of them. Each is painted
 by the theme unless it says otherwise (`fill`, `line`: `accent`, `accent2-fill`, `muted`,
-`ink`, `paper`, `grey`, `#rrggbb`, `none`), with its line's width and dash, an arrowhead
+`ink`, `paper`, `grey`, `#rrggbb`, `none`; a fill may be a gradient, `{gradient: linear,
+angle: 90, stops: [[0, accent], [1, "#ffffff"]]}` or `{gradient: radial, centre: [0.5, 0.5],
+radius: 0.5, stops: ...}`), with its line's width, opacity and dash (`dashed`, `dotted`, or
+its own lengths, `[6, 3]`), an arrowhead
 at either end (`triangle`, `open`, `stealth`, `dot`, `circle`, `bar`, `diamond`), its
 opacities, the theme's shadow, a turn and a flip; its `text` (slide markup) is set in it
-in the deck's font. An end of a line glued to a shape (`{shape: note, side: left}`) or to
+in the deck's font. A drawing copied in Inkscape (or Illustrator, Affinity, a browser)
+pastes onto a slide as these shapes, one group, centred where it is pasted and made smaller
+to fit (`flexo import-svg drawing.svg` writes them); Edit › Paste as Picture (⌥⇧⌘V) places
+it as one picture instead. An end of a line glued to a shape (`{shape: note, side: left}`) or to
 one of the slide's objects (`{object: "body[0]"}`) follows it when it moves. `behind`
 draws a shape under the slide's words, `build` makes it appear on a click (after the
 objects that do), `hidden` keeps it out of the show, `locked` keeps it in place in the
@@ -308,20 +318,28 @@ the SVG, the show (their builds too) and the studio's thumbnails have them. In t
 PowerPoint each is PowerPoint's own shape: a preset where it has one -- rectangles,
 rounded ones, ovals, triangles, diamonds, pentagons, four- and five-pointed stars,
 parallelograms, trapezoids, the block arrows, chevrons, plus signs, clouds, speech
-bubbles, braces and brackets -- its settings as the preset's adjustments, any other a
-freeform of the same outline; its words in it; a straight or elbowed line a connector
+bubbles, braces and brackets -- its settings as the preset's adjustments, any other (a
+path too) a freeform of the same outline; its words in it; a straight or elbowed line a connector
 joined to the shapes it is glued to; a build a click.
 
 In the studio, **Shape** in the toolbar (or Insert › Shapes, or the palette's Add Arrow…)
 draws one: drag on the slide, or click for its usual size; a polyline is clicked point by
-point, the pen drawn by hand. Chosen, a shape is moved by a drag (⇧ along one way, ⌥ a
+point, the pencil drawn by hand, and the **Pen** draws a path point by point (a click for a
+corner, a drag for a curve, a click on its first point to close it, Return to leave it open).
+Chosen, a shape is moved by a drag (⇧ along one way, ⌥ a
 copy), sized by its handles (⇧ its proportions kept, ⌥ about its middle), turned by the
 handle over it (⇧ by 15°); a line by its ends, let go on a shape or an object to glue
 them, and a curve by its middle; a corner, a tail or a star's points by their own
 handles. Everything catches at the slide's edges and middles and at the other shapes' and
 objects', a guide drawn (⌘: none). The arrows nudge (⇧: ten points), a double-click types
 its words in it, ⇧-click or a band chooses several -- to align, distribute, group (⌘G),
-stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the inspector restyles them.
+stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the inspector restyles them. A path's
+points are edited where it is (a double-click on it, or Format › Edit Points): its points and
+handles dragged (⌥: one handle alone), a point double-clicked made smooth or a corner, a
+click on its outline adding one, ⌫ deleting those chosen. Format › Make Editable makes any
+shape a path of the same outline, and Arrange › Combine Shapes makes two or more one path:
+their union, the one at the back less the others, their intersection, or what one or other
+covers but not both.
 
 ## Tables
 
@@ -561,12 +579,25 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   Return, **Done** or a click elsewhere keeps the crop (`crop: [x, y, width, height]`,
   fractions of the whole picture), Esc leaves it as it was. Its panel crops it to a
   square, 4:3, 16:9 or a circle at once (`mask: circle`), or back to the whole
-  (**Original**). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  (**Original**). **Mask with Shape** (Format) shows a picture only inside the closed
+  shape drawn over it, as Keynote's does -- the shape is the picture's then (`mask:
+  {kind: star}`), moved, sized and cropped again with it -- and **Unmask** shows it whole.
+  **Add Zoom Inset** (Insert), a picture, a figure or a plot chosen, puts a box beside it
+  showing its middle magnified, a frame round that region and two lines joining them
+  (`{kind: inset, of: "body[0]", region: [x, y, w, h]}`): drag the region's corners or its
+  middle on the object, and the box as any shape; its panel draws the frame and the lines
+  in their own colours, widths and dashes. **Copy Style** and **Paste Style** (⌥⌘C, ⌥⌘V)
+  put one shape's fill, line, dash, arrowheads, shadow, opacity and words' look on the
+  shapes chosen -- and a figure's part's tone, own colours, outline and words' look on
+  other parts, or either on the other where it maps (an accent is a tone). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere: a drawing
   copied in Inkscape is pasted as the SVG it is (in the Mac app), its lines and words
   drawn as lines and words (in the PowerPoint as shapes, where they can be), not as a
-  picture of it. The bar
+  picture of it. What is copied goes to other apps as the drawing it is: Keynote, Word and
+  Pages paste a PDF in the deck's fonts, PowerPoint its own editable shapes, Inkscape and
+  Illustrator an SVG, the rest a picture four times its size (in a browser, the picture
+  and the SVG, where the browser takes them). The bar
   above adds slides (N, with a picture of each layout) and parts -- text, a list,
   a figure, a flow chart, a structure, a picture, a table, and more -- after the
   one chosen. Pictures dropped on the slide are added to it, and so are structures
@@ -643,7 +674,16 @@ flexo-talk build talk.py:results -o out --formats pptx,pdf --theme dark
 flexo-talk build talk.yaml            # a deck document
 flexo-talk convert talk.py            # talk.py's deck as talk.yaml
 flexo-talk studio talk.yaml           # edit it in the browser (made if missing)
+flexo bundle talk.yaml -o talk.flexo  # the deck and every file it names, as one file to send
+flexo-talk build talk.flexo --trust   # built straight from a bundle, its plots' Python run
+flexo-talk studio talk.flexo          # edited as a folder, saved back into the bundle
 ```
+
+A bundle (`.flexo`, see flexo's README) holds the deck and every file it names: its theme
+and palette files, pictures, logos and backgrounds, figure files (and theirs), plots' Python
+(and the modules and data it reads), structures, maps, scenes and the pictures kept from
+drawings pasted in. In Flexo Studio, File › Save as Bundle… makes one, File › New Bundle…
+starts a talk as one, and a bundle double-clicked in the Finder opens as a folder does.
 
 ## Development
 

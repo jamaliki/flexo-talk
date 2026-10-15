@@ -265,6 +265,18 @@ decoder, at: [0, -16], text: bottleneck}`, in the figure file or in a figure wri
 deck. A figure laid out for a slide's box is not turned to fit while it has shapes attached
 to none of its parts.
 
+A **zoom inset** -- a region of a micrograph, a structure, a plot or a figure shown magnified
+in a box of its own, a frame round the region and two lines joining it to the box -- is a
+shape too: `{kind: inset, of: "left[0]", region: [0.55, 0.3, 0.2, 0.15], at: [600, 280],
+size: [280, 210]}` (`region` is x, y, width, height as fractions of the object; `line`,
+`line_width`, `dash` its box's outline, `frame_line`/`connector_line` and their `_width` and
+`_dash` the frame and the lines, `connector_line: none` none; `text` a corner label). The
+box shows that region exactly, as vectors where the object is vectors, and follows the
+object as the slide lays it out. In a figure file, an inset of a part: `{kind: inset, of:
+latent, on: latent, region: [...], at: [...], size: [...]}`. A picture is shown within a
+closed shape with `mask: {kind: star}` (its places fractions of the part kept by `crop`),
+as Keynote's Mask with Shape.
+
 ## Plots
 
 ```python

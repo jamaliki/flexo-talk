@@ -290,6 +290,13 @@ class DeckKind:
     def parse(self, text: str) -> Any:
         return parse_document(text)
 
+    def references(self, data: Any, base: Path) -> list[Any]:
+        """The files a deck document (as it reads) names, for a bundle of it."""
+
+        from flexo_talk.bundling import references
+
+        return references(data, base)
+
     def guide(self) -> str:
         import flexo_talk.document as module
 
@@ -308,7 +315,12 @@ class DeckKind:
             "slide): " + "; ".join(f"{name}: {', '.join(kinds)}" for name, kinds in SECTIONS)
             + f". Every shape takes {', '.join(COMMON_SHAPE_KEYS)} and on a slide {', '.join(SHAPE_KEYS)}; "
             "lines from, to; polyline and pen points, closed; boxes at, size, rotate, flip; text at, width, rotate; "
-            "group shapes. Each kind's own: "
+            "path d (SVG path data, every command, holes as further pieces; no at or size: its box is what it "
+            "draws), fill_rule (nonzero, evenodd), rotate, flip; picture at, size, source (a drawing's part kept "
+            "as drawn: an SVG or a bitmap beside the deck); group shapes. A fill may be a gradient: {gradient: "
+            "linear, angle: 90, stops: [[0, accent], [1, '#ffffff']]} or {gradient: radial, centre: [0.5, 0.5], "
+            "radius: 0.5, stops: ...}; a dash solid, dashed, dotted or its own lengths, [6, 3]; line_opacity a "
+            "line fainter than its fill. Each kind's own: "
             + "; ".join(f"{kind}: {', '.join(own)}" for kind in KINDS
                         if (own := [key for key in keys_of(kind) if key not in COMMON_SHAPE_KEYS and key not in
                                     ("kind", "id", "from", "to", "points", "closed", "at", "size", "rotate", "flip",
@@ -316,7 +328,12 @@ class DeckKind:
             + ". To point at, ring, bracket or label part of a figure or picture, draw a shape over it rather "
             "than change the figure. A figure's own marks, which go wherever it is shown, are its shapes: a figure "
             "written in a slide takes a shapes list too, each attached to its parts (on: part, around: [parts], an "
-            "end's {part: id}) so they follow them as it is laid out for the slide.\n"
+            "end's {part: id}) so they follow them as it is laid out for the slide. A diagram pasted onto a slide as "
+            "shapes (boxes with words, arrows between them) becomes a figure on it, in the deck's theme, with the "
+            "convert_to_figure_parts tool. A zoom inset (kind: inset, of: "
+            "body[0], region: [x, y, width, height] as fractions of that picture, figure or plot, at, size) shows "
+            "that region magnified in its box, joined to it by two lines; a picture's mask may be a closed shape "
+            "({kind: star}, its places fractions of the part kept) as well as circle.\n"
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )
@@ -688,8 +705,10 @@ class DeckKind:
         "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}`` -- or
         ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``), or
         ``{"do": "inline", "at"}``, a figure file's figure written into the deck
-        (``_inline``), or ``{"do": "figure-file", "file", "text", "expect"}``, a figure
-        file put back as an edit made on its slide found it or left it (``_restore``).
+        (``_inline``), ``{"do": "figure-file", "file", "text", "expect"}``, a figure
+        file put back as an edit made on its slide found it or left it (``_restore``), or
+        ``{"do": "convert", "slide", "shapes"}``, a slide's shapes made a figure on it
+        (``convert``).
 
         An edit to a figure file answers with the file's text before and after it
         (``was``, ``now``) and both read as data (``change``): the studio keeps them in
@@ -721,6 +740,11 @@ class DeckKind:
             return _inline(document, action, base)
         if action.get("do") == "figure-file":
             return _restore(document, action, base)
+        if action.get("do") == "convert":
+            # Shapes on a slide made a figure on it: Convert to Figure Parts (convert.py).
+            from flexo_talk.studio.convert import convert
+
+            return convert(document, action, base)
         if action.get("do") != "figure":
             raise EditError(f"Unknown deck edit “{action.get('do')}”.")
         at = action.get("at") or {}
