@@ -21,6 +21,8 @@ import { slideToParts } from "/static/kinds/deck/toparts.js";
 import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
+import { magnetButton } from "/static/studio/magnet.js";
+import * as Snap from "/static/studio/snapping.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -1975,7 +1977,9 @@ export function mount(studio, container) {
     zoomValue,
     ui.button("", () => zoomIn(), { kind: "ghost", icon: "plus", small: true, title: "Zoom In (⌘+)" }),
     ui.button("Fit", () => fitSlide(), { kind: "ghost", small: true, title: "Fit Slide (⇧⌘0)" }),
-    ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }));
+    ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }),
+    // Snapping, on or off (%): the shapes', and objects' sizes (snapping.js).
+    h("span.zoom-sep"), magnetButton());
   // Clicked, a zoom button does not keep the keys (as a Mac window's toolbar buttons don't).
   for (const button of zoomBar.querySelectorAll("button")) button.addEventListener("mousedown", (event) => event.preventDefault());
   function showZoom() {
@@ -3023,10 +3027,11 @@ export function mount(studio, container) {
     if (!sizing.moved && Math.hypot(event.clientX - sizing.start.x, event.clientY - sizing.start.y) < 3) return;
     sizing.moved = true;
     let scale = scaleFor(event.clientX, event.clientY);
-    // It catches at the width of its place, and at the size it was -- ⌘ held, at neither.
-    const full = across / box.width;
-    if (!event.metaKey && full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
-    if (!event.metaKey && Math.abs(scale - 1) * box.width < 4) scale = 1;
+    // It catches at the width of its place, and at the size it was -- ⌘ held, at neither (with
+    // snapping off, only while ⌘ is held: snapping.js).
+    const full = across / box.width, caught = !Snap.free(event.metaKey);
+    if (caught && full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
+    if (caught && Math.abs(scale - 1) * box.width < 4) scale = 1;
     sizing.scale = scale;
     const at = sizing.place(scale), k = scaleOf(sizing.wrap);
     sizing.stand = at.stand;
@@ -3689,7 +3694,7 @@ export function mount(studio, container) {
     if (!it) return;
     if (!it.moved && Math.hypot(event.clientX - it.start.x, event.clientY - it.start.y) < 3) return;
     it.moved = true;
-    it.pointer = { x: event.clientX, y: event.clientY, free: event.metaKey };
+    it.pointer = { x: event.clientX, y: event.clientY, free: Snap.free(event.metaKey) };
     resizeDraw();
   }
   // It drawn at the width the pointer gives it, what follows it moved with it, its frame round
@@ -3771,7 +3776,7 @@ export function mount(studio, container) {
   function resizeKey(event) {
     // ⌘ pressed or let go: its catches off or on again, where the pointer is.
     if (event.key === "Meta") {
-      if (resizing?.moved && resizing.pointer) { resizing.pointer.free = event.type === "keydown"; resizeDraw(); }
+      if (resizing?.moved && resizing.pointer) { resizing.pointer.free = Snap.free(event.type === "keydown"); resizeDraw(); }
       return;
     }
     if (event.type !== "keydown" || event.key !== "Escape") return;
@@ -9680,8 +9685,9 @@ export function mount(studio, container) {
     const reach = ax * ax + ay * ay;
     const scale = reach > 0 ? Math.max(((point.x - far.x) * ax + (point.y - far.y) * ay) / reach, 0) : 1;
     let height = Math.round(Math.min(LOGO_MOST, Math.max(LOGO_LEAST, sizing.height * scale)));
-    // It catches at the deck's default (a few pixels either side of it), unless ⌘ is held.
-    const snapped = !(event.metaKey || event.ctrlKey) && Math.abs(height - LOGO_DEFAULT) * sizing.pixels < 6;
+    // It catches at the deck's default (a few pixels either side of it), unless ⌘ is held (with
+    // snapping off, only while it is).
+    const snapped = !Snap.free(event) && Math.abs(height - LOGO_DEFAULT) * sizing.pixels < 6;
     if (snapped) height = LOGO_DEFAULT;
     sizing.now = height;
     const k = height / sizing.height;
