@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
@@ -957,6 +957,22 @@ export function mount(studio, container) {
         onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
       h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
   });
+  // A drawing pasted, dropped or chosen (Inkscape's): the slide's own shapes, centred where
+  // the pointer is on the slide (else in its middle), made smaller to fit it -- or, as asked
+  // or too large, the picture it was (drawingpaste.js).
+  let pointer = null;
+  for (const name of ["pointermove", "dragover"]) stage.addEventListener(name, (event) => { pointer = [event.clientX, event.clientY]; }, { passive: true });
+  const drawings = drawingPaster({
+    studio, shapes: freeShapes, markup: "slide",
+    place: () => {
+      const width = SHAPE_FRAME, height = slideView().height / shapeScale();
+      const box = pageNode?.querySelector("svg")?.getBoundingClientRect();
+      const over = pointer && box && pointer[0] >= box.left && pointer[0] <= box.right && pointer[1] >= box.top && pointer[1] <= box.bottom;
+      return { centre: over ? freeShapes.pointAt(...pointer) : [width / 2, height / 2], fit: [width * 0.92, height * 0.92] };
+    },
+    asPicture: (file) => (file instanceof File ? addFiles([file], state.focus ? { kind: "block", ...state.focus } : null, null, { pictures: true }) : insertBlock("image", { image: file.path })),
+  });
+  document.addEventListener("keydown", (event) => { if (studio.active && !typingNow()) drawings.key(event); });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
   // half written does not read) waits until the typing pauses, or stops: it does not flash
@@ -6677,7 +6693,7 @@ export function mount(studio, container) {
 
   // Files added to the slide, dropped or pasted: pictures, and structures into the figure
   // `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
-  async function addFiles(all, part, at = null) {
+  async function addFiles(all, part, at = null, { pictures: asPictures = false } = {}) {
     const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|pdf|ai)$/i.test(file.name));
     const scenes = new Set();
     for (const file of all) if (await sceneFile(file)) scenes.add(file);
@@ -6708,6 +6724,13 @@ export function mount(studio, container) {
       toast("Picture replaced", { icon: "image" });
       return true;
     }
+    // A drawing (an SVG, a PDF's page) is the slide's own shapes, unless it is too large or
+    // a picture was asked for (drawingpaste.js).
+    for (const file of asPictures ? [] : pictures.filter((one) => DRAWING_FILE.test(one.name))) {
+      await drawings.add(file);
+      pictures.splice(pictures.indexOf(file), 1);
+    }
+    if (!pictures.length && !structures.length) return true;
     for (const file of pictures) await insertBlock("image", { image: await studio.upload(file) });
     if (structures.length) {
       const sources = [];
@@ -6849,7 +6872,7 @@ export function mount(studio, container) {
     if (drawing) {
       event.preventDefault();
       const drawn = await drawing;
-      if (drawn) { await addFiles([drawn], at); return; }
+      if (drawn) { await drawings.shapesOf(drawn); return; }
     }
     if (files.length) { event.preventDefault(); await addFiles(files, at); return; }
     const text = (data?.getData("text/plain") || "").replace(/\r/g, "").trim();
@@ -7013,6 +7036,8 @@ export function mount(studio, container) {
     if (!given && kind === "image") {
       const path = await chooseFile({ title: "Choose a Picture", types: ["image"], action: "Insert" });
       if (!path) return;
+      // A drawing chosen is the slide's own shapes, as one dropped is (drawingpaste.js).
+      if (DRAWING_FILE.test(path) && await drawings.add({ path, name: path })) return;
       block = { image: path };
     } else if (!given && kind === "plot") {
       const target = await chooseFunction();
@@ -10027,6 +10052,8 @@ export function mount(studio, container) {
     { icon: "plus", label: "New Slide", keys: "⇧⌘N", run: () => newSlideLike(state.slide) },
     // The object chosen, by name: what its right-click menu does; then the slide's.
     ...clipCommands(),
+    // A drawing on the clipboard, as one picture or in its own colours (drawingpaste.js).
+    ...(typingNow() ? [] : drawings.commands()),
     ...chosenCommands(),
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js).
     ...(typingNow() ? [] : freeShapes.commands()),

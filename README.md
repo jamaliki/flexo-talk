@@ -294,12 +294,20 @@ The kinds: lines from one point to another (`line`, `arrow`, `double-arrow`,
 arrows, `chevron`, `plus`, `cross`, `check`, `cloud`, a speech `bubble` whose `tail`
 points anywhere, `highlight` and `ring` -- `text`, any outline as a `path` (SVG path data,
 `d: "M 10 10 C 20 0 40 0 50 10 L 50 40 Z"`, its pieces -- holes too -- filled by its
-`fill_rule`, `nonzero` or `evenodd`; its box is what it draws), and a `group` of them. Each is painted
+`fill_rule`, `nonzero` or `evenodd`; its box is what it draws), a `picture` (a box holding
+an SVG or a bitmap, `source: assets/drawing-part-1.svg`: what a drawing pasted as shapes keeps
+of what no shape draws), and a `group` of them. Each is painted
 by the theme unless it says otherwise (`fill`, `line`: `accent`, `accent2-fill`, `muted`,
-`ink`, `paper`, `grey`, `#rrggbb`, `none`), with its line's width and dash, an arrowhead
+`ink`, `paper`, `grey`, `#rrggbb`, `none`; a fill may be a gradient, `{gradient: linear,
+angle: 90, stops: [[0, accent], [1, "#ffffff"]]}` or `{gradient: radial, centre: [0.5, 0.5],
+radius: 0.5, stops: ...}`), with its line's width, opacity and dash (`dashed`, `dotted`, or
+its own lengths, `[6, 3]`), an arrowhead
 at either end (`triangle`, `open`, `stealth`, `dot`, `circle`, `bar`, `diamond`), its
 opacities, the theme's shadow, a turn and a flip; its `text` (slide markup) is set in it
-in the deck's font. An end of a line glued to a shape (`{shape: note, side: left}`) or to
+in the deck's font. A drawing copied in Inkscape (or Illustrator, Affinity, a browser)
+pastes onto a slide as these shapes, one group, centred where it is pasted and made smaller
+to fit (`flexo import-svg drawing.svg` writes them); Edit › Paste as Picture (⌥⇧⌘V) places
+it as one picture instead. An end of a line glued to a shape (`{shape: note, side: left}`) or to
 one of the slide's objects (`{object: "body[0]"}`) follows it when it moves. `behind`
 draws a shape under the slide's words, `build` makes it appear on a click (after the
 objects that do), `hidden` keeps it out of the show, `locked` keeps it in place in the
