@@ -30,6 +30,7 @@ import { pathData } from "/static/studio/freeform.js";
 import { magnetButton } from "/static/studio/magnet.js";
 import * as Snap from "/static/studio/snapping.js";
 import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
+import { designBar } from "/static/kinds/deck/designbar.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -564,7 +565,7 @@ export function mount(studio, container) {
   const placeKey = `place-${studio.file}`;
   const leftAt = (() => { try { return JSON.parse(remembered(placeKey, "{}")) || {}; } catch { return {}; } })();
   const state = { slide: Math.max(0, Math.min(Number(leftAt.slide) || 0, (studio.doc?.slides?.length || 1) - 1)), picked: [], focus: null, field: null,
-    tab: leftAt.tab === "design" ? "design" : "slide", notes: remembered("notes", "0") === "1" };
+    tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
   let mathNotes = null;
@@ -808,21 +809,35 @@ export function mount(studio, container) {
   let inspectorHidden = false;
   let arrangeOn = leftAt.tab === "arrange";
   const tabShown = () => (state.tab === "design" ? "design" : arrangeOn ? "arrange" : "slide");
-  const panelButton = (tab, label, glyph, title) => ui.button(label, () => {
-    if (tabShown() === tab && !inspectorHidden) inspectorHidden = true;
+  // (Pressed by the person with the Design bar open, Format or Arrange puts the bar away and
+  // shows its tab: never hides the inspector in the same press.)
+  const panelButton = (tab, label, glyph, title) => ui.button(label, (event) => {
+    const designing = Boolean(event?.isTrusted) && design.open;
+    if (designing) design.toggle(false);
+    if (tabShown() === tab && !inspectorHidden && !designing) inspectorHidden = true;
     else { inspectorHidden = false; arrangeOn = tab === "arrange"; state.tab = tab === "design" ? "design" : "slide"; renderInspector(); }
     root.classList.toggle("no-inspector", inspectorHidden);
     showPanels();
   }, { kind: "ghost", icon: glyph, title });
   const formatButton = panelButton("slide", "Format", "slide", "Format what is chosen, or the slide");
   const arrangeButton = panelButton("arrange", "Arrange", "arrange", "Arrange what is chosen: align, distribute, order, flip, lock, group (⇧⌘A)");
-  const designButton = panelButton("design", "Design", "palette", "The deck’s theme, colours, fonts and look");
+  // Design: the Design bar across the window under the toolbar, as PowerPoint's ribbon tab --
+  // the deck's theme, colours, fonts and look (designbar.js) -- shown or put away.
+  const designButton = ui.button("Design", () => design.toggle(), { kind: "ghost", icon: "palette", title: "Show Design (⇧⌘D)" });
+  const design = designBar({
+    studio, catalog, root: () => root, index: () => state.slide, page: () => pages[state.slide], slideNode: () => (pageNode?.querySelector(":scope > svg") ? pageNode : null),
+    render: () => renderInspector(), customise: () => customiseTheme(doc().deck || {}), logos: () => logosControls(), logoCount: () => logosOf().length,
+    chooseFile: (options) => chooseFile(options), footerHint: FOOTER_HINT, lookArt, lookName, tinted, refit: () => fitStage(), shown: () => showPanels(),
+  });
   function showPanels() {
     const shown = !inspectorHidden;
-    for (const [button, tab] of [[formatButton, "slide"], [arrangeButton, "arrange"], [designButton, "design"]]) {
+    for (const [button, tab] of [[formatButton, "slide"], [arrangeButton, "arrange"]]) {
       button.classList.toggle("on", shown && tabShown() === tab);
       button.setAttribute("aria-pressed", String(shown && tabShown() === tab));
     }
+    designButton.classList.toggle("on", design.open);
+    designButton.setAttribute("aria-pressed", String(design.open));
+    designButton.title = `${design.open ? "Hide" : "Show"} Design (⇧⌘D)`;
   }
   // Arrange shown (⇧⌘A, Align and Distribute…, its button), whatever is chosen.
   function showArrange() {
@@ -1163,8 +1178,10 @@ export function mount(studio, container) {
   // Export lists what File › Export To does in the Mac app (`studio.exports`); each asks
   // where to save once. A deck with no slides has nothing to present or export.
   const presentButton = ui.button("Present", () => present(), { kind: "ghost", icon: "play" });
-  const exportButton = ui.button("Export", (event) => menu(event.currentTarget, studio.exports.map(({ format, label, hint, icon: glyph }) =>
-    ({ icon: glyph || "export", label, hint, run: () => studio.exportFiles([format]) })), { align: "end" }), { kind: "ghost", icon: "export" });
+  const exportButton = ui.button("Export", (event) => menu(event.currentTarget, [...studio.exports.map(({ format, label, hint, icon: glyph }) =>
+    ({ icon: glyph || "export", label, hint, run: () => studio.exportFiles([format]) })),
+  // (The name the files are given: talk.pptx, talk.pdf.)
+  "-", { icon: "pencil", label: "Export File Name…", hint: `${doc().deck?.id || "talk"}.pptx, ${doc().deck?.id || "talk"}.pdf`, run: () => design.fileName() }], { align: "end" }), { kind: "ghost", icon: "export" });
   studio.actions.append(presentButton, exportButton, h("span.sep"), formatButton, arrangeButton, designButton);
   const showable = () => {
     const none = !slides().length;
@@ -1185,7 +1202,7 @@ export function mount(studio, container) {
   // what to do, said where an object would be added -- a greyed button, a file dropped. A
   // title slide has room for logos: a picture added to it is one (Design › Logos).
   const noRoomSaid = (slide) => (layoutOf(slide) === "title" ? "The Title layout has room for logos only: Picture adds one, along its foot"
-    : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, choose a layout with room, such as Content (logos are in Design › Deck)`);
+    : `The ${LAYOUT_NAMES[layoutOf(slide)] || "slide’s"} layout has no room for objects: to add one, choose a layout with room, such as Content (logos are in Design › Logos)`);
   const logoRoom = (slide) => layoutOf(slide) === "title" && !regionsOf(slide).length;
   const renderBar = () => {
     const slide = slideAt();
@@ -2025,7 +2042,8 @@ export function mount(studio, container) {
 
   function fitStage() {
     const room = stage.getBoundingClientRect();
-    const width = Math.max(320, Math.min(room.width - 80, (room.height - 110) * 16 / 9));
+    const ratio = (Number(doc().deck?.style?.width) || 960) / (Number(doc().deck?.style?.height) || 540);
+    const width = Math.max(320, Math.min(room.width - 80, (room.height - 110) * ratio));
     stage.style.setProperty("--slide-max", `${width}px`);
     // (Its width inside its padding: under 820 points, nothing said under the slide. editor.css)
     stage.classList.toggle("narrow", room.width - 80 <= 820);
@@ -7410,10 +7428,9 @@ export function mount(studio, container) {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
       if (state.focus && !block) state.focus = null;
-      // Format and Design are the toolbar's, as Keynote's are (showPanels).
+      // Format and Arrange are the toolbar's, as Keynote's are (showPanels).
       showPanels();
-      if (state.tab === "design") clear(inspectorBody, designForm());
-      else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
+      if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
       // (Arrange: what is chosen arranged, lined up and spaced.)
       else if (arrangeOn) clear(inspectorBody, arrangeForm());
       // (Objects, or a figure's shapes, chosen with shapes on the slide: mixed.js.)
@@ -9332,127 +9349,7 @@ export function mount(studio, container) {
     return result.file.slice(folder.length);
   }
 
-  // -- the deck's design --
-  function designForm() {
-    const deck = doc().deck || {};
-    const editDeck = (mutate, options = {}) => studio.change((d) => { d.deck ||= {}; mutate(d.deck); }, options);
-    const setDeck = (name, fallback) => (value) => editDeck((d) => setOption(d, name, value, fallback), { quiet: true, merge: `deck-${name}` });
-    // Words typed in a field: one run from focusing it to leaving it (leftField).
-    const typeDeck = (name) => (value) => editDeck((d) => setOption(d, name, value), { quiet: true, merge: `deck-${name}`, hold: true });
-    const look = deck.look || "classic";
-    const looks = tinted(h("div.looks", {}, catalog.looks.map((item) => h(`button.look${item.name === look ? ".on" : ""}`, { type: "button", title: item.note || "",
-      onclick: () => { editDeck((d) => setOption(d, "look", item.name, "classic")); renderInspector(); } },
-    lookArt(item.name), h("span.name", {}, lookName(item))))), studio.info?.palette);
-    const themeIsFile = typeof deck.theme === "string" && /\.(ya?ml|json)$/i.test(deck.theme);
-    const current = Array.isArray(deck.palette) ? "" : deck.palette || "default";
-    const accents = () => Object.entries(studio.info?.palette || {}).filter(([k]) => k.startsWith("accent")).slice(0, 5).map(([, c]) => h("span", { style: { background: c } }));
-    // The palette as a pop-up button, like the theme above it: every palette is in its menu,
-    // not in a box scrolling inside the inspector.
-    const strip = (colours) => h("span.palette-strip", {}, colours ? colours.map((c) => h("span", { style: { background: c } })) : accents());
-    const choosePalette = (name) => { closeMenu(); editDeck((d) => { if (name === "default") delete d.palette; else d.palette = name; }); renderInspector(); };
-    // With no palette of its own the deck has its theme's colours: shown as they are, and
-    // named as the palette they are if they are one ("Okabe-Ito", after Customise…), else
-    // as the theme's own.
-    const own = studio.info?.own?.length ? studio.info.own : null;
-    const colourSet = (colours) => [...colours].map((colour) => String(colour).toLowerCase()).sort().join();
-    const ownName = own && Object.keys(catalog.palettes).find((name) => colourSet(catalog.palettes[name]) === colourSet(own));
-    const paletteName = (name) => (name === "default" ? ownName || "Theme’s Own" : name);
-    // The palette in use in the order its colours are used (the deck's tones take them so),
-    // the order Customise… writes them in and the theme then lists them in: one order.
-    const inUse = (name, colours) => (name === current && name !== "default" && studio.info?.order?.length ? studio.info.order : colours);
-    const paletteList = h("button.palette-pick", { type: "button", title: "Choose the deck’s palette", onclick: (event) => popover(event.currentTarget,
-      h("div.palette-choices", {}, [["default", own], ...Object.entries(catalog.palettes).filter(([name]) => name !== ownName)].map(([name, colours]) => h(`button.palette-choice${current === name ? ".on" : ""}`,
-        { type: "button", onclick: () => choosePalette(name) }, strip(inUse(name, colours)), h("span", {}, paletteName(name))))), { className: "palette-menu" }) },
-    strip(current === "default" ? own : inUse(current, catalog.palettes[current])), h("span", {}, current ? paletteName(current) : "Custom"), icon("chevron"));
-    const fonts = (name, label, note) => ui.field(label, ui.font({ value: deck[name] || "", options: catalog.fonts, placeholder: note, key: `deck.${name}`, onChange: setDeck(name) }));
-    // The whole deck in one face, a click away -- its titles and figures too: the theme's,
-    // or one of those most often wanted. The pop-ups under them set each apart.
-    const families = studio.info?.fonts || {};
-    // (The theme's own face is the Theme tile's: not offered twice.)
-    const quick = suggestedFonts(catalog.fonts || []).filter((name) => name !== "Helvetica Neue" && name !== families.theme).slice(0, 7);
-    const one = !deck.title_font && !deck.figure_font ? deck.font || "" : null;
-    const fontTile = (name, label, face) => h(`button.font-tile${one === name ? ".on" : ""}`, { type: "button", "aria-pressed": String(one === name),
-      title: name ? `Set the whole deck in ${name}` : `The theme’s fonts${families.theme ? ` (${families.theme})` : ""}`,
-      onclick: () => { editDeck((d) => { if (name) d.font = name; else delete d.font; delete d.title_font; delete d.figure_font; }, { label: "Change Font" }); renderInspector(); } },
-    h("span.font-tile-sample", { style: { fontFamily: face ? `"${face}", var(--font)` : "inherit" } }, "Aa"), h("span.font-tile-name", {}, label));
-    const fontTiles = h("div.font-tiles", { role: "group", "aria-label": "Font" }, fontTile("", "Theme", families.theme), quick.map((name) => fontTile(name, name, name)));
-    const lookStyle = catalog.looks.find((item) => item.name === look)?.style || {};
-    const changes = deck.style || {};
-    const styleRow = (field) => {
-      const fallback = lookStyle[field.name] ?? field.default;
-      const setStyle = (value) => editDeck((d) => { d.style ||= {}; setOption(d.style, field.name, value, undefined); if (!Object.keys(d.style).length) delete d.style; }, { quiet: true, merge: `style-${field.name}` });
-      const choiceLabel = (choice) => choiceName(field.name, choice);
-      let control;
-      if (field.kind === "bool") control = ui.select({ value: changes[field.name] === undefined ? "" : String(changes[field.name]), options: [{ value: "", label: `Default (${fallback ? "On" : "Off"})` }, { value: "true", label: "On" }, { value: "false", label: "Off" }], onChange: (v) => setStyle(v === "" ? null : v === "true") });
-      else if (field.kind === "choice") control = ui.select({ value: changes[field.name] ?? "", options: [{ value: "", label: `Default (${choiceLabel(fallback)})` }, ...field.choices.map((choice) => ({ value: choice, label: choiceLabel(choice) }))], onChange: (v) => setStyle(v || null) });
-      // A length's unit is said in its field ("28 pt"), as every number's is, not in its note.
-      const points = /,? in points$/i.test(field.note || "");
-      if (!control) control = ui.number({ value: changes[field.name], placeholder: String(fallback ?? "Auto"), step: "any", unit: points ? "pt" : undefined, key: `style.${field.name}`, onChange: setStyle });
-      const set = changes[field.name] !== undefined;
-      // Its pop-up or field named by its name, for VoiceOver -- not by its value alone.
-      const nameId = `style-${field.name}`;
-      const named = control.matches?.("input, button") ? control : control.querySelector?.("input, button.select");
-      named?.setAttribute("aria-labelledby", nameId);
-      return h("div.style-row", {}, h("span.name", {}, h(`span${set ? ".changed" : ""}`, { id: nameId }, styleName(field.name)), h("span.note", {}, String(field.note || "").replace(/,? in points$/i, ""))), control,
-        ui.button("", () => { setStyle(null); renderInspector(); }, { kind: "ghost", icon: "undo", small: true, title: "Reset", disabled: !set }));
-    };
-    // The deck's own settings, each in the tab of what it changes: a colour, the type, or
-    // where things stand and how far apart. (One the page is not told of here is spacing.)
-    const styleRows = (names) => catalog.style.filter((field) => names.includes(field.name)).map(styleRow);
-    const placed = [...STYLE_COLOUR, ...STYLE_TYPE, ...STYLE_ALIGN, ...STYLE_SLIDES];
-    const spacing = catalog.style.filter((field) => !placed.includes(field.name));
-    const spaced = spacing.filter((field) => changes[field.name] !== undefined).length;
-    const tab = DESIGN_TABS.some(([value]) => value === designTab) ? designTab : "colour";
-    const section = (title, ...children) => h("div.section", {}, h("div.section-title", {}, title), ...children);
-    // What the theme sets a kind of words in apart from the rest, if it does: said where
-    // the deck's own choice is made.
-    const themes = (family) => (family ? `Theme’s (${family})` : "Same as body");
-    return [
-      h("div.section", {}, h("div.section-title", {}, "Theme"),
-        // (Customise… is the button under it, not again in its menu.)
-        themeField(studio, { value: deck.theme, fallback: "paper",
-          onPick: (value) => { editDeck((d) => setOption(d, "theme", value, "paper")); renderInspector(); } }),
-        h("div.row", {},
-          themeIsFile ? ui.button("Edit Theme", () => studio.workspace.open(studio.folder() + deck.theme), { small: true, icon: "external" })
-            : ui.button("Customise…", () => customiseTheme(deck), { small: true, icon: "pencil", title: "Create a theme file based on this theme to edit its colours, fonts and lines" }))),
-      // The rest by what it changes, as the tabs of a Mac's inspector: the deck's colours,
-      // its type, where things stand on a slide, and what is the deck's alone.
-      h("div.design-tabs", {}, ui.segmented({ value: tab, key: "design-tab", options: DESIGN_TABS.map(([value, label, title]) => ({ value, label, title })),
-        onChange: (next) => { designTab = next; remember("design-tab", next); renderInspector(); inspectorBody.scrollTop = 0; } })),
-      tab === "colour" ? [
-        section("Colours", ui.field("Palette", paletteList), styleRows(STYLE_COLOUR))] : null,
-      tab === "type" ? [
-        section("Fonts",
-          fontTiles,
-          fonts("font", "Body", families.theme ? `Theme’s (${families.theme})` : "Theme’s"), fonts("title_font", "Titles", themes(families.theme_title)), fonts("figure_font", "Figures", themes(families.theme_figure))),
-        section("Sizes", styleRows(STYLE_TYPE))] : null,
-      tab === "layout" ? [
-        section("Look", looks),
-        section("Alignment", styleRows(STYLE_ALIGN)),
-        section("Slides", styleRows(STYLE_SLIDES)),
-        h("div.section", {}, h("details.more", { open: spaced > 0 }, h("summary", {}, icon("chevron"), `Spacing${spaced ? ` (${spaced} changed)` : ""}`),
-          h("div.inner", {}, spacing.map(styleRow)))),
-      // Every arrow in the deck's figures, in one shape (a line with a head of its own keeps it).
-      // (Not "Figures", the name of the font field just above.)
-      h("div.section", {}, h("div.section-title", {}, "Arrows"),
-        ui.field("Arrowheads", ui.segmented({ value: deck.conventions?.arrowheads || "theme", key: "deck.arrowheads",
-          options: [{ value: "theme", label: "Theme", title: "As the theme draws them" },
-            ...[["triangle", "Triangle"], ["stealth", "Stealth"], ["latex", "LaTeX"], ["open", "Open"]].map(([value, title]) => ({ value, title, label: icon(`head-${value}`) }))],
-          onChange: (value) => { editDeck((d) => {
-            d.conventions = { ...(d.conventions || {}) };
-            if (value === "theme") delete d.conventions.arrowheads; else d.conventions.arrowheads = value;
-            if (!Object.keys(d.conventions).length) delete d.conventions;
-          }, { label: "Change Arrowheads" }); renderInspector(); } }),
-        { hint: "Every arrow without a head of its own" }))] : null,
-      tab === "deck" ? [
-      h("div.section", {}, h("div.section-title", {}, "Deck"),
-        // (Its lines as typed, as on the slide: Return starts a new one, ⌘Return is done.)
-        ui.field("Footer", ui.markup({ value: deck.footer || "", placeholder: FOOTER_HINT, colours: false, lines: true, key: "deck.footer", onInput: typeDeck("footer") })),
-        ui.field("Export File Name", ui.input({ value: deck.id || "", placeholder: "talk", key: "deck.id", onInput: typeDeck("id") }), { hint: `${deck.id || "talk"}.pptx, ${deck.id || "talk"}.pdf` })),
-      h("div.section.logos-section", {}, h("div.section-title", {}, "Logos"), logosControls())] : null,
-    ];
-  }
-
+  // -- the deck's design: the Design bar (designbar.js) --
   // The deck's theme opened in its own tab, shown on this deck (not the theme's sample
   // figures): what is changed there is seen as it changes here.
   function openTheme(file) {
@@ -10000,10 +9897,12 @@ export function mount(studio, container) {
           // ⌫ takes it out of the list, as Remove does.
           else if ((event.key === "Backspace" || event.key === "Delete") && !event.metaKey && !event.ctrlKey) {
             event.preventDefault();
+            // (Where the list is: the inspector, or the Design bar's Logos.)
+            const holder = row.closest(".ribbon-drop") || inspectorBody;
             deleteLogo(index, "Remove Logo");
             // The keys stay in the list: on the logo after it (or before it), or on Add Logo… once none is left.
-            const left = inspectorBody.querySelectorAll(".logo-row");
-            (left[Math.min(index, left.length - 1)] || inspectorBody.querySelector('[data-key="logos.add"]'))?.focus({ preventScroll: true });
+            const left = holder.querySelectorAll(".logo-row");
+            (left[Math.min(index, left.length - 1)] || holder.querySelector('[data-key="logos.add"]'))?.focus({ preventScroll: true });
           }
         },
         ondragstart: (event) => { logoDragged = index; row.classList.add("dragging"); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", logoName(path)); },
@@ -10039,10 +9938,7 @@ export function mount(studio, container) {
       return button;
     };
     // (Where they show, and how tall, once there are some.)
-    if (!list.length) {
-      return [h("div.hint-line", {}, titled ? "Your institution’s and funders’ logos, along the foot of the title slide." : "Your institution’s and funders’ logos, small in every slide’s footer."),
-        h("div", {}, adder())];
-    }
+    if (!list.length) return [h("div", {}, adder())];
     return [
       h("div.list-rows.logo-rows", {}, rows),
       h("div", {}, adder()),
@@ -10386,6 +10282,7 @@ export function mount(studio, container) {
     // Where the figures are kept: Embed Figure in Deck, Embed All Figures in Deck, Open in Figure Editor.
     ...(typingNow() ? [] : figureFiles.commands()),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
+    design.command(),
     // View › Zoom, as Keynote's: by its steps, a point to a point, or fitted to the stage.
     ...(slides().length ? [
       { icon: "plus", label: "Zoom In", keys: "⌘+", hint: `Shown at ${zoomSaid()}`, run: () => zoomIn() },
@@ -10492,7 +10389,7 @@ export function mount(studio, container) {
     ];
   }
   studio.reveal = (where, { quiet = false } = {}) => {
-    if (where?.label === "Design") { state.tab = "design"; arrangeOn = false; inspectorHidden = false; root.classList.remove("no-inspector"); renderInspector(); return; }
+    if (where?.label === "Design") { design.toggle(true); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);
     // Its object chosen, where it is now (the activity list follows it) -- not while
     // following another's work, which is theirs to choose.
@@ -11148,17 +11045,9 @@ export function mount(studio, container) {
   renderStage();
   renderInspector();
   renderBar();
+  // (Shown again if it was left shown -- or the deck left on the inspector's old Design tab.)
+  design.start(leftAt.tab === "design");
 }
-
-// The Design panel's tabs, the one last shown (kept from deck to deck, and visit to visit),
-// and which of the deck's own settings each tab has.
-const DESIGN_TABS = [["colour", "Colour", "The deck’s palette and the colours of its slides"], ["type", "Type", "Fonts and text sizes"],
-  ["layout", "Layout", "The look of the slides, and where things stand on them"], ["deck", "Deck", "Its footer, file name and logos"]];
-let designTab = remembered("design-tab", "colour");
-const STYLE_COLOUR = ["title_role"];
-const STYLE_TYPE = ["title_size", "subtitle_size", "body_size", "small_size", "figure_size", "line_height", "title_weight"];
-const STYLE_ALIGN = ["title_align", "align"];
-const STYLE_SLIDES = ["header", "opening", "sections", "edge", "numbers"];
 
 function remembered(key, fallback) {
   try { return localStorage.getItem(`flexo-deck-${key}`) ?? fallback; } catch { return fallback; }
