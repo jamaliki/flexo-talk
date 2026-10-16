@@ -22,6 +22,7 @@ import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
 import { editableTools, isDrawing } from "/static/kinds/deck/editable.js";
 import { figureHome } from "/static/kinds/deck/figurehome.js";
 import { slideMixed } from "/static/kinds/deck/mixed.js";
+import { placing } from "/static/kinds/deck/placing.js";
 import { deckColours } from "/static/kinds/deck/colours.js";
 import { clipsOf } from "/static/studio/mixing.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
@@ -477,6 +478,13 @@ function copyOf(value) {
     Object.values(item).forEach(renew);
   };
   renew(copy);
+  return copy;
+}
+// A copy of an object made beside it (Duplicate): one placed where it is put stands a little
+// below and right of it, as a shape's copy does.
+function duplicateOf(block) {
+  const copy = copyOf(block);
+  if (Array.isArray(copy?.at) && copy.at.length === 2) copy.at = copy.at.map((value) => Math.round((Number(value) + 12) * 100) / 100);
   return copy;
 }
 
@@ -1073,12 +1081,33 @@ export function mount(studio, container) {
     partElement: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
     blocksAt: (slide, region) => blocksAt(slide, region), slideAt: () => slideAt(), regionsOf: (slide) => regionsOf(slide),
     blockName: (block) => blockName(block), element: (region, index) => blockElement(region, index), partAt: (event) => partAt(event),
-    editSlide: (mutate, options) => editSlide(mutate, options), copyOf: (block) => copyOf(block), pasteClip: (clip) => pasteClip(clip),
+    editSlide: (mutate, options) => editSlide(mutate, options), copyOf: (block) => duplicateOf(block), pasteClip: (clip) => pasteClip(clip),
     select: (index) => select(index), render: () => { placeChosen(); renderInspector(); reportFocus(); },
     crumb: () => [glyph(layoutOf(slideAt() || {})), `Slide ${state.slide + 1}`], frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()],
     clipChosen: (cut) => clipChosen(cut), clipItems: () => clipItems(), undoNote: (text, options) => undoNote(text, options),
     away: (what) => awayFrom(what), showPanel: () => { if (inspectorHidden || state.tab === "design") formatButton.click(); },
     swallowRelease: (held) => swallowRelease(held),
+    get placing() { return objects; },
+  });
+  // The slide's objects placed where they are put, as shapes are -- taken out of line and put
+  // back, dragged, sized, nudged, and arranged in the Arrange tab (placing.js).
+  const objects = placing({
+    studio, shapes: freeShapes, pageNode: () => pageNode, slideAt: () => slideAt(), slideIndex: () => state.slide,
+    blocksAt: (slide, region) => blocksAt(slide, region), regions: (slide) => regionsOf(slide).map((region) => region.key),
+    kindOf: (block) => kindOf(block), blockName: (block) => objectName(block), element: (region, index) => blockElement(region, index),
+    editSlide: (mutate, options) => editSlide(mutate, options),
+    picks: () => (figure && figureBlock() && figure.parts.selected.length ? [] : allOn() ? (allChosen?.picks || []).filter((pick) => blocksAt(slideAt() || {}, pick.region)[pick.index]) : state.focus && !state.field ? [{ region: state.focus.region, index: state.focus.index }] : []),
+    focus: () => (state.focus && !state.field ? { region: state.focus.region, index: state.focus.index } : null),
+    frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()], scale: () => shapeScale(),
+    room: (key) => { const region = regionsOf(slideAt()).find((item) => item.key === key); const box = String(pageNode?.querySelector(`[id="slide${state.slide + 1}.${region?.svg}"]`)?.getAttribute("data-flexo-box") || "").split(" ").map(Number); return box.length === 4 && Number.isFinite(box[2]) ? box[2] : null; },
+    mover: (element) => mover(element),
+    markMany: (before, after) => markMany(before, after),
+    markMixed: (before, after) => { const entry = studio.past[studio.past.length - 1]; if (entry) studio.said(entry).mixed = { page: state.slide, before, after }; },
+    mixedOn: () => mixed.on(),
+    render: () => { placeChosen(); renderInspector(); reportFocus(); }, renderInspector: () => renderInspector(), showArrange: () => showArrange(),
+    swallowRelease: (held) => swallowRelease(held), away: (what) => awayFrom(what), undoNote: (text, options) => undoNote(text, options),
+    hideChosen: (on) => { chosen.hidden = on || chosen.hidden; if (!on) placeChosen(); },
+    chooseOne: (pick) => { allChosen = null; focusBlock(pick.region, pick.index); },
   });
   // Set Colour… (⇧⌘C): what is chosen -- objects, shapes, a figure's shapes, both kinds, else the
   // slide's background -- given a colour's code pasted, one step (colours.js).
@@ -1747,7 +1776,7 @@ export function mount(studio, container) {
     if (!list.length) {
       clear(stage, h("div.stage-empty", {}, wedgeHead("No slides", { tag: "h2" }), h("div", {}, "Choose a layout for the first slide:"),
         tinted(h("div.layout-grid.big", {}, layouts.map((layout) => h("button.layout-card", { type: "button", onclick: () => addSlide(layout.name, 0) },
-          glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name]), h("span.note", {}, layout.note)))), studio.info?.palette)));
+          glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name])))), studio.info?.palette)));
       return;
     }
     const page = pages[state.slide];
@@ -1824,6 +1853,7 @@ export function mount(studio, container) {
     if (renewed && cropping) cropRedrawn();
     if (renewed) cropDrawn();
     if (renewed) freeShapes.drawn();
+    if (renewed) objects.drawn();
     placeChosen();
     placeOthers(here);
     if (inline) positionInline();
@@ -2393,6 +2423,8 @@ export function mount(studio, container) {
     if (event.target.closest(".fig-inline, .figure-bar")) return;
     // ⇧ or ⌘ on a shape with objects chosen, or on an object with shapes: both (mixed.js).
     if (mixed.press(event)) return;
+    // A shape chosen with placed objects, pressed: they move together (placing.js).
+    if (objects.pressShape(event)) return;
     // A shape over the slide's words and objects (or behind them, where none is) is pressed
     // before them; a shape being drawn, wherever the press is.
     if (freeShapes.press(event)) return;
@@ -2407,6 +2439,9 @@ export function mount(studio, container) {
     // but a figure's only shape is the figure, moved on the slide as it is once chosen.
     const inner = part && figurePartAt(event, part);
     if (inner && !inner.alone) { focusBlock(part.region, part.index, () => figure.parts.pointerdown(event)); return; }
+    // One placed where it is put is dragged anywhere, as a shape is -- one in line too, ⌘ held;
+    // one locked, nowhere (placing.js).
+    if (objects.press(event, part)) return;
     pressBlock(event, part);
   }
   // An object chosen as a click on it chooses it: a figure's only shape (a structure), the shape.
@@ -3025,6 +3060,8 @@ export function mount(studio, container) {
 
   function sizeStart(event, corner) {
     if (event.button !== 0 || sizing || resizing || carry) return;
+    // (One placed where it is put: sized where it stands, as a shape is -- placing.js.)
+    if (objects.size(event, corner)) return;
     const focus = state.focus;
     const block = focus && blocksAt(slideAt() || {}, focus.region)[focus.index];
     // (A plot, a gallery or a table is set again at its new width as it is dragged: below.)
@@ -3671,6 +3708,7 @@ export function mount(studio, container) {
 
   function resizeStart(event, handle) {
     if (event.button !== 0 || sizing || resizing || carry) return;
+    if (objects.size(event, handle)) return;
     event.preventDefault();
     event.stopPropagation();
     const focus = state.focus;
@@ -4362,7 +4400,7 @@ export function mount(studio, container) {
   const inChoice = (part) => part?.kind === "block" && allOn() && allBlocks().some((each) => each.region.key === part.region && each.index === part.index);
   stage.addEventListener("mousedown", (event) => {
     // (A right-click on one of them keeps them: its menu is theirs.)
-    if (!allChosen || event.shiftKey || event.metaKey || carry?.all || ((event.button === 2 || event.ctrlKey) && inChoice(partAt(event))) || mixed.keeps(event)) return;
+    if (!allChosen || event.shiftKey || event.metaKey || carry?.all || objects.pressing() || ((event.button === 2 || event.ctrlKey) && inChoice(partAt(event))) || mixed.keeps(event)) return;
     allChosen = null;
     placeChosen(); renderInspector(); reportFocus();
   }, true);
@@ -7388,17 +7426,20 @@ export function mount(studio, container) {
     markFills();
   }
 
-  // Arrange, Keynote's tab of it: the shapes chosen -- alone, with the slide's objects, or a
-  // figure's shapes being edited -- arranged, lined up and spaced (shapes.js, mixed.js,
-  // aligntools.js); nothing to align chosen, its rows greyed, saying what they need, Relative to
+  // Arrange, Keynote's tab of it: what is chosen -- the slide's objects (placing.js), its
+  // shapes, both (mixed.js), or a figure's shapes being edited -- arranged, lined up and
+  // spaced (shapes.js, aligntools.js), its heading naming what it is ("2 Objects", "1 Object,
+  // 3 Shapes"); nothing to align chosen, its rows greyed, saying what they need, Relative to
   // still a setting to change.
   function arrangeForm() {
-    const head = (name, hint) => h("div.section.block-top.arrange-top", {}, h("div.insp-title", {}, icon("arrange"),
-      h("div.insp-words", {}, h("div.insp-name", {}, name), h("div.insp-hint", {}, hint))));
-    if (mixed.on()) return [head(`${mixed.name()} Selected`, `The ${mixed.name().includes("Figure") ? "figure’s shapes" : "objects"} stay where they are laid out; the shapes line up with them`), ...mixed.arrangePanel()];
-    if (freeShapes.any()) return [head(freeShapes.label(), freeShapes.count() > 1 ? "Where they are, their order, and how they line up" : "Where it is, its order, and how it lines up"), ...freeShapes.arrangePanel()];
+    const head = (name) => h("div.section.block-top.arrange-top", {}, h("div.insp-title", {}, icon("arrange"),
+      h("div.insp-words", {}, h("div.insp-name", {}, name))));
+    if (mixed.on()) return [head(mixed.name()), objects.mixedFields(), ...mixed.arrangePanel()].filter(Boolean);
+    if (freeShapes.any()) return [head(freeShapes.label()), ...freeShapes.arrangePanel()];
     const parts = figure?.parts.model && figureBlock() ? figure.parts : null, chosen = parts ? parts.selected.length : 0;
-    const out = [head(chosen ? `${chosen === 1 ? "1 Figure Shape" : `${chosen} Figure Shapes`} Selected` : "Nothing Selected", chosen ? "The figure lays its shapes out" : "Choose shapes to arrange them")];
+    const picks = objects.any() ? (allOn() ? picksNow() : state.focus ? [state.focus] : []) : [];
+    if (!chosen && picks.length) return [head(picks.length === 1 ? objectName(blocksAt(slideAt(), picks[0].region)[picks[0].index]) : `${picks.length} Objects`), ...objects.arrangePanel()];
+    const out = [head(chosen ? `${chosen === 1 ? "1 Figure Shape" : `${chosen} Figure Shapes`}` : "Nothing Selected")];
     // (A figure's own shapes, being edited: put in one row or one column, as its Arrange menu does.)
     if (parts && chosen) {
       const ways = [["row", "Align in a Row", "Put them in one row, in the order they are seen"], ["column", "Align in a Column", "Put them in one column, in the order they are seen"]];
@@ -7559,7 +7600,10 @@ export function mount(studio, container) {
           onChange: (value) => moveBlock(at, { region: value, index: blocksAt(slideAt(), value).length }) })) : null,
         // Across its place, as Keynote's Arrange › Align: where it stands, chosen. (One as wide
         // as its place -- a paragraph filling it -- or as tall, has nowhere to go, and says so.)
-        kind !== "unknown" ? ui.field("Position", positionPad(slide, at, block)) : null),
+        // (Placed where it is put, out of line: back into its place, by the Arrange tab's X and Y.)
+        kind !== "unknown" ? ui.field("Position", objects.isPlaced(at)
+          ? h("div.row", {}, ui.button("Put Back in Line", () => objects.putBack([at]), { small: true, icon: "layout" }))
+          : positionPad(slide, at, block)) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at),
         // (A figure's and a picture's is among their own settings.)
         SIDEWAYS.has(kind) || CORNERED.has(kind) || kind === "mechanism" ? widthField(block, at) : null),
@@ -9533,7 +9577,7 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt(), at.region)[at.index];
     if (!block) return;
     const from = { region: at.region, index: at.index };
-    insertBlock(kindOf(block), copyOf(block), from, `Duplicate ${blockLabel(block)}`);
+    insertBlock(kindOf(block), duplicateOf(block), from, `Duplicate ${blockLabel(block)}`);
     // Undone, the one it was copied from is chosen; redone, the copy.
     markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
   }
@@ -9549,7 +9593,7 @@ export function mount(studio, container) {
       const columns = [...new Set(copies.map((copy) => copy.key))].map((key) => [key, copies.filter((copy) => copy.key === key).map((copy) => copy.index).sort((a, b) => a - b)]);
       allChosen = null;
       editSlide((s) => {
-        for (const [key, mine] of columns) { const list = blocksAt(s, key); list.splice(mine.at(-1) + 1, 0, ...mine.map((index) => copyOf(list[index]))); }
+        for (const [key, mine] of columns) { const list = blocksAt(s, key); list.splice(mine.at(-1) + 1, 0, ...mine.map((index) => duplicateOf(list[index]))); }
       }, { label: `Duplicate ${copies.length} Objects` });
       const made = columns.flatMap(([key, mine]) => mine.map((_, n) => ({ region: key, index: mine.at(-1) + 1 + n })));
       // The copies are what is chosen, as Keynote chooses them.
@@ -10127,6 +10171,8 @@ export function mount(studio, container) {
     // ⌘A outside a text field selects nothing on the page's own words.
     else if (mod && key.toLowerCase() === "a") { event.preventDefault(); chooseAll(); }
     else if (mod && !event.altKey && !event.shiftKey && ["b", "i"].includes(key.toLowerCase()) && emphasiseChosen(key.toLowerCase() === "b" ? "bold" : "italic")) event.preventDefault();
+    // ⌘L locks the objects chosen where they are, ⌥⌘L unlocks them, as a shape's (placing.js).
+    else if (mod && !event.shiftKey && event.code === "KeyL" && (state.focus || allOn()) && !state.field && objects.lock(!event.altKey)) event.preventDefault();
     else if (mod) return;
     // With a part of the slide chosen, ↑ and ↓ choose the one before or after it, ← and → the
     // one in the column beside: nothing changes. With ⌥ they move it (Arrange › Move Up and
@@ -10136,6 +10182,9 @@ export function mount(studio, container) {
     // before the first of them and ↓ the one after the last, ← and → the one beside the first
     // or the last, as a Mac list's arrows go on from a choice of several.
     else if (logoChosen() && !state.focus && !state.field && logoKey(event)) event.preventDefault();
+    // Placed where they are put, the objects chosen are nudged by the arrows, as shapes are
+    // (⇧: ten points); in line, the arrows go from one object to the next (placing.js).
+    else if (key.startsWith("Arrow") && !event.altKey && (allOn() || state.focus) && objects.nudge(event)) event.preventDefault();
     else if (key.startsWith("Arrow") && allOn()) {
       event.preventDefault();
       if (event.altKey) { moveAll(key); return; }
@@ -10287,12 +10336,15 @@ export function mount(studio, container) {
     // Every drawing placed as a picture, made the slides' own shapes (editable.js).
     ...(typingNow() ? [] : [editables.allCommand()].filter(Boolean)),
     ...chosenCommands(),
+    // The objects chosen, alone: put back in line, lined up and spaced, locked (placing.js) --
+    // as the Mac app's Arrange menu runs them by name.
+    ...(typingNow() || mixed.on() || freeShapes.any() ? [] : objects.commands()),
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js) -- with objects chosen
     // too, not what would take or copy the shapes alone (mixed.js).
     ...(typingNow() ? [] : mixed.shapeCommands(freeShapes.commands())),
     // Align and Distribute… (⇧⌘A), Arrange shown, with nothing to align chosen too (the shapes'
     // own, with shapes chosen: aligntools.js).
-    ...(freeShapes.any() || mixed.on() ? [] : [{ icon: "arrange", label: "Align and Distribute…", keys: "⇧⌘A", hint: "Arrange: Relative to, and the rest once shapes are chosen", run: () => freeShapes.revealArrange() }]),
+    ...(freeShapes.any() || mixed.on() || (objects.any() && !typingNow()) ? [] : [{ icon: "arrange", label: "Align and Distribute…", keys: "⇧⌘A", hint: "Arrange: Relative to, and the rest once shapes are chosen", run: () => freeShapes.revealArrange() }]),
     // Format › Set Colour… (⇧⌘C): of what is chosen, else of the slide (colours.js).
     ...(typingNow() ? [] : colours.commands()),
     ...(slides().length ? slideCommands() : []),

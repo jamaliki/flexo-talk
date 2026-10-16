@@ -168,6 +168,30 @@ plots and galleries fill their place; a table, a listing and an equation are as 
 they are of themselves. The PowerPoint's native lists, tables and text boxes take the
 same widths.
 
+Any object can also be **placed anywhere on its slide**, out of its place's flow, as a shape is:
+`at: [x, y]` is its top left and `width` its width there, in the units the slide's shapes are
+placed in (points on a slide 960 by 540; one of another size scaled to that) -- in a deck
+document
+
+```yaml
+body:
+- text: Measured at 4 K
+  at: [80, 440]
+  width: 300
+- {image: pictures/cell.png, at: [600, 120], width: 280}
+```
+
+or `slide.text("Measured at 4 K", width=300).place(at=[80, 440])` in Python. It is drawn there,
+over what the slide lays out and under its shapes, and the rest of its place is laid out as if it
+were not there. Its words keep their size, wrapped in its width; a picture, a figure, a gallery or
+a table keeps its proportions, that wide; a plot is drawn in its `aspect` (else 3:2). Without a
+width it is as large as its place would set it alone. A figure is laid out (turned or not) as it
+would be in its place. Its `horizontal` and `vertical` wait meanwhile: without `at` it is back in
+its place's flow, where it is in its list. It builds in on a click in the slide's order, and the
+PDF, PNG, SVG, the show and the PowerPoint have it where it says (a native text box, list, table
+or picture there, over what is in line and under the shapes). `locked: true` keeps it where it is
+in the studio.
+
 A single-column gallery (a column of logos) stands flush with the words above
 it; a grid is centred. Native lists and tables move with their region, so the
 PowerPoint matches the PDF.
@@ -343,15 +367,36 @@ chosen ("1 Object, 1 Shape"); a band across both chooses what it touches of each
 they are deleted (⌫), cut, copied and pasted (⌘X, ⌘C, ⌘V, and the Mac app's Edit menu: the
 objects pasted where pasted objects go, the shapes where pasted shapes go), and duplicated
 (⌘D) -- each one step, named for both, both chosen again by its undo; the inspector offers
-that, and Align and Distribute for the shapes, the objects among what they line up with (a
-drawing's left edge to a text's). The arrows nudge the shapes; the objects are laid out, and
-a drag moves each kind as it moves alone. A path's
+that, and Align and Distribute moves both (below). A path's
 points are edited where it is (a double-click on it, or Format › Edit Points): its points and
 handles dragged (⌥: one handle alone), a point double-clicked made smooth or a corner, a
 click on its outline adding one, ⌫ deleting those chosen. Format › Make Editable makes any
 shape a path of the same outline, and Arrange › Combine Shapes makes two or more one path:
 their union, the one at the back less the others, their intersection, or what one or other
 covers but not both.
+
+The slide's objects are arranged as its shapes are. The Arrange tab (⇧⌘A) names what is chosen
+("Text", "2 Objects", "1 Object, 3 Shapes") and gives the objects their X and Y, one its Width and
+Height (a picture's, a figure's or a table's height sets its width in proportion, a plot's its
+aspect; words are as tall as they are), Put Back in Line, Locked, and Align and Distribute --
+every Relative to, Beside, Move as a Group, Distribute, a set gap, Arrange in a Grid… -- as the
+palette and the Mac app's Arrange menu have them by name. Whatever of these moves an object takes
+it out of line: every object in line among those chosen is placed just where it stands, nothing
+about it changed but what the command moves (an object already where Align puts it stays in line);
+Put Back in Line puts it back in its place's flow. A placed object is dragged anywhere (⇧ along one
+way, ⌥ a copy) and sized by its handles -- words wrapped again in their new width as they are, the
+rest in proportion -- catching at the slide's edges and middles, at the shapes and other objects
+and where it is as far from its neighbours as they are apart, as a shape does (the magnet; ⌘ held
+the other way); the arrows nudge it (⇧: ten points), ⌘L locks it and ⌥⌘L unlocks it, and a
+duplicate stands a little below and right of it. An object in line is dragged between places as
+ever and its arrows go from one object to the next; ⌘ held as it starts to be dragged takes it out
+of line, to be placed where it is let go. Chosen with shapes, objects move with them: Align and
+its kin move both (one in line among them taken out of line as it moves); a drag of a placed
+object or of a chosen shape carries the shapes and the placed objects together, and the arrows
+nudge them together -- an object in line staying laid out. Placed objects are drawn in the slide's
+order over what it lays out, under every shape but those Behind Slide Content: there is no
+stacking them among the shapes, which Bring Forward and Send Backward still order among
+themselves.
 
 A group is entered as Inkscape enters one: double-click it (or choose it and press Return,
 or Enter Group). Its shapes are then the slide's to click, drag, size, turn, restyle in the

@@ -168,6 +168,9 @@ class _Canvas:
         the share of the room to spare on its left; None, where the slide puts it."""
         self.span = (0.0, 0.0)
         """Where across the slide the picture or table set last is drawn: ``(left, width)``."""
+        self.free: ET.Element | None = None
+        """The group the slide's objects placed where they say (``Region.at``) are drawn in:
+        over what its places lay out, under its shapes (see ``_free``)."""
         """What the build did that the author may want to know (a figure turned to fit)."""
         self._figures = 0
 
@@ -685,6 +688,10 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         canvas.layer.append(note)
     _furniture(canvas, slide)
     _logos(canvas, slide, logos)
+    if canvas.free is not None:
+        # The objects placed where they say: over all the slide lays out, under its shapes.
+        canvas.layer.remove(canvas.free)
+        canvas.layer.append(canvas.free)
     shapes = _draw_shapes(canvas, slide, behind)
     if f"{slide.id}.title" in empty and (not slide.subtitle_runs or f"{slide.id}.subtitle" in empty):
         # With no heading shown, the band or rule a heading is set on is not shown either.
@@ -1151,6 +1158,7 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     starts level with the words.
     """
 
+    _free_group(canvas, slide)
     if slide.rows is not None:
         _rows(canvas, slide, body)
         return
@@ -1168,7 +1176,8 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
     figured = [
         (slide.regions[name], box)
         for name, box in zip(names, boxes, strict=True)
-        if any(isinstance(block, _Figure) for block in slide.regions[name].blocks)
+        if any(isinstance(block, _Figure) and index not in slide.regions[name].at
+               for index, block in enumerate(slide.regions[name].blocks))
     ]
     if len(figured) > 1:
         sizes = [size for region, box in figured if (size := _figure_words(canvas, region, box))]
@@ -1189,8 +1198,9 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             used = _region(canvas, region, box, words=shared, panel=panels.get(name, 0.0))
         finally:
             canvas.layer = outer
-        # Placed as presented: an empty object, never shown, is no part of the decision.
-        hidden = _aside(canvas, region)
+        # Placed as presented: an empty object, never shown, is no part of the decision; nor
+        # is one placed on the slide where it says, out of the region's flow.
+        hidden = {*_aside(canvas, region), *region.at}
         shown = [block for index, block in enumerate(region.blocks) if index not in hidden]
         pictures = bool(shown) and (
             all(isinstance(block, _PICTURES) for block in shown) or _placing(shown) == "captioned"
@@ -1274,16 +1284,20 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
     columns = range(len(regions))
     # While edited every block keeps its cell, a sample too (its row is where it will be);
     # presented or exported, a placeholder is not there at all.
+    # (One placed on the slide where it says is in no row: its cell is empty, the rows set as
+    # if it were not there, and it is drawn where it says as it comes -- _free.)
     shown = [
-        [row for row in range(len(region.blocks)) if editing or f"{slide.id}.{region.name}.{row}" not in canvas.hinted]
+        [row for row in range(len(region.blocks)) if row not in region.at
+         and (editing or f"{slide.id}.{region.name}.{row}" not in canvas.hinted)]
         for region in regions
     ]
+    free = [_placed_here(canvas, region) for region in regions]
 
     # The words of every column shrink together, if that is what it takes to fit (_fitted).
     capped = [[_capped(canvas, block) for block in region.blocks] for region in regions]
 
     def real(column: int, row: int) -> bool:
-        return row < len(capped[column]) and row not in regions[column].placeholders
+        return row < len(capped[column]) and row not in regions[column].placeholders and row not in regions[column].at
 
     filled = [row for row in range(count) if any(real(column, row) for column in columns)]
     pictures = [
@@ -1501,8 +1515,11 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
         try:
             canvas.alone, canvas.centred = placing != "listed", placing != "listed"
             _check_legible(canvas, prepared, scales, box)
-            for row in shown[column]:
+            for row in sorted({*shown[column], *free[column]}):
                 block, identifier = blocks[column][row], f"{slide.id}.{name}.{row}"
+                if row in free[column]:
+                    _free(canvas, region, row, capped[column][row], identifier, box)
+                    continue
                 mark = (len(group), len(canvas.lists), len(canvas.tables), len(canvas.worded))
                 end = _set(
                     canvas, region, row, block, identifier, box, tops[row], placing, prepared, scales,
@@ -2223,7 +2240,7 @@ def _panel_row(canvas: _Canvas, slide: Slide, names: list[str], boxes: list[Box]
     heights = {}
     for name, box in zip(names, boxes, strict=True):
         region = slide.regions[name]
-        if region.blocks and isinstance(region.blocks[0], _Callout):
+        if region.blocks and isinstance(region.blocks[0], _Callout) and 0 not in region.at:
             callout = _fitted(canvas, region, box)[0]
             own = replace(box, width=_own_width(callout, box.width))
             heights[name] = _callout(canvas, "", callout, own, draw=False)
@@ -2237,7 +2254,8 @@ def _figure_words(canvas: _Canvas, region: Region, box: Box) -> float | None:
 
     # A trial: what it would note or warn of is said when the region is set.
     diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
-    blocks = _fitted(canvas, region, box)
+    # (Its own: not those placed where they say, out of its flow.)
+    blocks = [block for index, block in enumerate(_fitted(canvas, region, box)) if index not in region.at]
     prepared, scales, _ = _plan_figures(canvas, blocks, box, None)
     del canvas.diagnostics[diagnostics:], canvas.notes[notes:]
     sizes = [item.size * scales[index] for index, item in prepared.items() if blocks[index].width is None]
@@ -2329,8 +2347,11 @@ def _region(
     # editor after the rest, so they are set as they will be presented. (Empty words keep
     # their place while edited: they are typed in where they are.)
     ids = [f"{canvas.slide.id}.{region.name}.{index}" for index in range(len(blocks))]
-    aside = _aside(canvas, region)
-    shown = [index for index in range(len(blocks)) if index not in aside]
+    # Those placed on the slide where they say are out of its flow: it is set as if they were
+    # not there, and each is drawn where it says as it comes (_free), in the slide's order.
+    free = _placed_here(canvas, region)
+    aside = [index for index in _aside(canvas, region) if index not in region.at]
+    shown = [index for index in range(len(blocks)) if index not in aside and index not in region.at]
     # One rule for where a region's things go: pictures and tables alone, or with words of
     # their own (a caption), are a group centred in the place (the words centred under
     # them); beside a list they start at its edge, as its words do.
@@ -2343,7 +2364,14 @@ def _region(
     top = box.y
     used = None
     marks: list[tuple[int, int, int, int, int]] = []
-    for index in [*shown, *(aside if PLACEHOLDERS.get() else [])]:
+    for index in [*sorted({*shown, *free}), *(aside if PLACEHOLDERS.get() else [])]:
+        if index in free:
+            # (A figure laid out for the room it would have among the region's own: so drawn
+            # as it was there, turned or not -- _free.)
+            among = sorted({*shown, index})
+            _free(canvas, region, index, _capped(canvas, region.blocks[index]), ids[index], box,
+                  among=([blocks[at] for at in among], among.index(index)))
+            continue
         if used is None and index in aside:
             # The rest is set: the placeholders go after it, in what room is left, taking none.
             used = max(top - box.y - style.block_gap, 0.0)
@@ -2397,6 +2425,104 @@ def _set(
     return top
 
 
+PLACED_ROOM = 100_000.0
+"""How tall the room is that an object placed where it says with a width of its own is drawn
+in: its width alone sets its size (a picture's height its proportions')."""
+
+
+def _free_group(canvas: _Canvas, slide: Slide) -> None:
+    """The group the slide's objects placed where they say are drawn in (``canvas.free``), if
+    it has any: made now, before its places are set, and kept over them (``_render_slide``)."""
+
+    if any(region.at for region in slide.regions.values()):
+        canvas.free = element(canvas.layer, "g", id=f"{slide.id}.placed", data__flexo__talk="placed")
+
+
+def _placed_here(canvas: _Canvas, region: Region) -> list[int]:
+    """A region's objects placed on the slide where they say (``Region.at``), in its order --
+    out of its flow. Presented or exported, a placeholder among them is not there at all."""
+
+    editing = PLACEHOLDERS.get()
+    return [
+        index for index in sorted(region.at)
+        if index < len(region.blocks) and (editing or f"{canvas.slide.id}.{region.name}.{index}" not in canvas.hinted)
+    ]
+
+
+def _free(
+    canvas: _Canvas, region: Region, index: int, block: object, identifier: str, room: Box,
+    *, among: tuple[list, int] | None = None,
+) -> None:
+    """One of a region's objects placed on the slide where it says (``Region.at``), out of its
+    place's flow, drawn in ``canvas.free``: its top left at ``at`` and its width its own, both in
+    the units the slide's shapes are placed in -- words set from its top in that width, a
+    picture, figure, gallery or table that wide in its proportions, a plot in its ``aspect``
+    (else ``PLOT_WIDEST``). Without a width it is as large as its place (``room``) would set it
+    alone. It builds in on a click as it would in its place, in the slide's order.
+
+    A figure is laid out for the room it would have in its place, among what is set there
+    (``among``: those blocks, in order, and where it is among them; else alone in it), so it
+    is drawn as it was there -- turned or not -- then drawn as wide as it says."""
+
+    style = canvas.deck.style
+    scale = style.width / SHAPE_FRAME
+    x, y = (value * scale for value in region.at[index])
+    own = getattr(block, "width", None)
+    wide = own * scale if own else room.width
+    if canvas.free is None:
+        canvas.free = element(canvas.layer, "g", id=f"{canvas.slide.id}.placed", data__flexo__talk="placed")
+    outer, before = canvas.layer, (canvas.place, canvas.alone, canvas.centred)
+    # Alone where it stands, from its left: neither centred in a place nor asked across one.
+    canvas.layer, canvas.place, canvas.alone, canvas.centred = canvas.free, None, True, False
+    try:
+        if isinstance(block, _Figure):
+            blocks, at = among or ([block], 0)
+            blocks = [replace(block, width=None) if k == at else other for k, other in enumerate(blocks)]
+            # (A trial for the others: what they say is said as they are set, once.)
+            said = len(canvas.diagnostics), len(canvas.notes)
+            prepared, scales, _ = _plan_figures(canvas, blocks, room, None)
+            for lines, start in ((canvas.diagnostics, said[0]), (canvas.notes, said[1])):
+                lines[start:] = [line for line in dict.fromkeys(lines[start:]) if line not in lines[:start]]
+            item = prepared[at]
+            fit = wide / item.width if own else scales[at]
+            _check_legible(canvas, {0: item}, {0: fit}, room)
+            span = item.width * fit
+            end = y + _place_figure(canvas, identifier, item, Box(x, y, span, item.height * fit), fit)
+            if block.stages:
+                _stage_parts(canvas, identifier, block.stages, item.spec)
+            if block.caption:
+                end += _caption(canvas, identifier, block.caption, Box(x, y, span, 0.0), end)
+        else:
+            if own is not None and hasattr(block, "width"):
+                block = replace(block, width=wide)
+            tall = room.height if own is None else PLACED_ROOM
+            if isinstance(block, _Plot) and own is not None:
+                tall = wide / (block.aspect or PLOT_WIDEST)
+            end = _block(canvas, region, index, block, identifier, Box(x, y, wide, tall), y, "alone", {}, {}, tall, 0.0)
+            span = canvas.span[1] if isinstance(block, _Image | _Table | _Missing | _Code | _Math) else wide
+        drawn = _drawn(canvas, identifier)
+        if drawn is not None:
+            drawn.set("data-flexo-placed", "")
+            if PLACEHOLDERS.get():
+                # Where it stands, for an editor: its frame, as it is placed (_frame).
+                drawn.set("data-flexo-frame", " ".join(number(value) for value in (x, y, span, end - y)))
+        # (A sample set aside, drawn for an editor, builds in on no click: _set.)
+        built = index in region.builds and not getattr(block, "reveal", False)
+        if built and canvas.hinted.get(identifier) != "Placeholder" and drawn is not None:
+            canvas.steps += 1
+            canvas.built.append((canvas.steps, identifier))
+            drawn.set("data-flexo-step", str(canvas.steps))
+    except _FigureFailed:
+        raise
+    except Exception as error:
+        if not STANDING_ASIDE.get():
+            raise
+        raise _object_failed(region.blocks[index], error) from error
+    finally:
+        canvas.layer = outer
+        canvas.place, canvas.alone, canvas.centred = before
+
+
 def _block(
     canvas: _Canvas, region: Region, index: int, block: object, identifier: str, box: Box, top: float,
     placing: str, prepared: dict, scales: dict, share: float, panel: float,
@@ -2405,6 +2531,7 @@ def _block(
     is the least height of the panel a callout is drawn on (the tallest's beside it)."""
 
     style = canvas.deck.style
+    start = top
     # Words under a picture (its caption) are centred under it, unless set otherwise.
     given = index < len(region.sources) and "align" in region.sources[index]
     align = "middle" if isinstance(block, _Words) and placing == "captioned" and not given else (
@@ -2477,6 +2604,13 @@ def _block(
         stood = canvas.place if canvas.place is not None else 0.5 if canvas.centred else 0.0
         if drawn is not None:
             drawn.set("data-flexo-share", number(stood))
+    if PLACEHOLDERS.get() and (drawn := _drawn(canvas, identifier)) is not None:
+        # Its frame where the slide set it, in its place's units -- its words' room across, a
+        # picture's, a table's or an equation's own width, from its top to its end: for an
+        # editor to place it on the slide just where it is (``Region.at``).
+        own = isinstance(block, _Figure | _Image | _Table | _Missing | _Code | _Math)
+        across = canvas.span if own else (left, wide)
+        drawn.set("data-flexo-frame", " ".join(number(value) for value in (across[0], start, across[1], top - start)))
     return top
 
 
@@ -2908,7 +3042,7 @@ def _fitted(canvas: _Canvas, region: Region, box: Box) -> list:
     blocks = [_capped(canvas, block) for block in region.blocks]
     # A placeholder (a sample, drawn for an editor and never shown) takes no room from what
     # is really there: the words are fitted, and said to be, as if it were not.
-    real = [block for index, block in enumerate(blocks) if index not in region.placeholders]
+    real = [block for index, block in enumerate(blocks) if index not in region.placeholders and index not in region.at]
     shown = [block for block in real if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
     pictures = len(shown)
     gaps = style.block_gap * max(0, len(real) - 1)
