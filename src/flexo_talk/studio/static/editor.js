@@ -790,23 +790,36 @@ export function mount(studio, container) {
   const inspectorHead = h("div.insp-head", { hidden: true });
   const inspectorBody = h("div.panel-body.scroll-thin");
   const inspector = h("aside.panel.inspector", {}, inspectorHead, inspectorBody);
-  // Format and Design, as Keynote's: the inspector shown as one or the other -- the one shown
-  // clicked again, hidden, the slide given its room.
+  // Format, Arrange and Design, as Keynote's: the inspector shown as one of them -- the one shown
+  // clicked again, hidden, the slide given its room. Arrange (arrangeForm) is what is chosen
+  // arranged, lined up and spaced; it stays shown as other things are chosen, as Keynote's tab
+  // does (what is chosen leaves Design for Format, not Arrange).
   let inspectorHidden = false;
+  let arrangeOn = leftAt.tab === "arrange";
+  const tabShown = () => (state.tab === "design" ? "design" : arrangeOn ? "arrange" : "slide");
   const panelButton = (tab, label, glyph, title) => ui.button(label, () => {
-    if (state.tab === tab && !inspectorHidden) inspectorHidden = true;
-    else { inspectorHidden = false; state.tab = tab; renderInspector(); }
+    if (tabShown() === tab && !inspectorHidden) inspectorHidden = true;
+    else { inspectorHidden = false; arrangeOn = tab === "arrange"; state.tab = tab === "design" ? "design" : "slide"; renderInspector(); }
     root.classList.toggle("no-inspector", inspectorHidden);
     showPanels();
   }, { kind: "ghost", icon: glyph, title });
   const formatButton = panelButton("slide", "Format", "slide", "Format what is chosen, or the slide");
+  const arrangeButton = panelButton("arrange", "Arrange", "arrange", "Arrange what is chosen: align, distribute, order, flip, lock, group (⇧⌘A)");
   const designButton = panelButton("design", "Design", "palette", "The deck’s theme, colours, fonts and look");
   function showPanels() {
     const shown = !inspectorHidden;
-    formatButton.classList.toggle("on", shown && state.tab !== "design");
-    designButton.classList.toggle("on", shown && state.tab === "design");
-    formatButton.setAttribute("aria-pressed", String(shown && state.tab !== "design"));
-    designButton.setAttribute("aria-pressed", String(shown && state.tab === "design"));
+    for (const [button, tab] of [[formatButton, "slide"], [arrangeButton, "arrange"], [designButton, "design"]]) {
+      button.classList.toggle("on", shown && tabShown() === tab);
+      button.setAttribute("aria-pressed", String(shown && tabShown() === tab));
+    }
+  }
+  // Arrange shown (⇧⌘A, Align and Distribute…, its button), whatever is chosen.
+  function showArrange() {
+    inspectorHidden = false;
+    arrangeOn = true;
+    state.tab = "slide";
+    root.classList.remove("no-inspector");
+    renderInspector();
   }
   // Its buttons, swatches and cards clicked leave the keys with the slide, as Keynote's
   // inspector does; its fields take them.
@@ -986,6 +999,8 @@ export function mount(studio, container) {
         onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
       h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
   });
+  // (Its Arrange and Align and Distribute in the inspector's Arrange tab, a line in Format going there.)
+  freeShapes.arrangeIn(() => showArrange());
   // A drawing pasted, dropped or chosen (Inkscape's): the slide's own shapes, centred where
   // the pointer is on the slide (else in its middle), made smaller to fit it -- or, as asked
   // or too large, the picture it was (drawingpaste.js).
@@ -1100,7 +1115,7 @@ export function mount(studio, container) {
   const presentButton = ui.button("Present", () => present(), { kind: "ghost", icon: "play" });
   const exportButton = ui.button("Export", (event) => menu(event.currentTarget, studio.exports.map(({ format, label, hint, icon: glyph }) =>
     ({ icon: glyph || "export", label, hint, run: () => studio.exportFiles([format]) })), { align: "end" }), { kind: "ghost", icon: "export" });
-  studio.actions.append(presentButton, exportButton, h("span.sep"), formatButton, designButton);
+  studio.actions.append(presentButton, exportButton, h("span.sep"), formatButton, arrangeButton, designButton);
   const showable = () => {
     const none = !slides().length;
     presentButton.disabled = exportButton.disabled = none;
@@ -7323,7 +7338,7 @@ export function mount(studio, container) {
   // Who made the last change from elsewhere: who deleted what was being edited here.
   let lastWho = null;
   function renderInspector() {
-    remember(placeKey, JSON.stringify({ slide: state.slide, tab: state.tab }));
+    remember(placeKey, JSON.stringify({ slide: state.slide, tab: tabShown() }));
     pickedShown = pickedKey();
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
@@ -7336,6 +7351,8 @@ export function mount(studio, container) {
       showPanels();
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
+      // (Arrange: what is chosen arranged, lined up and spaced.)
+      else if (arrangeOn) clear(inspectorBody, arrangeForm());
       // (Objects, or a figure's shapes, chosen with shapes on the slide: mixed.js.)
       else if (mixed.on()) clear(inspectorBody, mixed.panel());
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
@@ -7348,6 +7365,28 @@ export function mount(studio, container) {
       markBlockErrors();
     }, { undone: undoing });
     markFills();
+  }
+
+  // Arrange, Keynote's tab of it: the shapes chosen -- alone, with the slide's objects, or a
+  // figure's shapes being edited -- arranged, lined up and spaced (shapes.js, mixed.js,
+  // aligntools.js); nothing to align chosen, its rows greyed, saying what they need, Relative to
+  // still a setting to change.
+  function arrangeForm() {
+    const head = (name, hint) => h("div.section.block-top.arrange-top", {}, h("div.insp-title", {}, icon("arrange"),
+      h("div.insp-words", {}, h("div.insp-name", {}, name), h("div.insp-hint", {}, hint))));
+    if (mixed.on()) return [head(`${mixed.name()} Selected`, `The ${mixed.name().includes("Figure") ? "figure’s shapes" : "objects"} stay where they are laid out; the shapes line up with them`), ...mixed.arrangePanel()];
+    if (freeShapes.any()) return [head(freeShapes.label(), freeShapes.count() > 1 ? "Where they are, their order, and how they line up" : "Where it is, its order, and how it lines up"), ...freeShapes.arrangePanel()];
+    const parts = figure?.parts.model && figureBlock() ? figure.parts : null, chosen = parts ? parts.selected.length : 0;
+    const out = [head(chosen ? `${chosen === 1 ? "1 Figure Shape" : `${chosen} Figure Shapes`} Selected` : "Nothing Selected", chosen ? "The figure lays its shapes out" : "Choose shapes to arrange them")];
+    // (A figure's own shapes, being edited: put in one row or one column, as its Arrange menu does.)
+    if (parts && chosen) {
+      const ways = [["row", "Align in a Row", "Put them in one row, in the order they are seen"], ["column", "Align in a Column", "Put them in one column, in the order they are seen"]];
+      out.push(h("div.section", {}, h("div.section-title", {}, "Figure"),
+        h("div.row", {}, ways.map(([way, label, title]) => { const button = ui.button(label, () => parts.alignChosen(way), { small: true, icon: "layout", title: parts.canAlign() ? title : "Choose two or more of the figure’s shapes" }); button.disabled = !parts.canAlign(); return button; })),
+        h("div.hint-line", {}, "⇧-click a shape on the slide to line it up with them")));
+    }
+    out.push(...freeShapes.arrangePanel());
+    return out;
   }
 
   function crumbs(slide, block) {
@@ -10054,6 +10093,8 @@ export function mount(studio, container) {
     // Shapes chosen (or one being drawn): their keys -- the arrows nudge, ⌫ deletes, ⌘G groups.
     if (freeShapes.key(event)) { event.preventDefault(); return; }
     if (mod && event.shiftKey && key.toLowerCase() === "n") { event.preventDefault(); newSlideLike(state.slide); }
+    // ⇧⌘A, nothing to align chosen: Arrange shown all the same (shapes.js's, with shapes chosen).
+    else if (mod && event.shiftKey && !event.altKey && key.toLowerCase() === "a") { event.preventDefault(); freeShapes.revealArrange(); }
     else if (mod && key.toLowerCase() === "d") { event.preventDefault(); duplicateChosen(); }
     // ⌘A outside a text field selects nothing on the page's own words.
     else if (mod && key.toLowerCase() === "a") { event.preventDefault(); chooseAll(); }
@@ -10217,6 +10258,9 @@ export function mount(studio, container) {
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js) -- with objects chosen
     // too, not what would take or copy the shapes alone (mixed.js).
     ...(typingNow() ? [] : mixed.shapeCommands(freeShapes.commands())),
+    // Align and Distribute… (⇧⌘A), Arrange shown, with nothing to align chosen too (the shapes'
+    // own, with shapes chosen: aligntools.js).
+    ...(freeShapes.any() || mixed.on() ? [] : [{ icon: "arrange", label: "Align and Distribute…", keys: "⇧⌘A", hint: "Arrange: Relative to, and the rest once shapes are chosen", run: () => freeShapes.revealArrange() }]),
     ...(slides().length ? slideCommands() : []),
     // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
     // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the
@@ -10351,7 +10395,7 @@ export function mount(studio, container) {
     ];
   }
   studio.reveal = (where, { quiet = false } = {}) => {
-    if (where?.label === "Design") { state.tab = "design"; inspectorHidden = false; root.classList.remove("no-inspector"); renderInspector(); return; }
+    if (where?.label === "Design") { state.tab = "design"; arrangeOn = false; inspectorHidden = false; root.classList.remove("no-inspector"); renderInspector(); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);
     // Its object chosen, where it is now (the activity list follows it) -- not while
     // following another's work, which is theirs to choose.
