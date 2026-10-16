@@ -20,6 +20,7 @@ import { convertible, convertCommand } from "/static/studio/toparts.js";
 import { slideToParts } from "/static/kinds/deck/toparts.js";
 import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
 import { editableTools, isDrawing } from "/static/kinds/deck/editable.js";
+import { figureHome } from "/static/kinds/deck/figurehome.js";
 import { slideMixed } from "/static/kinds/deck/mixed.js";
 import { deckColours } from "/static/kinds/deck/colours.js";
 import { clipsOf } from "/static/studio/mixing.js";
@@ -107,7 +108,7 @@ const FIGURE_EXPORTS = [
   { label: "SVG", formats: ["editable"], hint: "Editable SVG with Inkscape layers and live text" },
   { label: "PDF", formats: ["pdf"], hint: "PDF with embedded fonts" },
   { label: "PNG", formats: ["png"], hint: "PNG image" },
-  { label: "Flexo Figure", formats: ["yaml"], hint: "A figure file of its own, in the deck’s theme, to open in Flexo" },
+  { label: "File", formats: ["yaml"], hint: "A Flexo figure file of its own: the deck keeps its copy, or shows the file instead" },
 ];
 
 const LAYOUT_NAMES = {
@@ -1051,6 +1052,13 @@ export function mount(studio, container) {
     // (Made by a double-click: the group entered where it was double-clicked, groups.js.)
     enterShape: (index, at) => { const entered = freeShapes.enter(index, { at, deep: true }); placeChosen(); return entered; },
     away: (what) => awayFrom(what),
+  });
+  // Where the deck's figures are kept: Embed Figure in Deck, Embed All Figures in Deck, Export
+  // Figure as File… and Open in Figure Editor (figurehome.js).
+  const figureFiles = figureHome({
+    studio, at: () => (state.focus ? { slide: state.slide, region: state.focus.region, index: state.focus.index } : null),
+    blockAt: (at) => blocksAt(slides()[at.slide] || {}, at.region)[at.index],
+    render: () => { renderInspector(); reportFocus(); }, away: (what) => awayFrom(what),
   });
   // The slide's objects and its shapes chosen together, as Keynote's are: ⇧-click, a band
   // across both; deleted, cut, copied, pasted and duplicated together, one step (mixed.js).
@@ -4032,6 +4040,7 @@ export function mount(studio, container) {
     if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", run: () => whenFigure(() => figure.parts.addPalette(point)) });
     if ((SIZED.has(kind) || SIDEWAYS.has(kind) || CORNERED.has(kind)) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
+    if (kind === "figure") items.push(...figureFiles.menuItems({ slide: state.slide, region: at.region, index: at.index }));
     // Another picture in its place, as Keynote's Replace: its size, caption and place kept.
     if (kind === "image") {
       items.push({ icon: "image", label: "Replace Picture…", run: () => replacePicture(at) });
@@ -8947,7 +8956,10 @@ export function mount(studio, container) {
   }
 
   function figureForm(block, at, edit) {
-    const value = block.figure;
+    // One of the deck's own figures, shown on several slides by its name ('#pipeline'), is in
+    // the deck as one written here is, and shown so -- edited where the deck keeps it.
+    const named = typeof block.figure === "string" && block.figure.startsWith("#") ? block.figure.slice(1) : null;
+    const value = named !== null && doc().figures?.[named] && typeof doc().figures[named] === "object" ? doc().figures[named] : block.figure;
     const mode = typeof value === "string" ? (value.includes(".py:") ? "python" : "file") : "inline";
     // A figure of one shape (a structure by itself) has no rows and columns to swap.
     const shapes = mode === "inline" ? (value?.nodes || []).length : figure && figureBlock() === block ? figure.parts.model?.nodes?.length : undefined;
@@ -8978,16 +8990,12 @@ export function mount(studio, container) {
       { value: "inline", label: "In Deck" }, { value: "file", label: "File" }, { value: "python", label: "Python" }],
     onChange: async (next) => {
       if (next === mode) return;
-      // A figure file's figure comes into the deck as it is; else a new one starts here.
-      if (next === "inline" && mode === "file") {
-        try {
-          const result = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "inline", at: { slide: state.slide, region: at.region, index: at.index } } });
-          studio.change(() => result.document);
-          toast(`${value} copied into the deck. The file is unchanged.`, { icon: "check", seconds: 5 });
-        } catch (error) { toast(error.message, { kind: "error", icon: "error" }); }
-      } else if (next === "inline") editBlock(at, (b) => { b.figure = NEW_BLOCKS.figure().figure; });
+      // A figure file's figure comes into the deck as it is (Embed in Deck); else a new one
+      // starts here.
+      if (next === "inline" && mode === "file") await figureFiles.embed({ slide: state.slide, region: at.region, index: at.index });
+      else if (next === "inline") editBlock(at, (b) => { b.figure = NEW_BLOCKS.figure().figure; });
       else if (next === "file") {
-        const path = await chooseFile({ title: "Choose a Figure File", types: ["figure"], create: "figure" });
+        const path = await chooseFile({ title: "Choose a Figure File", types: ["figure"] });
         if (path) editBlock(at, (b) => { b.figure = path; });
       } else {
         const target = await chooseFunction("Choose a Figure Function");
@@ -8997,12 +9005,23 @@ export function mount(studio, container) {
     } }))];
     // A figure is made and changed on its slide; to use it elsewhere, it is exported.
     // One button for the figure's exports, as its right-click menu has one item.
-    const exports = ui.field("Export", ui.button("Export Figure…", (event) => menu(event.currentTarget, exportItems(at)), { small: true, icon: "export", title: "SVG, PDF, PNG or a Flexo figure file" }));
+    const place = { slide: state.slide, region: at.region, index: at.index };
+    // (And in a tab of its own, its source and layout tree with it: figurehome.js.)
+    const opens = mode !== "python" ? ui.button("Open in Figure Editor", () => figureFiles.openInEditor(place), { small: true, icon: "external", title: "The figure in a tab of its own: its source, its layout tree" }) : null;
+    const exports = ui.field("Export", h("div.list-row", {}, ui.button("Export Figure…", (event) => menu(event.currentTarget, exportItems(at)), { small: true, icon: "export", title: "SVG, PDF, PNG or a Flexo figure file" }), opens));
     if (mode === "inline") {
+      const shown = named !== null ? (studio.doc.slides || []).filter((slide) => JSON.stringify(slide ?? null).includes(JSON.stringify(`#${named}`))).length : 0;
       parts.push(h("div.figure-card", {},
-        h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`))));
+        h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`)),
+        named !== null ? h("div.muted", {}, `The deck’s figure “${named}”, on ${count(shown, "slide")}`) : null));
       const area = ui.textarea({ value: JSON.stringify(value, null, 2), rows: 8, mono: true, indent: true, key: "figure.json", onInput: (text) => {
-        try { const parsed = JSON.parse(text); area.style.borderColor = ""; edit((b) => { b.figure = parsed; }, "figure"); }
+        try {
+          const parsed = JSON.parse(text);
+          area.style.borderColor = "";
+          // (One of the deck's own: changed where the deck keeps it, every slide showing it.)
+          if (named !== null) studio.change((d) => { if (d.figures?.[named]) d.figures[named] = parsed; }, { merge: `figures-${named}-json`, hold: true });
+          else edit((b) => { b.figure = parsed; }, "figure");
+        }
         catch { area.style.borderColor = "var(--error)"; }
       } });
       area.classList.remove("grow"); area.style.maxHeight = "300px"; area.style.overflow = "auto";
@@ -9031,6 +9050,8 @@ export function mount(studio, container) {
 
   // The figure on the slide written out by itself, in the deck's look, laid out as written.
   function exportFigure(at, formats) {
+    // (As a file of its own: Export Figure as File…'s sheet, figurehome.js.)
+    if (formats.includes("yaml")) return figureFiles.exportAsFile({ slide: state.slide, region: at.region, index: at.index });
     return studio.exportFiles(formats, { slide: state.slide, region: at.region, index: at.index });
   }
 
@@ -9060,7 +9081,7 @@ export function mount(studio, container) {
   });
   listFiles(["image"]).catch(() => {});
   // `action`: its default button's name (Insert, as Keynote's; else Choose).
-  function chooseFile({ title, types, create, action = "Choose" }) {
+  function chooseFile({ title, types, action = "Choose" }) {
     const accept = types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent,.json" : ".yaml,.yml,.json";
     // A picture asked for in a folder known to have none: the Mac's file panel at once, as
     // Keynote's Choose… is, and no sheet. It is opened in the click that asked: a web view
@@ -9093,15 +9114,8 @@ export function mount(studio, container) {
         done = true;
         askEntry().then((id) => resolve(id || null));
       } });
-      if (create === "figure") actions.push({ label: "New Figure File…", aside: true, run: () => {
-        ask("New Figure File", "figures/figure.yaml", "Create").then(async (name) => {
-          if (!name) return;
-          try { finish(await createFile(name, "figure")); }
-          // Said in the sheet it was asked from, not in a note under it.
-          catch (error) { problem.hidden = false; clear(problem, icon("error"), h("span", {}, error.message)); }
-        });
-        return false;
-      } });
+      // (No new figure file is made here: a deck's figures are made in it, and one is written
+      // out as a file of its own by Export Figure as File…, figurehome.js.)
       // As a Mac's open panel: a click chooses a file, a double-click (or Return, or the
       // default button) takes it.
       let chosen = null;
@@ -10249,6 +10263,10 @@ export function mount(studio, container) {
           onChange: (value) => remember("png-width", String(value)) }];
       } },
   ];
+  // And while a figure kept in the deck is chosen, Figure as File… (figurehome.js), for the
+  // Mac app's File › Export To.
+  const deckExports = studio.exports;
+  Object.defineProperty(studio, "exports", { configurable: true, get: () => [...deckExports, ...figureFiles.exports()] });
   studio.present = () => present();
   studio.commands = () => [
     // The slides to go to: places, listed after every command (`later`).
@@ -10304,6 +10322,8 @@ export function mount(studio, container) {
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${lookName(look)}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
+    // Where the figures are kept: Embed Figure in Deck, Embed All Figures in Deck, Open in Figure Editor.
+    ...(typingNow() ? [] : figureFiles.commands()),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
     // View › Zoom, as Keynote's: by its steps, a point to a point, or fitted to the stage.
     ...(slides().length ? [

@@ -159,7 +159,9 @@ def test_the_deck_kind_says_what_a_deck_names() -> None:
 
 
 def test_a_deck_unpacks_from_its_bundle_as_it_was(talk: Path, tmp_path: Path) -> None:
-    made = B.pack(talk)
+    # (Its figure files kept as files: by default their figures are written into the deck as it
+    # is bundled -- test_embedding.)
+    made = B.pack(talk, embed=False)
     assert made.about["kind"] == "deck" and made.about["missing"][0]["name"] == "pictures/old-logo.png"
     out = tmp_path / "out"
     B.unpack(made.path, out)

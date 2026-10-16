@@ -22,7 +22,10 @@ slides:
   left:
   - text: Write what the model *is*
   right:
-  - figure: model.yaml                   # a flexo figure file, or model.py:figure
+  - figure:                              # a flexo figure, written in the deck (below)
+      figure: {id: model}
+      nodes: [{id: encoder, label: Encoder}, {id: decoder, label: Decoder}]
+      edges: [{from: encoder, to: decoder}]
 - title: Training
   body:
   - plot: plots.py:loss                  # a function returning a matplotlib figure
@@ -34,8 +37,9 @@ matching ``Deck`` call takes, and its regions -- ``body``, ``left`` and
 block is a mapping named by its kind (``bullets``, ``text``, ``figure``,
 ``image``, ``plot``, ``table``, ``gallery``, ``code``, ``quote``, ``stats``,
 ``callout``, ``math``, ``mechanism``) with that call's options beside it. Files are found next to the
-document. A figure is a flexo figure file, a flexo figure document written
-inline, or ``file.py:function`` (a function returning a flexo figure); a plot is
+document. A figure is a flexo figure document written in the deck (inline, or
+``'#name'``: one of the deck's ``figures``), a flexo figure file, or ``file.py:function``
+(a function returning a flexo figure); a plot is
 ``file.py:function`` returning a matplotlib figure, called inside
 ``deck.plotting()`` (and given the deck, if it takes an argument). A picture
 (``image``) may be cropped: ``crop: [x, y, width, height]``, the part kept as
@@ -48,6 +52,30 @@ place among the file's texts (``text: 3``): ``[{id: text1, words: "Encoder\nbloc
 20, bold: true, italic: false, colour: "#c0392b"}]``, its size in points at the drawing's own
 size. ``colours`` draws a colour in another wherever it is used: ``{"#4a90d9": "#2e7d32"}``.
 The file is never changed: a text it no longer has is passed over.
+
+A figure lives in the deck: written in its block, as the studio writes every figure it makes
+(``figure: {figure: {id: pipeline}, nodes: [...], edges: [...], groups: [...]}``) -- or, where one
+figure is shown on several slides, once in the deck's ``figures`` (beside ``deck`` and
+``slides``, a mapping of names to figure documents) and named from each block by its name
+after ``#``, in quotes, as YAML takes ``#`` unquoted for the start of a comment::
+
+  slides:
+  - title: The pipeline
+    body:
+    - figure: '#pipeline'
+  - title: Where it fails
+    body:
+    - {figure: '#pipeline', dim: [encoder]}
+  figures:
+    pipeline:
+      figure: {id: pipeline}
+      nodes: [{id: encoder, label: Encoder}, {id: decoder, label: Decoder}]
+      edges: [{from: encoder, to: decoder}]
+
+The pictures and structures a figure's parts draw are named from the deck's folder (in a
+bundle, its ``assets/``). A figure file of its own (``figure: figures/model.yaml``) is read as
+it always was, its files named from its own folder; the studio's Embed Figure in Deck writes it
+into the deck, and Export Figure as File… writes a figure of the deck's out as a file.
 
 A figure block may show its figure differently on each slide, nothing in it moved:
 ``hide``, ``dim`` and ``highlight`` list the figure's parts left out, drawn faint, or
@@ -145,6 +173,7 @@ back as a document.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import datetime
 import importlib.util
 import inspect
@@ -185,6 +214,10 @@ from flexo_talk.deck import (
 )
 
 SCHEMA_VERSION = 1
+
+DOCUMENT_KEYS = ("schema_version", "deck", "slides", "figures")
+"""A deck document's own keys: its settings, its slides, and the figures it keeps once for
+several of them (``figures``, named from their blocks as ``'#name'``)."""
 
 BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
@@ -453,7 +486,7 @@ def deck_from_document(
     if not isinstance(document, dict):
         raise DeckDocumentError("", "A deck document must be a mapping with deck and slides.")
     _bounded(document, "The document")  # one not read from a file too (the studio's, an agent's)
-    _only(document, ("schema_version", "deck", "slides"), "")
+    _only(document, DOCUMENT_KEYS, "")
     version = document.get("schema_version", SCHEMA_VERSION)
     if isinstance(version, bool) or version != SCHEMA_VERSION:
         raise DeckDocumentError(
@@ -464,21 +497,78 @@ def deck_from_document(
     slides = document.get("slides") or []
     if not isinstance(slides, list):
         raise DeckDocumentError("slides", "slides must be a list.")
-    for index, data in enumerate(slides):
-        where = f"slides[{index}]"
-        try:
-            add_slide(deck, data, base, where, missing=errors)
-        except DeckDocumentError as error:
-            if errors is None:
-                raise
-            errors.append(error)
-            _stand_in(deck, index)
-        except (ValueError, TypeError, OSError, AttributeError) as error:
-            if errors is None:
-                raise DeckDocumentError(where, str(error)) from error
-            errors.append(DeckDocumentError(where, str(error)))
-            _stand_in(deck, index)
+    # The deck's own figures, named from its slides' blocks ('#pipeline').
+    shared = _SHARED.set(shared_figures(document))
+    try:
+        for index, data in enumerate(slides):
+            where = f"slides[{index}]"
+            try:
+                add_slide(deck, data, base, where, missing=errors)
+            except DeckDocumentError as error:
+                if errors is None:
+                    raise
+                errors.append(error)
+                _stand_in(deck, index)
+            except (ValueError, TypeError, OSError, AttributeError) as error:
+                if errors is None:
+                    raise DeckDocumentError(where, str(error)) from error
+                errors.append(DeckDocumentError(where, str(error)))
+                _stand_in(deck, index)
+    finally:
+        _SHARED.reset(shared)
     return deck
+
+
+def shared_figures(document: object) -> dict[str, Any]:
+    """The figures a deck document keeps once for several slides (its ``figures``), by
+    name; what is wrong with them said as a deck's mistakes are."""
+
+    figures = document.get("figures") if isinstance(document, dict) else None
+    if figures is None:
+        return {}
+    if not isinstance(figures, dict):
+        raise DeckDocumentError("figures", "figures must be a mapping of names to figure documents "
+                                           "(figures: {pipeline: {figure: {id: pipeline}, nodes: [...]}}).")
+    for name, figure in figures.items():
+        if not isinstance(name, str) or not name.strip() or name.startswith("#"):
+            raise DeckDocumentError("figures", f"A figure's name in figures must be a word, not {name!r}.")
+        if not isinstance(figure, dict):
+            raise DeckDocumentError(
+                f"figures.{name}", f"The figure {name} must be a flexo figure document (figure, nodes, edges, "
+                f"groups), not {described(figure)}."
+            )
+    return figures
+
+
+def figure_value(document: object, value: object) -> object:
+    """A figure block's ``figure`` as it draws: one of the deck's ``figures`` for its name
+    ('#pipeline'), else as it is written (a figure written in the block, a file, Python)."""
+
+    if isinstance(value, str) and value.startswith("#"):
+        figures = document.get("figures") if isinstance(document, dict) else None
+        found = figures.get(value[1:]) if isinstance(figures, dict) else None
+        return found if isinstance(found, dict) else value
+    return value
+
+
+_SHARED: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar("flexo_talk_shared_figures",
+                                                                                default=None)
+"""The figures of the deck being read (``shared_figures``), while its slides are."""
+
+
+def _shared_figure(value: object, where: str) -> object:
+    """A block's figure named from the deck's ``figures`` ('#pipeline'): that figure; one the
+    deck has none of by that name is said, in a box where it would be."""
+
+    if not (isinstance(value, str) and value.startswith("#")):
+        return value
+    shared = _SHARED.get() or {}
+    found = shared.get(value[1:])
+    if not isinstance(found, dict):
+        names = ", ".join(f"#{name}" for name in shared) or "none"
+        raise InvalidFigure(where, f"The deck has no figure named \u201c{value[1:]}\u201d in its figures "
+                                   f"(it has {names}).")
+    return found
 
 
 def _stand_in(deck: Deck, index: int) -> None:
@@ -872,6 +962,8 @@ def add_block(
                 raise DeckDocumentError(here, "stats must be a list of {value, label} pairs.")
             region.stats(*(_stat(item, here) for item in value), **options)
         elif kind == "figure":
+            # One of the deck's own figures, by its name, drawn as one written here is.
+            value = _shared_figure(value, here)
             # A lone shape with no words shows its hint, faintly (see _lone_shape).
             hint = _lone_shape(value)
             shown = {**value, "nodes": [{**value["nodes"][0], "label": hint}]} if hint else value
@@ -1120,9 +1212,12 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
             while len(_FIGURES) > 64:
                 _FIGURES.popitem(last=False)
         return figure
+    if isinstance(value, str) and value.startswith("#"):
+        return _figure(base, _shared_figure(value, where), where, region)
     if not isinstance(value, str) or not value:
         raise DeckDocumentError(
-            where, "A figure must be a figure file, file.py:function, or a flexo figure document."
+            where, "A figure must be a flexo figure document, the name of one of the deck\u2019s figures in "
+            "quotes ('#pipeline'), a figure file, or file.py:function."
         )
     if _is_code(value):
         return Reference(value, _maker(base, value, where, lambda made: _as_figure(made, value, where), kind="figure"))
@@ -1143,6 +1238,11 @@ def _beside(base: Path, figure: dict) -> dict:
 
     from flexo.plots import beside
 
+    if isinstance(figure.get("shapes"), list):
+        from flexo.shape_pictures import anchored
+
+        # (And a picture among the shapes drawn over it, as a figure file's are beside it.)
+        figure = {**figure, "shapes": anchored(figure["shapes"], base)}
     nodes = figure.get("nodes")
     if not isinstance(nodes, list):
         return figure
@@ -1590,10 +1690,14 @@ def dump_document(document: dict[str, Any], *, format: str = "yaml") -> str:
 
 def _tidied(document: Any) -> Any:
     if isinstance(document, dict) and isinstance(document.get("slides"), list):
-        return {
+        tidied = {
             key: [_tidy(slide, slide=True) for slide in item] if key == "slides" else _tidy(item)
-            for key, item in document.items()
+            for key, item in document.items() if key != "figures"
         }
+        # The figures several slides show, after the slides: what they show is read first.
+        if "figures" in document:
+            tidied["figures"] = _tidy(document["figures"])
+        return tidied
     return document
 
 
