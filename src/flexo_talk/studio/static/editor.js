@@ -1001,7 +1001,7 @@ export function mount(studio, container) {
     goTo: (index) => { if (index < (doc().slides || []).length) select(index); },
     // The slide's objects, as drawn, a shape's line may be glued to (`{object: "body[0]"}`).
     glueKey: "object",
-    // What is on the slides either side, caught at too (across.js).
+    // What is on the slides overlaid, caught at too (across.js).
     beside: () => across.beside(),
     // The slide's grid, its margins and places (gridpaper.js).
     grid: () => slideGrid(),
@@ -1167,7 +1167,7 @@ export function mount(studio, container) {
     beside: () => across.beside(),
     grid: () => slideGrid(),
   });
-  // The slides either side: shown faintly, caught at, matched on (across.js).
+  // Slides overlaid on the one shown: drawn faintly, caught at, matched on (across.js).
   const across = acrossSlides({
     studio, pages: () => pages, slides: () => slides(), index: () => state.slide, pageNode: () => pageNode,
     frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()], scale: () => shapeScale(),
@@ -1177,6 +1177,9 @@ export function mount(studio, container) {
     objectFrame: (pick) => objects.frameOf(pick), shapes: freeShapes, chosenSlides: () => chosenSlides(),
     away: (what) => awayFrom(what), undoNote: (text, options) => undoNote(text, options),
     render: () => { placeChosen(); renderInspector(); reportFocus(); },
+    // Another slide shown -- and, a ghost's object clicked, it chosen there (an object, a shape).
+    go: (index) => select(index), rail: () => railList,
+    goTo: (index, at) => { select(index); if (at.shape !== undefined) { if (slideAt()?.shapes?.[at.shape]) freeShapes.choose([at.shape]); } else if (blocksAt(slideAt(), at.region)[at.index] !== undefined) chooseObject(at); },
   });
   // Set Colour… (⇧⌘C): what is chosen -- objects, shapes, a figure's shapes, both kinds, else the
   // slide's background -- given a colour's code pasted, one step (colours.js).
@@ -1551,6 +1554,8 @@ export function mount(studio, container) {
     // Named and keyed as the slide's own menu and the palette name them.
     const many = together ? `${together.length} Slides` : "Slide";
     menu(anchor, [
+      // First, the slides chosen overlaid -- one chosen, those either side (across.js).
+      ...across.listItems(),
       { icon: "plus", label: "New Slide", keys: "⇧⌘N", run: () => newSlideLike(together ? Math.max(...together) : index) },
       "-",
       ...clipItems(),
@@ -1663,6 +1668,8 @@ export function mount(studio, container) {
     // Slides chosen together, or no longer: the panel says so, with what applies to them all.
     if (pickedKey() !== pickedShown && !state.focus) renderInspector();
     todos?.rail();
+    // (Each slide overlaid marked down its edge in its tint: across.js.)
+    across.rail();
   }
   let pickedShown = "";
   const pickedKey = () => (state.picked.length > 1 ? [...state.picked].sort((a, b) => a - b).join() : "");
@@ -2162,7 +2169,7 @@ export function mount(studio, container) {
     ui.button("", () => zoomIn(), { kind: "ghost", icon: "plus", small: true, title: "Zoom In (⌘+)" }),
     ui.button("Fit", () => fitSlide(), { kind: "ghost", small: true, title: "Fit Slide (⇧⌘0)" }),
     ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }),
-    // The slides either side (across.js).
+    // Slides overlaid: the toggle, and their key (across.js).
     ...across.zoomButtons());
   // Clicked, a zoom button does not keep the keys (as a Mac window's toolbar buttons don't).
   for (const button of zoomBar.querySelectorAll("button")) button.addEventListener("mousedown", (event) => event.preventDefault());
@@ -2490,6 +2497,8 @@ export function mount(studio, container) {
       : part.kind === "logo" ? logoChosen() && state.logo === part.index
         : state.field && state.field.field === fieldOf(part.field, { x: event.clientX, y: event.clientY }));
     if (chosenNow) { hover.hidden = true; return; }
+    // Nothing of the slide's own there: an object of a slide overlaid on it, outlined (across.js).
+    if (!part && across.point(event)) { hover.hidden = true; return; }
     place(hover, part && frameOf(part), part ? labelOf(part) : "");
   }
 
@@ -3998,6 +4007,8 @@ export function mount(studio, container) {
     // ⇧-click or ⌘-click adds an object to what is chosen, or takes it out, as in Keynote.
     if ((event.shiftKey || event.metaKey) && part?.kind === "block" && (state.focus || allOn())) { pickAlso(part); return; }
     if (part?.kind === "logo") { chooseLogo(part.index); return; }
+    // (On an overlaid slide's object, outlined: that slide, and it chosen there -- across.js.)
+    if (!part && across.pick(event)) return;
     if (!part) { state.focus = null; state.field = null; state.logo = null; freeShapes.clear({ quiet: true }); placeChosen(); renderInspector(); reportFocus(); return; }
     state.field = null;
     freeShapes.clear({ quiet: true });
@@ -4081,7 +4092,7 @@ export function mount(studio, container) {
     // One of several chosen: they stay chosen, and its menu acts on them all.
     if (inChoice(part)) {
       const count = allBlocks().length;
-      menu(point, [...clipItems(), { icon: "duplicate", label: `Duplicate ${count} Objects`, keys: "⌘D", run: () => duplicateChosen() }, "-", ...chosenCommands()]);
+      menu(point, [...across.overlaidItems(), ...clipItems(), { icon: "duplicate", label: `Duplicate ${count} Objects`, keys: "⌘D", run: () => duplicateChosen() }, "-", ...chosenCommands()]);
       return;
     }
     if (part?.kind === "logo") {
@@ -4180,6 +4191,8 @@ export function mount(studio, container) {
       if (other.key !== at.region) items.push({ icon: "right", label: `Move to ${other.name}`, run: () => moveBlock(at, { region: other.key, index: blocksAt(slide, other.key).length }) });
     }
     items.push("-", { icon: "trash", label: "Delete", keys: "⌫", danger: true, run: () => deleteBlock(at) });
+    // Slides overlaid: Match on Overlaid Slides, first (across.js).
+    items.unshift(...across.overlaidItems());
     menu(point, items);
   }
   // Rows deleted here lately, with the step that deleted them (see followChange).
@@ -10212,6 +10225,8 @@ export function mount(studio, container) {
         : stop.field ? state.field?.field === stop.field : state.focus?.region === stop.region && state.focus?.index === stop.index));
       chooseStop(stops[(now + (event.shiftKey ? -1 : 1) + stops.length + (now < 0 && event.shiftKey ? 1 : 0)) % stops.length]);
     }
+    // Slides overlaid, Page Up and Page Down go among them (across.js).
+    else if ((key === "PageUp" || key === "PageDown") && !event.altKey && across.page(key === "PageDown" ? 1 : -1)) event.preventDefault();
     else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }
     else if (key === "End" && slides().length) { event.preventDefault(); select(slides().length - 1); }
     else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
@@ -10249,6 +10264,8 @@ export function mount(studio, container) {
     } else if ((key === "Delete" || key === "Backspace") && state.focus) { event.preventDefault(); deleteBlock(state.focus); }
     else if ((key === "Delete" || key === "Backspace") && allOn()) { event.preventDefault(); deleteAll(); }
     else if (key === "Escape" && allChosen) { allChosen = null; placeChosen(); renderInspector(); reportFocus(); }
+    // Esc with nothing else to do: slides overlaid, no longer (across.js).
+    else if (key === "Escape" && across.escape()) event.preventDefault();
   });
 
   // -- the palette's commands, and following --
@@ -10302,7 +10319,7 @@ export function mount(studio, container) {
       : block ? (objects.locked(state.focus) ? "locked-object" : objects.isPlaced(state.focus) ? "placed" : "object") : state.field ? "words" : "";
     const edit = !block ? "" : INLINE.has(kindOf(block)) ? "text" : { table: "cells", stats: "numbers", gallery: "captions", image: "crop", figure: "shapes" }[kindOf(block)] || "";
     return together(own, fromParts(parts, { sizing: Boolean(document.querySelector(".fig-sizing")), bending: document.body.classList.contains("fig-grabbing") }),
-      fromShapes(freeShapes.doing()), { chosen, edit });
+      fromShapes(freeShapes.doing()), { chosen, edit, overlay: across.shown() });
   };
   studio.commands = () => [
     // The slides to go to: places, listed after every command (`later`).
@@ -10365,7 +10382,7 @@ export function mount(studio, container) {
     ...(typingNow() ? [] : figureFiles.commands()),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
     design.command(),
-    // The slides either side, faintly; and what is chosen matched on them (across.js).
+    // Slides overlaid on the one shown, or no longer; and what is chosen matched on them (across.js).
     ...(slides().length ? across.viewCommands() : []),
     // The grid over the slide, its layout in red (gridpaper.js).
     ...(slides().length ? [gridCommand()] : []),
