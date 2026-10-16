@@ -194,8 +194,8 @@ class ShapeWriter:
         source = Path(str(spec.get("source") or ""))
         if self.pictures is None or not source.is_file():
             return None
-        kind = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(
-            source.suffix.lower())
+        kind = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".gif": "image/gif"}.get(source.suffix.lower())
         if kind is None:
             return None
         data = source.read_bytes()

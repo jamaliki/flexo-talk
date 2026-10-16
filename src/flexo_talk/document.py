@@ -44,7 +44,9 @@ document. A figure is a flexo figure document written in the deck (inline, or
 ``deck.plotting()`` (and given the deck, if it takes an argument). A picture
 (``image``) may be cropped: ``crop: [x, y, width, height]``, the part kept as
 fractions of the whole picture (``[0.1, 0, 0.8, 1]`` keeps the middle 80% across),
-and drawn round with ``mask: circle``. An SVG picture's words are set in the deck's figure
+and drawn round with ``mask: circle``. A GIF plays wherever a screen shows it (the studio,
+presenting, the SVG in a browser, PowerPoint and Keynote); a PDF or a PNG shows its first
+frame, or the one ``still`` names, counted from 1 (``still: 12``). An SVG picture's words are set in the deck's figure
 font, the same on the slide and in every export: ``font: drawn`` keeps the faces its file
 names (as found, Flexo's fallback face where none is), and a family's name sets them in that
 one. ``texts`` changes its texts, each named by its id in the file -- or, with none, by its
@@ -241,7 +243,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
     "text": ("size", "align", "muted", "colour", "width"),
     "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight", "stages"),
-    "image": ("width", "crop", "mask", "description", "caption", "font", "texts", "colours"),
+    "image": ("width", "crop", "mask", "description", "caption", "font", "texts", "colours", "still"),
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),
     "gallery": ("columns", "height", "crop", "size", "align", "width"),

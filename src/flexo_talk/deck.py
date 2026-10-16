@@ -219,8 +219,10 @@ LOGO_HEIGHTS = (12.0, 120.0)
 """The heights a deck's logos may be given, in points."""
 LOGOS_ON = ("title", "every")
 """Where a deck's logos show: on its title slide (or slides), or on every slide."""
-LOGO_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai")
-"""The pictures a logo may be: a photograph's kinds, and vectors (SVG, a PDF's page)."""
+LOGO_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf", ".ai")
+"""The pictures a logo may be: a photograph's kinds, and vectors (SVG, a PDF's page). A GIF
+logo is drawn still, its first frame: a logo is on every slide, and one moving there would
+draw the eye from what each slide shows."""
 
 SHAPE_FRAME = 960.0
 """How wide a slide is in the units its shapes are placed in. On the deck's own slide, 960
@@ -279,6 +281,18 @@ def _size(value: object, what: str = "size") -> float | None:
     """A size in points, or None for the size the place sets."""
 
     return None if value is None else _number(value, what, 4.0, 400.0, "20 (points)")
+
+
+def _still(value: object) -> int | None:
+    """The frame of a GIF that a PDF or a PNG shows, counted from 1 (paper cannot play it),
+    or None for its first."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float) or not float(value).is_integer() or value < 1:
+        raise SettingError("still", f"still must be the number of one of a GIF's frames, 1 for its first (such as "
+                                    f"12), not {_said(value) if isinstance(value, int | float) else repr(value)}.")
+    return int(value)
 
 
 def _crop(value: object) -> tuple[float, float, float, float] | None:
@@ -534,6 +548,9 @@ class _Image:
     restyle: Restyle = field(default_factory=Restyle)
     """An SVG's words and colours as they are drawn (``flexo.restyle``): its font -- the
     deck's figure font unless it says -- and its texts and colours changed."""
+    still: int | None = None
+    """The frame of a GIF that a PDF or a PNG shows, from 1 (``None``: its first). Every
+    screen plays it; paper shows that frame alone."""
 
 
 @dataclass(slots=True)
@@ -722,10 +739,10 @@ def _check_settings(settings: dict[str, object]) -> None:
     if isinstance(logos, str | Path):
         logos = [logos]
     if not isinstance(logos, list | tuple) or not all(isinstance(logo, str | Path) and str(logo) for logo in logos):
-        raise wrong("logos", "a list of picture files (PNG, JPEG, SVG or PDF), such as [logos/institute.png]")
+        raise wrong("logos", "a list of picture files (PNG, JPEG, GIF, SVG or PDF), such as [logos/institute.png]")
     for logo in logos:
         if Path(logo).suffix.lower() not in LOGO_SUFFIXES:
-            raise SettingError("logos", f"A logo must be a PNG, JPEG, SVG or PDF picture: {Path(logo).name} is "
+            raise SettingError("logos", f"A logo must be a PNG, JPEG, GIF, SVG or PDF picture: {Path(logo).name} is "
                                         "none of these.")
     if settings["logos_on"] not in LOGOS_ON:
         raise wrong("logos_on", "title (the title slide) or every (every slide)")
@@ -1376,9 +1393,13 @@ class Region:
         self, source: str | Path, *, width: float | None = None, description: str | None = None,
         caption: str | None = None, crop: Sequence[float] | None = None, mask: Literal["circle"] | dict | None = None,
         font: str | None = None, texts: Sequence[dict] | None = None, colours: dict[str, str] | None = None,
+        still: int | None = None,
     ) -> Region:
         """A picture file, scaled to fit: an SVG (a saved plot, a drawing) is drawn
         as vectors -- native shapes and text in the PowerPoint -- and a PNG as a picture.
+        A GIF plays wherever a screen shows it -- the studio, presenting, the SVG in a
+        browser, PowerPoint and Keynote -- and a PDF or PNG shows one frame of it: the
+        first, or ``still`` (counted from 1: ``still=12`` is its twelfth).
         ``description`` says what it shows, for whoever cannot see it (a screen reader,
         PowerPoint's alt text); ``caption`` is set under it, centred, a size smaller.
 
@@ -1408,18 +1429,19 @@ class Region:
         held, caption = caption == "", _caption(caption)
         crop = _crop(crop)
         mask = _mask(mask)
+        still = _still(still)
         try:
             restyle = restyle_of(font, texts, colours)
         except ValueError as error:
             said = str(error)
             key = "font" if said.startswith("font") else "colours" if said.startswith("colours") else "texts"
             raise SettingError(key, f"{said[:1].upper()}{said[1:]}.") from None
-        self.blocks.append(_Image(str(source), width, description, inline(caption), held, crop, mask, restyle))
+        self.blocks.append(_Image(str(source), width, description, inline(caption), held, crop, mask, restyle, still))
         kept = [int(item) if item.is_integer() else item for item in crop] if crop else None
         self._record("image", str(source), width=width, crop=kept, mask=mask, description=description or None,
                      caption=caption or None, font=restyle.font,
                      texts=[change.record() for change in restyle.texts] or None,
-                     colours=dict(restyle.colours) or None)
+                     colours=dict(restyle.colours) or None, still=still)
         return self
 
     def build_in(self) -> Region:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 
+from flexo.animated import stilled
 from flexo.drawing import Drawing, Group, Image, Shape, Text, ink_bounds, read_drawing
 from flexo.export import rasterise
 from flexo.pdf import ARTIFACT, Tag, Tagger, write_pdf
@@ -142,9 +143,10 @@ def build_deck(
             path.write_text(item.svg, encoding="utf-8")
             svgs.append(path)
         if "png" in formats:
-            # Drawn from outlines, so the preview shows exactly the glyphs measured.
+            # Drawn from outlines, so the preview shows exactly the glyphs measured -- and a
+            # GIF as the frame its picture names (flexo.animated: a PNG does not play).
             path = folder / f"{stem}.png"
-            path.write_bytes(rasterise(portable_svg(item.svg), dpi=dpi))
+            path.write_bytes(rasterise(portable_svg(stilled(item.svg)), dpi=dpi))
             pngs.append(path)
     pdf = None
     if "pdf" in formats:
