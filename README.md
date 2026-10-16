@@ -771,6 +771,18 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   labels changed in the file with the deck's in the same step. Esc closes it, the last
   match's words chosen where they are typed. The top bar's **Search** (⌘K) lists the same
   matches, by slide, above the commands; choosing one goes there as the bar does.
+- **TODOs**: the word `TODO` in capitals, as a word of its own (`TODO`, `TODO:`,
+  `TODO —`), anywhere in a slide's words -- the same words find finds, its notes too --
+  is work left, shown in the studio only. The slide's thumbnail glows amber in the
+  slide list, with how many under its number when it has several, and the list's foot
+  says how many in all ("3 TODOs"; pressed, it goes to the next). On the slide each is
+  marked amber behind its words (an equation's framed); zoomed in, markers at the
+  stage's edges point to those out of sight. One in the notes puts a **TODO** chip on
+  the notes' bar, which opens them at it. **Next TODO** (⌘') and **Previous TODO**
+  (⇧⌘') go from one to the next, slide after slide (the palette; View in the Mac app).
+  As a show starts or the deck is exported, a quiet word says "2 slides have TODOs".
+  Nothing of it is presented or exported, and "todo" or "Todo" is just a word
+  (`static/todos.js`, flexo's `todos.js`).
 - **Others, live**: slides an agent or another person changes flash in their
   colour, and their avatars show which slide they are on.
 - **Present** (⌘↩, or ⌥⌘↩ from the first slide) plays the deck full screen, as

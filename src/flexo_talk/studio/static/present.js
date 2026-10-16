@@ -24,7 +24,10 @@ let showing = null;  // the show this window leads, while there is one
 
 // Present `pages()` (each { svg, steps }) from slide `start`, with `slides()`'s notes;
 // `done(index)` is told the slide the show ended on. A show already running is left be.
-export function present({ pages, slides = () => [], start = 0, done = () => {} }) {
+// `note` is said quietly as it starts, a few seconds ("2 slides have TODOs"): on the presenter's
+// view, and on the slides only where there is no presenter's view to say it -- one screen, as
+// the hint is.
+export function present({ pages, slides = () => [], start = 0, done = () => {}, note = "" }) {
   if (showing || !pages().length) return;
   if (slides().length && slides().every((slide) => slide?.skip === true)) return;
   dress();
@@ -40,6 +43,7 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
   let paired = false;
   let full = "";  // "page" (the Fullscreen API) or "app" (the Mac window's), if this show entered it
   const hintUntil = Date.now() + 3000;
+  const noteUntil = note ? Date.now() + 4500 : 0;
 
   // The slides as they are now: the deck redrawn as it is edited is shown as it comes --
   // but for those skipped (Keynote's Skip Slide), each kept with where it is in the deck (`at`).
@@ -48,7 +52,7 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
     if (deck && now[0] === drawnFrom[0] && now[1] === drawnFrom[1]) return deck;
     const was = deck?.slides[state.index]?.at;
     drawnFrom = now;
-    deck = { seq: (deck?.seq || 0) + 1, slides: now[0].map((page, index) => ({ at: index,
+    deck = { seq: (deck?.seq || 0) + 1, note, noteUntil, slides: now[0].map((page, index) => ({ at: index,
       svg: page?.svg || "", steps: Math.max(1, page?.steps || 1), notes: String(now[1][index]?.notes || "") }))
       .filter((slide) => now[1][slide.at]?.skip !== true) };
     // A slide added, skipped or taken away before the one shown: it is shown still.
@@ -65,7 +69,7 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
     state.step = Math.min(state.step, all[state.index].steps);
     state.seq += 1;
     draw(root, state.swapped ? "presenter" : "audience", deck, state, {
-      paired, press, hint: !paired && Date.now() < hintUntil ? "Press X for the presenter view · Esc to end" : "" });
+      paired, press, hint: !paired && Date.now() < hintUntil ? "Press X for the presenter view · Esc to end" : "", note: Date.now() < noteUntil ? note : "" });
     if (paired) link?.send({ type: "state", state: { ...state } });
   };
   const go = (index) => {
@@ -223,6 +227,7 @@ export function present({ pages, slides = () => [], start = 0, done = () => {} }
   if (!popup) enter();
   show();
   setTimeout(() => { if (showing === handle) show(); }, 3100);  // the hint goes
+  if (note) setTimeout(() => { if (showing === handle) show(); }, 4600);  // and the note
   return handle;
 }
 
@@ -240,8 +245,11 @@ export function follow() {
     else if (message?.type === "state" && !(state && message.state.seq <= state.seq)) state = message.state;
     else if (message?.type === "end") { link.close(); root.textContent = ""; window.close(); return; }
     else return;
-    if (deck && state) draw(root, state.swapped ? "audience" : "presenter", deck, state, { paired: true, press });
+    if (deck && state) draw(root, state.swapped ? "audience" : "presenter", deck, state, { paired: true, press, note: noted() });
   }
+  // The leader's note, while it is said.
+  const noted = () => (deck?.note && Date.now() < deck.noteUntil ? deck.note : "");
+  let saying = false;
   let idle = 0;
   root.addEventListener("mousemove", () => { root.classList.add("ss-pointer"); clearTimeout(idle); idle = setTimeout(() => root.classList.remove("ss-pointer"), 1500); });
   window.addEventListener("keydown", (event) => {
@@ -251,7 +259,13 @@ export function follow() {
     press(event.key);
   });
   window.addEventListener("pagehide", () => link.send({ type: "bye" }));
-  setInterval(() => { if (state) tick(root, state); }, 500);
+  setInterval(() => {
+    if (!state) return;
+    // (Its note said, and gone: drawn again without it.)
+    if (saying && !noted()) { saying = false; draw(root, state.swapped ? "audience" : "presenter", deck, state, { paired: true, press }); }
+    saying ||= Boolean(noted());
+    tick(root, state);
+  }, 500);
   document.body.append(root);
   // Said until the leader answers, in case it was not listening yet.
   link.send({ type: "hello" });
@@ -282,7 +296,7 @@ function viaApp(receive) {
 
 // -- drawing --
 
-function draw(root, role, deck, state, { paired, press, hint = "" }) {
+function draw(root, role, deck, state, { paired, press, hint = "", note = "" }) {
   const slide = deck.slides[state.index];
   root.className = `present ss-root ss-${role}${state.blank ? ` ss-${state.blank}` : ""}${root.classList.contains("ss-pointer") ? " ss-pointer" : ""}`;
   root.textContent = "";
@@ -291,10 +305,12 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
     root.onclick = () => press("click");
     root.append(state.ended ? el("div", "ss-end", "End of slide show — click to exit") : frame(slide, state.step));
     if (!paired && goto) root.append(goto);
-    if (hint) {
+    // (The note before the hint, on one screen: with a presenter's view, it is said there.)
+    const noted = note && !paired ? el("span", "ss-noted", note) : null;
+    if (hint || noted) {
       // In the band below the slide if there is room for it there, else well over the
       // slide -- never across its edge.
-      const said = el("div", "ss-hint", hint);
+      const said = el("div", "ss-hint", noted, noted && hint ? " · " : null, hint || null);
       root.append(said);
       requestAnimationFrame(() => {
         const edge = root.querySelector(".ss-slide")?.getBoundingClientRect();
@@ -333,7 +349,7 @@ function draw(root, role, deck, state, { paired, press, hint = "" }) {
     el("div", "ss-keys", ...[["→|Space", "Next"], ["←", "Previous"], ["0–9 ↩", "Go to a Slide"], ["B", "Black Screen"],
       ["W", "White Screen"], ["X", paired ? "Swap Displays" : "Show the Slides"], ["Esc", "End"]].map(([keys, what]) =>
       el("span", "ss-key", ...keys.split("|").flatMap((either, n) => [n ? el("i", "", "or") : null, ...either.split(" ").map((key) => el("kbd", "", key))]), el("span", "", what)))),
-    blankWords ? el("div", "ss-status", blankWords) : null,
+    blankWords ? el("div", "ss-status", blankWords) : note ? el("div", "ss-note", note) : null,
     goto].filter(Boolean));
   fitPresenter(root);
 }
@@ -476,6 +492,10 @@ function dress() {
 .ss-key kbd { font: 12px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; color: #ddd; padding: 3px 6px; border-radius: 5px; background: #2a2a2a; border: 1px solid #3a3a3a; }
 .ss-key span { margin-left: 3px; }
 .ss-key i { font-style: normal; color: #777; }
+/* What the show is started by saying (the deck's TODOs), quietly: at the presenter's view's top, and before the hint on one screen. */
+.ss-note { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); background: rgba(28,28,30,0.9); color: #ffc266;
+  padding: 6px 13px; border-radius: 8px; font-size: 13px; pointer-events: none; white-space: nowrap; box-shadow: 0 4px 18px rgba(0,0,0,0.35); }
+.ss-noted { color: #ffc266; }
 .ss-status { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); background: #8f1d16; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 14px; }
 .ss-goto { position: absolute; left: 50%; bottom: 56px; transform: translateX(-50%); background: rgba(38,38,38,0.96); border: 1px solid #555;
   border-radius: 10px; padding: 10px 18px; font-size: 22px; color: #fff; text-align: center; }
