@@ -762,8 +762,9 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   word in the whole deck as it is typed -- titles, subtitles and bylines, texts, lists,
   quotes, callouts and tables, numbers and captions, shapes' words, figures' labels
   (inline or in a figure file), equations, and the speaker notes -- markup aside
-  (`en**zy**me` is found as "enzyme"), and says "3 of 17". Return and ⇧Return (⌘G and
-  ⇧⌘G) go from match to match, slide to slide: every match on the slide shown is marked
+  (`en**zy**me` is found as "enzyme"), and says "3 of 17". Return and ⇧Return in its field
+  go from match to match, slide to slide -- and n and ⇧N, as vim's, while it is open and no
+  words are typed (a shape or text chosen is not typed over): every match on the slide shown is marked
   faintly, the one gone to strongly; one in the notes opens them and is marked there.
   **Match Case** and **Whole Words** narrow it. ⌥⌘F (or the bar's chevron) shows
   **Replace** and **Replace All**: each is one step in the history, the words put in
