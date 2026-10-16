@@ -427,6 +427,28 @@ order over what it lays out, under every shape but those Behind Slide Content: t
 stacking them among the shapes, which Bring Forward and Send Backward still order among
 themselves.
 
+Slides that show one thing changing are lined up across them. **View › Show Neighbouring Slides**
+(the palette, and the toggle beside the magnet in the zoom bar) draws the slide before faintly on
+the one shown -- and, with **Include Next Slide** (the zoom bar's **Next**), the slide after too,
+in a blue tint -- in the studio alone: never presented or exported. The slides either side are
+the presented ones (a skipped slide is passed over), and the studio remembers the setting. A
+shape or a placed object dragged, sized or nudged catches at the edges and middles of what is on
+the slides either side as at the slide's own, shown or not -- with the magnet, ⌘ the other way --
+its guide drawn in violet with the box it caught at, so it reads as "where it is on the slide
+before"; a nudge that would step over such a guide stops on it. **Arrange › Match on Other
+Slides…** (also the right-click menu, the palette, and the Arrange tab's Other Slides) puts what
+is chosen -- a shape, a group, a placed object, a picture, a figure, several -- where it is, as
+large, on the next slide, the previous one, every slide of its run (the slides either side that
+each have its match), or the slides chosen in the list (⌘-click or ⇧-click them, then choose the
+object on the one shown); the palette has Match on Next Slide, on Previous Slide and on This Run
+too. Its match on each slide is a picture of the same file; the same figure (the deck's own by
+name, the same file, or the same figure id); a shape with the same id, or, without one, of the
+same kind at the same place in the slide's list; else the object in its place of the same kind.
+A slide with none is passed over, and said why. An object stands where the one chosen stands, as
+wide (`at`, `width`); a figure is put in the chosen one's frame too (a frame made and named for
+it if it has none, and the chosen one, in line, placed where it stands), so both are drawn at
+one scale; a shape takes its place and size. It is one step to undo.
+
 A group is entered as Inkscape enters one: double-click it (or choose it and press Return,
 or Enter Group). Its shapes are then the slide's to click, drag, size, turn, restyle in the
 inspector, retype (a double-click on their words), copy, duplicate, nudge, lock and delete

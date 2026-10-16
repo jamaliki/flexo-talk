@@ -28,6 +28,7 @@ import { clipsOf } from "/static/studio/mixing.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
 import { magnetButton } from "/static/studio/magnet.js";
+import { acrossSlides } from "/static/kinds/deck/across.js";
 import * as Snap from "/static/studio/snapping.js";
 import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
 
@@ -952,6 +953,8 @@ export function mount(studio, container) {
     goTo: (index) => { if (index < (doc().slides || []).length) select(index); },
     // The slide's objects, as drawn, a shape's line may be glued to (`{object: "body[0]"}`).
     glueKey: "object",
+    // What is on the slides either side, caught at too (across.js).
+    beside: () => across.beside(),
     objects: (toFrame) => {
       const found = new Map();
       for (const region of regionsDrawn()) {
@@ -1001,6 +1004,8 @@ export function mount(studio, container) {
       ...(picks.length === 1 && pictureTools.maskPair({ shape: picks[0] }) ? [{ icon: "image", label: "Mask with Shape", hint: "The picture under it, shown only inside it", run: () => pictureTools.maskWith(pictureTools.maskPair({ shape: picks[0] })) }] : []),
       { icon: "reveal", label: everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click", hint: name, run: () => set({ build: !everyShape(picks, "build") }, everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click") },
       { icon: "eye", label: everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape", hint: name, run: () => set({ hidden: !everyShape(picks, "hidden") }, everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape") },
+      // Match on Other Slides… (across.js).
+      ...across.shapeCommands(),
     ],
     panel: (picks, specs, { set }) => [h("div.section", {},
       ui.toggle({ value: everyShape(picks, "build"), label: "Build In on Click", key: "shape.build",
@@ -1109,6 +1114,18 @@ export function mount(studio, container) {
     swallowRelease: (held) => swallowRelease(held), away: (what) => awayFrom(what), undoNote: (text, options) => undoNote(text, options),
     hideChosen: (on) => { chosen.hidden = on || chosen.hidden; if (!on) placeChosen(); },
     chooseOne: (pick) => { allChosen = null; focusBlock(pick.region, pick.index); },
+    beside: () => across.beside(),
+  });
+  // The slides either side: shown faintly, caught at, matched on (across.js).
+  const across = acrossSlides({
+    studio, pages: () => pages, slides: () => slides(), index: () => state.slide, pageNode: () => pageNode,
+    frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()], scale: () => shapeScale(),
+    regions: (slide) => regionsOf(slide).map((region) => region.key), blocksAt: (slide, region) => blocksAt(slide, region),
+    kindOf: (block) => kindOf(block), blockName: (block) => objectName(block), element: (region, index) => blockElement(region, index),
+    objects: () => (figure && figureBlock() && figure.parts.selected.length ? [] : allOn() ? picksNow().map(({ region, index }) => ({ region, index })) : state.focus && !state.field ? [{ region: state.focus.region, index: state.focus.index }] : []),
+    objectFrame: (pick) => objects.frameOf(pick), shapes: freeShapes, chosenSlides: () => chosenSlides(),
+    away: (what) => awayFrom(what), undoNote: (text, options) => undoNote(text, options),
+    render: () => { placeChosen(); renderInspector(); reportFocus(); },
   });
   // Set Colour… (⇧⌘C): what is chosen -- objects, shapes, a figure's shapes, both kinds, else the
   // slide's background -- given a colour's code pasted, one step (colours.js).
@@ -1855,6 +1872,7 @@ export function mount(studio, container) {
     if (renewed) cropDrawn();
     if (renewed) freeShapes.drawn();
     if (renewed) objects.drawn();
+    if (renewed) across.drawn();
     placeChosen();
     placeOthers(here);
     if (inline) positionInline();
@@ -2086,7 +2104,7 @@ export function mount(studio, container) {
     ui.button("Fit", () => fitSlide(), { kind: "ghost", small: true, title: "Fit Slide (⇧⌘0)" }),
     ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }),
     // Snapping, on or off (%): the shapes', and objects' sizes (snapping.js).
-    h("span.zoom-sep"), magnetButton());
+    h("span.zoom-sep"), magnetButton(), ...across.zoomButtons());
   // Clicked, a zoom button does not keep the keys (as a Mac window's toolbar buttons don't).
   for (const button of zoomBar.querySelectorAll("button")) button.addEventListener("mousedown", (event) => event.preventDefault());
   function showZoom() {
@@ -4093,6 +4111,8 @@ export function mount(studio, container) {
       if (isDrawing(block)) items.push({ icon: "shape", label: "Make Editable", run: () => editables.one(at) });
     }
     if (MAGNIFIED.has(kind) && pictureTools.canInset(at)) items.push({ icon: "plus", label: "Add Zoom Inset", run: () => pictureTools.addInset(at) });
+    // Put where it is on other slides (across.js).
+    if (across.menuItem()) items.push(across.menuItem());
     if (items.length) items.push("-");
     items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => duplicateBlock(at) });
     items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
@@ -7415,7 +7435,7 @@ export function mount(studio, container) {
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
       // (Arrange: what is chosen arranged, lined up and spaced.)
-      else if (arrangeOn) clear(inspectorBody, arrangeForm());
+      else if (arrangeOn) clear(inspectorBody, [arrangeForm(), across.section()].flat().filter(Boolean));
       // (Objects, or a figure's shapes, chosen with shapes on the slide: mixed.js.)
       else if (mixed.on()) clear(inspectorBody, mixed.panel());
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
@@ -9079,7 +9099,7 @@ export function mount(studio, container) {
       parts.push(h("details.more", {}, h("summary", {}, icon("chevron"), "JSON"), h("div.inner", {}, area)));
       // Written in the deck, it is edited where it is drawn: where it is kept is put by, under
       // Advanced, as a figure's shape keeps its name in the file.
-      return [exports, widthField(block, at), turn, captionField(block, at), figureDescription(block, at), sizes, h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
+      return [exports, widthField(block, at), turn, across.frameField(block, at, (mutate, label) => editBlock(at, mutate, { label })), captionField(block, at), figureDescription(block, at), sizes, h("details.more", {}, h("summary", {}, icon("chevron"), "Advanced"), h("div.inner", {}, parts))];
     } else if (mode === "file") {
       parts.push(fileRow(value, ["figure"], (path) => { editBlock(at, (b) => { b.figure = path; }); }, "figure.yaml"));
     } else {
@@ -9087,7 +9107,7 @@ export function mount(studio, container) {
       named.title ||= "file.py:function, returning a flexo.Figure. It runs again when its file changes.";
       parts.push(named);
     }
-    parts.push(widthField(block, at), turn, captionField(block, at), figureDescription(block, at), sizes);
+    parts.push(widthField(block, at), turn, across.frameField(block, at, (mutate, label) => editBlock(at, mutate, { label })), captionField(block, at), figureDescription(block, at), sizes);
     return [exports, ...parts];
   }
 
@@ -10386,6 +10406,9 @@ export function mount(studio, container) {
     // Where the figures are kept: Embed Figure in Deck, Embed All Figures in Deck, Open in Figure Editor.
     ...(typingNow() ? [] : figureFiles.commands()),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
+    // The slides either side, faintly; and what is chosen matched on them (across.js).
+    ...(slides().length ? across.viewCommands() : []),
+    ...(typingNow() ? [] : across.commands()),
     // View › Zoom, as Keynote's: by its steps, a point to a point, or fitted to the stage.
     ...(slides().length ? [
       { icon: "plus", label: "Zoom In", keys: "⌘+", hint: `Shown at ${zoomSaid()}`, run: () => zoomIn() },
