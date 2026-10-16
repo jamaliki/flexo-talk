@@ -21,6 +21,7 @@ import { slideToParts } from "/static/kinds/deck/toparts.js";
 import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
 import { editableTools, isDrawing } from "/static/kinds/deck/editable.js";
 import { slideMixed } from "/static/kinds/deck/mixed.js";
+import { deckColours } from "/static/kinds/deck/colours.js";
 import { clipsOf } from "/static/studio/mixing.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
@@ -1055,6 +1056,17 @@ export function mount(studio, container) {
     clipChosen: (cut) => clipChosen(cut), clipItems: () => clipItems(), undoNote: (text, options) => undoNote(text, options),
     away: (what) => awayFrom(what), showPanel: () => { if (inspectorHidden || state.tab === "design") formatButton.click(); },
     swallowRelease: (held) => swallowRelease(held),
+  });
+  // Set Colour… (⇧⌘C): what is chosen -- objects, shapes, a figure's shapes, both kinds, else the
+  // slide's background -- given a colour's code pasted, one step (colours.js).
+  const colours = deckColours({
+    studio, shapes: freeShapes, pageNode: () => pageNode, inspector, typing: () => typingNow(), slide: () => state.slide, slideAt: () => slideAt(),
+    objects: () => (allOn() ? picksNow() : state.focus && !state.field ? [{ region: state.focus.region, index: state.focus.index }] : []),
+    blockAt: (slide, pick) => blocksAt(slide, pick.region)[pick.index], kindOf: (block) => kindOf(block), blockName: (block) => blockName(block),
+    element: (region, index) => blockElement(region, index),
+    figure: () => (figure && figureBlock() && figure.parts.model && figure.parts.selected.length ? { parts: figure.parts } : null),
+    partElement: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
+    chosenOther: () => Boolean(state.field || logoChosen()), editSlide: (mutate, options) => editSlide(mutate, options),
   });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
@@ -10047,6 +10059,8 @@ export function mount(studio, container) {
       if (key === "Escape" && inspector.contains(document.activeElement)) { event.preventDefault(); document.activeElement.blur(); }
       return;
     }
+    // ⇧⌘C: Set Colour…, of whatever is chosen (colours.js).
+    if (colours.key(event)) { event.preventDefault(); return; }
     // Objects (or a figure's shapes) and shapes chosen together: ⌫, ⌘D, ⌘A, Esc theirs; the
     // arrows the shapes' (mixed.js).
     if (mixed.key(event)) { event.preventDefault(); return; }
@@ -10217,6 +10231,8 @@ export function mount(studio, container) {
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js) -- with objects chosen
     // too, not what would take or copy the shapes alone (mixed.js).
     ...(typingNow() ? [] : mixed.shapeCommands(freeShapes.commands())),
+    // Format › Set Colour… (⇧⌘C): of what is chosen, else of the slide (colours.js).
+    ...(typingNow() ? [] : colours.commands()),
     ...(slides().length ? slideCommands() : []),
     // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
     // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the

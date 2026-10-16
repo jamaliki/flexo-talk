@@ -622,7 +622,16 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   in their own colours, widths and dashes. **Copy Style** and **Paste Style** (⌥⌘C, ⌥⌘V)
   put one shape's fill, line, dash, arrowheads, shadow, opacity and words' look on the
   shapes chosen -- and a figure's part's tone, own colours, outline and words' look on
-  other parts, or either on the other where it maps (an accent is a tone). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  other parts, or either on the other where it maps (an accent is a tone). Every colour is
+  also set by its code: the field beside a colour's name (and beside each own colour's well)
+  takes `#1f77b4`, `1f77b4`, `#17b`, `rgb(31, 119, 180)`, `hsl(…)`, `(0.12, 0.47, 0.71)`,
+  `steelblue` or `tab:blue`, typed (Return) or pasted (at once), each one step, an alpha
+  after it (`#1f77b4cc`) the fill's or line's opacity; the colours applied last sit beside
+  it. **Set Colour…** (⇧⌘C, Format) opens a small popover by what is chosen -- shapes, a
+  group, a text, both, a figure's shapes, or with nothing chosen the slide's background --
+  naming what it will colour ("Fill of 3 Shapes", a switch for its Outline and Text): paste
+  a code and it is applied, or type one and Return; a colour copied already is shown, ready
+  for Return; Esc closes it. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere: a drawing
   copied in Inkscape is pasted as the SVG it is (in the Mac app), its lines and words
