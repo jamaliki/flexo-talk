@@ -308,7 +308,9 @@ export function acrossSlides(ctx) {
     listeners.add(show);
     show();
     showKey();
-    return [h("span.zoom-sep"), button, key];
+    // (The key before the toggle: the bar is held at its right, so the toggle stays where it
+    // was pressed as the key comes and goes, for a second press to stop it.)
+    return [h("span.zoom-sep"), key, button];
   }
   // Each slide overlaid, by its number, in its tint (the one shown in ink): clicked, shown.
   function showKey() {

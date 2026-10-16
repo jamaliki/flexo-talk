@@ -11,7 +11,7 @@
 .ghost-ring.dark .ghost-tag { color: #16161a; }
 
 /* The zoom bar: the toggle, then each slide overlaid as a chip in its tint, the one shown in ink. */
-.slide-zoom .overlay-key { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; }
+.slide-zoom .overlay-key { display: inline-flex; align-items: center; gap: 3px; margin-right: 2px; }
 .slide-zoom .overlay-key[hidden] { display: none; }
 .slide-zoom .overlay-chip { font: 600 11.5px/20px var(--font); min-width: 0; padding: 0 7px; border: 0; border-radius: 5px; font-variant-numeric: tabular-nums; cursor: pointer;
   color: var(--tint, var(--ink-2)); background: color-mix(in srgb, var(--tint, var(--ink-3)) 12%, transparent); }
