@@ -741,6 +741,8 @@ export function placing(ctx) {
     reveal: () => arranging.reveal(), align: (side) => arranging.align(side),
     showMoves: (moves) => showMoves(moves ? moves.map(({ pick, dx, dy }) => ({ key: keyOf(pick), dx, dy })) : null),
     busy: () => Boolean(gesture?.started),
+    // (Which, for the help bar's keys: "move" or "size".)
+    dragging: () => (gesture?.started ? gesture.type : null),
     // (A press on one of them, held: they are carried together if it is dragged.)
     pressing: () => Boolean(gesture && gesture.type === "move" && gesture.objects.length > 1),
     any: () => chosen().length > 0,

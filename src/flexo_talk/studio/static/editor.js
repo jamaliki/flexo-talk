@@ -29,6 +29,7 @@ import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
 import { magnetButton } from "/static/studio/magnet.js";
 import { gridButton, gridCommand } from "/static/studio/gridpaper.js";
+import { fromShapes, fromParts, together } from "/static/studio/helpkeys.js";
 import { acrossSlides } from "/static/kinds/deck/across.js";
 import * as Snap from "/static/studio/snapping.js";
 import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
@@ -10280,6 +10281,27 @@ export function mount(studio, container) {
   const deckExports = studio.exports;
   Object.defineProperty(studio, "exports", { configurable: true, get: () => [...deckExports, ...figureFiles.exports()] });
   studio.present = () => present();
+  // What is being done on the slide now, for the keys the help bar along the window's foot says
+  // (flexo's helpbar.js, helpkeys.js): a drag under way -- of the slide's own, of its shapes, of
+  // a figure's shapes -- a picture cropped, words typed, and what is chosen.
+  studio.help = () => {
+    const parts = figure && figureBlock() ? figure.parts : null, placedDrag = objects.dragging();
+    const block = state.focus && blocksAt(slideAt() || {}, state.focus.region)[state.focus.index];
+    const typed = inline?.target?.kind === "block" ? kindOf(blocksAt(slideAt() || {}, inline.target.region)[inline.target.index]) : null;
+    const own = {
+      drag: cropping?.drag?.moved ? "crop" : placedDrag === "size" ? "scale" : placedDrag ? "move"
+        : sizing?.moved || resizing?.moved || logoSizing?.moved ? "handle" : carry?.started || logoDrag?.started || band?.node ? "plain" : "",
+      mode: cropping && !cropping.done ? "crop" : "",
+      typing: !inline ? "" : inline.cell ? "cell" : inline.bullets ? "list" : inline.target?.kind === "stat" ? "stat" : inline.target?.kind === "picture" ? "caption"
+        : typed === "code" ? "code" : typed === "math" ? "maths" : "words",
+      chosen: railList.contains(document.activeElement) ? "slides" : mixed.on() ? "mixed" : logoChosen() && !state.focus && !state.field ? "logo" : "",
+    };
+    const chosen = allOn() ? (objects.anyPlaced() ? "placed-objects" : "objects")
+      : block ? (objects.locked(state.focus) ? "locked-object" : objects.isPlaced(state.focus) ? "placed" : "object") : state.field ? "words" : "";
+    const edit = !block ? "" : INLINE.has(kindOf(block)) ? "text" : { table: "cells", stats: "numbers", gallery: "captions", image: "crop", figure: "shapes" }[kindOf(block)] || "";
+    return together(own, fromParts(parts, { sizing: Boolean(document.querySelector(".fig-sizing")), bending: document.body.classList.contains("fig-grabbing") }),
+      fromShapes(freeShapes.doing()), { chosen, edit });
+  };
   studio.commands = () => [
     // The slides to go to: places, listed after every command (`later`).
     ...slides().map((slide, index) => ({ icon: "slide", label: `Slide ${index + 1}: ${slideTitle(slide)}`, later: true, run: () => select(index) })),
