@@ -4240,6 +4240,8 @@ export function mount(studio, container) {
     const desk = event.target === stage || event.target.classList?.contains("slide-wrap");
     const onPage = pageNode.contains(event.target) && !event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size, .inline-editor") && !partAt(event);
     if (!desk && !onPage) return;
+    // (Inside a group of shapes, a band from the desk chooses among its shapes: shapes.js.)
+    if (desk && freeShapes.band(event)) return;
     const keep = event.shiftKey || event.metaKey ? (allOn() ? picksNow() : state.focus ? [{ region: state.focus.region, index: state.focus.index }] : []) : [];
     band = { start: { x: event.clientX, y: event.clientY }, keep, node: null };
     window.addEventListener("pointermove", bandMove);
