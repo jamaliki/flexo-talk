@@ -732,22 +732,58 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   choose, type to replace, double-click to type in place, Tab to the next), or in the
   fields under the switch; a row added gets a label of its own, and the last row
   deleted takes its empty one with it. Switched off, the labels go and each column
-  stacks its objects on its own again. **Design** holds the theme and, in tabs, the
-  deck's **Colour**
-  (palette, title colour), **Type** (fonts by role, sizes), **Layout** (the look,
-  alignment, slide furniture, spacing) and what is the **Deck**'s own (footer, file
-  name, logos); **Customise…** starts a theme file from the deck's theme and opens it
-  in the theme editor, and the deck redraws as the theme changes.
+  stacks its objects on its own again.
+- **Design** (⇧⌘D, View › Show Design in the Mac app) shows the Design bar under the
+  toolbar: one low row of pop-up buttons, each naming what is in use. **Theme** opens a grid
+  of the deck's title slide (else its first) drawn in each theme, the folder's theme files
+  first; **Colours** the palettes as swatch strips (and the title colour); **Fonts** the
+  theme's, pairs of faces and single faces, each set in itself, and the body, title and figure
+  fonts one by one; **Sizes** the type sizes and spacing; **Background** the theme's page,
+  none, a light colour, any colour, or a picture behind every slide; **Slide Size**
+  Widescreen 16:9, Standard 4:3, 16:10, Square, or a width and height in points; and **More**
+  the look (title slide, sections, the slides' furniture, alignment, arrowheads), the logos,
+  the footer and **Customise…** (a theme file started from the deck's theme, opened in the
+  theme editor, the deck redrawn as it changes). While the Theme or Colours menu is open, the
+  theme or palette the pointer is over shows on the slide as it would be, the deck unchanged
+  until it is chosen; chosen, it is one step to undo. The bar stays open as the slide is
+  edited; Format or Arrange pressed puts it away. The name the exported files take is the
+  Export menu's **Export File Name…**.
 - **Logos**: on a title slide **Picture** (or a picture dropped on it) adds a logo,
   in the row along its foot. A logo on a slide is chosen by a click, as any object
   is: ⌫ deletes it, ⌥← ⌥→ or a drag along the row move it, and a corner sizes every
   logo at once (they share one height; it catches at the default, and a double-click
-  on a corner goes back to it). **Design › Deck › Logos** lists them (drag to reorder),
+  on a corner goes back to it). **Design › More › Logos** lists them (drag to reorder),
   adds them, and says where they show and how tall; added to a deck with no title
   slide, they show on every slide.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
   being edited is drawn first; the others follow.
+- **Find and replace** (⌘F, Edit › Find in the Mac app): a bar over the slide finds a
+  word in the whole deck as it is typed -- titles, subtitles and bylines, texts, lists,
+  quotes, callouts and tables, numbers and captions, shapes' words, figures' labels
+  (inline or in a figure file), equations, and the speaker notes -- markup aside
+  (`en**zy**me` is found as "enzyme"), and says "3 of 17". Return and ⇧Return in its field
+  go from match to match, slide to slide -- and n and ⇧N, as vim's, while it is open and no
+  words are typed (a shape or text chosen is not typed over): every match on the slide shown is marked
+  faintly, the one gone to strongly; one in the notes opens them and is marked there.
+  **Match Case** and **Whole Words** narrow it. ⌥⌘F (or the bar's chevron) shows
+  **Replace** and **Replace All**: each is one step in the history, the words put in
+  taking the look of the first letter they replace (bold stays bold), a figure file's
+  labels changed in the file with the deck's in the same step. Esc closes it, the last
+  match's words chosen where they are typed. The top bar's **Search** (⌘K) lists the same
+  matches, by slide, above the commands; choosing one goes there as the bar does.
+- **TODOs**: the word `TODO` in capitals, as a word of its own (`TODO`, `TODO:`,
+  `TODO —`), anywhere in a slide's words -- the same words find finds, its notes too --
+  is work left, shown in the studio only. The slide's thumbnail glows amber in the
+  slide list, with how many under its number when it has several, and the list's foot
+  says how many in all ("3 TODOs"; pressed, it goes to the next). On the slide each is
+  marked amber behind its words (an equation's framed); zoomed in, markers at the
+  stage's edges point to those out of sight. One in the notes puts a **TODO** chip on
+  the notes' bar, which opens them at it. **Next TODO** (⌘') and **Previous TODO**
+  (⇧⌘') go from one to the next, slide after slide (the palette; View in the Mac app).
+  As a show starts or the deck is exported, a quiet word says "2 slides have TODOs".
+  Nothing of it is presented or exported, and "todo" or "Todo" is just a word
+  (`static/todos.js`, flexo's `todos.js`).
 - **Others, live**: slides an agent or another person changes flash in their
   colour, and their avatars show which slide they are on.
 - **Present** (⌘↩, or ⌥⌘↩ from the first slide) plays the deck full screen, as

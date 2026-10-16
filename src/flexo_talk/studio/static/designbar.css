@@ -1,0 +1,20 @@
+/* The deck's Design bar (designbar.js): across the deck's frame, over the slide list, the stage
+   and the inspector, as PowerPoint's ribbon is over the window. */
+
+.deck.designing { grid-template-rows: auto minmax(0, 1fr); }
+.deck.designing > .ribbon { grid-column: 1 / -1; }
+
+/* The slides drawn at the deck's proportions (a 4:3 deck's slide is 4:3), on the stage and in
+   the slide list. */
+.deck .slide-page, .deck .thumb .frame { aspect-ratio: var(--slide-ratio, 16 / 9); }
+
+/* A pop-up button's panel: the deck's settings as the inspector draws them, narrower. */
+.ribbon-drop .style-row.drop-style { grid-template-columns: minmax(0, 1fr) 128px 24px; gap: 6px; }
+.ribbon-drop .style-row .name { font: var(--text-small); color: var(--ink-2); }
+.ribbon-drop .style-row .name .changed { color: var(--ink); font-weight: 600; }
+.ribbon-drop .drop-tiles .look-art { width: 100%; }
+.ribbon-drop .drop-size { grid-template-columns: 1fr 1fr; }
+.ribbon-drop .drop-choice .ribbon-ratio { height: 12px; }
+.ribbon-drop:has(.logos-section) { width: 320px; max-width: 320px; }
+.drop-tile.custom { position: relative; }
+.drop-tile.custom .drop-colour { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
