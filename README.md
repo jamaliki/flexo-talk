@@ -732,17 +732,27 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   choose, type to replace, double-click to type in place, Tab to the next), or in the
   fields under the switch; a row added gets a label of its own, and the last row
   deleted takes its empty one with it. Switched off, the labels go and each column
-  stacks its objects on its own again. **Design** holds the theme and, in tabs, the
-  deck's **Colour**
-  (palette, title colour), **Type** (fonts by role, sizes), **Layout** (the look,
-  alignment, slide furniture, spacing) and what is the **Deck**'s own (footer, file
-  name, logos); **Customise…** starts a theme file from the deck's theme and opens it
-  in the theme editor, and the deck redraws as the theme changes.
+  stacks its objects on its own again.
+- **Design** (⇧⌘D, View › Show Design in the Mac app) shows the Design bar across the
+  window under the toolbar, as PowerPoint's Design tab: a gallery of the deck's title
+  slide (else its first) drawn in each theme, the folder's theme files first, and beside
+  it **Colours** (the palettes as swatch strips, the title colour), **Fonts** (the
+  theme's, pairs of faces and single faces, each set in itself, and the body, title and
+  figure fonts one by one), **Look** (the looks, the title slide, sections, the slides'
+  furniture and alignment, arrowheads), **Sizes** (type sizes and spacing),
+  **Background** (the theme's page, none, a light colour, any colour, a picture behind
+  every slide), **Slide Size** (Widescreen 16:9, Standard 4:3, 16:10, Square, or a width
+  and height in points), **Logos** and **Footer**. A theme, palette, pair of fonts, look
+  or background pointed at shows on the slide as it would be, the deck unchanged until
+  it is chosen; chosen, it is one step to undo. The bar stays open as the slide is edited;
+  Format or Arrange pressed puts it away. **Customise…** starts a theme file from the
+  deck's theme and opens it in the theme editor, and the deck redraws as the theme
+  changes. The name the exported files take is the Export menu's **Export File Name…**.
 - **Logos**: on a title slide **Picture** (or a picture dropped on it) adds a logo,
   in the row along its foot. A logo on a slide is chosen by a click, as any object
   is: ⌫ deletes it, ⌥← ⌥→ or a drag along the row move it, and a corner sizes every
   logo at once (they share one height; it catches at the default, and a double-click
-  on a corner goes back to it). **Design › Deck › Logos** lists them (drag to reorder),
+  on a corner goes back to it). **Design › Logos** lists them (drag to reorder),
   adds them, and says where they show and how tall; added to a deck with no title
   slide, they show on every slide.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to

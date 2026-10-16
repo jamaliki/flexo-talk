@@ -534,14 +534,6 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 /* Keys in the system's face, their modifiers as large as their letters (as .kbd). */
 .hint-line kbd { font: var(--text-hint); }
 
-.looks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-/* The Design panel's tabs stay at its top as what is under them scrolls. */
-.design-tabs { position: sticky; top: 0; z-index: 2; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.look { border: 1px solid var(--line-strong); border-radius: 9px; padding: 8px; display: grid; gap: 5px; cursor: pointer; background: var(--raised); text-align: left; transition: border-color 0.12s; }
-.look:hover { border-color: var(--ink-3); }
-.look.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.look .name { font: var(--text-label); text-transform: capitalize; }
-.look .note { font: var(--text-hint); color: var(--ink-3); }
 .look-art { aspect-ratio: 16 / 9; border-radius: 4px; background: var(--deck-canvas, #fbfaf8); border: 1px solid var(--line); position: relative; overflow: hidden; }
 .look-art i { position: absolute; border-radius: 1px; }
 .theme-file { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
@@ -642,17 +634,6 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .placeholder-note { display: flex; align-items: center; gap: 6px; }
 .placeholder-note[hidden] { display: none; }
 .placeholder-note svg { width: 13px; height: 13px; flex: none; }
-
-/* The Design tab's fonts: the whole deck in one face, a click away. */
-.font-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 12px; }
-.font-tile { display: grid; justify-items: center; gap: 3px; padding: 8px 2px 6px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--raised); color: var(--ink); cursor: pointer; min-width: 0; }
-.font-tile:hover { border-color: var(--ink-3); }
-.font-tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.font-tile-sample { font-size: 21px; line-height: 1.1; }
-/* A long name (Latin Modern Roman) on two lines rather than cut short. */
-.font-tile-name { font-size: 10px; line-height: 1.2; color: var(--ink-3); max-width: 100%; overflow: hidden; text-align: center; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.font-tile.on .font-tile-name { color: var(--ink); }
 
 /* A part a figure hides on this slide is a ghost on the slide being edited (there to be
    chosen and shown again), and gone from its thumbnail and from the slideshow. */

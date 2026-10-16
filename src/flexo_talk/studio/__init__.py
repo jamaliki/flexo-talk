@@ -816,6 +816,11 @@ class DeckKind:
             from flexo_talk.studio.editable import editable
 
             return editable(document, action, base)
+        if action.get("do") == "previews":
+            # A slide drawn in a design before it is chosen: the Design bar's (previews.py).
+            from flexo_talk.studio.previews import previews
+
+            return previews(document, action, base)
         if action.get("do") != "figure":
             raise EditError(f"Unknown deck edit “{action.get('do')}”.")
         at = action.get("at") or {}
