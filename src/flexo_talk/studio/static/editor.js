@@ -6887,7 +6887,7 @@ export function mount(studio, container) {
   // Files added to the slide, dropped or pasted: pictures, and structures into the figure
   // `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
   async function addFiles(all, part, at = null, { pictures: asPictures = false } = {}) {
-    const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|pdf|ai)$/i.test(file.name));
+    const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|tiff?|bmp|hei[cf]|avif|pdf|ai)$/i.test(file.name));
     const scenes = new Set();
     for (const file of all) if (await sceneFile(file)) scenes.add(file);
     const structures = all.filter((file) => STRUCTURE_FILE.test(file.name) || scenes.has(file));
@@ -7493,20 +7493,20 @@ export function mount(studio, container) {
       ?? pageNode?.querySelector(`[id="slide${state.slide + 1}.${region?.svg}"]`)?.getAttribute("data-flexo-spare");
     return spare != null && Number(spare) < 2;
   }
-  // What it fills, said under Position, the stops that would not move it greyed: there it
-  // has nowhere to go. (Kept to the slide as it is drawn again: a width changed.)
+  // The stops that would not move it greyed -- there it has nowhere to go -- why, in each one's
+  // tooltip. (Kept to the slide as it is drawn again: a width changed.)
   function markFills() {
     const pad = inspectorBody.querySelector(".position-pad"), at = state.focus;
     if (!pad || !at) return;
     const wide = fillsPlace(at), tall = fillsDown(at);
     const [across, down] = pad.querySelectorAll(".position-row");
-    across?.querySelectorAll("button").forEach((button) => { button.disabled = wide; });
-    down?.querySelectorAll("button").forEach((button) => { button.disabled = tall; });
-    const note = pad.querySelector(".position-note");
-    note.textContent = wide && tall ? "It fills its place: there is nowhere to move it."
-      : wide ? "It fills its place’s width: there is nowhere across to move it."
-        : tall ? "It fills the height left: there is nowhere down to move it." : "";
-    note.hidden = !wide && !tall;
+    const mark = (off, why) => (button) => {
+      button.dataset.title ??= button.title;
+      button.disabled = off;
+      button.title = off ? why : button.dataset.title;
+    };
+    across?.querySelectorAll("button").forEach(mark(wide, "It fills its place’s width"));
+    down?.querySelectorAll("button").forEach(mark(tall, "It fills the height left"));
   }
   // An object set at a stop across its place (`across`) or down it (`down`; null, back where
   // the slide sets it), one step: written only when it is not where the slide would set it
@@ -7542,7 +7542,7 @@ export function mount(studio, container) {
       options: [{ value: "auto", label: "Auto", title: "Automatic: in line under what is before it" }, ...stops(DOWN, true)],
       onChange: (value) => placeBlock(at, { down: value === "auto" ? null : value }) });
     return h("div.position-pad", {}, h("div.position-row", {}, h("span.position-label", {}, "Across"), across),
-      h("div.position-row", {}, h("span.position-label", {}, "Down"), down), h("div.hint-line.position-note", { hidden: true }));
+      h("div.position-row", {}, h("span.position-label", {}, "Down"), down));
   }
 
   // A figure's only shape chosen -- a structure added as one -- is the object on the slide:
