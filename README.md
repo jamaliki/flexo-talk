@@ -337,7 +337,15 @@ go on a shape stays a point of its own (one glued before stays glued), ⌘ held 
 gluing for that drag. The studio remembers it, for every deck and figure. The arrows nudge
 (⇧: ten points), a double-click types its words in it, ⇧-click or a band chooses several --
 to align, distribute, group (⌘G), stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the
-inspector restyles them. A path's
+inspector restyles them. The slide's objects and its shapes are one choice, as in Keynote:
+⇧-click (or ⌘-click) a shape with a text chosen, or a text with a shape chosen, and both are
+chosen ("1 Object, 1 Shape"); a band across both chooses what it touches of each. Together
+they are deleted (⌫), cut, copied and pasted (⌘X, ⌘C, ⌘V, and the Mac app's Edit menu: the
+objects pasted where pasted objects go, the shapes where pasted shapes go), and duplicated
+(⌘D) -- each one step, named for both, both chosen again by its undo; the inspector offers
+that, and Align and Distribute for the shapes, the objects among what they line up with (a
+drawing's left edge to a text's). The arrows nudge the shapes; the objects are laid out, and
+a drag moves each kind as it moves alone. A path's
 points are edited where it is (a double-click on it, or Format › Edit Points): its points and
 handles dragged (⌥: one handle alone), a point double-clicked made smooth or a corner, a
 click on its outline adding one, ⌫ deleting those chosen. Format › Make Editable makes any
