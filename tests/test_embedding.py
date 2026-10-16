@@ -246,3 +246,20 @@ def test_an_edit_to_one_of_the_decks_figures_is_said_where_it_is_shown() -> None
     after["figures"]["pipeline"]["nodes"][0]["label"] = "Backbone"
     assert DeckKind().describe(before, after) == [
         {"text": "edited the figure “pipeline”", "where": {"page": 1, "label": "Slide 1"}}]
+
+
+def test_the_structure_a_structure_is_coloured_by_is_found_and_moved_with_it(tmp_path: Path) -> None:
+    """A diffusion frame coloured by the structure it ends as (``ss_from``): that file is
+    found beside the deck, as the frame's own is, and named from wherever the figure goes."""
+
+    from flexo_talk.document import _beside
+
+    for name in ("t100.pdb", "t000.pdb"):
+        (tmp_path / "frames").mkdir(exist_ok=True)
+        (tmp_path / "frames" / name).write_text("END\n", encoding="utf-8")
+    properties = {"source": "frames/t100.pdb", "ss_from": "frames/t000.pdb"}
+    figure = {"figure": {"id": "run"}, "nodes": [{"id": "t100", "kind": "structure", "properties": properties}]}
+    found = _beside(tmp_path, figure)["nodes"][0]["properties"]
+    assert found["ss_from"] == str((tmp_path / "frames" / "t000.pdb").resolve())
+    moved = embedding.rebased(figure, tmp_path, tmp_path / "figures")["nodes"][0]["properties"]
+    assert moved == {"source": "../frames/t100.pdb", "ss_from": "../frames/t000.pdb"}

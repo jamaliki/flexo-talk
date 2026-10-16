@@ -1,21 +1,30 @@
-// Across slides: a deck's slides seen, caught at and lined up one with the next -- for a
+// Across slides: a deck's slides overlaid, caught at and lined up one with the next -- for a
 // visualisation that changes a little from slide to slide, whose parts that stay the same
 // must not jump. What the deck's editor (editor.js) needs.
 //
-// - Show Neighbouring Slides (View, the palette, a toggle in the zoom bar): the slide before
-//   drawn faintly on the one shown -- and, with Include Next Slide (the toggle beside it), the
-//   one after too, in another tint -- in the studio alone, never presented or exported. The
-//   slides either side that are presented: a skipped one is passed over. One setting for the
-//   person, kept in this browser, as the magnet is (snapping.js).
-// - Caught at: a shape or a placed object dragged, sized or nudged catches at the edges and
-//   middles of what is on the slides either side, as at the slide's own -- with the magnet, ⌘
-//   the other way -- its guide in a colour of its own, the box it caught at outlined (beside.js),
-//   whether they are shown or not.
+// - Overlay Slides (O; the slide list's right-click, the palette, View, the toggle in the zoom
+//   bar -- each again: Stop Overlaying): the slides chosen in the list drawn over the one shown
+//   -- or, one chosen, the presented slides either side of it, following it as it changes --
+//   each a ghost in a tint of its own, under its frames and handles, in the studio alone:
+//   never presented or exported (overlaying.js says which, and how). The zoom bar keys them,
+//   each a chip in its tint (clicked: that slide); the list marks each with a stripe in its
+//   tint. Page Up and Page Down go from one overlaid slide to the next. Going to a slide out of
+//   a set chosen stops it, as Esc does when it has nothing else to do. Kept for the person, in
+//   this browser: the slides either side, overlaid as a deck opens, or not.
+// - Caught at: a shape or a placed object dragged, sized or nudged while slides are overlaid
+//   catches at the edges and middles of what is on each, as at the slide's own -- with the
+//   magnet, ⌘ the other way; the grid's lines alone while it snaps to the grid -- its guide in
+//   the ghost's tint, the box it caught at outlined (beside.js).
+// - Pointed at: where nothing of the slide shown is under the pointer, an object of a ghost is
+//   outlined, dashed, in its tint, its slide named; clicked, that slide is shown and the object
+//   chosen on it, the overlay kept.
 // - Match on Other Slides…: what is chosen (a shape, a group, a placed object, a picture, a
 //   figure) put where it is, as large, on the next slide, the one before, every slide of its run
 //   (those either side that each have its match) or the slides chosen in the list -- its match
 //   on each found as matching.js says, a slide with none passed over and said; one step. A
-//   figure and its matches are put in one frame, drawn at one scale (flexo_talk.framing).
+//   figure and its matches are put in one frame, drawn at one scale (flexo_talk.framing). While
+//   slides are overlaid, Match on Overlaid Slides does so on each of them, the first of the
+//   chosen's right-click menu.
 // - A figure's Frame, in its panel: the frame it is drawn in with others, chosen or left.
 //
 // `ctx` is the editor's: studio, pages() (each slide's drawing: { svg, hash }), slides(),
@@ -23,167 +32,341 @@
 // its points in one of them), regions(slide) and blocksAt(slide, region), kindOf(block),
 // blockName(block), objects() (the objects chosen: [{ region, index }]), objectFrame(pick) (where
 // one stands, in the shapes' units), element(region, index), shapes (the slide's shapes' editor),
-// chosenSlides(), figures() (the deck's own), away(what), undoNote(text, options), render().
+// chosenSlides(), figures() (the deck's own), away(what), undoNote(text, options), render(),
+// go(index) (that slide shown), goTo(index, { region, index } | { shape }) (shown, and that
+// chosen on it), rail() (the slide list).
 
 import { h, ui, icon, toast, menu } from "/static/studio/studio.js";
+import { pagesKey } from "/static/studio/magnet.js";
 import * as F from "/static/studio/freeform.js";
 import * as P from "/static/kinds/deck/places.js";
 import * as M from "/static/kinds/deck/matching.js";
+import * as O from "/static/kinds/deck/overlaying.js";
 
-const KEY = "flexo-studio-neighbours";
-const read = () => { try { return globalThis.localStorage?.getItem?.(KEY) || "off"; } catch { return "off"; } };
-const write = (value) => { try { globalThis.localStorage?.setItem?.(KEY, value); } catch { /* this window's alone */ } };
-const SHOWN = ["off", "before", "both"];
 // (Each object and shape a slide draws, by its id: slide4.right.0, slide4.shapes.2.)
-const DRAWN = /^slide\d+\.(?:body|left|right|column\d+|shapes)\.\d+$/;
-const STYLE = ":host{display:block}svg{display:block;width:100%;height:100%;text-rendering:geometricPrecision}"
-  // Its own page left out, and what an editor alone sees of it: only what it draws, faintly.
+const DRAWN = /^slide\d+\.(body|left|right|column\d+|shapes)\.(\d+)$/;
+// A ghost's own page: white (on a dark slide, black) under its drawing in greys, its tint laid
+// over that -- screened, so ink takes the tint and white stays white (multiplied, on a dark
+// slide: light ink the light tint, black black) -- the whole then multiplied onto the slide
+// (screened, on a dark one), as ink under it would be. No more than CSS: no filter to find by
+// its id in a shadow root. Its own page left out, and what an editor alone sees of it.
+// A picture keeps its own colours whatever the slide's, its white page and all: on a dark slide
+// its ghost is drawn apart (`pictures`), as on a light one -- screened with the rest, its white
+// would wash out the slide's own picture under it.
+const STYLE = ":host{display:block;background:#fff}:host(.dark){background:#000}"
+  + "svg{display:block;width:100%;height:100%;text-rendering:geometricPrecision;filter:grayscale(1)}"
+  + ".tint{position:absolute;inset:0;background:var(--tint);mix-blend-mode:screen}:host(.dark) .tint{background:var(--tint-light);mix-blend-mode:multiply}"
+  + ":host(.pictures) svg{visibility:hidden}"
   + "[id='layer.background']{display:none}[data-flexo-placeholder]{display:none}[data-flexo-show=hidden]{visibility:hidden}";
-
-// Two slides, one over the other, the one behind dashed: the slides either side, faintly.
-function neighboursIcon() {
-  const node = icon("slide");
-  node.replaceChildren();
-  const S = (name, attributes) => { const item = document.createElementNS("http://www.w3.org/2000/svg", name); for (const [key, value] of Object.entries(attributes)) item.setAttribute(key, value); return item; };
-  node.append(S("path", { d: "M5.5 3.5h8v6h-8z", "stroke-dasharray": "1.6 1.4" }), S("path", { d: "M2.5 6.5h8v6h-8z", fill: "var(--raised, #fff)" }));
-  return node;
-}
+const KEPT = 6;  // drawings kept made, out of sight, for slides lately overlaid
+const OVERLAY = "Overlay Slides", STOP = "Stop Overlaying", MATCH = "Match on Overlaid Slides";
 
 export function acrossSlides(ctx) {
   const { studio } = ctx;
   if (!document.querySelector('link[href="/static/kinds/deck/across.css"]')) {
     document.head.append(h("link", { rel: "stylesheet", href: "/static/kinds/deck/across.css" }));
   }
-  let shown = SHOWN.includes(read()) ? read() : "off";
   const listeners = new Set();
-  const on = () => shown !== "off";
-  const withNext = () => shown === "both";
+  // Off (null), the slides either side ({ set: null }), or a set chosen ({ set: [indices] }).
+  let overlay = O.keptOverlay() === "on" ? { set: null } : null;
+  const on = () => overlay !== null;
 
-  // -- the slides either side --
+  // -- which slides --
 
-  // The presented slide before (`way` -1) or after (1) the one shown, if any.
-  function neighbour(way) {
-    const list = ctx.slides();
-    for (let at = ctx.index() + way; at >= 0 && at < list.length; at += way) if (list[at]?.skip !== true) return at;
-    return null;
+  // The slides overlaid now, the one shown among them, and each ghost's tint -- or null, off.
+  function now() {
+    if (!overlay) return null;
+    const here = ctx.index(), overlaid = O.overlaidOf(ctx.slides(), here, overlay.set);
+    if (!overlaid) return null;
+    return { here, overlaid, ghosts: overlaid.filter((index) => index !== here), tints: O.tintsOf(overlaid, here) };
   }
-  // Each neighbour's drawing in a page of its own (a shadow root, its ids and styles its own),
-  // made once for each drawing (by its hash): the few lately seen kept.
+  // What a press of O (or Overlay Slides) does: the slides chosen in the list overlaid -- they
+  // differing from those overlaid, or none -- else it stops.
+  const chosenSet = () => O.setOf(ctx.chosenSlides(), ctx.slides().length);
+  const stops = () => on() && !(chosenSet() && chosenSet().join() !== (overlay.set || []).join());
+  const label = () => (stops() ? STOP : OVERLAY);
+
+  function start() {
+    const set = chosenSet();
+    overlay = { set: set && set.includes(ctx.index()) ? set : null };
+    // (The slides either side are kept for next time; a set is this deck's, now.)
+    if (!overlay.set) O.keepOverlay("on");
+    changed();
+  }
+  function stop() {
+    if (!overlay) return;
+    overlay = null;
+    O.keepOverlay("off");
+    changed();
+  }
+  const toggle = () => (stops() ? stop() : start());
+  function changed() {
+    lay();
+    for (const listener of listeners) listener();
+    // (What can be done now is said again: the Mac app's View item, the help bar, Arrange's.)
+    ctx.render?.();
+  }
+
+  // -- the ghosts --
+
+  // Each ghost's drawing in a page of its own (a shadow root, its ids and styles its own), made
+  // once for each drawing (by its hash); those lately overlaid kept, out of sight.
   const made = new Map();
+  function ghostNode(svgText, own = "") {
+    const node = h("div.onion", { "aria-hidden": "true" });
+    const root = node.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = STYLE + own;
+    const holder = document.createElement("template");
+    holder.innerHTML = svgText.replace(/^<\?xml[^>]*>\s*/, "");
+    const svg = holder.content.querySelector("svg");
+    if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
+    for (const link of holder.content.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); }
+    root.append(style, holder.content, h("div.tint"));
+    return node;
+  }
   function drawingOf(page) {
     if (!page?.svg || !page.hash) return null;
     let one = made.get(page.hash);
     if (one) { made.delete(page.hash); made.set(page.hash, one); return one; }
-    const node = h("div.onion", { "aria-hidden": "true" });
-    const root = node.attachShadow({ mode: "open" });
-    const style = document.createElement("style");
-    style.textContent = STYLE;
-    const holder = document.createElement("template");
-    holder.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, "");
-    const svg = holder.content.querySelector("svg");
-    if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
-    for (const link of holder.content.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); }
-    root.append(style, holder.content);
-    one = { node, hash: page.hash, boxes: null };
+    one = { node: ghostNode(page.svg), svg: page.svg, hash: page.hash, found: null, look: "", pictures: undefined };
     made.set(page.hash, one);
-    for (const [hash, old] of made) { if (made.size <= 6) break; if (!old.node.isConnected) made.delete(hash); }
     return one;
   }
-  // Those shown now, before and after, put on the slide (under its frames and handles, over its
-  // drawing), each faint or kept out of sight -- there all the same, to be caught at.
-  let laid = { before: null, after: null, key: "" };
-  function lay({ now = on() } = {}) {
+  // Its pictures alone, for a dark slide -- the slide's pictures (drawn inline, an SVG's, or as
+  // an image) and any image else -- left out of the rest: made when first needed (none, null).
+  const drawnAs = (key) => (key.startsWith("columns.") ? `column${Number(key.split(".")[1]) + 1}` : key);
+  function picturesOf(one, index) {
+    if (one.pictures !== undefined) return one.pictures;
+    const slide = ctx.slides()[index];
+    const ids = slide ? ctx.regions(slide).flatMap((key) => ctx.blocksAt(slide, key).flatMap((block, n) => (ctx.kindOf(block) === "image" ? [`slide${index + 1}.${drawnAs(key)}.${n}`] : []))) : [];
+    if (!ids.length && !one.node.shadowRoot.querySelector("image")) return (one.pictures = null);
+    const chosen = ["image", ...ids.map((id) => `[id="${id}"]`)].join(",");
+    one.node.shadowRoot.append(h("style", {}, `:host(.dark) :is(${chosen}){visibility:hidden}`));
+    return (one.pictures = ghostNode(one.svg, `:host(.pictures) :is(${chosen}){visibility:visible}`));
+  }
+  // Those overlaid now, put on the slide over its drawing and under its frames and handles, in
+  // the deck's order, each in its tint: [{ one, index, tint }].
+  let laid = [];
+  function lay() {
     const page = ctx.pageNode(), svg = page?.querySelector(":scope > svg");
-    if (!svg) return;
-    const pages = ctx.pages(), before = neighbour(-1), after = neighbour(1);
-    const key = `${before}:${pages[before]?.hash}:${after}:${pages[after]?.hash}`;
-    if (key !== laid.key) {
-      // (Made when first needed -- shown, or caught at -- else a moment after the slide is drawn.)
-      if (!now) { schedule(); return; }
-      laid = { before: before === null ? null : drawingOf(pages[before]), after: after === null ? null : drawingOf(pages[after]), key };
+    let shown = now();
+    // Gone to a slide out of the set chosen (or the set gone from the deck): stopped.
+    if (overlay && !shown) { overlay = null; O.keepOverlay("off"); for (const listener of listeners) listener(); }
+    if (!svg) shown = null;
+    if (shown) hook(page);
+    const pages = ctx.pages(), dark = O.isDark(page?.style.background || ""), wanted = [];
+    for (const index of shown?.ghosts || []) {
+      const one = drawingOf(pages[index]);
+      if (one && !wanted.some((each) => each.one === one)) wanted.push({ one, index, tint: shown.tints.get(index) });
     }
-    for (const old of page.querySelectorAll(":scope > .onion")) if (old !== laid.before?.node && old !== laid.after?.node) old.remove();
-    // A dark slide's faint copy lightens it; a light one's darkens it, as ink under it would.
-    const dark = lightness(page.style.background || "") < 0.45;
+    const nodes = new Set(wanted.flatMap(({ one, index }) => [one.node, ...(dark && picturesOf(one, index) ? [one.pictures] : [])]));
+    for (const old of page?.querySelectorAll(":scope > .onion") || []) if (!nodes.has(old)) old.remove();
     let last = svg;
-    for (const [one, side] of [[laid.before, "before"], [laid.after, "after"]]) {
-      if (!one) continue;
-      if (last.nextElementSibling !== one.node) last.after(one.node);
-      last = one.node;
-      one.node.className = `onion ${side}${dark ? " dark" : ""}${(side === "before" ? on() : withNext()) ? " shown" : ""}`;
+    for (const { one, index, tint } of wanted) {
+      const pictures = dark ? picturesOf(one, index) : null;
+      for (const node of [one.node, pictures]) {
+        if (!node) continue;
+        if (last.nextElementSibling !== node) last.after(node);
+        last = node;
+      }
+      const look = `${index}:${tint.colour}:${tint.opacity}:${dark}`;
+      if (one.look === look) continue;
+      one.look = look;
+      one.node.className = `onion${dark ? " dark" : ""}`;
+      if (pictures) pictures.className = "onion pictures";
+      for (const node of [one.node, pictures]) {
+        if (!node) continue;
+        node.style.setProperty("--tint", tint.colour);
+        node.style.setProperty("--tint-light", tint.light);
+        node.style.opacity = String(tint.opacity);
+      }
     }
+    laid = wanted.map((each) => ({ ...each, dark }));
+    // (The few lately overlaid kept, made, beside those now.)
+    for (const [hash, old] of made) { if (made.size <= KEPT + laid.length) break; if (!old.node.isConnected) made.delete(hash); }
+    if (!laid.some((each) => each.one === aimed?.one)) unpoint();
+    showKey();
+    rail();
   }
-  let waiting = 0;
-  function schedule() {
-    if (waiting) return;
-    const later = globalThis.requestIdleCallback || ((then) => setTimeout(then, 200));
-    waiting = later(() => { waiting = 0; lay({ now: true }); }, { timeout: 600 });
-  }
-  const lightness = (colour) => {
-    const found = /#([0-9a-f]{6})/i.exec(colour) || null;
-    const rgb = found ? [0, 2, 4].map((at) => parseInt(found[1].slice(at, at + 2), 16) / 255) : (/rgb\(([^)]+)\)/.exec(colour)?.[1].split(",").map((value) => Number(value) / 255));
-    return rgb && rgb.length >= 3 ? 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] : 1;
-  };
+  // (Each drawing's colour on a dark slide: its light tint, as the ghost shows it.)
+  const shownTint = (each) => (each.dark ? each.tint.light : each.tint.colour);
 
-  // What each neighbour draws -- its objects' and shapes' boxes, [left, top, right, bottom] in
-  // the shapes' units -- measured once for each drawing.
-  function boxesOf(one) {
-    if (!one) return [];
-    if (one.boxes) return one.boxes;
+  // What each ghost draws -- its objects' and shapes' boxes, [left, top, right, bottom] in the
+  // shapes' units, with which each is -- measured once for each drawing.
+  const regionOf = (drawn) => (/^column\d+$/.test(drawn) ? `columns.${Number(drawn.slice(6)) - 1}` : drawn);
+  function foundIn(one) {
+    if (one.found) return one.found;
     const svg = one.node.shadowRoot?.querySelector("svg"), matrix = svg?.getScreenCTM?.();
     if (!svg || !matrix || !one.node.isConnected) return [];
-    const back = matrix.inverse(), k = ctx.scale() || 1, boxes = [];
+    const back = matrix.inverse(), k = ctx.scale() || 1, found = [];
     for (const element of svg.querySelectorAll("[id]")) {
-      if (!DRAWN.test(element.id) || element.closest("[data-flexo-placeholder]")) continue;
+      const id = DRAWN.exec(element.id);
+      if (!id || element.closest("[data-flexo-placeholder]")) continue;
       const rect = element.getBoundingClientRect();
       if (!rect.width && !rect.height) continue;
       const a = new DOMPoint(rect.left, rect.top).matrixTransform(back), b = new DOMPoint(rect.right, rect.bottom).matrixTransform(back);
-      boxes.push([a.x / k, a.y / k, b.x / k, b.y / k].map((value) => Math.round(value * 100) / 100));
+      const box = [a.x / k, a.y / k, b.x / k, b.y / k].map((value) => Math.round(value * 100) / 100);
+      found.push({ box, what: id[1] === "shapes" ? { shape: Number(id[2]) } : { region: regionOf(id[1]), index: Number(id[2]) } });
     }
-    one.boxes = boxes;
-    return boxes;
+    one.found = found;
+    return found;
   }
-  // What a drag catches at beside the slide (beside.js): what is on the slides either side.
+  // What a drag catches at beside the slide (beside.js): what is on each slide overlaid, the
+  // nearest first, each box with its ghost's tint for its guide.
   function beside() {
-    lay({ now: true });
-    const boxes = [...boxesOf(laid.before), ...boxesOf(laid.after)];
+    if (!on()) return null;
+    lay();
+    const boxes = [];
+    for (const each of [...laid].sort((a, b) => a.tint.away - b.tint.away)) {
+      for (const { box } of foundIn(each.one)) { box.tint = shownTint(each); boxes.push(box); }
+    }
     return boxes.length ? { boxes } : null;
   }
 
-  // -- shown, or not --
+  // -- a ghost's object, pointed at --
 
-  function set(value) {
-    if (!SHOWN.includes(value) || value === shown) return;
-    shown = value;
-    write(value);
-    lay({ now: true });
-    for (const listener of listeners) listener();
+  const ring = h("div.ghost-ring", { hidden: true, "aria-hidden": "true" }, h("span.ghost-tag"));
+  let aimed = null, claimed = null;
+  function unpoint() { aimed = null; ring.hidden = true; }
+  // A move the editor did not hand on (something of the slide's under the pointer, a drag, a
+  // crop) points at no ghost; nor does the pointer gone from the slide. (Heard after the
+  // editor's own, on each slide's page.)
+  const hooked = new WeakSet();
+  function hook(page) {
+    if (!page || hooked.has(page)) return;
+    hooked.add(page);
+    page.addEventListener("mousemove", (event) => { if (aimed && event !== claimed) unpoint(); });
+    page.addEventListener("mouseleave", () => { if (aimed) unpoint(); });
   }
-  const toggle = () => set(on() ? "off" : withNext() ? "both" : "before");
-  // (Include Next Slide is the toggle's own: turned on, the slides either side are shown.)
-  const toggleNext = () => set(withNext() ? "before" : "both");
-  // Turned in another tab of this browser: here too.
-  window.addEventListener("storage", (event) => { if (event.key === KEY) { shown = SHOWN.includes(read()) ? read() : "off"; lay({ now: true }); for (const listener of listeners) listener(); } });
+  // The ghost's object under the pointer, if any: the smallest there, the nearest slide's first.
+  function ghostAt(event) {
+    const svg = ctx.pageNode()?.querySelector(":scope > svg"), matrix = svg?.getScreenCTM?.();
+    if (!matrix || !laid.length) return null;
+    const k = ctx.scale() || 1, at = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+    const x = at.x / k, y = at.y / k, slack = 3 / ((matrix.a || 1) * k);
+    let best = null;
+    for (const each of laid) {
+      for (const found of foundIn(each.one)) {
+        const [left, top, right, bottom] = found.box;
+        if (x < left - slack || x > right + slack || y < top - slack || y > bottom + slack) continue;
+        const area = (right - left) * (bottom - top);
+        if (!best || area < best.area - 1e-6 || (Math.abs(area - best.area) <= 1e-6 && each.tint.away < best.each.tint.away)) best = { area, each, found };
+      }
+    }
+    return best;
+  }
+  // Pointed at where nothing of the slide shown is (the editor asks, else `event` null): the
+  // ghost's object there outlined, its slide named. Whether one is.
+  function point(event) {
+    claimed = event;
+    const found = event && on() && !event.buttons ? ghostAt(event) : null;
+    if (!found) { if (aimed) unpoint(); return false; }
+    if (aimed?.one === found.each.one && aimed.found === found.found) return true;
+    aimed = { one: found.each.one, found: found.found, index: found.each.index };
+    const page = ctx.pageNode(), matrix = page?.querySelector(":scope > svg")?.getScreenCTM?.();
+    if (!matrix) { unpoint(); return false; }
+    const k = ctx.scale() || 1, outer = page.getBoundingClientRect(), [left, top, right, bottom] = found.found.box;
+    const a = new DOMPoint(left * k, top * k).matrixTransform(matrix), b = new DOMPoint(right * k, bottom * k).matrixTransform(matrix);
+    if (ring.parentNode !== page) page.append(ring);
+    ring.classList.toggle("dark", found.each.dark);
+    ring.style.setProperty("--tint", shownTint(found.each));
+    Object.assign(ring.style, { left: `${a.x - outer.left - 3}px`, top: `${a.y - outer.top - 3}px`, width: `${b.x - a.x + 6}px`, height: `${b.y - a.y + 6}px` });
+    ring.firstChild.textContent = `Slide ${found.each.index + 1}`;
+    ring.hidden = false;
+    return true;
+  }
+  // Clicked there (the editor asks, nothing of the slide shown under it): that slide shown and
+  // the object chosen on it, the overlay kept. Whether it was.
+  function pick(event) {
+    if (!aimed || !on() || event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
+    const found = ghostAt(event);
+    if (!found || found.found !== aimed.found) return false;
+    unpoint();
+    ctx.goTo(found.each.index, found.found.what);
+    return true;
+  }
 
-  // The zoom bar's toggles: the slides either side, and with them the next.
+  // -- the zoom bar's key, and the list's stripes --
+
+  // Two slides, one over the other, the one behind dashed: slides overlaid.
+  const overlayIcon = () => icon("overlay");
+  let key = null, keyShown = "";
   function zoomButtons() {
-    const button = h("button.btn.ghost.small.icon.neighbours", { type: "button", onclick: () => toggle() }, neighboursIcon());
-    const next = h("button.btn.ghost.small.neighbours-next", { type: "button", onclick: () => toggleNext() }, "Next");
+    // (Pressed, it stops, whatever is chosen in the list now: it says it is on.)
+    const button = h("button.btn.ghost.small.icon.overlay-toggle", { type: "button", onclick: () => (on() ? stop() : start()) }, overlayIcon());
+    key = h("span.overlay-key", { hidden: true });
+    // Clicked, a chip leaves the keys where they were, as the zoom bar's buttons do.
+    key.addEventListener("mousedown", (event) => event.preventDefault());
     const show = () => {
       button.classList.toggle("on", on());
       button.setAttribute("aria-pressed", String(on()));
-      button.title = on() ? "Hide Neighbouring Slides" : "Show Neighbouring Slides";
-      button.setAttribute("aria-label", button.title);
-      next.hidden = !on();
-      next.classList.toggle("on", withNext());
-      next.setAttribute("aria-pressed", String(withNext()));
-      next.title = withNext() ? "Leave Out Next Slide" : "Include Next Slide";
+      button.title = `${on() ? STOP : OVERLAY} (O)`;
+      button.setAttribute("aria-label", on() ? STOP : OVERLAY);
     };
-    for (const one of [button, next]) one.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("mousedown", (event) => event.preventDefault());
     listeners.add(show);
     show();
-    return [h("span.zoom-sep"), button, next];
+    showKey();
+    // (The key before the toggle: the bar is held at its right, so the toggle stays where it
+    // was pressed as the key comes and goes, for a second press to stop it.)
+    return [h("span.zoom-sep"), key, button];
   }
+  // Each slide overlaid, by its number, in its tint (the one shown in ink): clicked, shown.
+  function showKey() {
+    if (!key) return;
+    const shown = now(), tints = shown?.tints;
+    const said = shown ? shown.overlaid.map((index) => `${index}:${tints.get(index)?.colour || ""}`).join() + `|${shown.here}` : "";
+    if (said === keyShown) return;
+    keyShown = said;
+    key.hidden = !shown;
+    key.replaceChildren(...(shown?.overlaid || []).map((index) => {
+      const tint = tints.get(index), solid = index === shown.here;
+      const chip = h(`button.overlay-chip${solid ? ".solid" : ""}`, { type: "button", tabindex: -1, title: solid ? `Slide ${index + 1}, Shown` : `Show Slide ${index + 1}`,
+        onclick: () => { if (!solid) ctx.go(index); } }, String(index + 1));
+      if (tint) { chip.style.setProperty("--tint", tint.colour); chip.style.setProperty("--tint-light", tint.light); }
+      return chip;
+    }));
+  }
+  // The list: each ghost's thumbnail marked down its edge in its tint.
+  function rail() {
+    const list = ctx.rail?.();
+    if (!list) return;
+    const tints = now()?.tints || new Map();
+    for (const thumb of list.querySelectorAll(":scope > .thumb")) {
+      const tint = tints.get(Number(thumb.dataset.index));
+      let stripe = thumb.querySelector(":scope > .overlay-stripe");
+      if (!tint) { stripe?.remove(); continue; }
+      if (!stripe) { stripe = h("span.overlay-stripe", { "aria-hidden": "true" }); thumb.append(stripe); }
+      if (stripe.dataset.tint !== tint.colour) { stripe.dataset.tint = tint.colour; stripe.style.setProperty("--tint", tint.colour); stripe.style.setProperty("--tint-light", tint.light); }
+    }
+  }
+
+  // -- the keys --
+
+  // Page Up (`way` -1) and Page Down (1), overlaying: the overlaid slide that way (none, it
+  // stays). Whether they were the overlay's.
+  function page(way) {
+    const shown = now();
+    if (!shown) return false;
+    const to = O.stepAmong(shown.overlaid, shown.here, way);
+    if (to !== null) ctx.go(to);
+    return true;
+  }
+  // Esc with nothing else to do (the editor's last): it stops. Whether it did.
+  function escape() {
+    if (!on()) return false;
+    stop();
+    return true;
+  }
+  // O, while the page has the keys (magnet.js): before an editor's, as % and # are.
+  document.addEventListener("keydown", (event) => {
+    if (!studio.active || (event.key !== "o" && event.key !== "O") || event.altKey || !pagesKey(event)) return;
+    if (document.querySelector(".menu, .popover") || !ctx.slides().length || !ctx.pageNode()?.isConnected) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    toggle();
+  });
 
   // -- Match on Other Slides --
 
@@ -357,17 +540,39 @@ export function acrossSlides(ctx) {
       }),
     ];
   }
+  // -- Match on Overlaid Slides --
+
+  // While slides are overlaid and something is chosen: the command for the slides overlaid but
+  // the one shown -- greyed, said why, where none has its match (as a Mac's item is). Else null.
+  function overlaidMatch(picks = chosenNow()) {
+    const ghosts = now()?.ghosts || [];
+    if (!picks.count || !ghosts.length) return null;
+    const ok = ghosts.some((index) => matchesOn(picks, index));
+    return { icon: "arrange", label: MATCH, hint: ok ? `${named(picks)} on ${M.slidesSaid(ghosts)}` : `${M.slidesSaid(ghosts)}: ${whyNot(picks, ghosts[0]) || "no match"}`,
+      disabled: !ok, run: () => matchOn(ghosts, picks) };
+  }
+  // First in the right-click menu of what is chosen, overlaying: it, and a line.
+  const overlaidItems = () => { const item = overlaidMatch(); return item ? [item, "-"] : []; };
+
   // Objects chosen (shapes with them or not): the editor's. Shapes alone: the shapes' editor's,
-  // the first in their right-click menu too (shapes.js's `menu`).
-  const commands = () => { const picks = chosenNow(); return picks.objects.length ? matching(picks) : []; };
-  const shapeCommands = () => { const picks = chosenNow(); return picks.objects.length ? [] : matching(picks, true); };
+  // in their right-click menu too (shapes.js's `menu`; Match on Overlaid Slides, its first).
+  const commands = () => {
+    const picks = chosenNow();
+    return picks.objects.length ? [overlaidMatch(picks), ...matching(picks)].filter(Boolean) : [];
+  };
+  const shapeCommands = () => {
+    const picks = chosenNow(), first = picks.objects.length ? null : overlaidMatch(picks);
+    return picks.objects.length ? [] : [...(first ? [{ ...first, menu: "first" }] : []), ...matching(picks, true)];
+  };
   const menuItem = () => (chosenNow().count ? { icon: "arrange", label: LABEL, run: () => chooser() } : null);
-  // The Arrange tab's section: the button, with what is chosen.
+  // The Arrange tab's section: the buttons, with what is chosen.
   function section() {
     const picks = chosenNow();
     if (!picks.count) return null;
     const button = ui.button(LABEL, (event) => { const box = event.currentTarget.getBoundingClientRect(); chooser({ x: box.left, y: box.bottom + 4 }); }, { small: true, icon: "arrange" });
-    return h("div.section.across", {}, h("div.section-title", {}, "Other Slides"), h("div.row", {}, button));
+    const overlaid = overlaidMatch(picks);
+    const matched = overlaid ? ui.button(MATCH, () => overlaid.run(), { small: true, icon: "arrange", disabled: overlaid.disabled, title: overlaid.hint }) : null;
+    return h("div.section.across", {}, h("div.section-title", {}, "Other Slides"), h("div.row", {}, matched, button));
   }
 
   // -- a figure's frame --
@@ -394,17 +599,20 @@ export function acrossSlides(ctx) {
     } }));
   }
 
-  // The slide drawn again (another slide shown, or its drawing come): its neighbours with it.
+  // The slide drawn again (another slide shown, or its drawing come): the slides overlaid on it.
   function drawn() { lay(); }
   studio.on?.("drawn", () => requestAnimationFrame(() => lay()));
+  // (Out of the slide, nothing of a ghost is pointed at; pressed, its outline goes.)
+  document.addEventListener("pointerdown", () => { ring.hidden = true; }, true);
 
+  // The overlay toggled: named for what it will do, as Show Speaker Notes is, its key O.
+  const overlayCommand = () => ({ icon: "overlay", label: label(), keys: "O", run: () => toggle() });
   return {
-    drawn, beside, zoomButtons, toggle, toggleNext, shown: on, withNext, commands, shapeCommands, menuItem, section, frameField,
+    drawn, beside, zoomButtons, toggle, shown: on, commands, shapeCommands, menuItem, section, frameField,
     chooser, matchOn, targets: () => targets(chosenNow()),
-    viewCommands: () => [
-      // (Each one command named for what it will do, as Show Speaker Notes is.)
-      { icon: "slide", label: on() ? "Hide Neighbouring Slides" : "Show Neighbouring Slides", run: () => toggle() },
-      { icon: "slide", label: withNext() ? "Leave Out Next Slide" : "Include Next Slide", run: () => toggleNext() },
-    ],
+    point, pick, page, escape, rail, overlaidItems, leave: () => unpoint(),
+    // The slide list's right-click: first, the overlay -- of the slides chosen, or those either side.
+    listItems: () => [overlayCommand(), "-"],
+    viewCommands: () => [overlayCommand()],
   };
 }

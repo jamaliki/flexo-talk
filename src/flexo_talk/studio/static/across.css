@@ -1,9 +1,32 @@
-/* The slides either side of the one shown (across.js): drawn faintly on it, over its drawing and
-   under its frames and handles, never taking a click -- the slide before in its own colours, the
-   one after tinted. Kept out of sight when not shown, to be caught at all the same. */
-.slide-page > .onion { position: absolute; inset: 0; pointer-events: none; visibility: hidden; border-radius: 3px; overflow: hidden; }
-.slide-page > .onion.shown { visibility: visible; opacity: 0.32; mix-blend-mode: multiply; }
-.slide-page > .onion.shown.dark { mix-blend-mode: screen; opacity: 0.4; }
-.slide-page > .onion.after.shown { opacity: 0.26; filter: sepia(1) saturate(4) hue-rotate(195deg); }
-.slide-zoom .neighbours-next { min-width: 0; padding: 0 7px; font-size: 12px; }
-.slide-zoom .neighbours-next[hidden] { display: none; }
+/* Slides overlaid on the one shown (across.js): each a ghost over its drawing and under its
+   frames and handles, never taking a click -- in its tint (its own page: across.js's STYLE),
+   multiplied onto the slide as ink under it would be; on a dark slide, screened. */
+.slide-page > .onion { position: absolute; inset: 0; pointer-events: none; border-radius: 3px; overflow: hidden; isolation: isolate; mix-blend-mode: multiply; }
+.slide-page > .onion.dark { mix-blend-mode: screen; }
+
+/* A ghost's object pointed at: outlined, dashed, in its slide's tint, its slide named. */
+.slide-page > .ghost-ring { position: absolute; pointer-events: none; z-index: 7; border: 1.5px dashed var(--tint); border-radius: 4px; }
+.slide-page > .ghost-ring[hidden] { display: none; }
+.ghost-ring .ghost-tag { position: absolute; right: -1px; top: -24px; font: 600 11px/18px var(--font); color: #fff; background: var(--tint); padding: 0 7px; border-radius: 99px; white-space: nowrap; }
+.ghost-ring.dark .ghost-tag { color: #16161a; }
+
+/* The zoom bar: the toggle, then each slide overlaid as a chip in its tint, the one shown in ink. */
+.slide-zoom .overlay-key { display: inline-flex; align-items: center; gap: 3px; margin-right: 2px; }
+.slide-zoom .overlay-key[hidden] { display: none; }
+.slide-zoom .overlay-chip { font: 600 11.5px/20px var(--font); min-width: 0; padding: 0 7px; border: 0; border-radius: 5px; font-variant-numeric: tabular-nums; cursor: pointer;
+  color: var(--tint, var(--ink-2)); background: color-mix(in srgb, var(--tint, var(--ink-3)) 12%, transparent); }
+.slide-zoom .overlay-chip:hover { background: color-mix(in srgb, var(--tint, var(--ink-3)) 22%, transparent); }
+.slide-zoom .overlay-chip.solid { color: var(--raised, #fff); background: var(--ink); cursor: default; }
+
+/* The slide list: a stripe down each overlaid slide's edge, in its tint. */
+.thumb > .overlay-stripe { position: absolute; left: -2px; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--tint); pointer-events: none; }
+
+/* On a dark studio, each tint's lighter one: it reads on the panel's grey as the tint does on white. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .slide-zoom .overlay-chip:not(.solid) { color: var(--tint-light, var(--ink-2)); background: color-mix(in srgb, var(--tint-light, var(--ink-3)) 16%, transparent); }
+  :root:not([data-theme="light"]) .slide-zoom .overlay-chip:not(.solid):hover { background: color-mix(in srgb, var(--tint-light, var(--ink-3)) 26%, transparent); }
+  :root:not([data-theme="light"]) .thumb > .overlay-stripe { background: var(--tint-light); }
+}
+:root[data-theme="dark"] .slide-zoom .overlay-chip:not(.solid) { color: var(--tint-light, var(--ink-2)); background: color-mix(in srgb, var(--tint-light, var(--ink-3)) 16%, transparent); }
+:root[data-theme="dark"] .slide-zoom .overlay-chip:not(.solid):hover { background: color-mix(in srgb, var(--tint-light, var(--ink-3)) 26%, transparent); }
+:root[data-theme="dark"] .thumb > .overlay-stripe { background: var(--tint-light); }

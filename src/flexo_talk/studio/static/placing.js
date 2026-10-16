@@ -35,7 +35,7 @@
 // (a place's width, in the slide's points), mover(element) (a group round a drawing, moved by
 // its style), markMany(before, after), markMixed(before, after) (what an undo chooses again),
 // mixedOn(), render(), renderInspector(), showArrange(), swallowRelease(held), away(what),
-// undoNote(text, options), hideChosen(on), beside() (the slides either side: beside.js), grid()
+// undoNote(text, options), hideChosen(on), beside() (the slides overlaid: beside.js), grid()
 // (the slide's grid: grid.js).
 
 import { h, ui, toast } from "/static/studio/studio.js";
@@ -215,11 +215,11 @@ export function placing(ctx) {
   }
   function guide(axis, at, from = Beside.besideAt(gesture?.targets, axis, at)) {
     const [x0, y0, width, height] = ctx.frame(), px = 1 / unit();
-    // (One on the slide before or after, in a colour of its own, with its box: beside.js.)
-    const kind = from ? "shape-guide beside" : "shape-guide";
-    guides.append(axis === "x" ? S("line", { x1: at, y1: y0, x2: at, y2: y0 + height, class: kind, "stroke-width": px })
-      : S("line", { x1: x0, y1: at, x2: x0 + width, y2: at, class: kind, "stroke-width": px }));
-    if (from) guides.append(S("rect", { x: from[0], y: from[1], width: from[2] - from[0], height: from[3] - from[1], class: "shape-beside", "stroke-width": px }));
+    // (One on a slide overlaid, in that slide's tint, with its box: beside.js.)
+    const kind = from ? "shape-guide beside" : "shape-guide", style = from?.tint ? `--beside:${from.tint}` : null;
+    guides.append(axis === "x" ? S("line", { x1: at, y1: y0, x2: at, y2: y0 + height, class: kind, "stroke-width": px, style })
+      : S("line", { x1: x0, y1: at, x2: x0 + width, y2: at, class: kind, "stroke-width": px, style }));
+    if (from) guides.append(S("rect", { x: from[0], y: from[1], width: from[2] - from[0], height: from[3] - from[1], class: "shape-beside", "stroke-width": px, style }));
   }
   function say(text, event) {
     const node = ctx.pageNode();
@@ -251,7 +251,7 @@ export function placing(ctx) {
       if (!spec || movingShapes.includes(index)) return;
       add(shapes.boxOf(index), F.family(spec.kind) !== "line");
     });
-    // And what is on the slides before and after it (across.js), caught at too.
+    // And what is on the slides overlaid on it (across.js), caught at too.
     return Beside.withBeside({ xs, ys, boxes }, ctx.beside?.());
   }
   // The nearest of `values` to any of `mine` within reach: how far to move to it, and where.
@@ -559,7 +559,7 @@ export function placing(ctx) {
     run.at = Date.now();
     nudged = run;
     const before = chosen(), shapesBefore = shapes.chosen();
-    // Stopped where it would pass a guide on the slide before or after, snapping on (beside.js).
+    // Stopped where it would pass a guide on a slide overlaid, snapping on (beside.js).
     const reach = (boxes) => (boxes.length ? [Math.min(...boxes.map((b) => b[0])), Math.min(...boxes.map((b) => b[1])), Math.max(...boxes.map((b) => b[2])), Math.max(...boxes.map((b) => b[3]))] : null);
     const caught = Snap.toGuides() && ctx.beside ? Beside.nudgeCaught(reach([...objects.map(boxOf), ...drawn.map((index) => shapes.boxOf(index))].filter(Boolean)), dx, dy, ctx.beside()) : null;
     if (caught) ({ dx, dy } = caught);
