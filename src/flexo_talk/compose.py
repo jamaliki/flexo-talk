@@ -1898,6 +1898,12 @@ def _logos(canvas: _Canvas, slide: Slide, row: list[_Logo]) -> None:
 
             # A logo is a picture, vectors and all: a picture in the PowerPoint too.
             href = "data:image/svg+xml;base64," + base64.b64encode(art.markup.encode()).decode()
+        elif art.format == "gif":
+            from flexo.animated import still_href
+
+            # A logo holds still, its first frame: it is on every slide, and one moving there
+            # would draw the eye from what each slide shows.
+            href = still_href(art)
         else:
             href = picture_href(art)
         element(
@@ -3804,6 +3810,15 @@ def _fitted_picture(
         x = across(natural_w * scale)
         y = box.y + (box.height - natural_h * scale) / 2.0
         _place_svg(canvas, identifier, art.markup, x, y, scale * units)
+        return
+    if crop and art.format == "gif" and art.width and art.height:
+        # A GIF made square, or round, plays still: a window on it, not a picture made of it.
+        side = min(box.width, box.height)
+        kept = Box(across(side), box.y + (box.height - side) / 2.0, side, side)
+        scale = side / min(art.width, art.height)
+        whole = Box(kept.x + (side - art.width * scale) / 2.0, kept.y + (side - art.height * scale) / 2.0,
+                    art.width * scale, art.height * scale)
+        _gif_window(parent, identifier, picture_href(art), kept, whole, oval=crop == "circle")
         return
     if crop and art.format != "svg":
         href, natural_w, natural_h = _cropped(source, crop, Path(source).stat().st_mtime_ns)
@@ -5885,6 +5900,7 @@ def _image(canvas: _Canvas, identifier: str, block: _Image, box: Box) -> float:
         canvas.layer, "image", id=identifier, x=_across(canvas, box, width), y=box.y,
         width=width, height=height, href=href, data__flexo__width=number(width),
     )
+    _still(picture, art, block.still)
     _described(picture, block.description)
     _whole(picture, Box(_across(canvas, box, width), box.y, width, height))
     _framed(picture, Box(_across(canvas, box, width), box.y, width, height))
@@ -5935,6 +5951,15 @@ def _cropped_image(
         # Masked by a shape: the tile as large as the shape too, should it reach past the
         # picture, so the picture is never repeated in it.
         outline = masked(block.mask, (kept.x, kept.y, kept.width, kept.height))
+    if art.format == "gif":
+        # A GIF plays only drawn as itself, never as a pattern's tile: a window on it instead.
+        picture = _gif_window(canvas.layer, identifier, href, kept, tile, oval=block.mask == "circle",
+                              outline=outline, still=block.still)
+        picture.set("data-flexo-width", number(kept.width))
+        _described(picture, block.description)
+        _framed(picture, kept)
+        return
+    if outline is not None:
         xs = [value for segment in outline for value in segment[1::2]]
         ys = [value for segment in outline for value in segment[2::2]]
         if xs and ys:
@@ -5968,6 +5993,54 @@ def _cropped_image(
     _described(picture, block.description)
     _whole(picture, Box(kept.x - left * whole_w, kept.y - top * whole_h, whole_w, whole_h))
     _framed(picture, kept)
+
+
+def _still(picture: ET.Element, art: Any, still: int | None) -> None:
+    """A GIF's ``<image>`` naming the frame a PDF or PNG shows of it, where that is not its
+    first (``flexo.animated``)."""
+
+    if art.format == "gif" and still is not None and still > 1:
+        from flexo.animated import STILL
+
+        picture.set(STILL, str(still))
+
+
+def _gif_window(
+    parent: ET.Element, identifier: str, href: str, kept: Box, whole: Box, *, oval: bool = False,
+    outline: Any = None, still: int | None = None,
+) -> ET.Element:
+    """A GIF cropped, still playing: a window on it (a nested ``<svg>``, the part kept its
+    viewport) holding it whole, where ``whole`` puts it -- clipped to an oval within the part
+    kept, or to a shape's ``outline``. Every other picture is cropped as a shape filled with a
+    pattern of it, but a browser shows only a GIF's first frame in a pattern. The window says
+    where the whole of the picture is (``data-flexo-whole``), for an editor and the drawing's
+    readers (``flexo.drawing``) to take it for the picture it is, cropped."""
+
+    window = element(
+        parent, "svg", id=identifier, x=kept.x, y=kept.y, width=kept.width, height=kept.height,
+        viewBox=" ".join(number(value) for value in (kept.x, kept.y, kept.width, kept.height)),
+        preserveAspectRatio="none", overflow="hidden",
+    )
+    _whole(window, whole)
+    shaped = None
+    if outline is not None or oval:
+        from flexo.freeform import path_data
+
+        shaped = element(window, "clipPath", id=f"{identifier}.crop")
+        if outline is not None:
+            element(shaped, "path", d=path_data(outline))
+        else:
+            element(shaped, "ellipse", cx=kept.x + kept.width / 2.0, cy=kept.y + kept.height / 2.0,
+                    rx=kept.width / 2.0, ry=kept.height / 2.0)
+    picture = element(
+        window, "image", x=whole.x, y=whole.y, width=whole.width, height=whole.height, href=href,
+        preserveAspectRatio="none", clip_path=f"url(#{identifier}.crop)" if shaped is not None else None,
+    )
+    if still is not None and still > 1:
+        from flexo.animated import STILL
+
+        picture.set(STILL, str(still))
+    return window
 
 
 @functools.lru_cache(maxsize=32)

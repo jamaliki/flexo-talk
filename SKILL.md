@@ -146,7 +146,7 @@ line; without it each column stacks its blocks on its own.
 | `with region.figure(**Figure options) as figure:` | A new flexo figure in the deck's theme |
 | `add(flexo_figure, turn=True, caption=)` | An existing flexo figure, redrawn in the deck's theme |
 | `plot(matplotlib_figure)` | A plot laid out again at its place's size: vectors and live text |
-| `image(path, description=, caption=)` | An SVG as vectors when flexo can draw it exactly, else a picture; PNG/JPEG pictures. `description`: what it shows, read out by screen readers and PowerPoint's alt text |
+| `image(path, description=, caption=, still=)` | An SVG as vectors when flexo can draw it exactly, else a picture; PNG/JPEG pictures; a GIF plays (studio, presenting, SVG, PowerPoint, Keynote), a PDF or PNG showing its first frame or `still=12` (from 1). `description`: what it shows, read out by screen readers and PowerPoint's alt text |
 | `table(rows, header=True, align="lrr", caption=)` | A booktabs-ruled native table; numbers flush right by default |
 | `code(source)` | A monospace listing on a tinted panel |
 | `gallery(items, columns=, height=, crop="circle"\|"square", align=)` | Logos, or people as `(file, "**Name**\nRole")` |
@@ -211,8 +211,8 @@ with English words, numbers, and maths inside it kept in order.
   `font`, then to the theme's (its `type: {title_family:, figure_family:}`, then its
   family).
 - **Logos** (an institution's, its funders'): `Deck(logos=["logos/institute.png",
-  "logos/funder.svg"], logos_on="title", logo_height=40)` -- PNG, JPEG, SVG or PDF
-  files, in order. On a title slide: a row along its foot, the words above making room;
+  "logos/funder.svg"], logos_on="title", logo_height=40)` -- PNG, JPEG, GIF, SVG or PDF
+  files, in order (a GIF holds still, its first frame: a logo is on every slide). On a title slide: a row along its foot, the words above making room;
   `logos_on="every"` puts them small in every other slide's footer too. In a document:
   `deck: {logos: [logos/institute.png], logos_on: every}`.
 - **A theme file can carry the slides' look**: beside `theme:`, a `slides:`

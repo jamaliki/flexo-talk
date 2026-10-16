@@ -5,7 +5,7 @@
 // the slides they touch flash in their colour.
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE, wedgeHead } from "/static/studio/studio.js";
-import { copyOut, copiedHere, pastedOwn } from "/static/studio/studio.js";
+import { copyOut, copiedHere, pastedOwn, pastedGif } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
@@ -29,6 +29,7 @@ import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
 import { magnetButton } from "/static/studio/magnet.js";
 import * as Snap from "/static/studio/snapping.js";
+import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -36,7 +37,7 @@ const BLOCKS = {
   figure: { icon: "figure", label: "Figure", hint: "A diagram of shapes and lines" },
   flow: { icon: "flow", label: "Flow Chart", hint: "Steps and decisions connected by arrows" },
   structure: { icon: "structure", label: "Structure", hint: "A protein structure from a PDB or mmCIF file or a PDB ID, or a mol-sketch scene" },
-  image: { icon: "image", label: "Picture", hint: "PNG, JPEG or SVG (SVG stays as vectors)" },
+  image: { icon: "image", label: "Picture", hint: "PNG, JPEG, GIF or SVG (SVG stays as vectors)" },
   table: { icon: "table", label: "Table", hint: "Rows and columns with simple rules" },
   stats: { icon: "stats", label: "Numbers", hint: "Key numbers, shown large" },
   quote: { icon: "quote", label: "Quote", hint: "A quotation, with who said it" },
@@ -1802,7 +1803,7 @@ export function mount(studio, container) {
       landing = null;
       if (carry) dropCarry();
       pageNode = h("div.slide-page", { dataset: { shows } });
-      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); ownResources(pageNode.querySelector("svg")); }
+      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
       else pageNode.append(away ? h("div.placeholder.away", {}, h("span.away-title")) : h("div.placeholder", {}, h("div.spinner")));
       const svg = pageNode.querySelector("svg");
       if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
@@ -3292,7 +3293,8 @@ export function mount(studio, container) {
     const [x, y, w, h] = values;
     const a = new DOMPoint(x, y).matrixTransform(toRoot), b = new DOMPoint(x + w, y + h).matrixTransform(toRoot);
     const fill = /url\(\s*["']?#([^"')]+)/.exec(element.getAttribute("fill") || "")?.[1];
-    const image = fill ? pageNode.querySelector(`[id="${CSS.escape(fill)}"] image`) : null;
+    // (A GIF cropped is a window on it, the picture whole in it: compose._gif_window.)
+    const image = fill ? pageNode.querySelector(`[id="${CSS.escape(fill)}"] image`) : element.localName === "svg" ? element.querySelector(":scope > image") : null;
     let drawn;
     if (image) drawn = svgNode("image", { href: image.getAttribute("href") || image.getAttributeNS("http://www.w3.org/1999/xlink", "href"), x, y, width: w, height: h, preserveAspectRatio: "none" });
     else {
@@ -6895,7 +6897,7 @@ export function mount(studio, container) {
       if (!pictures.length) { if (all.length) toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return all.length > 0; }
       const row = at?.clientX !== undefined ? logoRow() : [];
       const where = row.length ? row.filter((item) => (item.box.left + item.box.right) / 2 < at.clientX).length : null;
-      // (A picture no logo can be -- a GIF, say -- is said so, not put in the deck's folder.)
+      // (A picture no logo can be -- a WebP, say -- is said so, not put in the deck's folder.)
       const fit = pictures.filter((file) => logoFile(file.name));
       if (fit.length < pictures.length) notLogo(pictures.find((file) => !logoFile(file.name)).name);
       const paths = [];
@@ -7085,7 +7087,8 @@ export function mount(studio, container) {
     // A drawing copied in another app (Inkscape's) is pasted as its SVG -- its lines and words
     // drawn as lines and words -- not as the picture of it the web view hands over. Flexo's own
     // copy, made in a window of another folder, is what it is, not the picture beside it.
-    const drawing = pastedDrawing(data), own = pastedOwn(data);
+    // (A GIF copied, asked for now: the paste's clipboard is gone once anything is waited for.)
+    const drawing = pastedDrawing(data), own = pastedOwn(data), animated = pastedGif(data);
     if (drawing) {
       event.preventDefault();
       const theirs = await own;
@@ -7093,7 +7096,8 @@ export function mount(studio, container) {
       const drawn = await drawing;
       if (drawn) { await drawings.shapesOf(drawn); return; }
     }
-    if (files.length) { event.preventDefault(); await addFiles(files, at); return; }
+    // A GIF copied plays, as itself: a browser's Copy Image hands over a PNG of its first frame.
+    if (files.length) { event.preventDefault(); const gif = animated && await animated; await addFiles(gif ? [gif] : files, at); return; }
     const text = (data?.getData("text/plain") || "").replace(/\r/g, "").trim();
     // Another app's formatted words keep their bold, italic, code, links and levels, as
     // they do pasted in an editor.
@@ -8896,6 +8900,9 @@ export function mount(studio, container) {
     const shape = aspect ? cropShapeOf(block, aspect) : "original";
     return [shown,
       fileRow(block.image, ["image"], (path) => replacePicture(at, path), "picture.png"),
+      // A GIF: how it plays, Play and Pause, and the frame paper shows (animated.js).
+      ...gifFields({ studio, block, id: pictureOf(blockElement(at.region, at.index))?.id, svg: () => pageNode?.querySelector("svg"),
+        write: (still) => editBlock(at, (b) => setOption(b, "still", still), { label: "Set Still Frame" }), redraw: () => renderInspector() }),
       // A drawing's picture, made its own shapes where it is (editable.js).
       isDrawing(block) && ui.field("Shapes", ui.button("Make Editable", () => editables.one(at), { small: true, icon: "shape", title: "The drawing as its own shapes, where it is (or double-click it)" }),
         { hint: "Its boxes, lines and words, to drag and edit one by one" }),
@@ -9623,7 +9630,7 @@ export function mount(studio, container) {
   const logoChosen = () => Number.isInteger(state.logo) && state.logo < logosOf().length && logosShown();
   // A logo by its file's name, as the person named the file (never the folders it is in).
   const logoName = (path) => String(path ?? "").split("/").pop();
-  const logoFile = (path) => (catalog.logos?.types ?? [".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai"]).some((suffix) => String(path).toLowerCase().endsWith(suffix));
+  const logoFile = (path) => (catalog.logos?.types ?? [".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf", ".ai"]).some((suffix) => String(path).toLowerCase().endsWith(suffix));
   // The deck's logos changed, as one step named `label`; `chosen`: the logo chosen after it,
   // and before it (undone, the one chosen then is chosen again: chooseChanged).
   // (Until the slide is drawn again with the change, the drawing's logos are the old row's: the
@@ -9677,11 +9684,13 @@ export function mount(studio, container) {
       if (everywhere) deck.logos_on = "every";
     }, paths.length === 1 ? `${verb} Logo` : `${verb} ${paths.length} Logos`, { chosen: where + paths.length - 1 });
     const done = pasted ? "pasted" : "added";
-    if (everywhere) toast(`${paths.length === 1 ? "Logo" : `${paths.length} logos`} ${done}, shown on every slide: this deck has no title slide.`, { icon: "image", seconds: 5 });
-    else if (said) toast(paths.length === 1 ? `${pasted ? "Pasted" : "Added"} as a logo` : `${paths.length} pictures ${done} as logos`, { icon: "image" });
+    // (A GIF holds still as a logo, on every slide: compose._logos.)
+    const still = paths.some((path) => /\.gif$/i.test(path)) ? " A GIF logo holds still, at its first frame." : "";
+    if (everywhere) toast(`${paths.length === 1 ? "Logo" : `${paths.length} logos`} ${done}, shown on every slide: this deck has no title slide.${still}`, { icon: "image", seconds: 5 });
+    else if (said || still) toast(`${paths.length === 1 ? `${pasted ? "Pasted" : "Added"} as a logo` : `${paths.length} pictures ${done} as logos`}${still ? `.${still}` : ""}`, { icon: "image", seconds: still ? 5 : undefined });
   }
   // A file that is no logo, said so.
-  const notLogo = (path) => toast(`A logo is a PNG, JPEG, SVG or PDF picture: ${logoName(path)} is none of these.`, { icon: "info", seconds: 5 });
+  const notLogo = (path) => toast(`A logo is a PNG, JPEG, GIF, SVG or PDF picture: ${logoName(path)} is none of these.`, { icon: "info", seconds: 5 });
   function deleteLogo(index, label = "Delete Logo") {
     if (awayFrom("delete logos") || index >= logosOf().length) return;
     editLogos((list) => list.splice(index, 1), label, { chosen: null, was: index });

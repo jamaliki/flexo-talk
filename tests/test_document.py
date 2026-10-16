@@ -3250,12 +3250,12 @@ def test_a_deck_s_logos_are_read_beside_it_and_written_back_as_given(tmp_path: P
     ({"logos_on": "all"}, "logos_on must be title (the title slide) or every (every slide), not 'all'."),
     ({"logo_height": 500}, "logo_height must be between 12 and 120, not 500."),
     ({"logo_height": "big"}, "logo_height must be a number, such as 40 (points), not 'big'."),
-    ({"logos": ["logo.gif"]}, "A logo must be a PNG, JPEG, SVG or PDF picture: logo.gif is none of these."),
-    ({"logos": {"a": "b.png"}}, "logos must be a list of picture files (PNG, JPEG, SVG or PDF), such as "
+    ({"logos": ["logo.tiff"]}, "A logo must be a PNG, JPEG, GIF, SVG or PDF picture: logo.tiff is none of these."),
+    ({"logos": {"a": "b.png"}}, "logos must be a list of picture files (PNG, JPEG, GIF, SVG or PDF), such as "
                                 "[logos/institute.png], not {'a': 'b.png'}."),
 ])
 def test_a_deck_s_logos_said_wrong_are_said_where_they_are(tmp_path: Path, deck: dict, said: str) -> None:
-    (tmp_path / "logo.gif").write_bytes(b"GIF89a")
+    (tmp_path / "logo.tiff").write_bytes(b"II*\x00")
     with pytest.raises(DeckDocumentError) as raised:
         deck_from_document({"deck": deck, "slides": []}, tmp_path)
     assert raised.value.where == f"deck.{next(iter(deck))}"

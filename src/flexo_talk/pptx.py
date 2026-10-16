@@ -697,9 +697,10 @@ def _adjustments(corners: list[tuple[float, float]], width: float, height: float
 
 
 def slide_pictures(slide) -> Pictures:
-    """A ``Pictures`` for a python-pptx slide: PNG and JPEG as they are; an SVG
-    as a PNG drawn at print resolution with the SVG beside it, which PowerPoint
-    shows (and can turn into shapes) and other programs replace by the PNG."""
+    """A ``Pictures`` for a python-pptx slide: PNG, JPEG and GIF as they are (a GIF every
+    frame of it, which PowerPoint and Keynote play); an SVG as a PNG drawn at print
+    resolution with the SVG beside it, which PowerPoint shows (and can turn into shapes)
+    and other programs replace by the PNG."""
 
     from io import BytesIO
 
@@ -762,9 +763,13 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
             f'r:embed="{svg_id}"/></a:ext></a:extLst>'
         )
         x, y, width, height = image.x, image.y, image.width, image.height
-    elif mime in {"image/png", "image/jpeg"}:
+    elif mime in {"image/png", "image/jpeg", "image/gif"}:
+        from flexo.animated import gif_size
+
+        # (A GIF as itself, every frame: it plays in the slideshow, as in Keynote's.)
         embed = ids.pictures(data, mime)
-        size = struct.unpack(">II", data[16:24]) if mime == "image/png" else _jpeg_size(data)
+        size = (struct.unpack(">II", data[16:24]) if mime == "image/png"
+                else gif_size(data) if mime == "image/gif" else _jpeg_size(data))
         x, y, width, height = image.placed(*size) if size else (image.x, image.y, image.width, image.height)
     else:
         return None

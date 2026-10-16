@@ -235,8 +235,9 @@ Any slide (title and section slides too) can take `background=`: a colour
 background the slide's words and accents are set light (`dark=` overrides).
 
 A deck's **logos** -- an institution's, its funders' -- are the deck's, not a slide's:
-`Deck(logos=["logos/institute.png", "logos/funder.svg"])`, PNG, JPEG, SVG or PDF
-pictures in the order they stand. On a title slide they stand in a row along its
+`Deck(logos=["logos/institute.png", "logos/funder.svg"])`, PNG, JPEG, GIF, SVG or PDF
+pictures in the order they stand (a GIF holds still, at its first frame: a logo is on
+every slide, and one moving there would draw the eye from what each slide shows). On a title slide they stand in a row along its
 foot, centred and evenly spaced, each `logo_height` points tall (40 unless set) in its
 own proportions -- a very wide one narrowed until the row fits -- and the title, subtitle
 and byline make room above them. With `logos_on="every"` the other slides carry them
@@ -549,7 +550,16 @@ all of LaTeX that flexo reads, in the deck's maths font -- and drawn as shapes. 
 is the same settings as a dict). An SVG saved by any program --
 `slide.image("plot.svg")` -- is placed as vectors the same way when it holds
 only what flexo draws exactly (paths, text, clips, pictures); otherwise, and for
-PNG and JPEG files, it is a picture. An Illustrator file or a PDF --
+PNG and JPEG files, it is a picture. A GIF is a picture that plays: sized by its pixels,
+cropped and masked as any picture is, and playing wherever a screen shows it -- the
+studio, presenting, the slide's SVG in a browser, and PowerPoint and Keynote, which are
+given the GIF itself. A PDF or a PNG shows one frame of it: the first, or the one `still`
+names, counted from 1 (`slide.image("cells.gif", still=12)`; `still: 12` in a document).
+In the studio its panel says how it plays (its frames and their seconds), takes its
+**Still Frame**, and has **Pause** and **Play**, which hold it at that frame on the slide
+while it is edited and play it again; presenting always plays it. A GIF pasted (copied
+in a browser, Safari, Preview or the Finder) or dropped arrives as the GIF it is.
+An Illustrator file or a PDF --
 `slide.image("figure.ai")`, `slide.image("paper.pdf#2")` -- is read back as the
 drawing it is: its shapes become freeforms, its words their glyphs' outlines,
 its photographs pictures, and a gradient or a curved mask a picture of that part
