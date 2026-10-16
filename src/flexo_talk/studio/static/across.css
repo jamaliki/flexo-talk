@@ -1,0 +1,9 @@
+/* The slides either side of the one shown (across.js): drawn faintly on it, over its drawing and
+   under its frames and handles, never taking a click -- the slide before in its own colours, the
+   one after tinted. Kept out of sight when not shown, to be caught at all the same. */
+.slide-page > .onion { position: absolute; inset: 0; pointer-events: none; visibility: hidden; border-radius: 3px; overflow: hidden; }
+.slide-page > .onion.shown { visibility: visible; opacity: 0.32; mix-blend-mode: multiply; }
+.slide-page > .onion.shown.dark { mix-blend-mode: screen; opacity: 0.4; }
+.slide-page > .onion.after.shown { opacity: 0.26; filter: sepia(1) saturate(4) hue-rotate(195deg); }
+.slide-zoom .neighbours-next { min-width: 0; padding: 0 7px; font-size: 12px; }
+.slide-zoom .neighbours-next[hidden] { display: none; }

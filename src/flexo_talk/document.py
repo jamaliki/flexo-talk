@@ -83,6 +83,11 @@ A figure block may show its figure differently on each slide, nothing in it move
 ``hide``, ``dim`` and ``highlight`` list the figure's parts left out, drawn faint, or
 kept while the rest is drawn faint; ``stages`` lists the clicks its parts appear on
 (``stages: [[encoder, decoder], [loss]]``: two parts on the first click, one on the next).
+A visualisation that changes a little from slide to slide -- a part added, a label changed,
+each slide's its own figure -- is drawn as one by giving its blocks one ``frame``: figures
+naming the same frame are laid out with each other's parts (those a slide's lacks kept room
+for, unseen), the same way, at one scale and from one top left, so what they share stays
+where it is (``{figure: figures/step-2.yaml, frame: smc}``; ``flexo_talk.framing``).
 A figure is drawn in the deck's theme; its own ``spacing``, ``shape_padding``,
 ``line_width`` and ``head_size`` (in its ``figure:``, each a share of the theme's) make it
 tighter, or its arrowheads smaller, than the deck's other figures: ``spacing: 0.6``.
@@ -242,7 +247,7 @@ several of them (``figures``, named from their blocks as ``'#name'``)."""
 BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
     "text": ("size", "align", "muted", "colour", "width"),
-    "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight", "stages"),
+    "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight", "stages", "frame"),
     "image": ("width", "crop", "mask", "description", "caption", "font", "texts", "colours", "still"),
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),

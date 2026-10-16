@@ -40,6 +40,7 @@ import { h, ui, toast } from "/static/studio/studio.js";
 import { alignTools, nearer, drawSpacing, sizeCatch } from "/static/studio/aligntools.js";
 import * as Align from "/static/studio/aligning.js";
 import * as Snap from "/static/studio/snapping.js";
+import * as Beside from "/static/studio/beside.js";
 import * as F from "/static/studio/freeform.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import * as P from "/static/kinds/deck/places.js";
@@ -209,10 +210,13 @@ export function placing(ctx) {
     if (layer.parentNode !== node) node.append(layer);
     if (tip.parentNode !== node) node.append(tip);
   }
-  function guide(axis, at) {
+  function guide(axis, at, from = Beside.besideAt(gesture?.targets, axis, at)) {
     const [x0, y0, width, height] = ctx.frame(), px = 1 / unit();
-    guides.append(axis === "x" ? S("line", { x1: at, y1: y0, x2: at, y2: y0 + height, class: "shape-guide", "stroke-width": px })
-      : S("line", { x1: x0, y1: at, x2: x0 + width, y2: at, class: "shape-guide", "stroke-width": px }));
+    // (One on the slide before or after, in a colour of its own, with its box: beside.js.)
+    const kind = from ? "shape-guide beside" : "shape-guide";
+    guides.append(axis === "x" ? S("line", { x1: at, y1: y0, x2: at, y2: y0 + height, class: kind, "stroke-width": px })
+      : S("line", { x1: x0, y1: at, x2: x0 + width, y2: at, class: kind, "stroke-width": px }));
+    if (from) guides.append(S("rect", { x: from[0], y: from[1], width: from[2] - from[0], height: from[3] - from[1], class: "shape-beside", "stroke-width": px }));
   }
   function say(text, event) {
     const node = ctx.pageNode();
@@ -242,7 +246,8 @@ export function placing(ctx) {
       if (!spec || movingShapes.includes(index)) return;
       add(shapes.boxOf(index), F.family(spec.kind) !== "line");
     });
-    return { xs, ys, boxes };
+    // And what is on the slides before and after it (across.js), caught at too.
+    return Beside.withBeside({ xs, ys, boxes }, ctx.beside?.());
   }
   // The nearest of `values` to any of `mine` within reach: how far to move to it, and where.
   function catchAt(mine, values) {
@@ -557,6 +562,10 @@ export function placing(ctx) {
     run.at = Date.now();
     nudged = run;
     const before = chosen(), shapesBefore = shapes.chosen();
+    // Stopped where it would pass a guide on the slide before or after, snapping on (beside.js).
+    const reach = (boxes) => (boxes.length ? [Math.min(...boxes.map((b) => b[0])), Math.min(...boxes.map((b) => b[1])), Math.max(...boxes.map((b) => b[2])), Math.max(...boxes.map((b) => b[3]))] : null);
+    const caught = Snap.snapping() && ctx.beside ? Beside.nudgeCaught(reach([...objects.map(boxOf), ...drawn.map((index) => shapes.boxOf(index))].filter(Boolean)), dx, dy, ctx.beside()) : null;
+    if (caught) ({ dx, dy } = caught);
     const moves = new Map(objects.map((pick) => [keyOf(pick), { dx, dy }]));
     const label = drawn.length ? `Move ${[counted(objects.length, "Object"), counted(drawn.length, "Shape")].join(" and ")}` : `Move ${called(objects)}`;
     commit(moves, label, { picks: objects, merge: `object-nudge-${run.id}`,
@@ -564,6 +573,13 @@ export function placing(ctx) {
     if (drawn.length) ctx.markMixed({ own: before, shapes: shapesBefore }, { own: chosen(), shapes: shapes.chosen() });
     else if (before.length > 1) ctx.markMany(before, before);
     ctx.render();
+    if (caught?.guides.length) {
+      attach();
+      guides.replaceChildren();
+      for (const line of caught.guides) guide(line.axis, line.at, line.box);
+      clearTimeout(nudge.shown);
+      nudge.shown = setTimeout(() => { if (!gesture) guides.replaceChildren(); }, 900);
+    }
     return true;
   }
 
