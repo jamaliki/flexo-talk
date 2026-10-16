@@ -18,7 +18,8 @@
 //   handles (words wrapped again in their new width as they are, the rest in proportion),
 //   catching at the slide's edges and middles and at the shapes' and other objects', and where
 //   it is as far from its neighbours as they are apart, as a shape does (the magnet, ⌘ free:
-//   snapping.js). An object in line is dragged between places as ever; ⌘ held as it starts
+//   snapping.js) -- or, snapping to the grid, at the grid's lines and the slide's layout's
+//   (grid.js). An object in line is dragged between places as ever; ⌘ held as it starts
 //   takes it out of line, to be placed where it is let go (⌘ let go, it catches again).
 // - The arrows nudge placed objects (⇧: ten points), one step however many presses; those in
 //   line keep the arrows for going from one object to the next.
@@ -34,13 +35,15 @@
 // (a place's width, in the slide's points), mover(element) (a group round a drawing, moved by
 // its style), markMany(before, after), markMixed(before, after) (what an undo chooses again),
 // mixedOn(), render(), renderInspector(), showArrange(), swallowRelease(held), away(what),
-// undoNote(text, options), hideChosen(on).
+// undoNote(text, options), hideChosen(on), beside() (the slides either side: beside.js), grid()
+// (the slide's grid: grid.js).
 
 import { h, ui, toast } from "/static/studio/studio.js";
 import { alignTools, nearer, drawSpacing, sizeCatch } from "/static/studio/aligntools.js";
 import * as Align from "/static/studio/aligning.js";
 import * as Snap from "/static/studio/snapping.js";
 import * as Beside from "/static/studio/beside.js";
+import * as Grid from "/static/studio/grid.js";
 import * as F from "/static/studio/freeform.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import * as P from "/static/kinds/deck/places.js";
@@ -228,8 +231,10 @@ export function placing(ctx) {
     tip.style.top = `${event.clientY - outer.top + 16}px`;
   }
   // What a drag catches at: the slide's edges and middles, and the edges and middles of the
-  // shapes and objects not moving -- each box, but lines, spaced among (aligning.js).
+  // shapes and objects not moving -- each box, but lines, spaced among (aligning.js); or,
+  // snapping to the grid, its lines (grid.js).
   function targetsFor(movingObjects, movingShapes) {
+    if (Snap.toGrid()) return Grid.targetsOf(ctx.frame(), ctx.grid?.());
     const [x0, y0, width, height] = ctx.frame();
     const xs = [x0, x0 + width / 2, x0 + width], ys = [y0, y0 + height / 2, y0 + height], boxes = [];
     const add = (box, spaced = true) => {
@@ -250,15 +255,7 @@ export function placing(ctx) {
     return Beside.withBeside({ xs, ys, boxes }, ctx.beside?.());
   }
   // The nearest of `values` to any of `mine` within reach: how far to move to it, and where.
-  function catchAt(mine, values) {
-    let best = null;
-    const reach = NEAR / unit();
-    for (const own of mine) for (const value of values) {
-      const gap = value - own;
-      if (Math.abs(gap) <= reach && (!best || Math.abs(gap) < Math.abs(best.gap))) best = { gap, at: value };
-    }
-    return best;
-  }
+  const catchAt = (mine, values) => Snap.nearest(mine, values, NEAR / unit());
 
   // -- dragged --
 
@@ -564,7 +561,7 @@ export function placing(ctx) {
     const before = chosen(), shapesBefore = shapes.chosen();
     // Stopped where it would pass a guide on the slide before or after, snapping on (beside.js).
     const reach = (boxes) => (boxes.length ? [Math.min(...boxes.map((b) => b[0])), Math.min(...boxes.map((b) => b[1])), Math.max(...boxes.map((b) => b[2])), Math.max(...boxes.map((b) => b[3]))] : null);
-    const caught = Snap.snapping() && ctx.beside ? Beside.nudgeCaught(reach([...objects.map(boxOf), ...drawn.map((index) => shapes.boxOf(index))].filter(Boolean)), dx, dy, ctx.beside()) : null;
+    const caught = Snap.toGuides() && ctx.beside ? Beside.nudgeCaught(reach([...objects.map(boxOf), ...drawn.map((index) => shapes.boxOf(index))].filter(Boolean)), dx, dy, ctx.beside()) : null;
     if (caught) ({ dx, dy } = caught);
     const moves = new Map(objects.map((pick) => [keyOf(pick), { dx, dy }]));
     const label = drawn.length ? `Move ${[counted(objects.length, "Object"), counted(drawn.length, "Shape")].join(" and ")}` : `Move ${called(objects)}`;
@@ -744,6 +741,8 @@ export function placing(ctx) {
     reveal: () => arranging.reveal(), align: (side) => arranging.align(side),
     showMoves: (moves) => showMoves(moves ? moves.map(({ pick, dx, dy }) => ({ key: keyOf(pick), dx, dy })) : null),
     busy: () => Boolean(gesture?.started),
+    // (Which, for the help bar's keys: "move" or "size".)
+    dragging: () => (gesture?.started ? gesture.type : null),
     // (A press on one of them, held: they are carried together if it is dragged.)
     pressing: () => Boolean(gesture && gesture.type === "move" && gesture.objects.length > 1),
     any: () => chosen().length > 0,

@@ -118,6 +118,9 @@ class _Canvas:
                 "data-flexo-talk-slide": str(slide.index),
             },
         )
+        if PLACEHOLDERS.get():
+            # (While edited: the theme's margin, for the studio's grid to draw its layout by.)
+            self.root.set("data-flexo-margin", number(style.margin))
         self.defs = element(self.root, "defs", id=f"{slide.id}.defs")
         background = layer(self.root, "layer.background", "Background")
         page = deck.background
