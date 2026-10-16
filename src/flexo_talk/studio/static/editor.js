@@ -1234,7 +1234,9 @@ export function mount(studio, container) {
     ({ icon: glyph || "export", label, hint, run: () => studio.exportFiles([format]) })),
   // (The name the files are given: talk.pptx, talk.pdf.)
   "-", { icon: "pencil", label: "Export File Name…", hint: `${doc().deck?.id || "talk"}.pptx, ${doc().deck?.id || "talk"}.pdf`, run: () => design.fileName() }], { align: "end" }), { kind: "ghost", icon: "export" });
-  studio.actions.append(presentButton, exportButton, h("span.sep"), formatButton, arrangeButton, designButton);
+  // Snap (%: the shapes', and objects' sizes -- snapping.js) and Grid (#: gridpaper.js), beside
+  // Arrange.
+  studio.actions.append(presentButton, exportButton, h("span.sep"), magnetButton(), gridButton(), h("span.sep"), formatButton, arrangeButton, designButton);
   const showable = () => {
     const none = !slides().length;
     presentButton.disabled = exportButton.disabled = none;
@@ -2159,8 +2161,8 @@ export function mount(studio, container) {
     ui.button("", () => zoomIn(), { kind: "ghost", icon: "plus", small: true, title: "Zoom In (⌘+)" }),
     ui.button("Fit", () => fitSlide(), { kind: "ghost", small: true, title: "Fit Slide (⇧⌘0)" }),
     ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }),
-    // Snapping (%): the shapes', and objects' sizes (snapping.js); the grid (#: gridpaper.js).
-    h("span.zoom-sep"), magnetButton(), gridButton(), ...across.zoomButtons());
+    // The slides either side (across.js).
+    ...across.zoomButtons());
   // Clicked, a zoom button does not keep the keys (as a Mac window's toolbar buttons don't).
   for (const button of zoomBar.querySelectorAll("button")) button.addEventListener("mousedown", (event) => event.preventDefault());
   function showZoom() {
