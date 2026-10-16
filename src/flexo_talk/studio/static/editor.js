@@ -28,6 +28,7 @@ import { clipsOf } from "/static/studio/mixing.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
 import { magnetButton } from "/static/studio/magnet.js";
+import { gridButton, gridCommand } from "/static/studio/gridpaper.js";
 import { acrossSlides } from "/static/kinds/deck/across.js";
 import * as Snap from "/static/studio/snapping.js";
 import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
@@ -954,6 +955,31 @@ export function mount(studio, container) {
   const slideView = () => { const box = pageNode?.querySelector(":scope > svg")?.viewBox?.baseVal; return box && box.width ? { width: box.width, height: box.height } : { width: 960, height: 540 }; };
   const shapeScale = () => slideView().width / SHAPE_FRAME;
   const everyShape = (picks, key) => picks.every((index) => slideAt()?.shapes?.[index]?.[key]);
+  // The slide's grid (grid.js), in the shapes' units: squares of 12 (80 across), every fifth line
+  // darker (16 by 9 on a wide slide); and its layout -- the theme's margins, across the slide,
+  // and the places of the slide's layout, as the slide drew them (compose's data-flexo-margin,
+  // and each place's data-flexo-box, in its parent's units).
+  function slideGrid() {
+    const svg = pageNode?.querySelector(":scope > svg"), view = slideView(), k = 1 / shapeScale();
+    const at = (value) => Math.round(value * k * 100) / 100;
+    const layout = { xs: [], ys: [], boxes: [] };
+    const margin = Number(svg?.getAttribute("data-flexo-margin"));
+    if (margin > 0 && 2 * margin < Math.min(view.width, view.height)) {
+      layout.xs.push(at(margin), at(view.width - margin));
+      layout.ys.push(at(margin), at(view.height - margin));
+    }
+    const back = svg?.getScreenCTM?.()?.inverse();
+    for (const region of regionsOf(slideAt())) {
+      const group = pageNode?.querySelector(`[id="slide${state.slide + 1}.${region.svg}"]`);
+      const values = (group?.getAttribute("data-flexo-box") || "").split(" ").map(Number);
+      const matrix = back && group?.parentNode?.getScreenCTM?.();
+      if (values.length !== 4 || values.some(Number.isNaN) || !matrix) continue;
+      const to = back.multiply(matrix), [x, y, width, height] = values;
+      const a = new DOMPoint(x, y).matrixTransform(to), b = new DOMPoint(x + width, y + height).matrixTransform(to);
+      layout.boxes.push([at(Math.min(a.x, b.x)), at(Math.min(a.y, b.y)), at(Math.max(a.x, b.x)), at(Math.max(a.y, b.y))]);
+    }
+    return { step: 12, major: 5, layout };
+  }
   const freeShapes = shapeEditor({
     studio, center, stage, catalog: studio.catalog?.shapes,
     page: () => state.slide,
@@ -976,6 +1002,8 @@ export function mount(studio, container) {
     glueKey: "object",
     // What is on the slides either side, caught at too (across.js).
     beside: () => across.beside(),
+    // The slide's grid, its margins and places (gridpaper.js).
+    grid: () => slideGrid(),
     objects: (toFrame) => {
       const found = new Map();
       for (const region of regionsDrawn()) {
@@ -1136,6 +1164,7 @@ export function mount(studio, container) {
     hideChosen: (on) => { chosen.hidden = on || chosen.hidden; if (!on) placeChosen(); },
     chooseOne: (pick) => { allChosen = null; focusBlock(pick.region, pick.index); },
     beside: () => across.beside(),
+    grid: () => slideGrid(),
   });
   // The slides either side: shown faintly, caught at, matched on (across.js).
   const across = acrossSlides({
@@ -2130,8 +2159,8 @@ export function mount(studio, container) {
     ui.button("", () => zoomIn(), { kind: "ghost", icon: "plus", small: true, title: "Zoom In (⌘+)" }),
     ui.button("Fit", () => fitSlide(), { kind: "ghost", small: true, title: "Fit Slide (⇧⌘0)" }),
     ui.button("1:1", () => actualSize(), { kind: "ghost", small: true, title: "Actual Size (⌘0)" }),
-    // Snapping, on or off (%): the shapes', and objects' sizes (snapping.js).
-    h("span.zoom-sep"), magnetButton(), ...across.zoomButtons());
+    // Snapping (%): the shapes', and objects' sizes (snapping.js); the grid (#: gridpaper.js).
+    h("span.zoom-sep"), magnetButton(), gridButton(), ...across.zoomButtons());
   // Clicked, a zoom button does not keep the keys (as a Mac window's toolbar buttons don't).
   for (const button of zoomBar.querySelectorAll("button")) button.addEventListener("mousedown", (event) => event.preventDefault());
   function showZoom() {
@@ -10314,6 +10343,8 @@ export function mount(studio, container) {
     design.command(),
     // The slides either side, faintly; and what is chosen matched on them (across.js).
     ...(slides().length ? across.viewCommands() : []),
+    // The grid over the slide, its layout in red (gridpaper.js).
+    ...(slides().length ? [gridCommand()] : []),
     ...(typingNow() ? [] : across.commands()),
     // View › Zoom, as Keynote's: by its steps, a point to a point, or fitted to the stage.
     ...(slides().length ? [

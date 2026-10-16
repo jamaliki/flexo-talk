@@ -384,10 +384,17 @@ copy), sized by its handles (⇧ its proportions kept, ⌥ about its middle), tu
 handle over it (⇧ by 15°); a line by its ends, let go on a shape or an object to glue
 them, and a curve by its middle; a corner, a tail or a star's points by their own
 handles. Everything catches at the slide's edges and middles and at the other shapes' and
-objects', a guide drawn (⌘: none). The magnet in the zoom bar -- or %, or the Mac app's
-View › Snap to Guides and Objects -- turns that off: nothing catches, and a line's end let
-go on a shape stays a point of its own (one glued before stays glued), ⌘ held catching and
-gluing for that drag. The studio remembers it, for every deck and figure. The arrows nudge
+objects', a guide drawn (⌘: none). **#** (the toggle beside the magnet in the zoom bar, or
+**View › Show Grid**) draws a grid over the slide, in the studio alone: graph paper in
+non-photo blue, squares of 12 points of the 960 across (80 by 45 on a wide slide), every fifth
+line darker and the middles darker still, with the slide's layout over it in red -- the theme's
+margins across the whole slide, and the places of the slide's layout outlined. The magnet -- or
+%, or the Mac app's View › Snap to Guides and Objects and Snap to Grid -- goes from guides to
+the grid to off: snapping to the grid, what is dragged catches at the grid's lines instead, its
+edges at every square's, its middle too at the layout's lines and the slide's middles; off,
+nothing catches, and a line's end let go on a shape stays a point of its own (one glued before
+stays glued), ⌘ held catching and gluing for that drag. The studio remembers both, for every
+deck and figure. The arrows nudge
 (⇧: ten points), a double-click types its words in it, ⇧-click or a band chooses several --
 to align, distribute, group (⌘G), stack (⇧⌘F, ⇧⌘B), lock (⌘L), copy and paste -- and the
 inspector restyles them. The slide's objects and its shapes are one choice, as in Keynote:

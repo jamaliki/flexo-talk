@@ -294,6 +294,18 @@ def test_the_studio_s_drawing_says_what_sizing_an_object_needs(tmp_path: Path) -
     assert "data-flexo-span" not in exported and "data-flexo-least" not in exported
 
 
+def test_the_studio_s_drawing_says_the_theme_s_margin_for_its_grid(tmp_path: Path) -> None:
+    """While edited, a slide says its theme's margin, which the studio's grid draws its layout
+    by -- and nothing of it is exported."""
+
+    for said, margin in (({}, "48"), ({"style": {"margin": 60}}, "60")):
+        document = {"deck": said, "slides": [{"title": "T", "body": [{"text": "Words"}]}]}
+        deck = deck_from_document(document, tmp_path)
+        root = re.search(r"<svg[^>]*>", _editing(deck)).group(0)
+        assert f'data-flexo-margin="{margin}"' in root
+        assert "data-flexo-margin" not in render_slide(deck, deck.slides[0]).svg
+
+
 def test_a_plot_given_a_width_is_converted_to_a_picture_that_wide(tmp_path: Path) -> None:
     import yaml
 
