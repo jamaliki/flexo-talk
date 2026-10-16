@@ -1,14 +1,14 @@
-// The deck's Design bar, as PowerPoint's Design tab: across the window under the toolbar, its
-// theme gallery -- this deck's title slide (else its first) drawn in each theme -- and beside
-// it the deck's colours, fonts, look, sizes, background, slide size, logos and footer, each a
-// pull-down. Pointed at, a theme, a palette, a pair of fonts, a look or a background is shown
-// on the slide shown as it would be; chosen, it is one step in the history. It stays open as
-// the slide is edited, as a ribbon's tab does: the toolbar's Design (⇧⌘D, View › Show Design)
-// shows and hides it, and Format or Arrange pressed puts it away for the inspector's tab.
-// What it needs of the editor (editor.js) comes in `host`.
+// The deck's Design bar: one low row under the toolbar of pop-up buttons, each naming what is
+// in use -- Theme, Colours, Fonts, Sizes, Background, Slide Size -- and More (the look, the
+// logos, the footer, Customise…). Theme opens a grid of this deck's title slide (else its
+// first) drawn in each theme. Only in an open menu, and only a theme or a palette, is what the
+// pointer is over shown on the slide as it would be, as PowerPoint does; chosen, it is one step
+// in the history. It stays open as the slide is edited, as a ribbon's tab does: the toolbar's
+// Design (⇧⌘D, View › Show Design) shows and hides it, and Format or Arrange pressed puts it
+// away for the inspector's tab. What it needs of the editor (editor.js) comes in `host`.
 
 import { h, clear, icon, ui, dialog, themesFor, themeName, suggestedFonts } from "/static/studio/studio.js";
-import { ribbonBar, ribbonSep, ribbonStack, pull, closeDrop, dropOpen, redrawDrop, previewer, gallery } from "/static/studio/ribbon.js";
+import { ribbonBar, ribbonSep, pull, drop, closeDrop, dropOpen, redrawDrop, previewer, gallery } from "/static/studio/ribbon.js";
 import { SLIDE_SIZES, SIZE_RANGE, slideSize, sized, gallerySlide, withVariant, applyVariant, hasVariant, keyOf, backgroundOf, BACKGROUNDS, fontChoices } from "/static/kinds/deck/designs.js";
 
 if (!document.querySelector('link[href="/static/kinds/deck/designbar.css"]')) {
@@ -34,8 +34,10 @@ export function designBar(host) {
   const setOption = (target, key, value, fallback) => {
     if (value === null || value === undefined || value === "" || value === fallback) delete target[key]; else target[key] = value;
   };
-  // A design chosen: one step, named; what is shown of it drawn again.
-  const choose = (variant, label) => {
+  // A design chosen: one step, named; what is shown of it drawn again. A choice from a menu of
+  // them closes the menu (`close`), as a pop-up's does.
+  const choose = (variant, label, { close = false } = {}) => {
+    if (close) closeDrop(true);
     if (hasVariant(deck(), variant)) return;
     previews.hold();
     edit((d) => applyVariant(d, variant), { label });
@@ -55,7 +57,8 @@ export function designBar(host) {
     const found = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "previews", slide, variants, placeholders } });
     return found?.previews || [];
   };
-  // What the pointer is over in a panel, shown so: `show(variant)` while over it, none once left.
+  // What the pointer is over in an open menu (Theme's, Colours'), shown so: `show(variant)` while
+  // over it, none once left or the menu closes.
   const shows = (element, variant) => {
     element.addEventListener("pointerenter", () => previews.show(variant));
     element.addEventListener("focus", () => { if (element.matches(":focus-visible")) previews.show(variant); });
@@ -81,7 +84,7 @@ export function designBar(host) {
     // (What a theme's thumbnail shows: the gallery's slide, and the rest of the deck's design.)
     version: (item) => keyOf(item.value, gallerySlide(doc().slides), doc().slides?.[gallerySlide(doc().slides)], { ...deck(), theme: undefined }),
     thumbs: (items) => ask(gallerySlide(doc().slides), items.map((item) => ({ theme: item.value }))),
-    pick: (item) => { if (item.card.problem) return; choose({ theme: item.value === "paper" ? null : item.value }, "Change Theme"); },
+    pick: (item) => { if (item.card.problem) return; choose({ theme: item.value === "paper" ? null : item.value }, "Change Theme", { close: true }); },
     preview: (item) => previews.show(item && !item.card.problem ? { theme: item.value === "paper" ? null : item.value } : null),
   });
   const loadThemes = async () => {
@@ -90,15 +93,15 @@ export function designBar(host) {
     const named = cards.some((card) => card.value === themeOf()) ? [] : [{ value: themeOf(), title: themeOf(), source: "folder" }];
     themes.set([...named, ...cards].map((card) => ({ value: card.value, card })));
     themes.reveal();
+    faces();
   };
-  const themeButton = ui.button("Customise…", () => {}, { kind: "ghost", small: true });
-  themeButton.classList.add("ribbon-button");
-  const renderThemeButton = () => {
-    const file = typeof deck().theme === "string" && /\.(ya?ml|json)$/i.test(deck().theme);
-    clear(themeButton, icon(file ? "external" : "pencil"), h("span.btn-label", {}, file ? "Edit Theme" : "Customise…"));
-    themeButton.title = file ? "Edit Theme" : "Customise Theme…";
-    themeButton.onclick = () => { closeDrop(); if (file) studio.workspace.open(studio.folder() + deck().theme); else host.customise(); };
-  };
+  const unpreview = () => previews.show(null);
+  const themePull = pull({ label: "Theme", title: "Theme", panel: () => [themes.node], className: "theme-pull",
+    onOpen: () => { loadThemes(); requestAnimationFrame(() => themes.reveal()); }, onClose: unpreview });
+  const cardOf = () => cards.find((card) => card.value === themeOf());
+  // The theme's page in small, with its first colours: the Theme button's face.
+  const chip = (card) => h("span.ribbon-chip", { style: { background: card?.canvas || "#fff" } },
+    [...new Set((card?.colours || []).map((colour) => String(colour).toLowerCase()))].slice(0, 3).map((colour) => h("i", { style: { background: colour } })));
 
   // -- the pull-downs --
   const strip = (colours) => h("span.palette-strip", {}, (colours || []).slice(0, 5).map((colour) => h("span", { style: { background: colour } })));
@@ -108,14 +111,14 @@ export function designBar(host) {
   const ownName = () => own() && Object.keys(catalog.palettes || {}).find((name) => colourSet(catalog.palettes[name]) === colourSet(own()));
   const paletteName = (name) => (name === "default" ? ownName() || "Theme’s Own" : name || "Custom");
   const coloursOf = (name) => (name === "default" ? own() : name === paletteNow() && studio.info?.order?.length ? studio.info.order : catalog.palettes?.[name]);
-  const colours = pull({ label: "Colours", title: "Colours", panel: () => coloursPanel() });
+  const colours = pull({ label: "Colours", title: "Colours", panel: () => coloursPanel(), onClose: unpreview });
   function coloursPanel() {
     const current = paletteNow();
     const names = [["default"], ...Object.keys(catalog.palettes || {}).filter((name) => name !== ownName()).map((name) => [name])];
     const list = unshown(h("div.palette-choices", { role: "group", "aria-label": "Palette" }, names.map(([name]) => {
       const variant = { palette: name === "default" ? null : name };
       return shows(h(`button.palette-choice${current === name ? ".on" : ""}`, { type: "button", "aria-pressed": String(current === name),
-        onclick: () => choose(variant, "Change Palette") }, strip(coloursOf(name)), h("span", {}, paletteName(name))), variant);
+        onclick: () => choose(variant, "Change Palette", { close: true }) }, strip(coloursOf(name)), h("span", {}, paletteName(name))), variant);
     })));
     return [h("div.drop-title", {}, "Palette"), list, h("div.drop-title", {}, "Text"), h("div.drop-body", {}, styleRows(STYLE_COLOUR))];
   }
@@ -130,16 +133,16 @@ export function designBar(host) {
   function fontsPanel() {
     const now = fontNow(), theme = families();
     const face = (name) => (name ? `"${name}", var(--font)` : "inherit");
-    const list = unshown(h("div.drop-choices", { role: "group", "aria-label": "Fonts" }, fontPicks().map((choice) => {
+    const list = h("div.drop-choices", { role: "group", "aria-label": "Fonts" }, fontPicks().map((choice) => {
       const title = choice.title ?? (theme.theme_title || theme.theme), body = choice.body ?? theme.theme;
       const name = choice.value ? (choice.title === choice.body ? choice.title : `${choice.title} and ${choice.body}`) : `Theme (${title === body ? body : `${title} and ${body}`})`;
-      return shows(h(`button.drop-choice${now === choice.value ? ".on" : ""}`, { type: "button", title: name, "aria-label": name, "aria-pressed": String(now === choice.value),
-        onclick: () => choose(choice.variant, "Change Font") },
+      return h(`button.drop-choice${now === choice.value ? ".on" : ""}`, { type: "button", title: name, "aria-label": name, "aria-pressed": String(now === choice.value),
+        onclick: () => choose(choice.variant, "Change Font", { close: true }) },
       h("span.drop-sample", { style: { fontFamily: face(title) } }, "Aa"),
       // (Titles' face over the words', each in itself; one face for both, named once.)
       h("span.drop-pair", {}, h("b", { style: { fontFamily: face(title) } }, choice.value ? title : "Theme"),
-        !choice.value || title !== body ? h("span", { style: { fontFamily: face(body) } }, choice.value ? body : title === body ? body : `${title} · ${body}`) : null)), choice.variant);
-    })));
+        !choice.value || title !== body ? h("span", { style: { fontFamily: face(body) } }, choice.value ? body : title === body ? body : `${title} · ${body}`) : null));
+    }));
     const picker = (name, label, placeholder) => ui.field(label, ui.font({ value: deck()[name] || "", options: catalog.fonts || [], placeholder, key: `design.${name}`,
       onChange: (value) => { edit((d) => setOption(d, name, value), { label: "Change Font" }); after(); } }));
     const themes = (family) => (family ? `Theme’s (${family})` : "Same as Body");
@@ -170,14 +173,13 @@ export function designBar(host) {
     });
   }
 
-  const look = pull({ label: "Look", title: "Look", panel: () => lookPanel() });
   function lookPanel() {
     const now = deck().look || "classic";
-    const tiles = unshown(host.tinted(h("div.drop-tiles", { role: "group", "aria-label": "Look" }, (catalog.looks || []).map((item) => {
+    const tiles = host.tinted(h("div.drop-tiles", { role: "group", "aria-label": "Look" }, (catalog.looks || []).map((item) => {
       const variant = { look: item.name === "classic" ? null : item.name };
-      return shows(h(`button.drop-tile${item.name === now ? ".on" : ""}`, { type: "button", title: item.note || "", "aria-pressed": String(item.name === now),
-        onclick: () => choose(variant, "Change Look") }, host.lookArt(item.name), h("span", {}, host.lookName(item))), variant);
-    })), studio.info?.palette));
+      return h(`button.drop-tile${item.name === now ? ".on" : ""}`, { type: "button", title: item.note || "", "aria-pressed": String(item.name === now),
+        onclick: () => choose(variant, "Change Look") }, host.lookArt(item.name), h("span", {}, host.lookName(item)));
+    })), studio.info?.palette);
     const heads = deck().conventions?.arrowheads || "theme";
     const arrows = ui.segmented({ value: heads, key: "design.arrowheads",
       options: [{ value: "theme", label: "Theme", title: "As the theme draws them" }, ...ARROWS.map(([value, title]) => ({ value, title, label: icon(`head-${value}`) }))],
@@ -193,7 +195,7 @@ export function designBar(host) {
       h("div.drop-title", {}, "Arrowheads"), h("div.drop-body", {}, arrows)];
   }
 
-  const sizes = pull({ label: "Sizes", title: "Sizes", face: icon("type"), panel: () => sizesPanel() });
+  const sizes = pull({ label: "Sizes", title: "Sizes", panel: () => sizesPanel() });
   function sizesPanel() {
     return [h("div.drop-title", {}, "Text"), h("div.drop-body", {}, styleRows(STYLE_TYPE)), h("div.drop-title", {}, "Spacing"), h("div.drop-body", {}, styleRows(STYLE_SPACE))];
   }
@@ -203,22 +205,21 @@ export function designBar(host) {
   const canvas = () => studio.info?.palette?.canvas || "#ffffff";
   function backgroundPanel() {
     const now = backgroundOf(deck());
-    const tile = (variant, label, swatch, on) => shows(h(`button.drop-tile${on ? ".on" : ""}`, { type: "button", title: label, "aria-pressed": String(on),
-      onclick: () => choose(variant, "Change Background") }, swatch, h("span", {}, label)), variant);
+    const tile = (variant, label, swatch, on) => h(`button.drop-tile${on ? ".on" : ""}`, { type: "button", title: label, "aria-pressed": String(on),
+      onclick: () => choose(variant, "Change Background", { close: true }) }, swatch, h("span", {}, label));
     const swatch = (colour) => h("span.drop-swatch", { style: { background: colour } });
     const custom = h("input.drop-colour", { type: "color", value: now.kind === "colour" ? now.value : "#ffffff", "aria-label": "Custom Colour", title: "Custom Colour" });
-    custom.addEventListener("input", () => previews.show({ background: custom.value.toLowerCase() }));
     custom.addEventListener("change", () => choose({ background: custom.value.toLowerCase() }, "Change Background"));
     const named = BACKGROUNDS.some(([colour]) => colour === now.value);
-    const tiles = unshown(h("div.drop-tiles", { role: "group", "aria-label": "Background" },
+    const tiles = h("div.drop-tiles", { role: "group", "aria-label": "Background" },
       tile({ background: null }, "Theme", swatch(now.kind === "theme" ? canvas() : studio.info?.palette?.canvas || canvas()), now.kind === "theme"),
       tile({ background: false }, "None", h("span.drop-swatch.none"), now.kind === "none"),
       BACKGROUNDS.map(([colour, label]) => tile({ background: colour }, label, swatch(colour), now.value === colour)),
       h(`label.drop-tile.custom${now.kind === "colour" && !named ? ".on" : ""}`, { title: "Custom Colour" }, h("span.drop-swatch", { style: { background: now.kind === "colour" && !named ? now.value : "conic-gradient(#e33, #ec3, #3c6, #3ae, #93e, #e33)" } }, custom), h("span", {}, "Custom")),
       h(`button.drop-tile${now.kind === "picture" ? ".on" : ""}`, { type: "button", title: now.kind === "picture" ? now.value : "Picture…", "aria-pressed": String(now.kind === "picture"),
-        onclick: async () => { const path = await host.chooseFile({ title: "Background Picture", types: ["image"], action: "Choose" }); if (path) choose({ background: path }, "Change Background"); } },
+        onclick: async () => { const path = await host.chooseFile({ title: "Background Picture", types: ["image"], action: "Choose" }); if (path) choose({ background: path }, "Change Background", { close: true }); } },
       h("span.drop-swatch.picture", { style: now.kind === "picture" ? { backgroundImage: `url("${studio.raw(now.value)}")` } : {} }, now.kind === "picture" ? null : icon("image")),
-      h("span", {}, now.kind === "picture" ? now.value.split("/").pop() : "Picture…"))));
+      h("span", {}, now.kind === "picture" ? now.value.split("/").pop() : "Picture…")));
     return [h("div.drop-title", {}, "Background"), tiles];
   }
 
@@ -226,19 +227,22 @@ export function designBar(host) {
   const size = pull({ label: "Slide Size", title: "Slide Size", panel: () => sizePanel() });
   function sizePanel() {
     const now = slideSize(deck());
-    const set = (wanted) => { studio.change((d) => { d.deck = sized(d.deck, wanted); if (!Object.keys(d.deck).length) delete d.deck; }, { label: "Change Slide Size" }); after(); };
+    const set = (wanted, close = false) => {
+      if (close) closeDrop(true);
+      studio.change((d) => { d.deck = sized(d.deck, wanted); if (!Object.keys(d.deck).length) delete d.deck; }, { label: "Change Slide Size" });
+      after();
+    };
     const [least, most] = SIZE_RANGE;
     const field = (key, label) => ui.field(label, ui.number({ value: now[key], min: least, max: most, step: 1, unit: "pt", key: `design.size.${key}`,
       onChange: (value) => { if (value) set({ ...slideSize(deck()), [key]: value }); } }));
     return [h("div.drop-title", {}, "Slide Size"), h("div.drop-choices", { role: "group", "aria-label": "Slide Size" }, SLIDE_SIZES.map((each) =>
-      h(`button.drop-choice${now.value === each.value ? ".on" : ""}`, { type: "button", "aria-pressed": String(now.value === each.value), onclick: () => set(each.value) },
+      h(`button.drop-choice${now.value === each.value ? ".on" : ""}`, { type: "button", "aria-pressed": String(now.value === each.value), onclick: () => set(each.value, true) },
         h("span.ribbon-ratio", { style: { width: `${Math.round(16 * each.width / each.height)}px` } }), h("span.drop-name", {}, each.label === each.value ? each.value : `${each.label} (${each.value})`)))),
     h("div.drop-title", {}, "Custom"), h("div.drop-body.drop-size", {}, field("width", "Width"), field("height", "Height"))];
   }
 
   // The deck's logos and its footer: the editor's own controls (editor.js's logosControls).
-  const logos = pull({ label: "Logos", title: "Logos", panel: () => [h("div.drop-title", {}, "Logos"), h("div.drop-body.logos-section", {}, host.logos())], className: "logos-pull" });
-  const footer = pull({ label: "Footer", title: "Footer", face: icon("text"), panel: () => footerPanel() });
+  const logosPanel = () => [h("div.drop-title", {}, "Logos"), h("div.drop-body.logos-section", {}, host.logos())];
   let footerRun = 0;
   function footerPanel() {
     const area = ui.markup({ value: deck().footer || "", placeholder: host.footerHint, colours: false, lines: true, key: "design.footer",
@@ -247,21 +251,45 @@ export function designBar(host) {
     return [h("div.drop-title", {}, "Footer"), h("div.drop-body", {}, area)];
   }
 
-  // -- drawn --
-  const faces = () => {
-    colours.setFace(strip(coloursOf(paletteNow()) || []));
-    const theme = families(), now = fontPicks().find((choice) => choice.value === fontNow());
-    const title = now?.title || deck().title_font || theme.title || theme.theme;
-    fonts.setFace(h("span.ribbon-aa", { style: { fontFamily: title ? `"${title}", var(--font)` : "" } }, "Aa"));
-    fonts.title = `Fonts: ${title || "Theme’s"}${(deck().font || theme.body) && (deck().font || theme.body) !== title ? ` and ${deck().font || theme.body}` : ""}`;
-    look.setFace(host.tinted(h("span.ribbon-look", {}, host.lookArt(deck().look || "classic")), studio.info?.palette));
-    const bg = backgroundOf(deck());
-    background.setFace(h(`span.ribbon-chip${bg.kind === "none" ? ".none" : bg.kind === "picture" ? ".picture" : ""}`, { style: bg.kind === "colour" ? { background: bg.value } : bg.kind === "theme" ? { background: canvas() } : {} }, bg.kind === "picture" ? icon("image") : null));
-    const now2 = slideSize(deck());
-    size.setFace(h("span.ribbon-ratio", { style: { width: `${Math.max(10, Math.min(22, Math.round(13 * now2.ratio)))}px` } }));
-    size.title = `Slide Size: ${SLIDE_SIZES.find((each) => each.value === now2.value)?.label || "Custom"} (${now2.width} × ${now2.height} pt)`;
+  // More: the look, the logos and the footer, each a panel of its own from here, and the
+  // theme's file -- made from it (Customise…), or opened (Edit Theme).
+  const more = pull({ label: "More", title: "More", panel: () => morePanel() });
+  function morePanel() {
+    const file = typeof deck().theme === "string" && /\.(ya?ml|json)$/i.test(deck().theme);
+    const row = (glyph, label, run) => h("button.drop-choice.drop-command", { type: "button", onclick: run }, icon(glyph), h("span.drop-name", {}, label));
     const count = host.logoCount();
-    logos.setFace(count ? h("span.ribbon-count", {}, String(count)) : icon("image"));
+    return [h("div.drop-choices", { role: "group", "aria-label": "More" },
+      row("palette", "Look", () => drop(more, lookPanel)),
+      row("image", count ? `Logos (${count})` : "Logos", () => drop(more, logosPanel)),
+      row("text", "Footer", () => drop(more, footerPanel)),
+      h("div.drop-sep"),
+      row(file ? "external" : "pencil", file ? "Edit Theme" : "Customise Theme…", () => {
+        closeDrop();
+        if (file) studio.workspace.open(studio.folder() + deck().theme); else host.customise();
+      }))];
+  }
+
+  // -- drawn --
+  // What each button shows: what is in use, named where it fits.
+  const faces = () => {
+    if (!built) return;
+    const card = cardOf(), named = card ? themeName(card) : themeOf();
+    themePull.show({ face: chip(card), text: named, title: `Theme: ${named}` });
+    colours.show({ face: strip(coloursOf(paletteNow()) || []), text: "", title: `Colours: ${paletteName(paletteNow())}` });
+    const type = families(), now = fontPicks().find((choice) => choice.value === fontNow());
+    const title = now?.title || deck().title_font || type.title || type.theme;
+    const body = now?.body || deck().font || type.body || type.theme;
+    const face = (name) => ({ fontFamily: name ? `"${name}", var(--font)` : "" });
+    fonts.show({ text: h("span.ribbon-font", {}, title && body && title !== body ? [h("b", { style: face(title) }, title), " ", h("span", { style: face(body) }, body)] : h("span", { style: face(title || body) }, title || body || "Theme’s")),
+      title: `Fonts: ${title && body && title !== body ? `${title} and ${body}` : title || body || "Theme’s"}` });
+    const bg = backgroundOf(deck());
+    const bgName = bg.kind === "theme" ? "Theme’s" : bg.kind === "none" ? "None" : bg.kind === "picture" ? bg.value.split("/").pop() : BACKGROUNDS.find(([colour]) => colour === bg.value)?.[1] || "Custom";
+    background.show({ face: h(`span.ribbon-chip${bg.kind === "none" ? ".none" : bg.kind === "picture" ? ".picture" : ""}`, { style: bg.kind === "colour" ? { background: bg.value } : bg.kind === "theme" ? { background: canvas() } : {} }, bg.kind === "picture" ? icon("image") : null),
+      text: bgName, title: `Background: ${bgName}` });
+    const now2 = slideSize(deck());
+    const sizeName = now2.value === "custom" ? `${now2.width} × ${now2.height}` : now2.value;
+    size.show({ face: h("span.ribbon-ratio", { style: { width: `${Math.max(9, Math.min(20, Math.round(11 * now2.ratio)))}px` } }), text: sizeName,
+      title: `Slide Size: ${SLIDE_SIZES.find((each) => each.value === now2.value)?.label || "Custom"} (${now2.width} × ${now2.height} pt)` });
   };
   // The slides drawn at the deck's proportions, here and in the slide list (designbar.css).
   let ratio = null;
@@ -275,9 +303,7 @@ export function designBar(host) {
   function build() {
     if (built) return;
     built = true;
-    clear(node, themes.node, h("div.ribbon-stack.ribbon-themes", {}, themeButton), ribbonSep(),
-      ribbonStack(colours, fonts), ribbonStack(look, sizes), ribbonSep(),
-      ribbonStack(background, size), ribbonStack(logos, footer));
+    clear(node, themePull, colours, fonts, sizes, ribbonSep(), background, size, ribbonSep(), more);
     loadThemes();
   }
   let later = 0;
@@ -285,7 +311,6 @@ export function designBar(host) {
     proportion();
     if (!open) return;
     faces();
-    renderThemeButton();
     // (Thumbnails drawn again a moment after the typing on their slide pauses, not at each key.)
     clearTimeout(later);
     later = setTimeout(() => themes.refresh(), 800);
