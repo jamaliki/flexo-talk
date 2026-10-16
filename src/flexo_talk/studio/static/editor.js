@@ -1776,7 +1776,7 @@ export function mount(studio, container) {
     if (!list.length) {
       clear(stage, h("div.stage-empty", {}, wedgeHead("No slides", { tag: "h2" }), h("div", {}, "Choose a layout for the first slide:"),
         tinted(h("div.layout-grid.big", {}, layouts.map((layout) => h("button.layout-card", { type: "button", onclick: () => addSlide(layout.name, 0) },
-          glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name]), h("span.note", {}, layout.note)))), studio.info?.palette)));
+          glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name])))), studio.info?.palette)));
       return;
     }
     const page = pages[state.slide];

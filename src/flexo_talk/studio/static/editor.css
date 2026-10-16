@@ -414,7 +414,6 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 /* Grey until the deck's colours are known: never the app's blue, then the deck's. */
 .layout-card .glyph i.a { background: var(--deck-accent, var(--ink-3)); opacity: 1; }
 .layout-card .name { font: var(--text-hint); color: var(--ink-2); white-space: nowrap; letter-spacing: -0.005em; }
-.layout-card .note { font: var(--text-hint); color: var(--ink-3); }
 .layout-grid.big { width: min(620px, 90vw); gap: 10px; }
 .layout-grid.big .layout-card { padding: 10px; gap: 6px; text-align: center; }
 .layout-grid.big .layout-card .name { font-size: 12.5px; color: var(--ink); }
