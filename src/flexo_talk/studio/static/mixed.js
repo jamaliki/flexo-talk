@@ -20,7 +20,8 @@
 // blockName(block), element(region, index) (an object's drawing), partAt(event),
 // editSlide(mutate, options), copyOf(block), pasteClip(clip), select(slide), render(), crumb(),
 // frame(), clipChosen(cut), clipItems(), undoNote(text, options), away(what), showPanel(),
-// swallowRelease(held).
+// swallowRelease(held), placing (placing.js's: the slide's objects moved with the shapes --
+// by Align and its kin, taken out of line as they are; by the arrows and a drag, those placed).
 
 import { mixedChoice } from "/static/studio/mixed.js";
 import { toast } from "/static/studio/studio.js";
@@ -130,6 +131,13 @@ export function slideMixed(ctx) {
         return ctx.regionsOf(ctx.slideAt() || {}).flatMap((region) => blocksOn(region.key).map((_, index) => ({ region: region.key, index })));
       },
       settled: () => ctx.figure()?.parts.idle?.(),
+      // The slide's objects move with the shapes (placing.js): never a figure's shapes, which
+      // the figure lays out.
+      movable: (pick) => pick.part === undefined && Boolean(ctx.placing),
+      locked: (pick) => pick.part === undefined && Boolean(ctx.placing?.locked(pick)),
+      move: (moves, label, shapesChange) => Boolean(ctx.placing?.moveWith(moves, label, shapesChange)),
+      show: (moves) => ctx.placing?.showMoves(moves),
+      nudge: (event) => (opened() ? false : Boolean(ctx.placing?.nudge(event, { drawn: shapes.chosen().filter((index) => !shapes.lockedAt(index)) }))),
     },
     page: () => state.slide, goTo: (index) => ctx.select(index),
     render: () => ctx.render(), crumb: () => ctx.crumb(), frame: () => ctx.frame(),

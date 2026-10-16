@@ -160,6 +160,23 @@ pieces PowerPoint's own shapes. A picture's ``mask`` may be a closed shape inste
 ``circle`` (``mask: {kind: star, tips: 6}``), its places fractions of the part kept: the
 picture shows only inside it, in every output (in a PowerPoint, a picture in a freeform).
 
+Any block may be placed anywhere on its slide instead, out of its place's flow, as a shape is:
+``at`` is its top left and ``width`` its width, in the units the slide's shapes are placed in
+(points on a slide 960 across; one of another size scaled to that)::
+
+  body:
+  - text: Measured at 4 K
+    at: [80, 440]
+    width: 300
+  - {image: pictures/cell.png, at: [600, 120], width: 280}
+
+It is drawn there, over what the slide lays out and under its shapes, and the rest of its place
+is laid out as if it were not there. Its words keep their size, wrapped in its width; a picture,
+a figure, a gallery or a table keeps its proportions, that wide; a plot is drawn in its ``aspect``
+(else 3:2). Without a ``width`` it is as large as its place would set it alone. Its ``horizontal``
+and ``vertical`` wait meanwhile: without ``at`` it is back in its place's flow, where it is in
+its list. ``locked: true`` keeps it where it is in the studio, as a shape's does.
+
 A slide of columns (``two-columns``, ``columns``) may be set in rows: ``rows`` lists
 the rows' labels (``rows: ["", Mechanism, Geometry]``; ``""`` for a row without one).
 Block *i* of every column is then in row *i*: each row's blocks start on one line, and
@@ -208,6 +225,7 @@ from flexo_talk.deck import (
     _Plot,
     displayed,
     named_colour,
+    placed_at,
     shape_of,
     shape_problems,
     share_of,
@@ -236,6 +254,12 @@ BLOCKS: dict[str, tuple[str, ...]] = {
 }
 """Each block kind and the options it takes beside its value. Every kind takes ``width``
 (points): the most it takes across its place, set there as its place sets it."""
+
+BLOCK_KEYS = ("placeholder", "build", "horizontal", "vertical", "at", "locked")
+"""What every block takes besides its kind's options: whether it is a placeholder, whether it
+builds in on a click, where it stands across and down its place -- or, ``at: [x, y]``, where
+it is placed on the slide, out of its place's flow (its ``width`` its width there, both in
+the units the slide's shapes are placed in) -- and whether it is locked where it is."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
@@ -906,8 +930,10 @@ def add_block(
     # Any block may be a placeholder (``placeholder: true``): see ``Region.placeholders``;
     # and any may build in, appearing on a click (``build: true``): see ``Region.builds``.
     # And any may stand across and down its place where it is asked to (``horizontal:
-    # middle``, ``vertical: 0.25``): see ``Region.place``.
-    _only(block, (kind, *BLOCKS[kind], "placeholder", "build", "horizontal", "vertical"), f"{where} ({kind})")
+    # middle``, ``vertical: 0.25``), or anywhere on the slide, out of its place's flow (``at:
+    # [x, y]``, its ``width`` its width there): see ``Region.place``. And any may be locked
+    # where it is in the studio (``locked: true``).
+    _only(block, (kind, *BLOCKS[kind], *BLOCK_KEYS), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
@@ -915,6 +941,14 @@ def add_block(
         raise DeckDocumentError(here, "placeholder must be true or false.")
     if not isinstance(block.get("build", False), bool):
         raise DeckDocumentError(here, "build must be true or false.")
+    if not isinstance(block.get("locked", False), bool):
+        raise DeckDocumentError(here, "locked must be true or false.")
+    point = None
+    if block.get("at") is not None:
+        try:
+            point = placed_at(block["at"])
+        except SettingError as error:
+            raise DeckDocumentError(here, str(error)) from error
     shares = {}
     for key, names, said in (("horizontal", ACROSS, "start (left), middle (centre) or end (right)"),
                              ("vertical", DOWN, "top, middle or bottom")):
@@ -1009,6 +1043,10 @@ def add_block(
         region.across[len(region.blocks) - 1] = shares["horizontal"]
     if "vertical" in shares:
         region.down[len(region.blocks) - 1] = shares["vertical"]
+    if point is not None:
+        region.at[len(region.blocks) - 1] = point
+    if block.get("locked"):
+        region.locked.add(len(region.blocks) - 1)
 
 
 def _figure_problem(value: dict, error: Exception) -> str:

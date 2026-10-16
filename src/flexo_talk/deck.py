@@ -788,6 +788,34 @@ def share_written(share: float, names: dict[str, float]) -> str | float:
     return next((name for name, value in names.items() if value == share), share)
 
 
+PLACED_REACH = 10_000.0
+"""How far from the slide's top left (in its shapes' units, either way) an object may be
+placed: well off the slide, where a person may put one aside, but no further."""
+
+
+def placed_at(value: object) -> tuple[float, float]:
+    """Where an object placed on the slide stands (``at``): its top left, ``[x, y]`` in the
+    units the slide's shapes are placed in. A ``SettingError`` for anything else."""
+
+    import math
+
+    said = "at must be the object's top left on the slide, [x, y] in points from its top left (a slide is 960 across)"
+    if isinstance(value, str | bytes) or not isinstance(value, Sequence) or len(value) != 2:
+        raise SettingError("at", f"{said}, such as [80, 120], not {value!r}.")
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int | float) or not math.isfinite(item):
+            raise SettingError("at", f"{said}, such as [80, 120], not {list(value)!r}.")
+        if abs(item) > PLACED_REACH:
+            raise SettingError("at", f"{said}, each within {PLACED_REACH:,.0f} of it, not {list(value)!r}.")
+    return float(value[0]), float(value[1])
+
+
+def _written_number(value: float) -> float | int:
+    """A number as a document writes it: whole, without its ``.0``."""
+
+    return int(value) if float(value).is_integer() else value
+
+
 def accent_field(palette: Palette) -> str:
     """The accent as a field to set words on: itself, or deepened when it is light
     (a dark theme's accent), so light words read on it either way."""
@@ -980,6 +1008,11 @@ class Region:
         self.down: dict[int, float] = {}
         """Where blocks (by index) asked to stand down their place stand: the share of the
         room the region has to spare that is above them (see ``place``)."""
+        self.at: dict[int, tuple[float, float]] = {}
+        """The blocks (by index) placed on the slide where they say, out of the region's flow:
+        each one's top left, in the units the slide's shapes are placed in (``place(at=)``)."""
+        self.locked: set[int] = set()
+        """The blocks (by index) locked where they are in the studio (``locked: true``)."""
         """The blocks (by index) that are placeholders: put there to be made one's own (the
         studio's sample table, figure or equation), drawn faintly while editing and never
         presented or exported until changed."""
@@ -1402,20 +1435,33 @@ class Region:
         return self
 
     def place(
-        self, horizontal: str | float | None = None, *, vertical: str | float | None = None
+        self, horizontal: str | float | None = None, *, vertical: str | float | None = None,
+        at: Sequence[float] | None = None,
     ) -> Region:
         """The block added last set across its place (``horizontal``: ``start``, ``middle``,
         ``end``, or a share between, 0.25 halfway from the left to the middle) and down it
         (``vertical``: ``top``, ``middle``, ``bottom``, or a share) -- as Keynote's Align --
         not where the slide puts it. Words, a list, a listing or numbers stand there as a
         box as wide as they are, their lines as set; down, it takes that share of the room
-        its place has to spare above it, what comes after it following it down."""
+        its place has to spare above it, what comes after it following it down.
+
+        ``at`` places it anywhere on the slide instead, out of its place's flow: its top left,
+        ``[x, y]`` in the units the slide's shapes are placed in (points on a slide 960
+        across; a slide of another size scaled to that), its ``width`` (the block's own, in
+        those units too) its width there. Without a width it is as large as its place would
+        set it alone. The rest of its place is laid out as if it were not there; it is drawn
+        over what the slide lays out, under the shapes."""
 
         if not self.blocks:
             raise ValueError("Add a block before placing it.")
-        if horizontal is None and vertical is None:
-            raise ValueError("Say where the block goes: horizontal, vertical or both.")
-        at = len(self.blocks) - 1
+        if horizontal is None and vertical is None and at is None:
+            raise ValueError("Say where the block goes: horizontal, vertical, both, or at.")
+        index = len(self.blocks) - 1
+        if at is not None:
+            point = placed_at(at)
+            self.at[index] = point
+            if self.sources[-1]:  # a stand-in for what is missing is written as nothing
+                self.sources[-1]["at"] = [_written_number(value) for value in point]
         asked = ((horizontal, ACROSS, self.across, "horizontal"), (vertical, DOWN, self.down, "vertical"))
         for value, names, kept, key in asked:
             if value is None:
@@ -1424,7 +1470,7 @@ class Region:
             if share is None:
                 said = ", ".join(dict.fromkeys(names))
                 raise SettingError(key, f"{key} must be {said} or a number from 0 to 1, not {value!r}.")
-            kept[at] = share
+            kept[index] = share
             if self.sources[-1]:  # a stand-in for what is missing is written as nothing
                 self.sources[-1][key] = share_written(share, names)
         return self
@@ -1751,11 +1797,13 @@ class Slide:
         return self
 
     def place(
-        self, horizontal: str | float | None = None, *, vertical: str | float | None = None
+        self, horizontal: str | float | None = None, *, vertical: str | float | None = None,
+        at: Sequence[float] | None = None,
     ) -> Slide:
-        """The block added last set across and down its place (see ``Region.place``)."""
+        """The block added last set across and down its place, or anywhere on the slide
+        (``at``: see ``Region.place``)."""
 
-        next(iter(self.regions.values())).place(horizontal, vertical=vertical)
+        next(iter(self.regions.values())).place(horizontal, vertical=vertical, at=at)
         return self
 
     def gallery(self, items, **options: object) -> Slide:

@@ -281,8 +281,9 @@ def _read_in_order(tree, slide: Slide, over: set[str] = frozenset()) -> None:
     screen reader), as the PDF reads them: its headings and what is drawn under them, then
     its body top to bottom (its rows' labels, then a left column before a right) -- its
     lists and tables where they are drawn, not after the rest -- then its footnotes, then
-    its number and footer; and the shapes drawn over it all (``over``), last, in the order
-    they are drawn, which is the order they stack in."""
+    its number and footer; then its objects placed where they say (``Region.at``), drawn over
+    all that, in the slide's order; and the shapes drawn over it all (``over``), last, in the
+    order they are drawn, which is the order they stack in."""
 
     import re
 
@@ -303,8 +304,10 @@ def _read_in_order(tree, slide: Slide, over: set[str] = frozenset()) -> None:
             return 1, -1, int(label.group(1)), False
         found = block.fullmatch(name)
         if found and found.group(1) in regions:
+            placed = int(found.group(2)) in slide.regions[found.group(1)].at
             # A table's caption after the table, as it is drawn under it.
-            return 1, regions[found.group(1)], int(found.group(2)), name.endswith(".caption")
+            return (3 if placed else 1, regions[found.group(1)] + (1 if placed else 0), int(found.group(2)),
+                    name.endswith(".caption"))
         return 0, 0, 0, False
 
     shapes = [child for child in tree if child.tag not in {f"{{{_PML}}}nvGrpSpPr", f"{{{_PML}}}grpSpPr"}]
@@ -899,14 +902,15 @@ def _formulas(group: Group) -> list[Group]:
 
 
 def _dissolve_regions(group: Group) -> None:
-    """A slide's regions are groups only so the layout can move each whole; in the
-    PowerPoint their shapes stand on the slide, as if placed there by hand."""
+    """A slide's regions are groups only so the layout can move each whole -- and its objects
+    placed where they say are a group only to be drawn over them; in the PowerPoint their
+    shapes stand on the slide, as if placed there by hand."""
 
     items: list = []
     for item in group.items:
         if isinstance(item, Group):
             _dissolve_regions(item)
-            if item.data.get("data-flexo-talk") == "region":
+            if item.data.get("data-flexo-talk") in {"region", "placed"}:
                 items.extend(item.items)
                 continue
         items.append(item)
