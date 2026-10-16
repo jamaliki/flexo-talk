@@ -207,6 +207,11 @@ with English words, numbers, and maths inside it kept in order.
 - **One figure, several slides**: `{figure: file.yaml, hide: [ids], dim: [ids],
   highlight: [ids]}` shows parts hidden, faint or alone at full strength; nothing moves.
   `stages: [[ids], [ids]]` on a figure block builds it up on one slide, a click each.
+- **A figure that changes from slide to slide**: give each slide's figure block the same
+  `frame: smc` -- each its own figure (a part added, a label changed) -- and they are drawn as
+  one: laid out with each other's parts (unseen), at one scale and from one top left, so the
+  parts they share (by id) stay put. Keep the ids of what stays the same; put the blocks in
+  the same place of the same layout, or at the same `at` and `width`.
 - **Type by role**: `Deck(font=, title_font=, figure_font=)`; each falls back to
   `font`, then to the theme's (its `type: {title_family:, figure_family:}`, then its
   family).

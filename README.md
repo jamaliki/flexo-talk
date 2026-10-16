@@ -48,6 +48,34 @@ shapes and groups by id; a figure written in the slide says the same in its own
 **Show** to Highlight, Dimmed or Hidden (for a figure kept in a file, it is that
 slide's alone: written on its block, the file left as it is).
 
+A visualisation that changes a little from slide to slide -- a part added, a label changed,
+each slide its own figure -- is drawn as one when its blocks name one **frame**:
+
+```yaml
+slides:
+- title: Sample the prior
+  right:
+  - {figure: figures/smc-1.yaml, frame: smc}
+- title: Weight the samples
+  right:
+  - {figure: figures/smc-2.yaml, frame: smc}
+```
+
+The figures naming a frame are laid out with each other's parts (each kept room for where it
+lacks them, unseen), the same way (turned or not, as the frame's first), at one scale -- the
+one that fits the largest, so none is made smaller to fit -- and from one top left; a shape whose
+words change is as large on each slide as its largest words need, and each version is moved so
+its parts are where the first's of the same name are. Parts with the same id stay exactly where
+they are from one slide to the next; only what changed looks different. `hide`, `dim`,
+`highlight` and `stages` stay each slide's own: a deck's own figure shown with different parts
+hidden on each slide (`{figure: '#smc', hide: [move], frame: smc}`) keeps its whole room on
+every slide, its hidden parts' too, where alone it is drawn larger the more is hidden. A frame's
+figures line up where their slides set them in the same place: the same place of the same
+layout, or placed at the same `at` with the same `width` (Match on Other Slides sets both). In
+Python: `region.add(figure, frame="smc")`. In the studio, a figure's panel has **Frame**: None,
+one of the deck's frames (with the slides it is on), or New Frame. Every output -- the studio,
+presenting, the PDF, the PowerPoint, an image, a bundle -- draws it so.
+
 A figure can also be built up on one slide, a click at a time: `{figure: ..., stages:
 [[api], [queue, worker], [store]]}` names the shapes and groups that appear on each
 click. The rest is there from the start, a line comes with the later of its ends, and
@@ -398,6 +426,28 @@ nudge them together -- an object in line staying laid out. Placed objects are dr
 order over what it lays out, under every shape but those Behind Slide Content: there is no
 stacking them among the shapes, which Bring Forward and Send Backward still order among
 themselves.
+
+Slides that show one thing changing are lined up across them. **View › Show Neighbouring Slides**
+(the palette, and the toggle beside the magnet in the zoom bar) draws the slide before faintly on
+the one shown -- and, with **Include Next Slide** (the zoom bar's **Next**), the slide after too,
+in a blue tint -- in the studio alone: never presented or exported. The slides either side are
+the presented ones (a skipped slide is passed over), and the studio remembers the setting. A
+shape or a placed object dragged, sized or nudged catches at the edges and middles of what is on
+the slides either side as at the slide's own, shown or not -- with the magnet, ⌘ the other way --
+its guide drawn in violet with the box it caught at, so it reads as "where it is on the slide
+before"; a nudge that would step over such a guide stops on it. **Arrange › Match on Other
+Slides…** (also the right-click menu, the palette, and the Arrange tab's Other Slides) puts what
+is chosen -- a shape, a group, a placed object, a picture, a figure, several -- where it is, as
+large, on the next slide, the previous one, every slide of its run (the slides either side that
+each have its match), or the slides chosen in the list (⌘-click or ⇧-click them, then choose the
+object on the one shown); the palette has Match on Next Slide, on Previous Slide and on This Run
+too. Its match on each slide is a picture of the same file; the same figure (the deck's own by
+name, the same file, or the same figure id); a shape with the same id, or, without one, of the
+same kind at the same place in the slide's list; else the object in its place of the same kind.
+A slide with none is passed over, and said why. An object stands where the one chosen stands, as
+wide (`at`, `width`); a figure is put in the chosen one's frame too (a frame made and named for
+it if it has none, and the chosen one, in line, placed where it stands), so both are drawn at
+one scale; a shape takes its place and size. It is one step to undo.
 
 A group is entered as Inkscape enters one: double-click it (or choose it and press Return,
 or Enter Group). Its shapes are then the slide's to click, drag, size, turn, restyle in the
