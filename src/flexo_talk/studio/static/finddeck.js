@@ -30,7 +30,9 @@ export function deckFinder(studio, deck) {
     });
     return found;
   };
-  // Read again: every figure file shown, as its slide shows it (an edit of nothing: "read").
+  // Read again: every figure file shown, as its slide shows it (an edit of nothing: "read") --
+  // those who asked told when any is not as it was (onFiles: a deck's TODOs, todos.js).
+  const heard = [];
   const readFiles = () => {
     reading ||= (async () => {
       const wanted = figureFiles();
@@ -43,7 +45,7 @@ export function deckFinder(studio, deck) {
         } catch { /* a file that does not read: its words are not found */ }
       }
       reading = null;
-      if (changed) found.refresh();
+      if (changed) { found.refresh(); for (const hear of heard) hear(); }
     })();
     return reading;
   };
@@ -229,5 +231,7 @@ export function deckFinder(studio, deck) {
     // The slide drawn again (or another shown): its marks put on it.
     drawn: () => found.shown(),
     finder: found,
+    // The figure files read, { file: model }; read again; and who is told when they change.
+    files: () => files, readFiles, onFiles: (hear) => heard.push(hear),
   };
 }

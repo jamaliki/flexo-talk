@@ -32,6 +32,7 @@ import * as Snap from "/static/studio/snapping.js";
 import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
 import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
+import { deckTodos } from "/static/kinds/deck/todos.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -572,8 +573,10 @@ export function mount(studio, container) {
   let mathNotes = null;
   let pending = false;
   let inline = null;
-  // Find and replace across the deck (finddeck.js): made once the editor is.
+  // Find and replace across the deck (finddeck.js): made once the editor is. So too its TODOs
+  // (todos.js).
   let finding = null;
+  let todos = null;
   // A part of the slide being dragged on it, and parts just moved, landing.
   let carry = null;
   let moving = null;
@@ -1610,6 +1613,7 @@ export function mount(studio, container) {
     }
     // Slides chosen together, or no longer: the panel says so, with what applies to them all.
     if (pickedKey() !== pickedShown && !state.focus) renderInspector();
+    todos?.rail();
   }
   let pickedShown = "";
   const pickedKey = () => (state.picked.length > 1 ? [...state.picked].sort((a, b) => a - b).join() : "");
@@ -1876,6 +1880,7 @@ export function mount(studio, container) {
     if (renewed) freeShapes.drawn();
     if (renewed) objects.drawn();
     if (renewed) finding?.drawn();
+    if (renewed) todos?.drawn();
     placeChosen();
     placeOthers(here);
     if (inline) positionInline();
@@ -9392,7 +9397,7 @@ export function mount(studio, container) {
   function present(fromStart = Boolean(window.event?.altKey)) {
     if (!slides().length) { toast("This deck has no slides to present.", { icon: "play" }); return; }
     if (slides().every((slide) => slide?.skip === true)) { toast("Every slide is skipped: there is nothing to present.", { icon: "play" }); return; }
-    presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index) });
+    presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index), note: todos?.said() || "" });
   }
 
   // ⌘B and ⌘I with words chosen, not being typed in (a text, a list, a title): all their
@@ -10399,6 +10404,8 @@ export function mount(studio, container) {
     openWords: (edit, start, end) => { openInline(edit); if (inline?.area?.caretTo) { inline.area.focus(); inline.area.caretTo(start, end); } },
     choose: (at, part = null) => { if (blocksAt(slideAt(), at.region)[at.index]) focusBlock(at.region, at.index, part ? () => figure?.parts.select([part]) : null); },
   });
+  // TODOs: glowing in the slide list, marked on the slide, gone to by Next TODO (todos.js).
+  todos = deckTodos(studio, { finding, rail, railList, stage, center, notes, notesArea, showNotes, pageNode: () => pageNode, slide: () => state.slide, select: (index) => select(index) });
   studio.reveal = (where, { quiet = false } = {}) => {
     if (where?.label === "Design") { design.toggle(true); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);

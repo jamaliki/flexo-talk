@@ -1,0 +1,40 @@
+/* A deck's TODOs (todos.js), in the studio only: a soft amber glow round a slide's thumbnail --
+   never the solid blue ring of the slide chosen, which it is worn with -- its count under its
+   number when it has several, how many in all at the foot of the list, a chip on the notes' bar,
+   and their words marked in the notes. (The marks on the slide, and the tokens: the studio's
+   todos.css.) */
+
+.thumb.todo .frame { box-shadow: 0 0 0 1.5px var(--todo-line), 0 0 12px 3px var(--todo-glow); }
+.thumb.todo:hover .frame { box-shadow: 0 0 0 1.5px var(--todo), 0 0 14px 4px var(--todo-glow); }
+.thumb.todo.on .frame { box-shadow: 0 0 0 2.5px var(--accent), 0 0 13px 4px var(--todo-glow); }
+.rail-list:focus-visible .thumb.todo.on .frame { box-shadow: 0 0 0 2.5px var(--accent), 0 0 0 5px var(--accent-soft), 0 0 15px 5px var(--todo-glow); }
+.deck:has(.hit.selected:not([hidden])) .rail-list:not(:focus) .thumb.todo.on .frame { box-shadow: 0 0 0 2.5px var(--line-strong), 0 0 13px 4px var(--todo-glow); }
+.rail-list.carried .thumb.todo:hover:not(.on) .frame { box-shadow: 0 0 0 1.5px var(--todo-line), 0 0 12px 3px var(--todo-glow); }
+.thumb.todo.drop-into .frame { box-shadow: 0 0 0 var(--frame) var(--accent), 0 0 0 calc(var(--frame) + 3.5px) var(--accent-soft), 0 0 13px 4px var(--todo-glow); }
+.thumb .todo-badge { display: block; width: fit-content; min-width: 15px; height: 15px; margin: 5px 1px 0 auto; padding: 0 4px; border-radius: 8px; box-sizing: border-box;
+  background: var(--todo); color: var(--todo-ink); font: 700 9.5px/15px var(--font); text-align: center; font-variant-numeric: tabular-nums; box-shadow: 0 0 6px var(--todo-glow); }
+
+/* How many in all, in a row of its own under the list (the list short of it, so a slide chosen
+   at its foot is never under it): it goes to the next. */
+.deck > .rail:has(> .rail-todos:not([hidden])) > .rail-list { height: auto; flex: 1 1 0; }
+.rail-todos { flex: none; display: flex; justify-content: center; padding: 7px 8px; border-top: 1px solid var(--line); background: var(--panel); }
+.rail-todos[hidden] { display: none; }
+
+/* The notes' bar: one in the notes, a chip that opens them at it. */
+.notes-head .todo-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px 0 6px; border-radius: 9px;
+  background: var(--todo-soft); color: var(--todo-text); font: 700 10.5px/1 var(--font); letter-spacing: 0.02em; cursor: pointer; }
+.notes-head .todo-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--todo); box-shadow: 0 0 5px 1px var(--todo-glow); }
+.notes-head .todo-chip:hover { background: color-mix(in srgb, var(--todo) 28%, transparent); }
+.notes-head .todo-chip[hidden] { display: none; }
+
+/* In the notes: over their own words, which stay where they are. */
+.todo-notes { position: absolute; pointer-events: none; overflow: hidden; color: transparent; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; }
+.todo-notes[hidden] { display: none; }
+.todo-notes mark { color: transparent; background: rgba(255, 166, 0, 0.3); border-radius: 2px; box-shadow: inset 0 -2px 0 rgba(240, 140, 0, 0.85); }
+.todo-notes mark.current { background: rgba(255, 150, 0, 0.48); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .todo-notes mark { background: rgba(255, 170, 30, 0.26); box-shadow: inset 0 -2px 0 rgba(255, 176, 46, 0.9); }
+  :root:not([data-theme="light"]) .todo-notes mark.current { background: rgba(255, 170, 30, 0.42); }
+}
+:root[data-theme="dark"] .todo-notes mark { background: rgba(255, 170, 30, 0.26); box-shadow: inset 0 -2px 0 rgba(255, 176, 46, 0.9); }
+:root[data-theme="dark"] .todo-notes mark.current { background: rgba(255, 170, 30, 0.42); }

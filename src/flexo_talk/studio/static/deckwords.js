@@ -22,7 +22,8 @@ export function deckFields(deck, { files = {}, figure = () => [] } = {}) {
   const slides = Array.isArray(deck?.slides) ? deck.slides : [];
   const add = (slide, path, value, { kind = "markup", element = null, name = "Text", edit = null, ...rest } = {}) => {
     if (typeof value === "number") value = String(value);
-    if (typeof value !== "string" || !value) return;
+    // (A figure's label written as runs, [{ text, weight }...], is words too.)
+    if (kind === "runs" ? !Array.isArray(value) || !value.length : typeof value !== "string" || !value) return;
     fields.push({ kind, value, slide, path, element, name, edit, ...rest });
   };
   // The deck's own figures, shown by name on slides (`figure: "#pipeline"`): found once, on
