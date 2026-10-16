@@ -37,6 +37,7 @@ from flexo_talk.deck import (
     DeckStyle,
 )
 from flexo_talk.document import (
+    BLOCK_KEYS,
     BLOCKS,
     COMMON_KEYS,
     DECK_KEYS,
@@ -334,7 +335,8 @@ class DeckKind:
         return (
             "A flexo-talk deck document.\n" + (module.__doc__ or "")
             + f"\nEvery slide may also take: {', '.join(COMMON_KEYS)}.\nLayouts and their keys:\n{layouts}"
-            + f"\nBlocks:\n{blocks}\n"
+            + f"\nBlocks:\n{blocks}\nEvery block also takes: {', '.join(BLOCK_KEYS)} (at: [x, y], placed on the slide "
+            "out of its place's flow, its width its width there, in shape units).\n"
             + f"Deck settings: {', '.join(DECK_KEYS)}. logos: picture files (an institution's, its funders'), "
             "in their order, in a row along the title slide's foot; logos_on: title, or every (small in every "
             "slide's footer too); logo_height: how tall on the title slide, in points (40).\n"

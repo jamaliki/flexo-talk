@@ -162,6 +162,15 @@ across its place, standing where the place stands it (or where `horizontal` asks
 words wrap in it, a plot keeps its proportions, a table's columns and a gallery's cells
 share it. Left out, each is drawn as it always was.
 
+Any block can instead be placed anywhere on its slide, as a shape is: `at: [x, y]` (its
+top left) and `width:`, in the slide's shape units (points on a 960 by 540 slide), in a
+document -- `{text: "Measured at 4 K", at: [80, 440], width: 300}` -- or
+`slide.text(..., width=300).place(at=[80, 440])` in Python. It is drawn there, over what
+the slide lays out and under its shapes, the rest of its place laid out without it; leave
+`at` out to put it back in line. Use it for a label or picture that belongs at a spot, not
+for ordinary content, which the layout keeps aligned. `locked: true` keeps it in place in
+the studio.
+
 A figure's, picture's or table's `caption=` is set under it, centred and a size
 smaller, as part of it (a Caption in the PDF's tags, grouped with a picture or
 figure in the PowerPoint). `region.build_in()` (`build: true` in a document) makes

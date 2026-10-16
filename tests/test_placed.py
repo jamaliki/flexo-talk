@@ -126,6 +126,12 @@ def test_an_object_is_placed_in_python_after_it_is_added() -> None:
         slide.place()
 
 
+def test_an_agent_is_told_how_to_place_an_object() -> None:
+    guide = DeckKind().guide()
+    assert "Every block also takes: placeholder, build, horizontal, vertical, at, locked" in guide
+    assert "at: [80, 440]" in guide
+
+
 # -- the slide --
 
 

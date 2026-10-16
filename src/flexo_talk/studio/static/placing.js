@@ -668,6 +668,30 @@ export function placing(ctx) {
     out.push(ui.toggle({ value: picks.every(isLocked), label: "Locked", key: "object.locked", onChange: (on) => lock(on) }));
     return h("div.section", {}, h("div.section-title", {}, "Arrange"), out);
   }
+  // With shapes chosen too: X and Y of where they all reach, moving them all -- the objects in
+  // line among them taken out of line as they move -- one step.
+  function mixedFields() {
+    const picks = chosen(), drawn = shapes.chosen();
+    if (!picks.length || !drawn.length) return null;
+    const frameBox = (pick) => { const frame = frameOf(pick); return frame && [frame[0], frame[1], frame[0] + frame[2], frame[1] + frame[3]]; };
+    const reach = () => P.reach([...picks.map(frameBox), ...drawn.map((index) => shapes.boxOf(index))]);
+    const where = reach();
+    if (!where) return null;
+    const moveTo = (axis) => (value) => {
+      if (value === null || value === undefined) return;
+      const delta = value - reach()[axis === "x" ? 0 : 1];
+      if (Math.abs(delta) < 0.005) return;
+      const [dx, dy] = axis === "x" ? [delta, 0] : [0, delta];
+      const objects = picks.filter((pick) => !isLocked(pick)), moving = drawn.filter((index) => !shapes.lockedAt(index));
+      const before = { own: picks, shapes: drawn };
+      const made = commit(new Map(objects.map((pick) => [keyOf(pick), { dx, dy }])), `Move ${[counted(objects.length, "Object"), counted(moving.length, "Shape")].filter((said) => !said.startsWith("0 ")).join(" and ")}`, {
+        picks, also: moving.length ? (slide) => { for (const index of moving) if (slide.shapes?.[index]) shapes.moveIn(slide.shapes, index, dx, dy); } : null });
+      if (made) { ctx.markMixed(before, { own: chosen(), shapes: shapes.chosen() }); ctx.render(); }
+    };
+    return h("div.section", {}, h("div.section-title", {}, "Arrange"), h("div.row", {},
+      ui.field("X", ui.number({ value: round(where[0]), step: 1, unit: "pt", key: "object.x", onChange: moveTo("x") })),
+      ui.field("Y", ui.number({ value: round(where[1]), step: 1, unit: "pt", key: "object.y", onChange: moveTo("y") }))));
+  }
   function lock(on, picks = chosen()) {
     if (!picks.length || ctx.away("lock objects")) return false;
     const all = chosen();
@@ -700,7 +724,7 @@ export function placing(ctx) {
   }
 
   return {
-    placed, frameOf, boxOf, press, pressShape, size, nudge, drawn, attach, putBack, lock, moveWith, commands, arrangePanel,
+    placed, frameOf, boxOf, press, pressShape, size, nudge, drawn, attach, putBack, lock, moveWith, commands, arrangePanel, mixedFields,
     reveal: () => arranging.reveal(), align: (side) => arranging.align(side),
     showMoves: (moves) => showMoves(moves ? moves.map(({ pick, dx, dy }) => ({ key: keyOf(pick), dx, dy })) : null),
     busy: () => Boolean(gesture?.started),

@@ -7434,7 +7434,7 @@ export function mount(studio, container) {
   function arrangeForm() {
     const head = (name) => h("div.section.block-top.arrange-top", {}, h("div.insp-title", {}, icon("arrange"),
       h("div.insp-words", {}, h("div.insp-name", {}, name))));
-    if (mixed.on()) return [head(mixed.name()), ...mixed.arrangePanel()];
+    if (mixed.on()) return [head(mixed.name()), objects.mixedFields(), ...mixed.arrangePanel()].filter(Boolean);
     if (freeShapes.any()) return [head(freeShapes.label()), ...freeShapes.arrangePanel()];
     const parts = figure?.parts.model && figureBlock() ? figure.parts : null, chosen = parts ? parts.selected.length : 0;
     const picks = objects.any() ? (allOn() ? picksNow() : state.focus ? [state.focus] : []) : [];
