@@ -63,14 +63,18 @@ def main(argv: list[str] | None = None) -> int:
     convert.add_argument("-o", "--output", help="the document to write (default: the deck's file, as .yaml)")
     convert.add_argument("--theme", help="pass a theme name to the deck function")
     studio = commands.add_parser("studio", help="open a deck document in flexo studio, the editor")
-    studio.add_argument("deck", nargs="?", help="deck.yaml (made if missing)")
+    studio.add_argument("deck", nargs="?", help="talk.flexo, a deck as one file, or talk.yaml, a deck in a folder "
+                        "(either made if missing; a new name with no ending is a bundle)")
     studio.add_argument("--port", type=int, default=0, help="the port to serve on (default: any free one)")
     studio.add_argument("--no-browser", action="store_true", help="do not open a browser")
     arguments = parser.parse_args(argv)
     if arguments.command == "studio":
         from flexo.studio.server import main as studio_main
 
-        options = [*([arguments.deck] if arguments.deck else []), "--port", str(arguments.port)]
+        deck = arguments.deck
+        if deck and not Path(deck).suffix and not Path(deck).exists():
+            deck += ".flexo"  # a new deck is a bundle, one file (talk.yaml for one in a folder)
+        options = [*([deck] if deck else []), "--port", str(arguments.port)]
         return studio_main([*options, *(["--no-browser"] if arguments.no_browser else [])], kind="deck")
     try:
         if arguments.command == "convert":

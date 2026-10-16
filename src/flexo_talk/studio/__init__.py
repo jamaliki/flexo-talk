@@ -50,6 +50,7 @@ from flexo_talk.document import (
     UntrustedCode,
     deck_from_document,
     dump_document,
+    figure_value,
     is_deck_document,
     load_document,
     parse_document,
@@ -297,6 +298,34 @@ class DeckKind:
 
         return references(data, base)
 
+    def figure_in(self, document: Any, key: str) -> dict[str, Any] | None:
+        """The figure the deck holds by ``key``, for the figure editor to edit in a tab of its
+        own (``flexo.studio.embedded``): one of the deck's ``figures`` by its name, else the
+        first figure written in a slide's block with that id. None if it holds none."""
+
+        return _held_figure(document, key)[0]
+
+    def with_figure(self, document: Any, key: str, figure: dict[str, Any]) -> Any:
+        """The deck with the figure it holds by ``key`` (``figure_in``) made ``figure``; None
+        if it holds none."""
+
+        changed = copy.deepcopy(document)
+        _, put = _held_figure(changed, key)
+        if put is None:
+            return None
+        put(copy.deepcopy(figure))
+        return changed
+
+    def bundled(self, data: Any, base: Path) -> Any:
+        """A deck as a bundle of it keeps it (``flexo.bundle.pack``): its figures kept in
+        figure files of their own written into it (``flexo_talk.embedding``), files and all."""
+
+        from flexo_talk import embedding
+
+        if not isinstance(data, dict):
+            return data
+        return embedding.embed(data, base)["document"]
+
     def guide(self) -> str:
         import flexo_talk.document as module
 
@@ -334,6 +363,11 @@ class DeckKind:
             "body[0], region: [x, y, width, height] as fractions of that picture, figure or plot, at, size) shows "
             "that region magnified in its box, joined to it by two lines; a picture's mask may be a closed shape "
             "({kind: star}, its places fractions of the part kept) as well as circle.\n"
+            "A deck's figures live in the deck: write a new figure in its block (figure: {figure: {id: ...}, "
+            "nodes: [...], edges: [...], groups: [...]}), never as a figure file of its own unless the user asks "
+            "for one; one figure shown on several slides goes once in the deck's figures (a mapping beside deck "
+            "and slides, of names to figures) and each block names it in quotes, figure: '#name'. A figure file a "
+            "deck already names (figure: figures/x.yaml) is read as it is.\n"
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )
@@ -352,6 +386,9 @@ class DeckKind:
             return f"slides must be a list of slides, not {described(slides)}"
         if deck is not None and not isinstance(deck, dict):
             return f"deck must be a mapping of deck settings, not {described(deck)}"
+        figures = document.get("figures")
+        if figures is not None and not isinstance(figures, dict):
+            return f"figures must be a mapping of names to figures, not {described(figures)}"
         for number, slide in enumerate(slides or [], start=1):
             if not isinstance(slide, dict):
                 continue  # said on its slide
@@ -429,6 +466,19 @@ class DeckKind:
             name = _object_name(json.loads(one)).lower()
             there[0]["text"] = f"moved the {name} from slide {a + 1} to slide {there[4] + 1}"
             notes.remove(note)
+        # The figures the deck keeps once for several slides: one changed is said where it is
+        # first shown.
+        old_figures, new_figures = before.get("figures") or {}, after.get("figures") or {}
+        if isinstance(old_figures, dict) and isinstance(new_figures, dict) and old_figures != new_figures:
+            for name in sorted({*old_figures, *new_figures}):
+                if old_figures.get(name) == new_figures.get(name):
+                    continue
+                verb = "edited" if name in old_figures and name in new_figures else "added" if name in new_figures \
+                    else "removed"
+                page = next((index + 1 for index, slide in enumerate(new)
+                             if f"#{name}" in json.dumps(slide, ensure_ascii=False)), None)
+                notes.append({"text": f"{verb} the figure \u201c{name}\u201d",
+                              "where": {"page": page, "label": f"Slide {page}"} if page else {"label": "Figures"}})
         return notes
 
     def follow(self, before: Any, after: Any) -> Any:
@@ -584,10 +634,13 @@ class DeckKind:
             if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
         ]
         watched: set[Path] = set(_theme_files(deck_data, base)) | set(_logo_files(deck_data, base))
+        shared = document.get("figures") if isinstance(document.get("figures"), dict) else {}
 
         def key(index: int) -> str:
             data = slides[index]
-            files = sorted(_files(data, base))
+            # (The deck's own figures it shows by name: one changed draws again those showing it.)
+            named = {name: shared.get(name) for name in sorted(_shared_names(data))}
+            files = sorted(_files(data, base) | _files([{"figure": figure} for figure in named.values()], base))
             watched.update(files)
             layout = data.get("layout", "content") if isinstance(data, dict) else "content"
             return _stable({
@@ -602,6 +655,7 @@ class DeckKind:
                 # skipped there or shown again redraws it.
                 "shown": sum(1 for item in slides[:index] if not _skipped(item)),
                 "slide": data,
+                "figures": named,
                 "files": [(str(file), _stamp(file)) for file in files],
             })
 
@@ -705,7 +759,11 @@ class DeckKind:
         "at": {"slide", "region", "index"}, "edit": <a flexo figure edit>}`` -- or
         ``{"do": "mechanism", ...}``, drawing on a mechanism (``_mechanism``), or
         ``{"do": "inline", "at"}``, a figure file's figure written into the deck
-        (``_inline``), ``{"do": "figure-file", "file", "text", "expect"}``, a figure
+        (``_inline``), its file left as it is; ``{"do": "embed", "at"}`` (no ``at``: every
+        figure file the deck's slides show), the same, the files no longer named said
+        (``released``) for the studio to take out of a bundle; ``{"do": "export-figure",
+        "at", "name", "use"}``, a figure of the deck's written out as a figure file of its
+        own, and shown from it (``use``); ``{"do": "figure-file", "file", "text", "expect"}``, a figure
         file put back as an edit made on its slide found it or left it (``_restore``), or
         ``{"do": "convert", "slide", "shapes"}``, a slide's shapes made a figure on it
         (``convert``).
@@ -738,6 +796,11 @@ class DeckKind:
             return _mechanism(document, action, base)
         if action.get("do") == "inline":
             return _inline(document, action, base)
+        if action.get("do") in {"embed", "export-figure"}:
+            # A figure file's figure written into the deck (Embed Figure in Deck, Embed All
+            # Figures in Deck), or a figure of the deck's written out as a file of its own
+            # (Export Figure as File…): flexo_talk.embedding.
+            return _embedding(document, action, base)
         if action.get("do") == "figure-file":
             return _restore(document, action, base)
         if action.get("do") == "convert":
@@ -772,6 +835,9 @@ class DeckKind:
                 # A sample figure changed is the person's own: presented and exported.
                 block.pop("placeholder", None)
             return {"document": changed, "select": made["select"], "model": made["model"]}
+        if isinstance(value, str) and value.startswith("#"):
+            # One of the deck's own figures, shown on several slides: edited where it is kept.
+            return _shared_edit(changed, block, value[1:], edit, base)
         if isinstance(value, str) and value and ".py:" not in value:
             path = _figure_file(base, value)
             was = path.read_text(encoding="utf-8")
@@ -930,6 +996,7 @@ class DeckKind:
         from flexo.serialization import figure_to_document, parse_figure
         from flexo.studio.figure_edit import EditError
 
+        from flexo_talk import embedding
         from flexo_talk.deck import made
         from flexo_talk.document import _figure, make_deck
 
@@ -938,7 +1005,7 @@ class DeckKind:
             raise EditError("The selected object isn't a figure.")
         deck = make_deck(document.get("deck") or {}, base)
         where = f"slides[{part.get('slide')}].{part.get('region')}[{part.get('index')}]"
-        figure = made(_figure(base, block["figure"], where, None))
+        figure = made(_figure(base, figure_value(document, block["figure"]), where, None))
         spec = getattr(figure, "spec", figure)
         spec = replace(
             spec, style=deck.theme, palette=deck.palette_name,
@@ -947,7 +1014,8 @@ class DeckKind:
         # The files its parts draw, wherever it names them from (a figure file names them
         # from its own folder), found once and for all.
         value = block["figure"]
-        origin = (base / value).parent if isinstance(value, str) and ".py:" not in value else base
+        origin = (base / value).parent if isinstance(value, str) and ".py:" not in value and not value.startswith("#") \
+            else base
         data = figure_to_document(spec)
         for node in data.get("nodes") or []:
             properties = node.get("properties") or {}
@@ -983,7 +1051,13 @@ class DeckKind:
                 if "source" in properties:
                     properties["source"] = beside(properties["source"])
             target = folder / f"{name}.yaml"
-            target.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+            # A figure the deck keeps (or a file of its own) as it is written -- every file it
+            # names named from where it goes (by its whole path, handed over), in the deck's
+            # theme -- as Export Figure as File… writes it; one made in Python, as made.
+            own = _as_written(document, base, value, target if into is None else None)
+            text = (embedding.figure_text(own) if own is not None
+                    else yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+            target.write_text(text, encoding="utf-8")
             written.append(target)
         built = [item for item in formats if item != "yaml"]
         if built:
@@ -1056,6 +1130,107 @@ def _mechanism(document: dict[str, Any], action: dict[str, Any], base: Path) -> 
         look = {}
     drawn = sheet(block["mechanism"], step=step, holding=holding, options=options, look=look)
     return {"document": changed, "sheet": drawn, **said}
+
+
+def _held_figure(document: Any, key: str) -> tuple[dict[str, Any] | None, Any]:
+    """The figure a deck holds by ``key`` (see ``DeckKind.figure_in``), and how to put another
+    in its place; ``(None, None)`` if it holds none."""
+
+    from flexo_talk.embedding import places
+
+    if not isinstance(document, dict):
+        return None, None
+    figures = document.get("figures")
+    if isinstance(figures, dict) and isinstance(figures.get(key), dict):
+        return figures[key], lambda figure: figures.__setitem__(key, figure)
+    for _, block in places(document):
+        value = block.get("figure")
+        if isinstance(value, dict) and isinstance(value.get("figure"), dict) and str(value["figure"].get("id")) == key:
+            return value, lambda figure, block=block: block.__setitem__("figure", figure)
+    return None, None
+
+
+def _embedding(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+    """Embed Figure in Deck, Embed All Figures in Deck and Export Figure as File… (see
+    ``flexo_talk.embedding``), what keeps them from being done said as an edit's mistakes are."""
+
+    from flexo.studio.figure_edit import EditError
+
+    from flexo_talk import embedding
+
+    try:
+        if action.get("do") == "embed":
+            at = action.get("at")
+            made = embedding.embed(document, base, at if isinstance(at, dict) else None)
+            # The files the deck no longer names: in a bundle, its own, taken out of it (once
+            # no document names them -- and put back should the embedding be undone).
+            named = embedding.file_figures(made["document"], base)
+            released = [str(path) for path in made["files"] if path not in named]
+            return {"document": made["document"], "said": made["said"], "skipped": made["skipped"],
+                    "embedded": len(made["files"]), "released": released}
+        made = embedding.export(document, base, action.get("at") or {}, str(action.get("name") or ""),
+                                use=bool(action.get("use")))
+        answer = {"document": made["document"], "written": made["file"], "said": made["said"]}
+        if action.get("use"):
+            # In a bundle, a file of the bundle's own, there while the deck shows it: should
+            # showing it be undone, it goes too, and comes back with it.
+            answer["released"] = [str((base / made["file"]).resolve())]
+        return answer
+    except embedding.EmbedError as error:
+        raise EditError(str(error)) from None
+
+
+def _as_written(document: dict[str, Any], base: Path, value: object, target: Path | None) -> dict[str, Any] | None:
+    """A slide's figure (its block's ``value``) as a figure file of its own at ``target`` has
+    it, its files named from there -- or, with no ``target`` (a file handed over, to go who
+    knows where), by their whole paths; None for one made in Python."""
+
+    from flexo_talk import embedding
+
+    figure = figure_value(document, value)
+    origin = base
+    if embedding.is_file(figure):
+        path = (base / str(figure)).resolve()
+        try:
+            figure = embedding.read_figure_file(path, str(value))
+        except embedding.EmbedError:
+            return None
+        origin = path.parent
+    if not isinstance(figure, dict):
+        return None
+    figure = embedding.rebased(figure, origin, base)
+    return embedding.as_file(document, base, figure, target)
+
+
+def _shared_edit(changed: dict[str, Any], block: dict[str, Any], name: str, edit: dict[str, Any],
+                 base: Path) -> dict[str, Any]:
+    """An edit to one of the deck's own figures (its ``figures``) made on a slide that shows
+    it by name: made to the figure where the deck keeps it, every slide showing it changed with
+    it -- one change to the deck, one step in its history. Its parts hidden, dimmed or
+    highlighted (``show``) are this slide's alone, said by its block, as for a figure file."""
+
+    from flexo.studio.figure_edit import EditError, apply_to_data
+
+    figures = changed.get("figures")
+    data = figures.get(name) if isinstance(figures, dict) else None
+    if not isinstance(data, dict):
+        raise EditError(f"The deck has no figure named “{name}” any more. Someone else may have changed it.")
+    if edit.get("do") == "show":
+        own = data.get("figure") or {}
+        made = apply_to_data({**data, "figure": {**own, **_shown_here(block, data)}}, edit, base=base)
+        for key in SHOWN_KEYS:
+            block[key] = list((made["data"].get("figure") or {}).get(key) or [])
+            if not block[key] and not own.get(key):
+                del block[key]
+        return {"document": changed, "select": made["select"], "model": made["model"]}
+    made = apply_to_data(data, edit, base=base)
+    if edit.get("do") != "read":
+        figures[name] = made["data"]
+    shown = made["model"]
+    if isinstance(shown, dict):
+        # (As this slide shows it: what its block hides, dims and highlights.)
+        shown["figure"] = {**(shown.get("figure") or {}), **_shown_here(block, shown)}
+    return {"document": changed, "select": made["select"], "model": shown}
 
 
 def _figure_file(base: Path, value: str) -> Path:
@@ -1137,7 +1312,7 @@ def _slide_figure(document: dict[str, Any], at: dict[str, Any], base: Path) -> A
     deck = make_deck(document.get("deck") or {}, base)
     # (As the slide draws it: a line to a shape it has none of left out, a shape that can't be
     # drawn as written a plain box -- what is asked of a structure in it the same.)
-    value = block["figure"]
+    value = figure_value(document, block["figure"])
     strays = _strays(value)
     try:
         figure = made(_figure(base, {**value, "edges": strays[1]} if strays else value, "figure", None))
@@ -1967,6 +2142,22 @@ def _files(data: object, base: Path) -> set[Path]:
                 found |= _files(value, base)
             elif key == "gallery" and isinstance(value, list):
                 found |= _files([{"picture": item} if isinstance(item, str) else item for item in value], base)
+    return found
+
+
+def _shared_names(data: object) -> set[str]:
+    """The deck's own figures a slide's document shows by name (``figure: '#pipeline'``)."""
+
+    found: set[str] = set()
+    if isinstance(data, list):
+        for item in data:
+            found |= _shared_names(item)
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            if key == "figure" and isinstance(value, str) and value.startswith("#"):
+                found.add(value[1:])
+            elif isinstance(value, dict | list):
+                found |= _shared_names(value)
     return found
 
 
