@@ -4298,6 +4298,8 @@ class _Prepared:
     spec: Any = None
     """The figure as it was laid out: its shapes, groups and lines, for its parts to be found
     in its drawing (those revealed a click at a time)."""
+    parts: Any = None
+    """Where its shapes were laid out, by id (``framing.part_boxes``), for a figure in a frame."""
 
 
 LEGIBLE = 7.0
@@ -4449,7 +4451,8 @@ def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prep
     figures beside it). One that fails so is said (``_FigureFailed``), not the slide's end."""
 
     try:
-        return _prepared(canvas, block, box, largest)
+        # One of a frame's figures, drawn as one with the others (framing).
+        return _in_frame(canvas, block, box, largest) if block.frame else _prepared(canvas, block, box, largest)
     except Exception as error:
         from flexo.studio.plain import explain
 
@@ -4532,9 +4535,9 @@ def _named(spec: object, said: str) -> str:
     return said
 
 
-def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
-    deck = canvas.deck
-    figure = made(block.figure)
+def _in_deck_look(deck: Deck, figure: object) -> Any:
+    """A figure's spec as a slide draws it: one made elsewhere redrawn in the deck's look."""
+
     spec = figure.spec if isinstance(figure, flexo.Figure) else figure
     if not isinstance(figure, flexo.Figure) or spec.style != deck.theme:
         # A figure made elsewhere is redrawn in the deck's look.
@@ -4548,6 +4551,16 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
 
             ours = parse_conventions(deck.conventions)
             spec = replace(spec, conventions=ours.with_updates(spec.conventions) if spec.conventions else ours)
+    return spec
+
+
+def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout: str | None = None) -> _Prepared:
+    """A figure laid out for its place (``_prepare``) -- in ``layout`` (``flexo.fit_in_box``'s
+    name for one) if given, as a frame lays out each of its figures as its first."""
+
+    deck = canvas.deck
+    figure = made(block.figure)
+    spec = _in_deck_look(deck, figure)
     style = figure_style(spec)
     base = style.typography.size.points
     # A figure its person arranged by hand -- a part put under another, or on a line of its
@@ -4576,6 +4589,8 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         for was, now in zip(placed, (box.width, box.height, largest), strict=True)
     )
     free = seen.startswith("turned") if seen is not None and same and not asked else turn
+    if layout is not None:
+        free = layout.startswith("turned")
     # The palette is in the key too: a theme file's colours can change under the same name.
     # (So is whether its person asked it to turn, or left it to the deck; and, once it has
     # been seen, whether it is free to turn. Opened again, it is found as it was last seen.)
@@ -4584,14 +4599,19 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         largest, turn, block.turn,
     )
     key = opened if seen is None else (*opened, free)
+    if layout is not None:
+        key = (*opened, "frame", layout)
     # (A figure with plots is laid out again when their Python or their data has changed.)
     plotted = any(node.kind == "plot" for node in spec.nodes)
     laid = _plotted_fit(key, spec) if plotted else _cached_fit(key)
+    if laid is not None and block.frame and "parts" not in laid:
+        laid = None  # (kept before frames asked where its parts are)
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
         # (Not one just let turn, or kept from turning: its person asked for the other way.)
-        keep = seen if EDITING.get() and not asked else None
+        # (One of a frame's, the frame's.)
+        keep = layout if layout is not None else seen if EDITING.get() and not asked else None
         started = time.perf_counter()
         try:
             fit = _fit_in_box(
@@ -4616,7 +4636,9 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         # (Unless finding it takes a while -- a large figure -- when the changes would wait on
         # it: it is found once they stop. So too if how long is not known.)
         quick = _FINDING.get(where, math.inf) <= REFIT
-        if keep is not None and fit.layout == keep and ((shown and fit.scale < shown * SHRUNK) or crossed) and quick:
+        framed = layout is not None
+        shrank = (shown and fit.scale < shown * SHRUNK) or crossed
+        if not framed and keep is not None and fit.layout == keep and shrank and quick:
             # Kept, the figure would shrink a good deal (a shape added to a long row): its
             # best layout is found now, in one drawing, rather than a moment later, when it
             # would jump under its person's eyes.
@@ -4636,7 +4658,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         ]
         # (Only while it is changed: settled, a figure is drawn as its document says, the same
         # way whatever came before -- after an undo, after a reload.)
-        previous = _LAYOUTS.get(where) if EDITING.get() and not asked else None
+        previous = _LAYOUTS.get(where) if EDITING.get() and not asked and not framed else None
         if (keep is None or fit.layout != keep) and previous and fit.layout != previous:
             # A figure already shown one way stays that way unless another is clearly
             # larger: it doesn't turn under its person for a little more room.
@@ -4661,13 +4683,17 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
             "svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout, "codes": codes,
             "scale": fit.scale, "finding": _FINDING.get(where),
         }
+        if block.frame:
+            from flexo_talk.framing import part_boxes
+
+            laid["parts"] = part_boxes(fit.compilation)
         if plotted:
             laid["plots"] = _plots_said(fit.compilation)
         if plotted and any(code == _PLOT_WAITING for _, code, _ in laid["plots"]):
             # (A plot not run yet -- its Python was still starting -- is asked for again
             # at the next drawing: its figure is not kept as it is.)
             canvas.settled = False
-        elif keep is not None and fit.layout == keep:
+        elif keep is not None and fit.layout == keep and (not framed or EDITING.get()):
             canvas.settled = False
         else:
             # (Found again as it is seen -- by the next drawing, free to turn as this one is
@@ -4744,8 +4770,114 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
     turnable = _settled_only(where, "turned", larger_turned, 1.0) if not free else None
     return _Prepared(
         laid["svg"], left, top, width, height, most, base, spec.id, turnable, _settled_only(where, "alone", alone, 0.0),
-        spec,
+        spec, laid.get("parts"),
     )
+
+
+_FRAMED: dict[tuple, dict] = {}
+"""A frame's figures laid out for a place (``_member``), by what they were laid out from: kept
+while the program runs, each slide of the frame asking for its others'."""
+
+_FRAME_LAYOUTS: dict[tuple[str, str], str] = {}
+"""The layout each frame (by deck and name) was last drawn in: kept while it is changed."""
+
+
+def _in_frame(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
+    """One of a frame's figures (``framing``) laid out for ``box``: with every part of the
+    frame's others it lacks, hidden; in the layout of the frame's first; and given the extent
+    of all of them together, each moved for the parts they share to be where the first's are
+    -- so drawn at the scale that fits them all, from the same top left. Alone in its frame,
+    or should the others fail, a figure as any."""
+
+    from flexo_talk import framing
+
+    deck = canvas.deck
+    blocks = framing.members(deck, block.frame)
+    me = next((index for index, other in enumerate(blocks) if other is block), None)
+    if me is None:
+        # (A copy of its block, made for its place: its frame's member by what it is.)
+        me = next((index for index, other in enumerate(blocks) if other.figure is block.figure), None)
+    specs: list[Any] = []
+    for index, other in enumerate(blocks):
+        try:
+            specs.append(_in_deck_look(deck, made(other.figure)) if index != me else None)
+        except Exception:
+            specs.append(False)  # (one that can't be made: no part of the frame here)
+    if me is None or sum(spec is not False for spec in specs) < 2:
+        return _prepared(canvas, block, box, largest)
+    specs[me] = _in_deck_look(deck, made(block.figure))
+    kept = [index for index, spec in enumerate(specs) if spec is not False]
+    whole = {
+        index: framing.completed(specs[index], [specs[other] for other in kept if other != index]) for index in kept
+    }
+    # (A shape whose words change from one to another the same size in each: framing.evened.)
+    own = [[node.id for node in specs[index].nodes] for index in kept]
+    sized = framing.evened([whole[index][0] for index in kept], own)
+    whole = {index: (spec, whole[index][1]) for index, spec in zip(kept, sized, strict=True)}
+    first = kept[0]
+    turn, fold = _turning(blocks[first], specs[first])
+    words = min(deck.style.figure_size, largest)
+    where = (deck.id, block.frame)
+    known = _FRAME_LAYOUTS.get(where)
+    if EDITING.get() and known:
+        # (While it is changed, the way it was drawn: its best is found once the changes stop.)
+        layout = known
+        canvas.settled = False
+    else:
+        layout = _member(whole[first][0], box, words, largest, turn, fold, None)["layout"]
+        _FRAME_LAYOUTS[where] = layout
+    own = _prepared(canvas, replace(block, figure=whole[me][0]), box, largest, layout=layout)
+    laid: dict[int, tuple[Any, Any]] = {}
+    for index in kept:
+        if index == me:
+            laid[index] = ((own.left, own.top, own.width, own.height), own.parts or {})
+            continue
+        try:
+            fit = _member(whole[index][0], box, words, largest, turn, fold, layout)
+        except GivenUp:
+            raise
+        except Exception:
+            continue
+        laid[index] = (fit["ink"], fit["parts"])
+    reference = laid.get(first, laid[me])[1]
+    moves = {index: framing.offset(reference, parts) for index, (_, parts) in laid.items()}
+    left, top, width, height = framing.extent([ink for ink, _ in laid.values()], [moves[index] for index in laid])
+    dx, dy = moves[me]
+    return replace(own, svg=framing.stripped(own.svg, whole[me][1]), left=left - dx, top=top - dy, width=width,
+                   height=height)
+
+
+def _turning(block: _Figure, spec: Any) -> tuple[bool, bool]:
+    """Whether a figure may be turned to fit its place, and folded: as ``_prepared`` has it."""
+
+    turn = block.turn if block.turn is not None else not _arranged(spec)
+    return turn, turn or (block.turn is False and not _arranged(spec))
+
+
+def _member(spec: Any, box: Box, words: float, largest: float, turn: bool, fold: bool, layout: str | None) -> dict:
+    """A frame's figure laid out for ``box`` -- in ``layout``, else afresh -- in full: its
+    drawing, its ink, its layout's name and where its shapes are (``_FRAMED``, and kept between
+    builds as any figure laid out for a box is)."""
+
+    from flexo_talk.framing import part_boxes
+
+    style = figure_style(spec)
+    key = ("frame member", spec, style, repr(figure_palette(spec)), box.width, box.height, words, largest, turn, fold,
+           layout)
+    plotted = any(node.kind == "plot" for node in spec.nodes)
+    found = _FRAMED.get(key) or (None if plotted else _cached_fit(key))
+    if found is None:
+        fit = _fit_in_box(spec, box.width, box.height, words=words, largest=largest, turn=turn, fold=fold, keep=layout,
+                          draft=False)
+        found = {"svg": fit.compilation.document.text, "ink": list(fit.ink), "layout": fit.layout,
+                 "parts": part_boxes(fit.compilation)}
+        if not plotted:
+            _store_fit(key, found)
+    _FRAMED.pop(key, None)
+    _FRAMED[key] = found
+    while len(_FRAMED) > 96:
+        _FRAMED.pop(next(iter(_FRAMED)))
+    return found
 
 
 _ASIDE: dict[tuple, float] = {}

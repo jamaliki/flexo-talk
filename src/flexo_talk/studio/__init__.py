@@ -637,12 +637,20 @@ class DeckKind:
         ]
         watched: set[Path] = set(_theme_files(deck_data, base)) | set(_logo_files(deck_data, base))
         shared = document.get("figures") if isinstance(document.get("figures"), dict) else {}
+        from flexo_talk.framing import frames_of
+
+        frames = frames_of(document)
 
         def key(index: int) -> str:
             data = slides[index]
+            # (Figures it draws as one with others on other slides, in a frame: one of them changed
+            # draws it again -- flexo_talk.framing.)
+            framed = _frame_members(frames, data)
             # (The deck's own figures it shows by name: one changed draws again those showing it.)
-            named = {name: shared.get(name) for name in sorted(_shared_names(data))}
-            files = sorted(_files(data, base) | _files([{"figure": figure} for figure in named.values()], base))
+            named = {name: shared.get(name) for name in sorted(_shared_names([data, framed]))}
+            files = sorted(
+                _files([data, framed], base) | _files([{"figure": figure} for figure in named.values()], base)
+            )
             watched.update(files)
             layout = data.get("layout", "content") if isinstance(data, dict) else "content"
             return _stable({
@@ -657,6 +665,7 @@ class DeckKind:
                 # skipped there or shown again redraws it.
                 "shown": sum(1 for item in slides[:index] if not _skipped(item)),
                 "slide": data,
+                "frames": framed,
                 "figures": named,
                 "files": [(str(file), _stamp(file)) for file in files],
             })
@@ -2145,6 +2154,19 @@ def _files(data: object, base: Path) -> set[Path]:
             elif key == "gallery" and isinstance(value, list):
                 found |= _files([{"picture": item} if isinstance(item, str) else item for item in value], base)
     return found
+
+
+def _frame_members(frames: dict[str, list[dict[str, Any]]], data: object) -> list[dict[str, Any]]:
+    """The figure blocks of the frames a slide's document draws a figure in, on every slide
+    (``flexo_talk.framing``): what else its figures are drawn as one with."""
+
+    from flexo_talk.embedding import places
+
+    names = sorted({
+        block["frame"].strip() for _, block in places({"slides": [data]})
+        if isinstance(block.get("frame"), str) and block["frame"].strip()
+    })
+    return [block for name in names for block in frames.get(name, [])]
 
 
 def _shared_names(data: object) -> set[str]:

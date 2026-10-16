@@ -48,6 +48,34 @@ shapes and groups by id; a figure written in the slide says the same in its own
 **Show** to Highlight, Dimmed or Hidden (for a figure kept in a file, it is that
 slide's alone: written on its block, the file left as it is).
 
+A visualisation that changes a little from slide to slide -- a part added, a label changed,
+each slide its own figure -- is drawn as one when its blocks name one **frame**:
+
+```yaml
+slides:
+- title: Sample the prior
+  right:
+  - {figure: figures/smc-1.yaml, frame: smc}
+- title: Weight the samples
+  right:
+  - {figure: figures/smc-2.yaml, frame: smc}
+```
+
+The figures naming a frame are laid out with each other's parts (each kept room for where it
+lacks them, unseen), the same way (turned or not, as the frame's first), at one scale -- the
+one that fits the largest, so none is made smaller to fit -- and from one top left; a shape whose
+words change is as large on each slide as its largest words need, and each version is moved so
+its parts are where the first's of the same name are. Parts with the same id stay exactly where
+they are from one slide to the next; only what changed looks different. `hide`, `dim`,
+`highlight` and `stages` stay each slide's own: a deck's own figure shown with different parts
+hidden on each slide (`{figure: '#smc', hide: [move], frame: smc}`) keeps its whole room on
+every slide, its hidden parts' too, where alone it is drawn larger the more is hidden. A frame's
+figures line up where their slides set them in the same place: the same place of the same
+layout, or placed at the same `at` with the same `width` (Match on Other Slides sets both). In
+Python: `region.add(figure, frame="smc")`. In the studio, a figure's panel has **Frame**: None,
+one of the deck's frames (with the slides it is on), or New Frame. Every output -- the studio,
+presenting, the PDF, the PowerPoint, an image, a bundle -- draws it so.
+
 A figure can also be built up on one slide, a click at a time: `{figure: ..., stages:
 [[api], [queue, worker], [store]]}` names the shapes and groups that appear on each
 click. The rest is there from the start, a line comes with the later of its ends, and

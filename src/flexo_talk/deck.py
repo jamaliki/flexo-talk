@@ -458,6 +458,19 @@ sections large; ``keynote`` centres titles and content, without rules; ``margin`
 runs an accent bar down each slide's edge and paints titles in the accent."""
 
 
+def _frame(value: object) -> str | None:
+    """A figure's ``frame``: the name its figures on other slides share (``smc``), or None."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise SettingError(
+            "frame", "frame must be the name the figures drawn as one share, on each of their slides "
+            f"(such as smc), not {value!r}."
+        )
+    return value.strip()
+
+
 def _stages(value: object) -> tuple[tuple[str, ...], ...]:
     """A figure's ``stages`` as written -- a list of clicks, each a list of the parts that
     appear on it (or one part) -- with the clicks that name nothing left out."""
@@ -526,6 +539,10 @@ class _Figure:
     """Its parts that appear on a click each, in the order of the clicks: the shapes and
     groups (by id) of the first click, of the second... What is in none is there from the
     start; a line appears with the later of its two ends."""
+    frame: str | None = None
+    """The frame it is drawn in (``flexo_talk.framing``): figures on several slides naming the
+    same frame are drawn as one -- laid out with each other's parts, at one scale, from one top
+    left -- so what they share stays where it is from slide to slide."""
 
 
 @dataclass(slots=True)
@@ -1339,25 +1356,26 @@ class Region:
 
     def figure(
         self, id: str | None = None, *, turn: bool | None = None, width: float | None = None,
-        **options: object,
+        frame: str | None = None, **options: object,
     ) -> flexo.Figure:
         """A flexo figure in the deck's theme, laid out for this place: use it as a
-        ``with`` block. ``turn=False`` keeps it from turning, and ``width`` draws it that
-        wide (see ``add``)."""
+        ``with`` block. ``turn=False`` keeps it from turning, ``width`` draws it that
+        wide, and ``frame`` draws it as one with the figures on other slides that name the
+        same frame (see ``add``)."""
 
         deck = self._slide.deck
         turn = None if turn is None else _flag(turn, "turn")
-        width = _width(width)
+        width, frame = _width(width), _frame(frame)
         options = {**deck.figure_options(), **options}
         figure = flexo.Figure(id or f"{self._slide.id}-{self.name}-{len(self.blocks)}", **options)
-        self.blocks.append(_Figure(figure, turn, width))
-        self._record("figure", None, turn=turn, width=width)
+        self.blocks.append(_Figure(figure, turn, width, frame=frame))
+        self._record("figure", None, turn=turn, width=width, frame=frame)
         return figure
 
     def add(
         self, figure: flexo.Figure | FigureSpec, *, turn: bool | None = None, width: float | None = None,
         description: str | None = None, caption: str | None = None,
-        stages: Sequence[str | Sequence[str]] | None = None,
+        stages: Sequence[str | Sequence[str]] | None = None, frame: str | None = None,
     ) -> Region:
         """An existing flexo figure, laid out again in the deck's theme for this place.
 
@@ -1374,6 +1392,12 @@ class Region:
         presenting -- the shapes and groups (by id) of each click; the rest is there from
         the start, and a line appears with the later of its ends. Nothing moves: the figure
         is laid out with all of it. A click in the PowerPoint, a page in the PDF.
+
+        ``frame="smc"`` draws it as one with the figures on other slides given the same
+        frame -- each version of a visualisation that changes a little from slide to slide
+        (a part added, a label changed): laid out with every part the others have, the same
+        way, at one scale (the one that fits the largest) and from one top left, the parts
+        they share where they were (``flexo_talk.framing``).
         """
 
         width = _width(width)
@@ -1381,12 +1405,13 @@ class Region:
         turn = None if turn is None else _flag(turn, "turn")
         held, caption = caption == "", _caption(caption)
         steps = _stages(stages)
+        frame = _frame(frame)
         self.blocks.append(
             _Figure(figure, turn, width, description=description, caption=inline(caption), caption_held=held,
-                    stages=steps)
+                    stages=steps, frame=frame)
         )
         self._record("figure", None, turn=turn, width=width, description=description or None, caption=caption or None,
-                     stages=[list(step) for step in steps] or None)
+                     stages=[list(step) for step in steps] or None, frame=frame)
         return self
 
     def image(
