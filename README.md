@@ -758,6 +758,19 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
   being edited is drawn first; the others follow.
+- **Find and replace** (⌘F, Edit › Find in the Mac app): a bar over the slide finds a
+  word in the whole deck as it is typed -- titles, subtitles and bylines, texts, lists,
+  quotes, callouts and tables, numbers and captions, shapes' words, figures' labels
+  (inline or in a figure file), equations, and the speaker notes -- markup aside
+  (`en**zy**me` is found as "enzyme"), and says "3 of 17". Return and ⇧Return (⌘G and
+  ⇧⌘G) go from match to match, slide to slide: every match on the slide shown is marked
+  faintly, the one gone to strongly; one in the notes opens them and is marked there.
+  **Match Case** and **Whole Words** narrow it. ⌥⌘F (or the bar's chevron) shows
+  **Replace** and **Replace All**: each is one step in the history, the words put in
+  taking the look of the first letter they replace (bold stays bold), a figure file's
+  labels changed in the file with the deck's in the same step. Esc closes it, the last
+  match's words chosen where they are typed. The top bar's **Search** (⌘K) lists the same
+  matches, by slide, above the commands; choosing one goes there as the bar does.
 - **Others, live**: slides an agent or another person changes flash in their
   colour, and their avatars show which slide they are on.
 - **Present** (⌘↩, or ⌥⌘↩ from the first slide) plays the deck full screen, as

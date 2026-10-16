@@ -31,6 +31,7 @@ import { magnetButton } from "/static/studio/magnet.js";
 import * as Snap from "/static/studio/snapping.js";
 import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
 import { designBar } from "/static/kinds/deck/designbar.js";
+import { deckFinder } from "/static/kinds/deck/finddeck.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -571,6 +572,8 @@ export function mount(studio, container) {
   let mathNotes = null;
   let pending = false;
   let inline = null;
+  // Find and replace across the deck (finddeck.js): made once the editor is.
+  let finding = null;
   // A part of the slide being dragged on it, and parts just moved, landing.
   let carry = null;
   let moving = null;
@@ -788,11 +791,11 @@ export function mount(studio, container) {
     h("button.notes-head", { type: "button", onclick: () => showNotes(!state.notes) },
       icon("chevron", { class: "caret" }), h("span.notes-label", {}, "Notes"), notesPreview),
     h("div.notes-body", {}, notesArea));
-  function showNotes(on) {
+  function showNotes(on, { focus = true } = {}) {
     state.notes = on;
     remember("notes", on ? "1" : "0");
     notes.classList.toggle("open", on);
-    if (!on) return;
+    if (!on || !focus) return;
     // Opened to be written in: the caret at the end of what is there, so the words typed
     // go on after it, as a Mac text view opened to type in has it.
     notesArea.focus({ preventScroll: true });
@@ -1872,6 +1875,7 @@ export function mount(studio, container) {
     if (renewed) cropDrawn();
     if (renewed) freeShapes.drawn();
     if (renewed) objects.drawn();
+    if (renewed) finding?.drawn();
     placeChosen();
     placeOthers(here);
     if (inline) positionInline();
@@ -10388,6 +10392,13 @@ export function mount(studio, container) {
       { icon: "trash", label: `Delete ${name}`, keys: "⌫", run: () => deleteBlock(at) },
     ];
   }
+  // ⌘F: the deck's words found, gone to and replaced (finddeck.js).
+  finding = deckFinder(studio, {
+    center, notesArea, showNotes, pageNode: () => pageNode, slide: () => state.slide, select: (index) => select(index),
+    slideTitle: (index) => slideTitle(slides()[index]),
+    openWords: (edit, start, end) => { openInline(edit); if (inline?.area?.caretTo) { inline.area.focus(); inline.area.caretTo(start, end); } },
+    choose: (at, part = null) => { if (blocksAt(slideAt(), at.region)[at.index]) focusBlock(at.region, at.index, part ? () => figure?.parts.select([part]) : null); },
+  });
   studio.reveal = (where, { quiet = false } = {}) => {
     if (where?.label === "Design") { design.toggle(true); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);
