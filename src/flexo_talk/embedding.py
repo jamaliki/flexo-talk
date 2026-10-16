@@ -109,7 +109,7 @@ def rebased(figure: dict[str, Any], origin: Path, destination: Path | None) -> d
         properties = node.get("properties") if isinstance(node, dict) else None
         if not isinstance(properties, dict):
             continue
-        for key in ("source", "density"):
+        for key in ("source", "density", "ss_from"):
             if key in properties:
                 properties[key] = moved(properties[key])
         if node.get("kind") == "plot" and "data" in properties:
