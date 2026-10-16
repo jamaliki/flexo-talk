@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE, wedgeHead } from "/static/studio/studio.js";
 import { copyOut, copiedHere, pastedOwn } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
@@ -1745,7 +1745,7 @@ export function mount(studio, container) {
     notesPreview.classList.toggle("unwritten", !slide?.notes);
     notes.hidden = !list.length;
     if (!list.length) {
-      clear(stage, h("div.stage-empty", {}, h("h2", {}, "No slides"), h("div", {}, "Choose a layout for the first slide:"),
+      clear(stage, h("div.stage-empty", {}, wedgeHead("No slides", { tag: "h2" }), h("div", {}, "Choose a layout for the first slide:"),
         tinted(h("div.layout-grid.big", {}, layouts.map((layout) => h("button.layout-card", { type: "button", onclick: () => addSlide(layout.name, 0) },
           glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name]), h("span.note", {}, layout.note)))), studio.info?.palette)));
       return;
