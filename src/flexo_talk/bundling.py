@@ -5,7 +5,8 @@ The deck's theme and palette files, the picture behind every slide and each slid
 its logos; each slide's pictures, galleries, figures (a figure file, whose own files are
 followed in turn; one written in the deck, whose parts' pictures, structures, maps and plots
 are found from the deck's folder; or ``file.py:function``), plots (``file.py:function``) and
-the pictures among its shapes (a drawing pasted in, its parts kept as drawn).
+the pictures among its shapes (a drawing pasted in, its parts kept as drawn); and the files
+the parts of the figures it keeps once for several slides draw (its ``figures``).
 """
 
 from __future__ import annotations
@@ -44,6 +45,11 @@ def references(data: Any, base: Path) -> list[Reference]:
     for index, slide in enumerate(slides if isinstance(slides, list) else []):
         if isinstance(slide, Mapping):
             found += _slide(slide, base, f"slides[{index}]")
+    # The figures the deck keeps once for several slides: their parts' files, from its folder.
+    figures = data.get("figures")
+    for name, figure in figures.items() if isinstance(figures, Mapping) else ():
+        if isinstance(figure, Mapping):
+            found += figure_references(figure, base, f"figures.{name}")
     return found
 
 
@@ -81,7 +87,8 @@ def _block(block: object, base: Path, where: str) -> list[Reference]:
     if isinstance(figure, Mapping):
         # Written in the deck: its parts' files are found from the deck's folder.
         found += figure_references(figure, base, f"{where} (figure)")
-    elif isinstance(figure, str) and figure:
+    elif isinstance(figure, str) and figure and not figure.startswith("#"):
+        # (One named '#pipeline' is the deck's own, among its figures: no file.)
         found.append(_named(figure, f"{where} (figure)", base, "document"))
     plot = block.get("plot")
     if isinstance(plot, str) and ".py:" in plot:

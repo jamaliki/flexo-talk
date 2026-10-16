@@ -8,7 +8,9 @@
 // figure is opened. ⇧-click or ⌘-click on an object or a shape puts it in, or takes it out; one
 // left alone is chosen as it is alone. A figure being edited, its shapes chosen, ⇧-click on a
 // shape over the slide chooses both: the figure stays open, its shapes chosen in it (each as
-// { region, index, part }: the figure's place, the shape's id).
+// { region, index, part }: the figure's place, the shape's id). ⇧-click on another object then
+// chooses the figure whole with it and the shapes, and says so: a figure's shapes are never
+// chosen with the slide's other objects (see press).
 //
 // `ctx` is the editor's: studio, shapes (its shapes' editor), state; many() (the objects chosen
 // together: [{ region, index }], none when they are not), setMany(picks) (they are, none: not),
@@ -21,6 +23,10 @@
 // swallowRelease(held).
 
 import { mixedChoice } from "/static/studio/mixed.js";
+import { toast } from "/static/studio/studio.js";
+
+// What ⇧-click on another object says, a figure's shapes chosen with the slide's.
+export const WHOLE = "A figure’s shapes can’t be selected with other objects, so the whole figure is selected instead.";
 
 const samePlace = (a, b) => a?.region === b?.region && a?.index === b?.index;
 const samePick = (a, b) => samePlace(a, b) && a?.part === b?.part;
@@ -141,8 +147,15 @@ export function slideMixed(ctx) {
     if (opened() && ctx.inFigure(event)) return false;
     const part = ctx.partAt(event);
     if (part?.kind !== "block") return false;
-    // (Another object, a figure's shapes chosen: the object, with the shapes, the figure closed.)
-    if (opened()) mixed.together(() => choose([]));
+    // (Another object, a figure's shapes chosen: the figure chosen whole with it, and the shapes
+    // -- as ⇧-click on another object chooses the figure whole when no shape is chosen. Its
+    // shapes are edited in it, through its own edits, where it is on the slide: chosen with the
+    // slide's other objects, a change of all of them would move it under its own edits. Said.)
+    const open = opened();
+    if (open) {
+      mixed.together(() => choose([{ region: open.region, index: open.index }]));
+      toast(WHOLE, { icon: "figure", seconds: 5 });
+    }
     mixed.pickOwn({ region: part.region, index: part.index }, samePick);
     ctx.swallowRelease(true);
     event.shapes = true;

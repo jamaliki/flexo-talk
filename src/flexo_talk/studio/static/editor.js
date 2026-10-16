@@ -4,7 +4,7 @@
 // slide -- and the deck's design. Others' edits (people, agents) arrive live:
 // the slides they touch flash in their colour.
 
-import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE } from "/static/studio/studio.js";
+import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE, wedgeHead } from "/static/studio/studio.js";
 import { copyOut, copiedHere, pastedOwn } from "/static/studio/studio.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
@@ -20,7 +20,9 @@ import { convertible, convertCommand } from "/static/studio/toparts.js";
 import { slideToParts } from "/static/kinds/deck/toparts.js";
 import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
 import { editableTools, isDrawing } from "/static/kinds/deck/editable.js";
+import { figureHome } from "/static/kinds/deck/figurehome.js";
 import { slideMixed } from "/static/kinds/deck/mixed.js";
+import { deckColours } from "/static/kinds/deck/colours.js";
 import { clipsOf } from "/static/studio/mixing.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
@@ -106,7 +108,7 @@ const FIGURE_EXPORTS = [
   { label: "SVG", formats: ["editable"], hint: "Editable SVG with Inkscape layers and live text" },
   { label: "PDF", formats: ["pdf"], hint: "PDF with embedded fonts" },
   { label: "PNG", formats: ["png"], hint: "PNG image" },
-  { label: "Flexo Figure", formats: ["yaml"], hint: "A figure file of its own, in the deck’s theme, to open in Flexo" },
+  { label: "File", formats: ["yaml"], hint: "A Flexo figure file of its own: the deck keeps its copy, or shows the file instead" },
 ];
 
 const LAYOUT_NAMES = {
@@ -790,23 +792,36 @@ export function mount(studio, container) {
   const inspectorHead = h("div.insp-head", { hidden: true });
   const inspectorBody = h("div.panel-body.scroll-thin");
   const inspector = h("aside.panel.inspector", {}, inspectorHead, inspectorBody);
-  // Format and Design, as Keynote's: the inspector shown as one or the other -- the one shown
-  // clicked again, hidden, the slide given its room.
+  // Format, Arrange and Design, as Keynote's: the inspector shown as one of them -- the one shown
+  // clicked again, hidden, the slide given its room. Arrange (arrangeForm) is what is chosen
+  // arranged, lined up and spaced; it stays shown as other things are chosen, as Keynote's tab
+  // does (what is chosen leaves Design for Format, not Arrange).
   let inspectorHidden = false;
+  let arrangeOn = leftAt.tab === "arrange";
+  const tabShown = () => (state.tab === "design" ? "design" : arrangeOn ? "arrange" : "slide");
   const panelButton = (tab, label, glyph, title) => ui.button(label, () => {
-    if (state.tab === tab && !inspectorHidden) inspectorHidden = true;
-    else { inspectorHidden = false; state.tab = tab; renderInspector(); }
+    if (tabShown() === tab && !inspectorHidden) inspectorHidden = true;
+    else { inspectorHidden = false; arrangeOn = tab === "arrange"; state.tab = tab === "design" ? "design" : "slide"; renderInspector(); }
     root.classList.toggle("no-inspector", inspectorHidden);
     showPanels();
   }, { kind: "ghost", icon: glyph, title });
   const formatButton = panelButton("slide", "Format", "slide", "Format what is chosen, or the slide");
+  const arrangeButton = panelButton("arrange", "Arrange", "arrange", "Arrange what is chosen: align, distribute, order, flip, lock, group (⇧⌘A)");
   const designButton = panelButton("design", "Design", "palette", "The deck’s theme, colours, fonts and look");
   function showPanels() {
     const shown = !inspectorHidden;
-    formatButton.classList.toggle("on", shown && state.tab !== "design");
-    designButton.classList.toggle("on", shown && state.tab === "design");
-    formatButton.setAttribute("aria-pressed", String(shown && state.tab !== "design"));
-    designButton.setAttribute("aria-pressed", String(shown && state.tab === "design"));
+    for (const [button, tab] of [[formatButton, "slide"], [arrangeButton, "arrange"], [designButton, "design"]]) {
+      button.classList.toggle("on", shown && tabShown() === tab);
+      button.setAttribute("aria-pressed", String(shown && tabShown() === tab));
+    }
+  }
+  // Arrange shown (⇧⌘A, Align and Distribute…, its button), whatever is chosen.
+  function showArrange() {
+    inspectorHidden = false;
+    arrangeOn = true;
+    state.tab = "slide";
+    root.classList.remove("no-inspector");
+    renderInspector();
   }
   // Its buttons, swatches and cards clicked leave the keys with the slide, as Keynote's
   // inspector does; its fields take them.
@@ -986,6 +1001,8 @@ export function mount(studio, container) {
         onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
       h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
   });
+  // (Its Arrange and Align and Distribute in the inspector's Arrange tab, a line in Format going there.)
+  freeShapes.arrangeIn(() => showArrange());
   // A drawing pasted, dropped or chosen (Inkscape's): the slide's own shapes, centred where
   // the pointer is on the slide (else in its middle), made smaller to fit it -- or, as asked
   // or too large, the picture it was (drawingpaste.js).
@@ -1036,6 +1053,13 @@ export function mount(studio, container) {
     enterShape: (index, at) => { const entered = freeShapes.enter(index, { at, deep: true }); placeChosen(); return entered; },
     away: (what) => awayFrom(what),
   });
+  // Where the deck's figures are kept: Embed Figure in Deck, Embed All Figures in Deck, Export
+  // Figure as File… and Open in Figure Editor (figurehome.js).
+  const figureFiles = figureHome({
+    studio, at: () => (state.focus ? { slide: state.slide, region: state.focus.region, index: state.focus.index } : null),
+    blockAt: (at) => blocksAt(slides()[at.slide] || {}, at.region)[at.index],
+    render: () => { renderInspector(); reportFocus(); }, away: (what) => awayFrom(what),
+  });
   // The slide's objects and its shapes chosen together, as Keynote's are: ⇧-click, a band
   // across both; deleted, cut, copied, pasted and duplicated together, one step (mixed.js).
   const mixed = slideMixed({
@@ -1055,6 +1079,17 @@ export function mount(studio, container) {
     clipChosen: (cut) => clipChosen(cut), clipItems: () => clipItems(), undoNote: (text, options) => undoNote(text, options),
     away: (what) => awayFrom(what), showPanel: () => { if (inspectorHidden || state.tab === "design") formatButton.click(); },
     swallowRelease: (held) => swallowRelease(held),
+  });
+  // Set Colour… (⇧⌘C): what is chosen -- objects, shapes, a figure's shapes, both kinds, else the
+  // slide's background -- given a colour's code pasted, one step (colours.js).
+  const colours = deckColours({
+    studio, shapes: freeShapes, pageNode: () => pageNode, inspector, typing: () => typingNow(), slide: () => state.slide, slideAt: () => slideAt(),
+    objects: () => (allOn() ? picksNow() : state.focus && !state.field ? [{ region: state.focus.region, index: state.focus.index }] : []),
+    blockAt: (slide, pick) => blocksAt(slide, pick.region)[pick.index], kindOf: (block) => kindOf(block), blockName: (block) => blockName(block),
+    element: (region, index) => blockElement(region, index),
+    figure: () => (figure && figureBlock() && figure.parts.model && figure.parts.selected.length ? { parts: figure.parts } : null),
+    partElement: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
+    chosenOther: () => Boolean(state.field || logoChosen()), editSlide: (mutate, options) => editSlide(mutate, options),
   });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
@@ -1100,7 +1135,7 @@ export function mount(studio, container) {
   const presentButton = ui.button("Present", () => present(), { kind: "ghost", icon: "play" });
   const exportButton = ui.button("Export", (event) => menu(event.currentTarget, studio.exports.map(({ format, label, hint, icon: glyph }) =>
     ({ icon: glyph || "export", label, hint, run: () => studio.exportFiles([format]) })), { align: "end" }), { kind: "ghost", icon: "export" });
-  studio.actions.append(presentButton, exportButton, h("span.sep"), formatButton, designButton);
+  studio.actions.append(presentButton, exportButton, h("span.sep"), formatButton, arrangeButton, designButton);
   const showable = () => {
     const none = !slides().length;
     presentButton.disabled = exportButton.disabled = none;
@@ -1710,7 +1745,7 @@ export function mount(studio, container) {
     notesPreview.classList.toggle("unwritten", !slide?.notes);
     notes.hidden = !list.length;
     if (!list.length) {
-      clear(stage, h("div.stage-empty", {}, h("h2", {}, "No slides"), h("div", {}, "Choose a layout for the first slide:"),
+      clear(stage, h("div.stage-empty", {}, wedgeHead("No slides", { tag: "h2" }), h("div", {}, "Choose a layout for the first slide:"),
         tinted(h("div.layout-grid.big", {}, layouts.map((layout) => h("button.layout-card", { type: "button", onclick: () => addSlide(layout.name, 0) },
           glyph(layout.name), h("span.name", {}, LAYOUT_NAMES[layout.name]), h("span.note", {}, layout.note)))), studio.info?.palette)));
       return;
@@ -4005,6 +4040,7 @@ export function mount(studio, container) {
     if (kind === "figure" && editable(block)) items.push({ icon: "plus", label: "Add Shape…", run: () => whenFigure(() => figure.parts.addPalette(point)) });
     if ((SIZED.has(kind) || SIDEWAYS.has(kind) || CORNERED.has(kind)) && block.width != null) items.push({ icon: "refresh", label: "Reset Size", run: () => sizeFit() });
     if (kind === "figure") items.push({ icon: "export", label: "Export Figure…", run: () => menu(point, exportItems(at)) });
+    if (kind === "figure") items.push(...figureFiles.menuItems({ slide: state.slide, region: at.region, index: at.index }));
     // Another picture in its place, as Keynote's Replace: its size, caption and place kept.
     if (kind === "image") {
       items.push({ icon: "image", label: "Replace Picture…", run: () => replacePicture(at) });
@@ -7323,7 +7359,7 @@ export function mount(studio, container) {
   // Who made the last change from elsewhere: who deleted what was being edited here.
   let lastWho = null;
   function renderInspector() {
-    remember(placeKey, JSON.stringify({ slide: state.slide, tab: state.tab }));
+    remember(placeKey, JSON.stringify({ slide: state.slide, tab: tabShown() }));
     pickedShown = pickedKey();
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
@@ -7336,6 +7372,8 @@ export function mount(studio, container) {
       showPanels();
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
+      // (Arrange: what is chosen arranged, lined up and spaced.)
+      else if (arrangeOn) clear(inspectorBody, arrangeForm());
       // (Objects, or a figure's shapes, chosen with shapes on the slide: mixed.js.)
       else if (mixed.on()) clear(inspectorBody, mixed.panel());
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
@@ -7348,6 +7386,28 @@ export function mount(studio, container) {
       markBlockErrors();
     }, { undone: undoing });
     markFills();
+  }
+
+  // Arrange, Keynote's tab of it: the shapes chosen -- alone, with the slide's objects, or a
+  // figure's shapes being edited -- arranged, lined up and spaced (shapes.js, mixed.js,
+  // aligntools.js); nothing to align chosen, its rows greyed, saying what they need, Relative to
+  // still a setting to change.
+  function arrangeForm() {
+    const head = (name, hint) => h("div.section.block-top.arrange-top", {}, h("div.insp-title", {}, icon("arrange"),
+      h("div.insp-words", {}, h("div.insp-name", {}, name), h("div.insp-hint", {}, hint))));
+    if (mixed.on()) return [head(`${mixed.name()} Selected`, `The ${mixed.name().includes("Figure") ? "figure’s shapes" : "objects"} stay where they are laid out; the shapes line up with them`), ...mixed.arrangePanel()];
+    if (freeShapes.any()) return [head(freeShapes.label(), freeShapes.count() > 1 ? "Where they are, their order, and how they line up" : "Where it is, its order, and how it lines up"), ...freeShapes.arrangePanel()];
+    const parts = figure?.parts.model && figureBlock() ? figure.parts : null, chosen = parts ? parts.selected.length : 0;
+    const out = [head(chosen ? `${chosen === 1 ? "1 Figure Shape" : `${chosen} Figure Shapes`} Selected` : "Nothing Selected", chosen ? "The figure lays its shapes out" : "Choose shapes to arrange them")];
+    // (A figure's own shapes, being edited: put in one row or one column, as its Arrange menu does.)
+    if (parts && chosen) {
+      const ways = [["row", "Align in a Row", "Put them in one row, in the order they are seen"], ["column", "Align in a Column", "Put them in one column, in the order they are seen"]];
+      out.push(h("div.section", {}, h("div.section-title", {}, "Figure"),
+        h("div.row", {}, ways.map(([way, label, title]) => { const button = ui.button(label, () => parts.alignChosen(way), { small: true, icon: "layout", title: parts.canAlign() ? title : "Choose two or more of the figure’s shapes" }); button.disabled = !parts.canAlign(); return button; })),
+        h("div.hint-line", {}, "⇧-click a shape on the slide to line it up with them")));
+    }
+    out.push(...freeShapes.arrangePanel());
+    return out;
   }
 
   function crumbs(slide, block) {
@@ -8896,7 +8956,10 @@ export function mount(studio, container) {
   }
 
   function figureForm(block, at, edit) {
-    const value = block.figure;
+    // One of the deck's own figures, shown on several slides by its name ('#pipeline'), is in
+    // the deck as one written here is, and shown so -- edited where the deck keeps it.
+    const named = typeof block.figure === "string" && block.figure.startsWith("#") ? block.figure.slice(1) : null;
+    const value = named !== null && doc().figures?.[named] && typeof doc().figures[named] === "object" ? doc().figures[named] : block.figure;
     const mode = typeof value === "string" ? (value.includes(".py:") ? "python" : "file") : "inline";
     // A figure of one shape (a structure by itself) has no rows and columns to swap.
     const shapes = mode === "inline" ? (value?.nodes || []).length : figure && figureBlock() === block ? figure.parts.model?.nodes?.length : undefined;
@@ -8927,16 +8990,12 @@ export function mount(studio, container) {
       { value: "inline", label: "In Deck" }, { value: "file", label: "File" }, { value: "python", label: "Python" }],
     onChange: async (next) => {
       if (next === mode) return;
-      // A figure file's figure comes into the deck as it is; else a new one starts here.
-      if (next === "inline" && mode === "file") {
-        try {
-          const result = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "inline", at: { slide: state.slide, region: at.region, index: at.index } } });
-          studio.change(() => result.document);
-          toast(`${value} copied into the deck. The file is unchanged.`, { icon: "check", seconds: 5 });
-        } catch (error) { toast(error.message, { kind: "error", icon: "error" }); }
-      } else if (next === "inline") editBlock(at, (b) => { b.figure = NEW_BLOCKS.figure().figure; });
+      // A figure file's figure comes into the deck as it is (Embed in Deck); else a new one
+      // starts here.
+      if (next === "inline" && mode === "file") await figureFiles.embed({ slide: state.slide, region: at.region, index: at.index });
+      else if (next === "inline") editBlock(at, (b) => { b.figure = NEW_BLOCKS.figure().figure; });
       else if (next === "file") {
-        const path = await chooseFile({ title: "Choose a Figure File", types: ["figure"], create: "figure" });
+        const path = await chooseFile({ title: "Choose a Figure File", types: ["figure"] });
         if (path) editBlock(at, (b) => { b.figure = path; });
       } else {
         const target = await chooseFunction("Choose a Figure Function");
@@ -8946,12 +9005,23 @@ export function mount(studio, container) {
     } }))];
     // A figure is made and changed on its slide; to use it elsewhere, it is exported.
     // One button for the figure's exports, as its right-click menu has one item.
-    const exports = ui.field("Export", ui.button("Export Figure…", (event) => menu(event.currentTarget, exportItems(at)), { small: true, icon: "export", title: "SVG, PDF, PNG or a Flexo figure file" }));
+    const place = { slide: state.slide, region: at.region, index: at.index };
+    // (And in a tab of its own, its source and layout tree with it: figurehome.js.)
+    const opens = mode !== "python" ? ui.button("Open in Figure Editor", () => figureFiles.openInEditor(place), { small: true, icon: "external", title: "The figure in a tab of its own: its source, its layout tree" }) : null;
+    const exports = ui.field("Export", h("div.list-row", {}, ui.button("Export Figure…", (event) => menu(event.currentTarget, exportItems(at)), { small: true, icon: "export", title: "SVG, PDF, PNG or a Flexo figure file" }), opens));
     if (mode === "inline") {
+      const shown = named !== null ? (studio.doc.slides || []).filter((slide) => JSON.stringify(slide ?? null).includes(JSON.stringify(`#${named}`))).length : 0;
       parts.push(h("div.figure-card", {},
-        h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`))));
+        h("div", {}, h("b", {}, `${count((value?.nodes || []).length, "shape")}, ${count((value?.edges || []).length, "line")}`)),
+        named !== null ? h("div.muted", {}, `The deck’s figure “${named}”, on ${count(shown, "slide")}`) : null));
       const area = ui.textarea({ value: JSON.stringify(value, null, 2), rows: 8, mono: true, indent: true, key: "figure.json", onInput: (text) => {
-        try { const parsed = JSON.parse(text); area.style.borderColor = ""; edit((b) => { b.figure = parsed; }, "figure"); }
+        try {
+          const parsed = JSON.parse(text);
+          area.style.borderColor = "";
+          // (One of the deck's own: changed where the deck keeps it, every slide showing it.)
+          if (named !== null) studio.change((d) => { if (d.figures?.[named]) d.figures[named] = parsed; }, { merge: `figures-${named}-json`, hold: true });
+          else edit((b) => { b.figure = parsed; }, "figure");
+        }
         catch { area.style.borderColor = "var(--error)"; }
       } });
       area.classList.remove("grow"); area.style.maxHeight = "300px"; area.style.overflow = "auto";
@@ -8980,6 +9050,8 @@ export function mount(studio, container) {
 
   // The figure on the slide written out by itself, in the deck's look, laid out as written.
   function exportFigure(at, formats) {
+    // (As a file of its own: Export Figure as File…'s sheet, figurehome.js.)
+    if (formats.includes("yaml")) return figureFiles.exportAsFile({ slide: state.slide, region: at.region, index: at.index });
     return studio.exportFiles(formats, { slide: state.slide, region: at.region, index: at.index });
   }
 
@@ -9009,7 +9081,7 @@ export function mount(studio, container) {
   });
   listFiles(["image"]).catch(() => {});
   // `action`: its default button's name (Insert, as Keynote's; else Choose).
-  function chooseFile({ title, types, create, action = "Choose" }) {
+  function chooseFile({ title, types, action = "Choose" }) {
     const accept = types.includes("image") ? "image/*,.svg,.pdf,.ai" : types.includes("structure") ? ".pdb,.cif,.mmcif,.ent,.json" : ".yaml,.yml,.json";
     // A picture asked for in a folder known to have none: the Mac's file panel at once, as
     // Keynote's Choose… is, and no sheet. It is opened in the click that asked: a web view
@@ -9042,15 +9114,8 @@ export function mount(studio, container) {
         done = true;
         askEntry().then((id) => resolve(id || null));
       } });
-      if (create === "figure") actions.push({ label: "New Figure File…", aside: true, run: () => {
-        ask("New Figure File", "figures/figure.yaml", "Create").then(async (name) => {
-          if (!name) return;
-          try { finish(await createFile(name, "figure")); }
-          // Said in the sheet it was asked from, not in a note under it.
-          catch (error) { problem.hidden = false; clear(problem, icon("error"), h("span", {}, error.message)); }
-        });
-        return false;
-      } });
+      // (No new figure file is made here: a deck's figures are made in it, and one is written
+      // out as a file of its own by Export Figure as File…, figurehome.js.)
       // As a Mac's open panel: a click chooses a file, a double-click (or Return, or the
       // default button) takes it.
       let chosen = null;
@@ -10047,6 +10112,8 @@ export function mount(studio, container) {
       if (key === "Escape" && inspector.contains(document.activeElement)) { event.preventDefault(); document.activeElement.blur(); }
       return;
     }
+    // ⇧⌘C: Set Colour…, of whatever is chosen (colours.js).
+    if (colours.key(event)) { event.preventDefault(); return; }
     // Objects (or a figure's shapes) and shapes chosen together: ⌫, ⌘D, ⌘A, Esc theirs; the
     // arrows the shapes' (mixed.js).
     if (mixed.key(event)) { event.preventDefault(); return; }
@@ -10054,6 +10121,8 @@ export function mount(studio, container) {
     // Shapes chosen (or one being drawn): their keys -- the arrows nudge, ⌫ deletes, ⌘G groups.
     if (freeShapes.key(event)) { event.preventDefault(); return; }
     if (mod && event.shiftKey && key.toLowerCase() === "n") { event.preventDefault(); newSlideLike(state.slide); }
+    // ⇧⌘A, nothing to align chosen: Arrange shown all the same (shapes.js's, with shapes chosen).
+    else if (mod && event.shiftKey && !event.altKey && key.toLowerCase() === "a") { event.preventDefault(); freeShapes.revealArrange(); }
     else if (mod && key.toLowerCase() === "d") { event.preventDefault(); duplicateChosen(); }
     // ⌘A outside a text field selects nothing on the page's own words.
     else if (mod && key.toLowerCase() === "a") { event.preventDefault(); chooseAll(); }
@@ -10194,6 +10263,10 @@ export function mount(studio, container) {
           onChange: (value) => remember("png-width", String(value)) }];
       } },
   ];
+  // And while a figure kept in the deck is chosen, Figure as File… (figurehome.js), for the
+  // Mac app's File › Export To.
+  const deckExports = studio.exports;
+  Object.defineProperty(studio, "exports", { configurable: true, get: () => [...deckExports, ...figureFiles.exports()] });
   studio.present = () => present();
   studio.commands = () => [
     // The slides to go to: places, listed after every command (`later`).
@@ -10217,6 +10290,11 @@ export function mount(studio, container) {
     // Shapes to draw, and the shapes chosen: what they can do (shapes.js) -- with objects chosen
     // too, not what would take or copy the shapes alone (mixed.js).
     ...(typingNow() ? [] : mixed.shapeCommands(freeShapes.commands())),
+    // Align and Distribute… (⇧⌘A), Arrange shown, with nothing to align chosen too (the shapes'
+    // own, with shapes chosen: aligntools.js).
+    ...(freeShapes.any() || mixed.on() ? [] : [{ icon: "arrange", label: "Align and Distribute…", keys: "⇧⌘A", hint: "Arrange: Relative to, and the rest once shapes are chosen", run: () => freeShapes.revealArrange() }]),
+    // Format › Set Colour… (⇧⌘C): of what is chosen, else of the slide (colours.js).
+    ...(typingNow() ? [] : colours.commands()),
     ...(slides().length ? slideCommands() : []),
     // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
     // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the
@@ -10244,6 +10322,8 @@ export function mount(studio, container) {
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${lookName(look)}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
+    // Where the figures are kept: Embed Figure in Deck, Embed All Figures in Deck, Open in Figure Editor.
+    ...(typingNow() ? [] : figureFiles.commands()),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
     // View › Zoom, as Keynote's: by its steps, a point to a point, or fitted to the stage.
     ...(slides().length ? [
@@ -10351,7 +10431,7 @@ export function mount(studio, container) {
     ];
   }
   studio.reveal = (where, { quiet = false } = {}) => {
-    if (where?.label === "Design") { state.tab = "design"; inspectorHidden = false; root.classList.remove("no-inspector"); renderInspector(); return; }
+    if (where?.label === "Design") { state.tab = "design"; arrangeOn = false; inspectorHidden = false; root.classList.remove("no-inspector"); renderInspector(); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);
     // Its object chosen, where it is now (the activity list follows it) -- not while
     // following another's work, which is theirs to choose.

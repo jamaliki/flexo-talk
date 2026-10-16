@@ -622,7 +622,16 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   in their own colours, widths and dashes. **Copy Style** and **Paste Style** (⌥⌘C, ⌥⌘V)
   put one shape's fill, line, dash, arrowheads, shadow, opacity and words' look on the
   shapes chosen -- and a figure's part's tone, own colours, outline and words' look on
-  other parts, or either on the other where it maps (an accent is a tone). ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
+  other parts, or either on the other where it maps (an accent is a tone). Every colour is
+  also set by its code: the field beside a colour's name (and beside each own colour's well)
+  takes `#1f77b4`, `1f77b4`, `#17b`, `rgb(31, 119, 180)`, `hsl(…)`, `(0.12, 0.47, 0.71)`,
+  `steelblue` or `tab:blue`, typed (Return) or pasted (at once), each one step, an alpha
+  after it (`#1f77b4cc`) the fill's or line's opacity; the colours applied last sit beside
+  it. **Set Colour…** (⇧⌘C, Format) opens a small popover by what is chosen -- shapes, a
+  group, a text, both, a figure's shapes, or with nothing chosen the slide's background --
+  naming what it will colour ("Fill of 3 Shapes", a switch for its Outline and Text): paste
+  a code and it is applied, or type one and Return; a colour copied already is shown, ready
+  for Return; Esc closes it. ⌘C, ⌘X and ⌘V copy, cut and paste what is chosen -- a figure's
   parts (into another figure, or a figure of their own), a part of the slide, or the
   slide -- and paste pictures, structure files and words copied elsewhere: a drawing
   copied in Inkscape is pasted as the SVG it is (in the Mac app), its lines and words
@@ -706,17 +715,29 @@ flexo-talk build talk.py              # the deck the function talk() returns
 flexo-talk build talk.py:results -o out --formats pptx,pdf --theme dark
 flexo-talk build talk.yaml            # a deck document
 flexo-talk convert talk.py            # talk.py's deck as talk.yaml
-flexo-talk studio talk.yaml           # edit it in the browser (made if missing)
+flexo-talk studio talk.flexo          # edit it in the browser: a bundle, made if missing
+flexo-talk studio talk.yaml           # a deck in a folder instead, its files beside it
 flexo bundle talk.yaml -o talk.flexo  # the deck and every file it names, as one file to send
 flexo-talk build talk.flexo --trust   # built straight from a bundle, its plots' Python run
-flexo-talk studio talk.flexo          # edited as a folder, saved back into the bundle
 ```
 
 A bundle (`.flexo`, see flexo's README) holds the deck and every file it names: its theme
 and palette files, pictures, logos and backgrounds, figure files (and theirs), plots' Python
 (and the modules and data it reads), structures, maps, scenes and the pictures kept from
-drawings pasted in. In Flexo Studio, File › Save as Bundle… makes one, File › New Bundle…
-starts a talk as one, and a bundle double-clicked in the Finder opens as a folder does.
+drawings pasted in. A new deck is a bundle: in Flexo Studio, File › New Deck (⌘N) makes one
+where you say (File › New Deck in Folder… makes a folder instead), File › Save as Bundle…
+makes one of a deck in a folder -- its figure files written into the deck as it is packed
+(`flexo bundle --figure-files` keeps them as files) -- and a bundle double-clicked in the
+Finder opens as a folder does.
+
+A deck's figures live in the deck: each written in its slide's block, or -- one figure shown
+on several slides -- once in the deck's `figures`, named from each block as `'#name'`
+(see `flexo_talk.document`). In the studio, Embed Figure in Deck (and Embed All Figures in
+Deck) writes a figure file's figure into the deck, one step to undo; in a bundle the file then
+goes from it, in a folder it is left alone. Export Figure as File… writes a figure out as a
+figure file of its own, the deck keeping its copy unless you ask it to show the file instead,
+and Open in Figure Editor edits a figure of the deck's in a tab of its own, its source and
+layout tree too, each edit made to the deck as it is made.
 
 ## Development
 
