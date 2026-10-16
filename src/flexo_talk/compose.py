@@ -4784,7 +4784,8 @@ _FRAME_LAYOUTS: dict[tuple[str, str], str] = {}
 
 def _in_frame(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
     """One of a frame's figures (``framing``) laid out for ``box``: with every part of the
-    frame's others it lacks, hidden; in the layout of the frame's first; and given the extent
+    frame's others it lacks, hidden; in the layout the frame's first takes with all of it shown
+    (the frame's whole figure); and given the extent
     of all of them together, each moved for the parts they share to be where the first's are
     -- so drawn at the scale that fits them all, from the same top left. Alone in its frame,
     or should the others fail, a figure as any."""
@@ -4824,7 +4825,9 @@ def _in_frame(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Pre
         layout = known
         canvas.settled = False
     else:
-        layout = _member(whole[first][0], box, words, largest, turn, fold, None)["layout"]
+        # (The way that suits the frame's whole figure, all of it shown: what a frame draws is
+        # as large as all its versions together, however much of it the first hides.)
+        layout = _member(replace(whole[first][0], hidden=()), box, words, largest, turn, fold, None)["layout"]
         _FRAME_LAYOUTS[where] = layout
     own = _prepared(canvas, replace(block, figure=whole[me][0]), box, largest, layout=layout)
     laid: dict[int, tuple[Any, Any]] = {}

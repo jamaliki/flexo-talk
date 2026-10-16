@@ -19,7 +19,8 @@ name the same frame are drawn as one::
   the same neighbours -- and hidden (``flexo.showing``), so the layout keeps its room. The
   layout sees the same figure in each, and puts the parts they share in the same places.
 - **The same way.** Each is laid out as the frame's first is -- turned to fit or not, spaced
-  closer or not (flexo's ``fit_in_box(keep=...)``), the first laid out afresh for its place.
+  closer or not, folded or not (flexo's ``fit_in_box(keep=...)``) -- the way that suits the
+  first with all of it shown, as the frame draws all of its versions' parts' room.
 - **The same places.** Each is moved so that its parts are where the first's of the same name
   are (``offset``): by the move that brings the most of them exactly there.
 - **One size.** They are drawn as one figure as large as all of them together (``extent``):
