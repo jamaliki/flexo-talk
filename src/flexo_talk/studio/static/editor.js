@@ -20,6 +20,8 @@ import { convertible, convertCommand } from "/static/studio/toparts.js";
 import { slideToParts } from "/static/kinds/deck/toparts.js";
 import { slideTools, MAGNIFIED } from "/static/kinds/deck/zoom.js";
 import { editableTools, isDrawing } from "/static/kinds/deck/editable.js";
+import { slideMixed } from "/static/kinds/deck/mixed.js";
+import { clipsOf } from "/static/studio/mixing.js";
 import { outline as maskOutline } from "/static/studio/masks.js";
 import { pathData } from "/static/studio/freeform.js";
 import { magnetButton } from "/static/studio/magnet.js";
@@ -942,11 +944,14 @@ export function mount(studio, container) {
     },
     // Shapes chosen, nothing else is: no object, line of words or logo, no figure edited.
     leaveOthers: () => {
+      // (Unless chosen with them, as ⇧-click chooses both: mixed.js.)
+      if (mixed.joining()) return;
       closeInline(); leaveFigure(false); offRail();
       state.focus = null; state.field = null; state.logo = null; allChosen = null; state.tab = "slide";
     },
+    others: () => mixed.on(),
     renderInspector: () => renderInspector(), placeChosen: () => placeChosen(), reportFocus: () => reportFocus(),
-    swallowRelease: (held) => swallowRelease(held), undoNote: (text, options) => undoNote(text, options),
+    swallowRelease: (held) => swallowRelease(held), undoNote: (text, options) => (mixed.joining() ? null : undoNote(text, options)),
     awayFrom: (what) => awayFrom(what), partAt: (event) => partAt(event),
     clipItems: () => clipItems(), canDraw: () => Boolean(slideAt()), shapeButton: () => shapeButton,
     // Words typed in a shape in the slide's own editor, at the slide's sizes: a box of words at
@@ -1030,6 +1035,26 @@ export function mount(studio, container) {
     // (Made by a double-click: the group entered where it was double-clicked, groups.js.)
     enterShape: (index, at) => { const entered = freeShapes.enter(index, { at, deep: true }); placeChosen(); return entered; },
     away: (what) => awayFrom(what),
+  });
+  // The slide's objects and its shapes chosen together, as Keynote's are: ⇧-click, a band
+  // across both; deleted, cut, copied, pasted and duplicated together, one step (mixed.js).
+  const mixed = slideMixed({
+    studio, shapes: freeShapes, state,
+    many: () => (allOn() ? picksNow() : []),
+    setMany: (picks) => { if (picks.length) chooseMany(picks); else allChosen = null; },
+    focusBlock: (region, index, then) => focusBlock(region, index, then),
+    leave: () => { closeInline(); leaveFigure(false); offRail(); },
+    figure: () => (figure && figureBlock() && figure.parts.model ? { parts: figure.parts, region: figure.region, index: figure.index } : null),
+    inFigure: (event) => Boolean(figureBlock() && inFigure(event)),
+    partElement: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
+    blocksAt: (slide, region) => blocksAt(slide, region), slideAt: () => slideAt(), regionsOf: (slide) => regionsOf(slide),
+    blockName: (block) => blockName(block), element: (region, index) => blockElement(region, index), partAt: (event) => partAt(event),
+    editSlide: (mutate, options) => editSlide(mutate, options), copyOf: (block) => copyOf(block), pasteClip: (clip) => pasteClip(clip),
+    select: (index) => select(index), render: () => { placeChosen(); renderInspector(); reportFocus(); },
+    crumb: () => [glyph(layoutOf(slideAt() || {})), `Slide ${state.slide + 1}`], frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()],
+    clipChosen: (cut) => clipChosen(cut), clipItems: () => clipItems(), undoNote: (text, options) => undoNote(text, options),
+    away: (what) => awayFrom(what), showPanel: () => { if (inspectorHidden || state.tab === "design") formatButton.click(); },
+    swallowRelease: (held) => swallowRelease(held),
   });
 
   // What the drawings say, as shown. A warning that comes while words are typed (a formula
@@ -1442,7 +1467,7 @@ export function mount(studio, container) {
     const slide = slideAt();
     if (!slide) { studio.focus(null); return; }
     const block = state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
-    const part = block ? ` · ${blockName(block)}` : freeShapes.any() ? ` · ${freeShapes.label()}` : "";
+    const part = block ? ` · ${blockName(block)}` : freeShapes.any() ? ` · ${mixed.on() ? mixed.name() : freeShapes.label()}` : "";
     // Typed in -- on the slide (a figure's shape's words too), or in the panel's fields -- it is
     // shown the others as being edited.
     const keys = document.activeElement;
@@ -2331,6 +2356,8 @@ export function mount(studio, container) {
   function onPress(event) {
     if (outOfStep(true)) return;
     if (event.target.closest(".fig-inline, .figure-bar")) return;
+    // ⇧ or ⌘ on a shape with objects chosen, or on an object with shapes: both (mixed.js).
+    if (mixed.press(event)) return;
     // A shape over the slide's words and objects (or behind them, where none is) is pressed
     // before them; a shape being drawn, wherever the press is.
     if (freeShapes.press(event)) return;
@@ -3807,7 +3834,12 @@ export function mount(studio, container) {
     if (outOfStep(true)) return;
     if (figure?.parts.justDragged || swallowClick || freeShapes.armed()) return;
     if (event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size")) return;
-    if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) { figure.parts.click(event); return; }
+    if (figure && figureBlock() && (figure.parts.connecting || inFigure(event))) {
+      // (A plain click on one of its shapes chosen with shapes on the slide: that one alone.)
+      if (!event.shiftKey && !event.metaKey && mixed.on()) freeShapes.clear({ quiet: true });
+      figure.parts.click(event);
+      return;
+    }
     const part = partAt(event);
     // What is chosen shows as chosen at once: the name tag of what the pointer was over goes.
     hover.hidden = true;
@@ -3888,6 +3920,8 @@ export function mount(studio, container) {
     if (outOfStep(true)) return;
     closeInline();
     hover.hidden = true;
+    // One of objects and shapes chosen together: their menu (mixed.js).
+    if (mixed.context(event)) return;
     if (freeShapes.context(event)) return;
     freeShapes.clear({ quiet: true });
     const point = { x: event.clientX, y: event.clientY };
@@ -4210,7 +4244,7 @@ export function mount(studio, container) {
     chooseMany(picks, to);
     // One left is the one chosen (where it was, for followChange to follow it from, after
     // another's change or an undo; else where it is).
-    if (picks.length === 1 && to >= 0) {
+    if (picks.length === 1 && to >= 0 && !freeShapes.any() && !mixed.joining()) {
       allChosen = null;
       const followed = event?.source === "remote" || event?.source === "history";
       state.focus = followed ? { region: old[kept[0].k].region, index: old[kept[0].k].index } : { ...picks[0] };
@@ -4241,7 +4275,7 @@ export function mount(studio, container) {
     const onPage = pageNode.contains(event.target) && !event.target.closest(".fig-inline, .figure-bar, .size-handle, .fig-size, .inline-editor") && !partAt(event);
     if (!desk && !onPage) return;
     const keep = event.shiftKey || event.metaKey ? (allOn() ? picksNow() : state.focus ? [{ region: state.focus.region, index: state.focus.index }] : []) : [];
-    band = { start: { x: event.clientX, y: event.clientY }, keep, node: null };
+    band = { start: { x: event.clientX, y: event.clientY }, keep, keepShapes: event.shiftKey || event.metaKey ? freeShapes.chosen() : [], node: null };
     window.addEventListener("pointermove", bandMove);
     window.addEventListener("pointerup", bandEnd, { once: true });
   });
@@ -4259,12 +4293,14 @@ export function mount(studio, container) {
     const left = Math.min(band.start.x, event.clientX), right = Math.max(band.start.x, event.clientX);
     const top = Math.min(band.start.y, event.clientY), bottom = Math.max(band.start.y, event.clientY);
     Object.assign(band.node.style, { left: `${left - origin.left}px`, top: `${top - origin.top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
-    // Shapes it touches are what it chooses, where it touches any (shapes.js); else the objects.
+    // Shapes it touches are what it chooses, where it touches any (shapes.js); else the objects
+    // -- both, where it touches both (mixed.js).
     const shaped = freeShapes.touched(left, top, right, bottom);
-    if (shaped.length) { state.field = null; state.logo = null; allChosen = null; state.focus = null; freeShapes.choose(shaped, { quiet: true }); placeChosen(); return; }
-    freeShapes.clear({ quiet: true });
     const touched = regionsOf(slideAt()).flatMap((region) => blocksAt(slideAt(), region.key).map((_, index) => ({ region: region.key, index })))
       .filter((at) => { const box = drawnBox(blockElement(at.region, at.index)); return box && box.right >= left && box.left <= right && box.bottom >= top && box.top <= bottom; });
+    if ((shaped.length || band.keepShapes.length) && (touched.length || band.keep.length) && mixed.band(touched, shaped, { objects: band.keep, shapes: band.keepShapes })) { placeChosen(); return; }
+    if (shaped.length) { state.field = null; state.logo = null; allChosen = null; state.focus = null; freeShapes.choose(shaped, { quiet: true }); placeChosen(); return; }
+    freeShapes.clear({ quiet: true });
     const picks = [...band.keep, ...touched.filter((at) => !band.keep.some((kept) => samePlace(kept, at)))];
     state.field = null;
     state.logo = null;
@@ -4288,7 +4324,7 @@ export function mount(studio, container) {
   const inChoice = (part) => part?.kind === "block" && allOn() && allBlocks().some((each) => each.region.key === part.region && each.index === part.index);
   stage.addEventListener("mousedown", (event) => {
     // (A right-click on one of them keeps them: its menu is theirs.)
-    if (!allChosen || event.shiftKey || event.metaKey || carry?.all || ((event.button === 2 || event.ctrlKey) && inChoice(partAt(event)))) return;
+    if (!allChosen || event.shiftKey || event.metaKey || carry?.all || ((event.button === 2 || event.ctrlKey) && inChoice(partAt(event))) || mixed.keeps(event)) return;
     allChosen = null;
     placeChosen(); renderInspector(); reportFocus();
   }, true);
@@ -5907,6 +5943,8 @@ export function mount(studio, container) {
   // After an undo or a redo, the object it changed is chosen, as Keynote does: the first
   // on the slide shown that is not as it was.
   function chooseChanged(was, entry) {
+    // Objects and shapes changed together: undone or redone, both are chosen again (mixed.js).
+    if (entry?.mixed) { mixed.restore(entry.mixed, studio.future[studio.future.length - 1]?.said === entry); return; }
     // The slide's shapes drawn, moved or restyled: undone or redone, they are chosen again.
     if (entry?.shapes) {
       const undone = studio.future[studio.future.length - 1]?.said === entry;
@@ -6834,6 +6872,9 @@ export function mount(studio, container) {
   const typingNow = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable
     || Boolean(document.querySelector(".scrim, .present"));
   function clipOf() {
+    // Objects and shapes chosen together (mixed.js): each kind's copy, in one.
+    const both = mixed.clip();
+    if (both) return both;
     // The slide's shapes chosen (shapes.js): those.
     const shaped = freeShapes.clip();
     if (shaped) return shaped;
@@ -6857,6 +6898,7 @@ export function mount(studio, container) {
     return { what: "slide", slide: structuredClone(slide), label: "slide" };
   }
   function plainOf(clip) {
+    if (clip.what === "mixed") return clipsOf(clip).map((one) => plainOf(one)).filter(Boolean).join("\n");
     if (clip.what === "shapes") return clip.shapes.map((shape) => plain(String(shape?.text ?? ""))).filter(Boolean).join("\n") || clip.label;
     if (clip.what === "slide") return plain(slideTitle(clip.slide));
     if (clip.what === "slides") return clip.slides.map((slide) => plain(slideTitle(slide))).join("\n");
@@ -6881,7 +6923,9 @@ export function mount(studio, container) {
   // or the logo chosen; none, the whole slide. (Several slides are no one drawing.)
   function drawingOf(clip) {
     const slide = `slide${state.slide + 1}`, prefix = clip.what === "parts" ? figurePrefix() : null;
-    const keep = clip.what === "shapes" ? freeShapes.ids()
+    const keep = clip.what === "mixed" ? [...freeShapes.ids(), ...(allOn() ? allBlocks() : []).map(({ region, index }) => blockElement(region.key, index)?.id),
+      ...clipsOf(clip).filter((one) => one.what === "parts").flatMap((one) => drawingOf(one).keep)]
+      : clip.what === "shapes" ? freeShapes.ids()
       : clip.what === "parts" && prefix ? [...clip.parts.top, ...(clip.parts.edges || []).map((edge) => edge.id), ...(clip.parts.nets || []).map((net) => net.id)].filter(Boolean).map((id) => prefix + id)
         : clip.what === "block" && clip.logo !== undefined ? [`${slide}.logo${clip.logo}`]
           : clip.what === "block" && state.focus ? [blockElement(state.focus.region, state.focus.index)?.id]
@@ -6899,6 +6943,7 @@ export function mount(studio, container) {
   // The object cut last, as it was cut: pasted, it is moved (see pasteClip).
   let cutLast = null;
   function cutAway(clip) {
+    if (clip.what === "mixed") { mixed.remove(true); return; }
     if (clip.what === "shapes") { freeShapes.remove("cut"); return; }
     if (clip.what === "parts") { figureCut = true; figure.parts.remove(); }
     else if (clip.what === "block" && clip.logo !== undefined) deleteLogo(clip.logo, "Cut Logo");
@@ -7041,6 +7086,8 @@ export function mount(studio, container) {
     });
   }
   function pasteClip(clip) {
+    // Objects and shapes copied together: each where it goes, both chosen, one step (mixed.js).
+    if (clip.what === "mixed") { mixed.paste(clip); return; }
     // Shapes, on the slide shown, whatever its layout: a slide of any kind may have them.
     if (clip.what === "shapes" && Array.isArray(clip.shapes) && clip.shapes.length) { freeShapes.paste(clip); return; }
     if (clip.what === "slides") {
@@ -7287,6 +7334,8 @@ export function mount(studio, container) {
       showPanels();
       if (state.tab === "design") clear(inspectorBody, designForm());
       else if (!slide) clear(inspectorBody, h("div.empty", {}, "No slides"));
+      // (Objects, or a figure's shapes, chosen with shapes on the slide: mixed.js.)
+      else if (mixed.on()) clear(inspectorBody, mixed.panel());
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else if (logoChosen()) clear(inspectorBody, logoPanel(slide));
@@ -9422,6 +9471,7 @@ export function mount(studio, container) {
     markMany([from], state.focus ? [{ region: state.focus.region, index: state.focus.index }] : null);
   }
   function duplicateChosen() {
+    if (mixed.duplicate()) return;
     if (freeShapes.any()) { freeShapes.duplicate(); return; }
     if (figure && figureBlock() && figure.parts.selected.length) { figure.parts.duplicate(); return; }
     if (logoChosen() && !state.focus) return;
@@ -9995,6 +10045,9 @@ export function mount(studio, container) {
       if (key === "Escape" && inspector.contains(document.activeElement)) { event.preventDefault(); document.activeElement.blur(); }
       return;
     }
+    // Objects (or a figure's shapes) and shapes chosen together: ⌫, ⌘D, ⌘A, Esc theirs; the
+    // arrows the shapes' (mixed.js).
+    if (mixed.key(event)) { event.preventDefault(); return; }
     if (figure && figureBlock() && figure.parts.key(event)) return;
     // Shapes chosen (or one being drawn): their keys -- the arrows nudge, ⌫ deletes, ⌘G groups.
     if (freeShapes.key(event)) { event.preventDefault(); return; }
@@ -10159,8 +10212,9 @@ export function mount(studio, container) {
     // Every drawing placed as a picture, made the slides' own shapes (editable.js).
     ...(typingNow() ? [] : [editables.allCommand()].filter(Boolean)),
     ...chosenCommands(),
-    // Shapes to draw, and the shapes chosen: what they can do (shapes.js).
-    ...(typingNow() ? [] : freeShapes.commands()),
+    // Shapes to draw, and the shapes chosen: what they can do (shapes.js) -- with objects chosen
+    // too, not what would take or copy the shapes alone (mixed.js).
+    ...(typingNow() ? [] : mixed.shapeCommands(freeShapes.commands())),
     ...(slides().length ? slideCommands() : []),
     // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
     // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the
@@ -10210,7 +10264,8 @@ export function mount(studio, container) {
     const block = !typing && state.focus && blocksAt(slideAt(), state.focus.region)[state.focus.index];
     const picked = chosenSlides(), many = picked.length > 1 ? `${picked.length} Slides` : "Slide", own = Boolean(shapes || block || freeShapes.any());
     return [
-      ...(own ? [{ icon: "duplicate", label: `Duplicate ${shapes ? (shapes > 1 ? `${shapes} Shapes` : "Shape") : blockLabel(block)}`, also: ["Duplicate"], keys: "⌘D", run: () => duplicateChosen() }] : []),
+      // (Objects and shapes chosen together: Duplicate is both's, mixed.js.)
+      ...(own && !mixed.on() ? [{ icon: "duplicate", label: `Duplicate ${shapes ? (shapes > 1 ? `${shapes} Shapes` : "Shape") : blockLabel(block)}`, also: ["Duplicate"], keys: "⌘D", run: () => duplicateChosen() }] : []),
       { icon: "duplicate", label: `Duplicate ${many}`, also: [...(own || typing ? [] : ["Duplicate"]), "Duplicate Slide"], keys: own || typing ? undefined : "⌘D", run: () => duplicateSlide(state.slide) },
       { icon: "eye", label: `${slides()[picked[0]]?.skip === true ? "Don’t Skip" : "Skip"} ${many}`, also: ["Skip Slide", "Don’t Skip Slide"], run: () => skipSlides(picked) },
       // A slide of columns: its rows lined up and labelled, or each column on its own again.
@@ -10247,6 +10302,8 @@ export function mount(studio, container) {
     return keys?.rich && inspectorBody.contains(keys) ? keys : null;
   }
   function chosenCommands() {
+    // Objects and shapes chosen together: what is done to both (mixed.js).
+    if (mixed.on() && !typingNow()) return mixed.commands();
     // Several chosen: Arrange moves them all, where any can go.
     if (allOn() && !typingNow()) {
       const count = allBlocks().length;
