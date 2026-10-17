@@ -2870,7 +2870,8 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
     that names it; a line on the later of its ends' (or its own); a group's own box with
     the first of what it holds, if all of that waits for a click; a frame with the last of
     what it goes round -- and a line that ends at a frame with the frame, as one that ends
-    at a shape with the shape; a shape drawn over the figure (``shapes.2``, or its id) with
+    at a shape with the shape, and one that ends at a group with the last of what it holds;
+    a shape drawn over the figure (``shapes.2``, or its id) with
     the last of the parts it is attached to, or on its own click. A group's box is keyed
     ``"<id> box"``: its pieces, not what it holds."""
 
@@ -2902,6 +2903,10 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
             framed[node.id] = named.get(node.id) or (max(held) if held and all(held) else 0)
 
     def at(end: str) -> int:
+        # (A line to a group, as one to a frame: with the last of what it holds -- flexo.group_ends.)
+        if end in groups and end not in named and end != spec.root:
+            held = [steps.get(one, 0) for one in within([end]) if one in shapes]
+            return max(held) if held and all(held) else 0
         return named.get(end) or framed.get(end, 0)
 
     for edge in spec.edges:

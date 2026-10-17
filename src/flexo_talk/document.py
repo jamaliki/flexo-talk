@@ -1090,7 +1090,8 @@ def _strays(value: object) -> tuple[list[str], list] | None:
 
     if not isinstance(value, dict) or not isinstance(value.get("edges"), list):
         return None
-    copy = {"nodes": value.get("nodes"), "edges": list(value["edges"])}
+    # (Its groups too, and its root: a line may end at a group -- flexo.group_ends.)
+    copy = {key: value.get(key) for key in ("nodes", "groups", "figure")} | {"edges": list(value["edges"])}
     ids: list[str] = []
     said = astray(copy, ids)
     # (Each names the line it is about, to be chosen by: "#edge.2.b-to-nowhere: A line ...".)
