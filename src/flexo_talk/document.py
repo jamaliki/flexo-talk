@@ -1239,7 +1239,8 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
 
     if isinstance(value, dict):
         # A figure is read once for each version of it: the studio reads the deck on every edit.
-        key = json.dumps([str(base), value], sort_keys=True, default=str)
+        # (And for which of the files it names are there: one put there since is found.)
+        key = json.dumps([str(base), value, _there(base, value)], sort_keys=True, default=str)
         with _FIGURES_LOCK:
             if key in _FIGURES:
                 _FIGURES.move_to_end(key)
@@ -1275,6 +1276,23 @@ def _figure(base: Path, value: object, where: str, region: Region) -> object:
         raise
     except Exception as error:
         raise DeckDocumentError(where, f"{value}: {error}") from error
+
+
+def _there(base: Path, figure: dict) -> list[bool]:
+    """Which of the pictures and structures a figure written in the deck names are beside
+    the deck (``_beside`` finds them so): asked of the disk, never read."""
+
+    from flexo.shape_pictures import sources
+
+    shapes = figure.get("shapes")
+    found = [bool(name) and (base / name).is_file() for name in sources(shapes if isinstance(shapes, list) else [])]
+    for node in figure.get("nodes") if isinstance(figure.get("nodes"), list) else []:
+        properties = node.get("properties") if isinstance(node, dict) else None
+        for key in ("source", "density", "ss_from"):
+            value = properties.get(key) if isinstance(properties, dict) else None
+            if isinstance(value, str) and value:
+                found.append((base / value).is_file())
+    return found
 
 
 def _beside(base: Path, figure: dict) -> dict:

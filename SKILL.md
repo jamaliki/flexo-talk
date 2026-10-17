@@ -356,7 +356,8 @@ deck; a figure file in its own file.
   fonts embedded, text selectable, links clickable.
 - `build(formats=("pptx", "pdf"))` skips SVG and PNG.
 - Laid-out figures are cached in `~/Library/Caches/flexo-talk` (or under
-  `$XDG_CACHE_HOME`); `FLEXO_TALK_CACHE=0` turns it off, `FLEXO_TALK_CACHE=dir` moves it.
+  `$XDG_CACHE_HOME`), kept by the figure, its place and the files its parts draw (a picture
+  edited is drawn anew); `FLEXO_TALK_CACHE=0` turns it off, `FLEXO_TALK_CACHE=dir` moves it.
 
 ## Working on flexo-talk itself
 
