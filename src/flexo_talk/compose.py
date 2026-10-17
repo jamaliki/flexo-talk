@@ -2870,7 +2870,8 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
     that names it; a line on the later of its ends' (or its own); a group's own box with
     the first of what it holds, if all of that waits for a click; a frame with the last of
     what it goes round -- and a line that ends at a frame with the frame, as one that ends
-    at a shape with the shape; a shape drawn over the figure (``shapes.2``, or its id) with
+    at a shape with the shape, and one that ends at a group with the last of what it holds;
+    a shape drawn over the figure (``shapes.2``, or its id) with
     the last of the parts it is attached to, or on its own click. A group's box is keyed
     ``"<id> box"``: its pieces, not what it holds."""
 
@@ -2902,6 +2903,10 @@ def part_steps(spec: Any, stages: Sequence[Sequence[str]]) -> dict[str, int]:
             framed[node.id] = named.get(node.id) or (max(held) if held and all(held) else 0)
 
     def at(end: str) -> int:
+        # (A line to a group, as one to a frame: with the last of what it holds -- flexo.group_ends.)
+        if end in groups and end not in named and end != spec.root:
+            held = [steps.get(one, 0) for one in within([end]) if one in shapes]
+            return max(held) if held and all(held) else 0
         return named.get(end) or framed.get(end, 0)
 
     for edge in spec.edges:
@@ -4597,9 +4602,10 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
     # The palette is in the key too: a theme file's colours can change under the same name.
     # (So is whether its person asked it to turn, or left it to the deck; and, once it has
     # been seen, whether it is free to turn. Opened again, it is found as it was last seen.)
+    # So are the files its parts draw, as the disk has them: a picture edited is drawn anew.
     opened = (
         spec, style, repr(figure_palette(spec)), box.width, box.height, deck.style.figure_size,
-        largest, turn, block.turn,
+        largest, turn, block.turn, _drawn_from(spec),
     )
     key = opened if seen is None else (*opened, free)
     if layout is not None:
@@ -4869,7 +4875,7 @@ def _member(spec: Any, box: Box, words: float, largest: float, turn: bool, fold:
 
     style = figure_style(spec)
     key = ("frame member", spec, style, repr(figure_palette(spec)), box.width, box.height, words, largest, turn, fold,
-           layout)
+           layout, _drawn_from(spec))
     plotted = any(node.kind == "plot" for node in spec.nodes)
     found = _FRAMED.get(key) or (None if plotted else _cached_fit(key))
     if found is None:
@@ -4991,6 +4997,51 @@ def _fingerprint() -> str:
             digest.update(path.read_bytes())
         _FLEXO_FINGERPRINT.append(digest.hexdigest()[:16])
     return _FLEXO_FINGERPRINT[0]
+
+
+_DRAWN_FROM = frozenset({"source", "density", "ss_from"})
+"""The properties of a figure's parts that name a file read as it is drawn: a picture (or a
+PDF's page), a structure, its map, the structure it is coloured by."""
+
+
+def _drawn_from(spec: Any) -> tuple:
+    """What a figure is drawn from besides its words: each file its parts read -- a picture,
+    a structure and its map (``_DRAWN_FROM``) -- and the pictures among the shapes drawn over
+    it, as the disk has each now (``_on_disk``). In the key a figure laid out for a box is kept
+    by, in memory and between builds: one of them edited (a picture's viewBox changed, a
+    structure saved again), the figure is laid out afresh. A plot's files are its own
+    (``_plots_from``)."""
+
+    found = []
+    for node in spec.nodes:
+        if node.kind == "plot":
+            continue
+        for name, value in node.properties:
+            if name in _DRAWN_FROM and isinstance(value, str) and value.strip():
+                found.append(_on_disk(value.strip()))
+    for shape in getattr(spec, "shapes", ()):
+        if '"picture"' in shape.written:
+            from flexo.shape_pictures import sources
+
+            found += [_on_disk(source) for source in sources([shape.spec])]
+    return tuple(found)
+
+
+def _on_disk(name: str) -> tuple:
+    """A file a figure names, as the disk has it: its name, size and when it last changed,
+    asked of the disk, never read -- or its name alone, for one that is not a file (a PDB ID,
+    a file gone). A PDF's page (``art.pdf#2``) is its file's."""
+
+    import os
+
+    found = os.path.expanduser(name)
+    for each in (found, found.rpartition("#")[0]):
+        try:
+            stat = os.stat(each)
+        except (OSError, ValueError):
+            continue
+        return (name, stat.st_size, stat.st_mtime_ns)
+    return (name,)
 
 
 def _cache_path(key: tuple) -> Path | None:

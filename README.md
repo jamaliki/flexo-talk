@@ -109,7 +109,9 @@ as written where that reaches it. A figure whose words still end up under
 7pt is reported with what to do. Laying a figure out can take a while for a large one (the
 full transformer, about half a minute), so each is kept in a cache between builds
 (`~/Library/Caches/flexo-talk` or `$XDG_CACHE_HOME/flexo-talk`), keyed by the figure,
-its place, and flexo's own source: a rebuild after editing words is immediate.
+its place, the files its parts draw (each picture, PDF page, structure and map, by its size and
+when it last changed) and flexo's own source: a rebuild after editing words is immediate, and
+one after editing a picture draws the picture as it is now.
 `FLEXO_TALK_CACHE=0` turns the cache off; `FLEXO_TALK_CACHE=dir` moves it.
 
 The slide's proportions -- sizes of title, body and figure text, margins,
