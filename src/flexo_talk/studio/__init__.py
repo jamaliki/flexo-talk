@@ -2150,10 +2150,12 @@ def _files(data: object, base: Path) -> set[Path]:
                             found.update(sorted(path.parent.glob("*.py"))[:50])
                         elif key == "figure":
                             found |= _plot_files(_plots_in(path), path.parent)
+                            found |= _drawn_in(path)
                     elif not path.exists():
                         found.add(path)  # missing: watched, so the slide is drawn again once it is there
             elif key == "figure" and isinstance(value, dict):
                 found |= _plot_files(value.get("nodes"), base)
+                found |= _drawn_files(value, base)
             elif isinstance(value, dict | list):
                 found |= _files(value, base)
             elif key == "gallery" and isinstance(value, list):
@@ -2226,6 +2228,60 @@ def _plots_in(path: Path) -> list:
     if len(_PLOTS_IN) > 256:
         _PLOTS_IN.clear()
     _PLOTS_IN[path] = (stamp, found)
+    return found
+
+
+_DRAWN_IN: dict[Path, tuple[float, set[Path]]] = {}
+"""The files each figure file's parts draw (``_drawn_files``), and when the figure file had
+last changed."""
+
+
+def _drawn_in(path: Path) -> set[Path]:
+    """The files a figure file's parts draw, read again when the figure file changes."""
+
+    stamp = _stamp(path)
+    known = _DRAWN_IN.get(path)
+    if known is not None and known[0] == stamp:
+        return known[1]
+    found: set[Path] = set()
+    try:
+        text = path.read_text(encoding="utf-8")
+        if any(name in text for name in ("source", "density", "ss_from")):
+            found = _drawn_files(_figure_data(text, path.suffix), path.parent)
+    except Exception:  # (a file that does not read is said where it is drawn)
+        found = set()
+    if len(_DRAWN_IN) > 256:
+        _DRAWN_IN.clear()
+    _DRAWN_IN[path] = (stamp, found)
+    return found
+
+
+def _drawn_files(figure: object, base: Path) -> set[Path]:
+    """The files a figure document's parts draw -- each picture (a PDF's page, its file),
+    structure, map and structure one is coloured by, and the pictures among the shapes drawn
+    over it -- found from ``base`` as the figure finds them (``flexo.studio.figure_kind.parse``),
+    there or not yet: one edited, or put there, the slides showing it are drawn again. (A PDB
+    ID, or a map's EMDB ID, is no file: it has no suffix.) A plot's are its own (``_plot_files``)."""
+
+    from flexo.shape_pictures import anchored, sources
+
+    found: set[Path] = set()
+    if not isinstance(figure, dict):
+        return found
+    names: list[str] = []
+    for node in figure.get("nodes") or []:
+        properties = node.get("properties") if isinstance(node, dict) and node.get("kind") != "plot" else None
+        for key in ("source", "density", "ss_from"):
+            value = properties.get(key) if isinstance(properties, dict) else None
+            if isinstance(value, str) and value.strip():
+                names.append(value.strip())
+    names += sources(anchored(figure.get("shapes"), base))
+    for name in names:
+        path = base / name
+        if not path.is_file() and "#" in name:
+            path = base / name.rpartition("#")[0]  # (a PDF's page: art.pdf#2)
+        if path.suffix:
+            found.add(path.resolve())
     return found
 
 
