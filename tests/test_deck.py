@@ -2007,3 +2007,31 @@ def test_a_logo_that_is_not_there_stops_the_build_saying_so(tmp_path: Path) -> N
     deck.title("A talk")
     with pytest.raises(FlexoError, match="Cannot read the artwork file"):
         deck.build(tmp_path, formats=("svg",))
+
+
+def test_an_empty_figure_says_so_while_edited_and_is_nothing_exported(tmp_path: Path) -> None:
+    """A figure with its shapes all taken out still holds room on its slide: while edited it
+    says "Empty figure" there, faintly, to be seen and deleted; exported, nothing is drawn."""
+
+    from flexo_talk.compose import PLACEHOLDERS, render_slide
+    from flexo_talk.document import deck_from_document
+
+    document = {"schema_version": 1, "deck": {"id": "talk"}, "slides": [{"title": "Diffusion", "body": [
+        {"figure": {"figure": {"id": "pipeline"}, "nodes": [{"id": "model", "label": "Model"}]}},
+        {"figure": {"figure": {"id": "left-over"}, "nodes": []}},
+    ]}]}
+    deck = deck_from_document(document, tmp_path)
+
+    def drawn(editing: bool) -> str:
+        token = PLACEHOLDERS.set(editing)
+        try:
+            return render_slide(deck, deck.slides[0]).svg
+        finally:
+            PLACEHOLDERS.reset(token)
+
+    editing, exported = drawn(True), drawn(False)
+    assert re.search(r'id="slide1\.body\.1"[^>]*data-flexo-placeholder="Figure"', editing)
+    assert "Empty figure" in editing and "Empty figure" not in exported
+    assert "slide1.body.1" not in exported and "slide1.body.0" in exported
+    # (The deck itself is as it was: the figure still has no shapes.)
+    assert deck.slides[0].regions["body"].blocks[1].figure.nodes == ()
