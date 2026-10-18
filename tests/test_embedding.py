@@ -263,3 +263,81 @@ def test_the_structure_a_structure_is_coloured_by_is_found_and_moved_with_it(tmp
     assert found["ss_from"] == str((tmp_path / "frames" / "t000.pdb").resolve())
     moved = embedding.rebased(figure, tmp_path, tmp_path / "figures")["nodes"][0]["properties"]
     assert moved == {"source": "../frames/t100.pdb", "ss_from": "../frames/t000.pdb"}
+
+
+def test_a_figure_file_from_elsewhere_brings_the_files_it_names_into_the_deck(tmp_path: Path) -> None:
+    """Figure from File… (or the file dropped on a slide, in the Mac app): the figure,
+    for the deck to keep, and every file it names copied into ``assets/<its name>/`` -- laid
+    out as beside it, one from outside its folder by its own name -- and named from there."""
+
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "figs" / "parts").mkdir(parents=True)
+    (elsewhere / "shared").mkdir()
+    (elsewhere / "figs" / "cell.svg").write_text(SVG)
+    (elsewhere / "figs" / "parts" / "chain.svg").write_text(SVG.replace('r="8"', 'r="6"'))
+    (elsewhere / "shared" / "logo.svg").write_text(SVG.replace('r="8"', 'r="4"'))
+    source = elsewhere / "figs" / "scales grid.yaml"
+    source.write_text(
+        "figure: {id: scales}\n"
+        "nodes:\n"
+        "- {id: cell, kind: image, properties: {source: cell.svg}}\n"
+        "- {id: chain, kind: image, properties: {source: parts/chain.svg}}\n"
+        "- {id: logo, kind: image, properties: {source: ../shared/logo.svg}}\n"
+        "- {id: gone, kind: image, properties: {source: gone.svg}}\n"
+        "- {id: fold, kind: structure, properties: {source: 5KKA}}\n"
+    )
+    deck = tmp_path / "deck"
+    deck.mkdir()
+    made = embedding.imported(source, deck)
+    sources = [node["properties"]["source"] for node in made["figure"]["nodes"]]
+    assert sources == ["assets/scales-grid/cell.svg", "assets/scales-grid/parts/chain.svg",
+                       "assets/scales-grid/logo.svg", "gone.svg", "5KKA"]
+    assert sorted(path.relative_to(deck.resolve()).as_posix() for path in made["files"]) == [
+        "assets/scales-grid/cell.svg", "assets/scales-grid/logo.svg", "assets/scales-grid/parts/chain.svg"]
+    assert made["missing"] == ["gone.svg"] and made["name"] == "scales grid.yaml"
+    assert (deck / "assets" / "scales-grid" / "logo.svg").read_text() == (elsewhere / "shared" / "logo.svg").read_text()
+    # On a slide, it is drawn from the deck's own copies.
+    slide = {"title": "Scales", "body": [{"figure": made["figure"]}]}
+    document = {"schema_version": 1, "deck": {"id": "talk"}, "slides": [slide]}
+    errors: list = []
+    drawn = deck_from_document(document, deck, errors=errors)
+    assert [error for error in errors if "gone.svg" not in str(error)] == []
+    assert "slide1.body.0.chain" in render_slide(drawn, drawn.slides[0]).svg
+    # Brought again: its files are there already, as they were.
+    assert embedding.imported(source, deck)["files"] == []
+    # Another file of one of their names there: a folder of its own.
+    (elsewhere / "figs" / "cell.svg").write_text(SVG.replace('r="8"', 'r="2"'))
+    again = embedding.imported(source, deck)
+    assert again["figure"]["nodes"][0]["properties"]["source"] == "assets/scales-grid-2/cell.svg"
+    # One in the deck's folder already names its files where they are.
+    (deck / "figures").mkdir()
+    (deck / "figures" / "own.yaml").write_text(
+        "nodes:\n- {id: a, kind: image, properties: {source: ../assets/scales-grid/cell.svg}}\n")
+    own = embedding.imported(deck / "figures" / "own.yaml", deck)
+    assert own["files"] == [] and own["figure"]["nodes"][0]["properties"]["source"] == "assets/scales-grid/cell.svg"
+    with pytest.raises(embedding.EmbedError, match="a figure file: one ends in"):
+        embedding.imported(elsewhere / "figs" / "cell.svg", deck)
+
+
+def test_a_figure_files_words_from_a_browser_name_the_files_that_came_with_it(tmp_path: Path) -> None:
+    """A browser's page has a dropped figure file's words and the files dropped with it, not
+    where they were: each file the figure names that came with it is named where the studio put
+    it; the rest are said."""
+
+    text = (
+        "figure: {id: scales}\n"
+        "nodes:\n"
+        "- {id: cell, kind: image, properties: {source: art/cell.svg}}\n"
+        "- {id: logo, kind: image, properties: {source: logo.svg}}\n"
+        "- {id: fold, kind: structure, properties: {source: 5KKA}}\n"
+    )
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "cell-2.svg").write_text(SVG)  # (put there by the studio, as dropped)
+    action = {"do": "import-figure", "text": text, "name": "scales.yaml", "files": {"cell.svg": "assets/cell-2.svg"}}
+    result = DeckKind().act({"schema_version": 1, "slides": []}, action, tmp_path)
+    sources = [node["properties"]["source"] for node in result["figure"]["nodes"]]
+    assert sources == ["assets/cell-2.svg", "logo.svg", "5KKA"]
+    assert result["used"] == ["assets/cell-2.svg"] and result["missing"] == ["logo.svg"]
+    assert result["document"] == {"schema_version": 1, "slides": []}
+    with pytest.raises(EditError, match=r"a figure\.$"):
+        DeckKind().act({}, {**action, "text": "slides: []\n"}, tmp_path)

@@ -190,6 +190,18 @@ const STRUCTURE_FILE = /\.(pdb|cif|mmcif|ent)$/i;
 // A .json is a structure when it is a mol-sketch scene (it has steps): a reaction drawn with
 // its orbitals, say -- not a figure or a theme written in JSON.
 const sceneFile = async (file) => /\.json$/i.test(file.name) && (await file.slice(0, 4_000_000).text()).includes('"keyframes"');
+// A figure file (a figure's words, YAML or JSON) from anywhere: added to a slide as the deck's
+// own figure, with the files it names (flexo_talk.embedding).
+const FIGURE_FILE = /\.(ya?ml|json)$/i;
+const figureFile = async (file) => {
+  if (!FIGURE_FILE.test(file.name) || file.size > 4_000_000) return false;
+  const text = await file.text();
+  if (!/\.json$/i.test(file.name)) return /^(figure|nodes)\s*:/m.test(text);
+  try {
+    const data = JSON.parse(text);
+    return Boolean(data) && typeof data === "object" && ("nodes" in data || "figure" in data) && !("keyframes" in data);
+  } catch { return false; }
+};
 function structureNode(source, taken = new Set(), name = null) {
   const stem = source.split("/").pop().replace(/\.(pdb|cif|mmcif|ent|json)$/i, "");
   let slug = stem.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 24) || "structure";
@@ -6945,7 +6957,7 @@ export function mount(studio, container) {
     event.preventDefault();
     const room = regionsOf(slideAt()).length > 0, logos = logoRoom(slideAt());
     if (!room && !logos) event.dataTransfer.dropEffect = "none";
-    const said = room ? "Drop pictures, structure files (PDB, mmCIF) or mol-sketch scenes to add them to the slide"
+    const said = room ? "Drop pictures, figure files, structure files (PDB, mmCIF) or mol-sketch scenes to add them to the slide"
       : logos ? "Drop pictures to add them as logos"
         : `The ${LAYOUT_NAMES[layoutOf(slideAt())]} layout has no room for pictures: choose one with room, such as Content`;
     if (dropNote?.textContent !== said) { dropNote?.remove(); dropNote = h("div.drop-note", {}, said); center.append(dropNote); }
@@ -6954,11 +6966,12 @@ export function mount(studio, container) {
     // figure, or a figure of their own. (Pictures always come as pictures.)
     const items = [...(event.dataTransfer?.items || [])];
     const pictures = items.every((item) => item.type.startsWith("image/") || item.type === "application/pdf");
+    const figures = items.length > 0 && items.every((item) => /yaml/.test(item.type));
     const part = partAt(event);
     const block = part?.kind === "block" ? blocksAt(slideAt(), part.region)[part.index] : null;
     // One picture over a picture takes its place, as in Keynote.
     if (pictures && items.length === 1 && block && kindOf(block) === "image") place(hover, boxOf(part.id), "Replace Picture");
-    else if (!pictures && block && kindOf(block) === "figure" && editable(block)) {
+    else if (!pictures && !figures && block && kindOf(block) === "figure" && editable(block)) {
       const inner = figurePartAt(event, part) || (figure && inFigure(event) && figure.parts.model && figure.parts.idAt(event)
         ? { element: pageNode.querySelector(`[id="${CSS.escape(figurePrefix() + figure.parts.idAt(event))}"]`), name: figure.parts.nameOf(figure.parts.idAt(event)) } : null);
       if (inner?.element) place(hover, boxOf(inner.element.id), `Add after ${inner.name}`);
@@ -6976,12 +6989,20 @@ export function mount(studio, container) {
     await addFiles(files, partAt(event), event);
   });
 
-  // Files added to the slide, dropped or pasted: pictures, and structures into the figure
-  // `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
+  // Files added to the slide, dropped or pasted: figure files, pictures, and structures into
+  // the figure `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
   async function addFiles(all, part, at = null, { pictures: asPictures = false } = {}) {
-    const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|tiff?|bmp|hei[cf]|avif|pdf|ai)$/i.test(file.name));
     const scenes = new Set();
     for (const file of all) if (await sceneFile(file)) scenes.add(file);
+    // Figure files first: the files they name, dropped with them, are theirs.
+    const figures = [];
+    for (const file of all) if (!scenes.has(file) && await figureFile(file)) figures.push(file);
+    if (figures.length && !logoRoom(slideAt())) {
+      const taken = await addFigureFiles(figures, all.filter((file) => !figures.includes(file)), { dropped: Boolean(at?.dataTransfer) });
+      all = all.filter((file) => !figures.includes(file) && !taken.has(file));
+      if (!all.length) return true;
+    }
+    const pictures = all.filter((file) => /\.(png|jpe?g|svg|gif|webp|tiff?|bmp|hei[cf]|avif|pdf|ai)$/i.test(file.name));
     const structures = all.filter((file) => STRUCTURE_FILE.test(file.name) || scenes.has(file));
     // On a title slide, pictures are logos: in the row where they are let go (`at`, a drop),
     // else after the logo chosen.
@@ -6999,7 +7020,7 @@ export function mount(studio, container) {
       return true;
     }
     if (!pictures.length && !structures.length) {
-      if (all.length) toast("Only pictures, structure files (PDB, mmCIF) and mol-sketch scenes can be added to a slide.", { icon: "info" });
+      if (all.length) toast("Only pictures, figure files, structure files (PDB, mmCIF) and mol-sketch scenes can be added to a slide.", { icon: "info" });
       return all.length > 0;
     }
     // One picture let go on a picture takes its place.
@@ -7027,6 +7048,77 @@ export function mount(studio, container) {
     const said = [pictures.length ? `${pictures.length} picture${pictures.length > 1 ? "s" : ""}` : "", structures.length ? `${structures.length} structure${structures.length > 1 ? "s" : ""}` : ""].filter(Boolean);
     toast(`${said.join(" and ")} added`, { icon: structures.length ? "structure" : "image" });
     return true;
+  }
+
+  // Figure files dropped, pasted or chosen (`files`), each the deck's own figure on the slide, the
+  // files it names copied into the deck's folder (flexo_talk.embedding): dropped in the Mac app,
+  // from where they are; else from those of `others` (dropped or chosen with them) that it
+  // names. Those of `others` taken so.
+  async function addFigureFiles(files, others = [], { dropped = false } = {}) {
+    const app = dropped && window.pywebview?.api?.dropped_figures ? window.pywebview.api : null;
+    const made = [], taken = new Set(), problems = [];
+    let left = files;
+    if (app) {
+      const answer = await app.dropped_figures(studio.file, files.map((file) => file.name));
+      made.push(...(answer.figures || []));
+      if (answer.error) problems.push(answer.error);
+      left = files.filter((file) => (answer.unknown || []).includes(file.name));
+    }
+    for (const file of left) {
+      try {
+        const text = await file.text();
+        const ask = (named) => studio.api("/api/act", { file: studio.file, action: { do: "import-figure", text, name: file.name, files: named } });
+        let answer = await ask({});
+        const wanted = new Set((answer.missing || []).map((name) => name.split(/[\\/]/).pop()));
+        const theirs = others.filter((other) => wanted.has(other.name));
+        if (theirs.length) {
+          const named = {};
+          for (const other of theirs) { named[other.name] = await studio.upload(other); taken.add(other); }
+          answer = await ask(named);
+        }
+        made.push({ ...answer, given: true });
+      } catch (error) { problems.push(`“${file.name}” couldn’t be added: ${error.message.replace(/[.\s]+$/, "")}.`); }
+    }
+    await placeFigures(made, problems);
+    return taken;
+  }
+
+  // Figures brought from files, put on the slide in one step; what they name that is not
+  // there, and what could not be brought, said.
+  async function placeFigures(made, problems = []) {
+    if (made.length) await insertBlock("figure", made.map((one) => ({ figure: one.figure })), null, made.length > 1 ? `Add ${made.length} Figures` : "Add Figure");
+    const names = (list) => (list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : list[0]);
+    for (const one of made.filter((each) => each.missing?.length)) {
+      problems.push(one.given ? `“${one.name}” names ${names(one.missing)}, not added with it. Add them together.`
+        : `“${one.name}” names ${names(one.missing)}, not found beside it.`);
+    }
+    if (problems.length) toast(problems.join(" "), { kind: made.length ? "info" : "error", icon: made.length ? "info" : "error", seconds: 10 });
+    else if (made.length) toast(made.length > 1 ? `${made.length} figures added` : `“${made[0].name}” added`, { icon: "figure" });
+  }
+
+  // Add Figure from File…: figure files chosen -- in the Mac app's open panel, else the
+  // browser's, with the files they name.
+  async function chooseFigureFiles() {
+    if (awayFrom("add objects")) return;
+    if (!regionsOf(slideAt()).length) { toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return; }
+    const app = window.pywebview?.api?.choose_figures ? window.pywebview.api : null;
+    if (app) {
+      const answer = await app.choose_figures(studio.file);
+      if (answer.figures?.length || answer.error) await placeFigures(answer.figures || [], answer.error ? [answer.error] : []);
+      return;
+    }
+    const chosen = await new Promise((resolve) => {
+      const upload = h("input", { type: "file", multiple: true, hidden: true });
+      upload.addEventListener("change", () => { upload.remove(); resolve([...upload.files]); });
+      upload.addEventListener("cancel", () => { upload.remove(); resolve([]); });
+      document.body.append(upload);
+      upload.click();
+    });
+    if (!chosen.length) return;
+    const figures = [];
+    for (const file of chosen) if (await figureFile(file)) figures.push(file);
+    if (!figures.length) { toast("Choose a figure file (.yaml, .yml or .json), with the files it names.", { icon: "info", seconds: 6 }); return; }
+    await addFigureFiles(figures, chosen.filter((file) => !figures.includes(file)));
   }
 
   // -- copy, cut and paste (⌘C, ⌘X, ⌘V) --
@@ -10374,7 +10466,8 @@ export function mount(studio, container) {
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
     // Only what can be done here: no layout the slide already has, nothing added where there is no room.
     ...(slides().length ? layouts.filter((layout) => layout.name !== layoutOf(slideAt())).map((layout) => ({ icon: "layout", label: `Layout: ${LAYOUT_NAMES[layout.name]}`, run: () => changeLayout(layout.name) })) : []),
-    ...(regionsOf(slideAt()).length ? Object.entries(BLOCKS).filter(([, info]) => !info.hidden).map(([kind, info]) => ({ icon: info.icon, label: `Add ${info.label}${CHOOSE.has(kind) ? "…" : ""}`, hint: info.hint, run: () => insertBlock(kind) })) : []),
+    ...(regionsOf(slideAt()).length ? Object.entries(BLOCKS).filter(([, info]) => !info.hidden).flatMap(([kind, info]) => [{ icon: info.icon, label: `Add ${info.label}${CHOOSE.has(kind) ? "…" : ""}`, hint: info.hint, run: () => insertBlock(kind) },
+      ...(kind === "figure" ? [{ icon: "figure", label: "Add Figure from File…", run: () => chooseFigureFiles() }] : [])]) : []),
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${lookName(look)}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
     { icon: "theme", label: "Customise Theme…", run: () => customiseTheme(doc().deck || {}) },
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),

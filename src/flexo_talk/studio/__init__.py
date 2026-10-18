@@ -774,8 +774,11 @@ class DeckKind:
         figure file the deck's slides show), the same, the files no longer named said
         (``released``) for the studio to take out of a bundle; ``{"do": "export-figure",
         "at", "name", "use"}``, a figure of the deck's written out as a figure file of its
-        own, and shown from it (``use``); ``{"do": "figure-file", "file", "text", "expect"}``, a figure
-        file put back as an edit made on its slide found it or left it (``_restore``), or
+        own, and shown from it (``use``); ``{"do": "import-figure", "text", "name", "files"}``,
+        a figure file's words from elsewhere and the files that came with it, answered with
+        its figure for a slide (``embedding.imported_words``); ``{"do": "figure-file", "file",
+        "text", "expect"}``, a figure file put back as an edit made on its slide found it or
+        left it (``_restore``), or
         ``{"do": "convert", "slide", "shapes"}``, a slide's shapes made a figure on it
         (``convert``).
 
@@ -807,10 +810,11 @@ class DeckKind:
             return _mechanism(document, action, base)
         if action.get("do") == "inline":
             return _inline(document, action, base)
-        if action.get("do") in {"embed", "export-figure"}:
+        if action.get("do") in {"embed", "export-figure", "import-figure"}:
             # A figure file's figure written into the deck (Embed Figure in Deck, Embed All
-            # Figures in Deck), or a figure of the deck's written out as a file of its own
-            # (Export Figure as File…): flexo_talk.embedding.
+            # Figures in Deck), a figure of the deck's written out as a file of its own
+            # (Export Figure as File…), or a figure file's words from elsewhere, for a slide
+            # (Figure from File…, a browser's): flexo_talk.embedding.
             return _embedding(document, action, base)
         if action.get("do") == "figure-file":
             return _restore(document, action, base)
@@ -1167,14 +1171,20 @@ def _held_figure(document: Any, key: str) -> tuple[dict[str, Any] | None, Any]:
 
 
 def _embedding(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
-    """Embed Figure in Deck, Embed All Figures in Deck and Export Figure as File… (see
-    ``flexo_talk.embedding``), what keeps them from being done said as an edit's mistakes are."""
+    """Embed Figure in Deck, Embed All Figures in Deck, Export Figure as File… and a figure file
+    from elsewhere for a slide (see ``flexo_talk.embedding``), what keeps them from being done
+    said as an edit's mistakes are."""
 
     from flexo.studio.figure_edit import EditError
 
     from flexo_talk import embedding
 
     try:
+        if action.get("do") == "import-figure":
+            files = action.get("files") if isinstance(action.get("files"), dict) else {}
+            made = embedding.imported_words(str(action.get("text") or ""), str(action.get("name") or "figure.yaml"),
+                                            {str(key): str(value) for key, value in files.items()}, base)
+            return {"document": document, **made}
         if action.get("do") == "embed":
             at = action.get("at")
             made = embedding.embed(document, base, at if isinstance(at, dict) else None)

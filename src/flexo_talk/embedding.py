@@ -16,15 +16,25 @@ document names any more (``flexo.studio.workspace.Workspace.release``).
 where the file is, in the deck's theme unless it names one -- and, if asked, has the deck show
 the file in its place (every slide showing it, for one of the deck's ``figures``). Python-made
 figures (``file.py:function``) are references, and stay so.
+
+``imported`` brings a figure file from anywhere on the computer to a slide (Insert, Figure from
+File…, or the file dropped on the slide): its figure, to be written into the deck as the studio
+makes every figure, and the files it names copied into the deck's folder -- ``assets/<its
+name>/``, laid out as they were beside it -- so that the deck (and its bundle) holds them.
+``imported_words`` does the same for a page that has the file's words and the files dropped with
+it, but not where they were (a browser's).
 """
 
 from __future__ import annotations
 
 import copy
+import filecmp
 import json
 import os
 import re
-from pathlib import Path
+import shutil
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -86,9 +96,8 @@ def rebased(figure: dict[str, Any], origin: Path, destination: Path | None) -> d
 
     origin = origin.resolve()
     destination = destination.resolve() if destination is not None else None
-    data = copy.deepcopy(figure)
     if origin == destination:
-        return data
+        return copy.deepcopy(figure)
 
     def moved(name: object) -> object:
         if not isinstance(name, str) or not name.strip() or os.path.isabs(os.path.expanduser(name)):
@@ -100,6 +109,14 @@ def rebased(figure: dict[str, Any], origin: Path, destination: Path | None) -> d
             return os.path.normpath(found)
         return Path(os.path.relpath(os.path.normpath(found), destination)).as_posix()
 
+    return renamed(figure, moved)
+
+
+def renamed(figure: dict[str, Any], moved: Callable[[object], object]) -> dict[str, Any]:
+    """A figure document with each file it names (those ``rebased`` names anew) named as
+    ``moved`` says of it."""
+
+    data = copy.deepcopy(figure)
     settings = data.get("figure")
     if isinstance(settings, dict):
         for key in ("theme", "style", "palette"):
@@ -142,8 +159,15 @@ def read_figure_file(path: Path, named: str) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
         raise EmbedError(f"Can\u2019t read “{named}”: {error.strerror or error}.") from None
+    return figure_in(text, named)
+
+
+def figure_in(text: str, named: str) -> dict[str, Any]:
+    """A figure file's words (``named``: the file, its ending saying how they are written), as
+    data; what keeps them from being a figure said."""
+
     try:
-        data = json.loads(text) if path.suffix.lower() == ".json" else yaml.safe_load(text)
+        data = json.loads(text) if named.lower().endswith(".json") else yaml.safe_load(text)
     except (ValueError, yaml.YAMLError):
         raise EmbedError(f"“{named}” doesn\u2019t read as a figure. Put it right first.") from None
     if not isinstance(data, dict) or not ("nodes" in data or "figure" in data):
@@ -228,6 +252,126 @@ def embed(document: dict[str, Any], base: Path, at: dict[str, Any] | None = None
         if count else "No figure was put in the deck."
     )
     return {"document": changed, "files": taken, "slides": len(slides), "said": said, "skipped": skipped}
+
+
+IMPORTED = "assets"
+"""Where a figure brought from elsewhere keeps the files it names: a folder of its own in here,
+named as its file is."""
+_FILE_LIKE = re.compile(r"[/\\]|\.[A-Za-z0-9]{1,6}(?:\.gz)?$")
+
+
+def imported(source: Path, base: Path) -> dict[str, Any]:
+    """A figure file from anywhere on the computer, for a slide of the deck whose folder is
+    ``base``: its figure as data, to be written into the deck, the files it names copied into
+    ``assets/<its name>/`` (``-2``... when one there is another file), laid out there as they
+    were beside it -- one from elsewhere by its own name -- and named from ``base``. A figure
+    file in the deck's folder already has its files where they are. Answers ``{"figure",
+    "name", "files", "missing"}``: the figure, its file's name, the files written (as the
+    computer has them: the studio takes away any nothing comes to use) and the files it names
+    that are not there, as it names them."""
+
+    from flexo import bundle
+
+    source = Path(source).expanduser()
+    named = source.name
+    if source.suffix.lower() not in FIGURE_FILES:
+        raise EmbedError(f"“{named}” isn\u2019t a figure file: one ends in .yaml, .yml or .json.")
+    data = read_figure_file(source, named)
+    root = base.resolve()
+    if source.resolve().is_relative_to(root):
+        figure = rebased(data, source.parent, root)
+        return {"figure": figure, "name": named, "files": [], "missing": _missing(figure, root)}
+    gathered = bundle.gather(source)
+    # Each file it names, by its name from the figure's folder; one from elsewhere by its own.
+    wanted = {
+        name: path for name, path in gathered.files.items()
+        if name != gathered.document and not name.startswith(f"{bundle.OWN}/")
+    }
+    moves: dict[str, str] = {}
+    for left in gathered.left:
+        if left.why != "outside" or left.document:
+            continue
+        found = Path(os.path.expanduser(left.name))
+        found = found if found.is_absolute() else source.parent / left.name
+        if not found.is_file():
+            continue
+        own, count = found.name, 1
+        while own in wanted and wanted[own].resolve() != found.resolve():
+            count += 1
+            own = f"{found.stem}-{count}{found.suffix}"
+        wanted[own] = found
+        moves[left.name] = own
+    stem = re.sub(r"[^\w.-]+", "-", source.stem).strip("-.") or "figure"
+    count = 1
+    while True:
+        folder = root / IMPORTED / (stem if count == 1 else f"{stem}-{count}")
+        if all(not (folder / name).exists() or _same(folder / name, path) for name, path in wanted.items()):
+            break
+        count += 1
+    written: list[Path] = []
+    for name, path in wanted.items():
+        target = folder.joinpath(*name.split("/"))
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        written.append(target)
+    if moves:
+        data = renamed(data, lambda name: moves.get(name, name) if isinstance(name, str) else name)
+    figure = rebased(data, folder, root)
+    return {"figure": figure, "name": named, "files": written, "missing": _missing(figure, root)}
+
+
+def imported_words(text: str, named: str, files: dict[str, str], base: Path) -> dict[str, Any]:
+    """A figure file's words (``named``: the file), for a slide of the deck whose folder is
+    ``base``, from a page that has the file but not where it was: each file it names that came
+    with it (``files``: each one's own name, and where the studio put it, from ``base``) named
+    so; the rest left as they are. Answers ``{"figure", "name", "used", "missing"}``: the
+    figure, its file's name, the files of ``files`` it names, and those it names that are not
+    there."""
+
+    data = figure_in(text, named)
+    root = base.resolve()
+    used: list[str] = []
+
+    def moved(name: object) -> object:
+        if not isinstance(name, str) or not name.strip():
+            return name
+        given = files.get(PurePosixPath(name.replace("\\", "/")).name)
+        if given is None or (root / name).exists():
+            return name
+        if given not in used:
+            used.append(given)
+        return given
+
+    figure = renamed(data, moved)
+    return {"figure": figure, "name": named, "used": used, "missing": _missing(figure, root)}
+
+
+def _missing(figure: dict[str, Any], root: Path) -> list[str]:
+    """The files a figure names (from ``root``) that are not there: a name that is no file's
+    (a PDB ID, a theme's name, a pattern) is not one."""
+
+    from flexo import bundle
+
+    missing: list[str] = []
+    for reference in bundle.figure_references(figure, root):
+        name = reference.name.strip()
+        if reference.role == "data" or _PATTERN.search(name) or not _FILE_LIKE.search(name):
+            continue
+        path = Path(os.path.expanduser(name))
+        if reference.role == "python":
+            path = Path(name.split(":")[0])
+        if not (path if path.is_absolute() else root / path).exists() and name not in missing:
+            missing.append(name)
+    return missing
+
+
+def _same(one: Path, other: Path) -> bool:
+    try:
+        return one.is_file() and filecmp.cmp(one, other, shallow=False)
+    except OSError:
+        return False
 
 
 def _files_named(names: list[str], most: int = 3) -> str:

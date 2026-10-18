@@ -906,6 +906,13 @@ figure file of its own, the deck keeping its copy unless you ask it to show the 
 and Open in Figure Editor edits a figure of the deck's in a tab of its own, its source and
 layout tree too, each edit made to the deck as it is made.
 
+A figure file from anywhere comes onto the slide shown with Insert › Figure from File… (Add
+Figure from File… in the palette), or dropped on the slide: its figure is written into the
+deck, and the files it names (structures, pictures, data) are copied into the deck's folder,
+under `assets/<its name>/`, so the deck -- and its bundle -- holds them. In a browser, which is
+given a dropped file but not where it was, drop the figure file together with the files it
+names (see `flexo_talk.embedding`).
+
 ## Development
 
 ```bash
