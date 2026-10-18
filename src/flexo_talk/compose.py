@@ -171,6 +171,12 @@ class _Canvas:
         the share of the room to spare on its left; None, where the slide puts it."""
         self.span = (0.0, 0.0)
         """Where across the slide the picture or table set last is drawn: ``(left, width)``."""
+        self.under = 0.0
+        """Room kept under the pictures of the region being set, more than their captions
+        take: for a caption beside theirs that is taller (``_captions_beside``)."""
+        self.foot: tuple[str, float] | None = None
+        """The picture set last that has words under it -- a caption, or names set under its
+        drawings -- and where it ends: ``(id, y)`` (see ``_feet``)."""
         self.free: ET.Element | None = None
         """The group the slide's objects placed where they say (``Region.at``) are drawn in:
         over what its places lay out, under its shapes (see ``_free``)."""
@@ -682,17 +688,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         foot = min(foot, min(logo.box.y for logo in logos) - LOGO_ROOM / 2.0)
         bottom = min(bottom, foot)
     if slide.footnotes:
-        # Footnotes sit at the foot of the body, above the footer; the body ends above them.
-        size = style.small_size
-        heights = [canvas.measure(runs, size, width - 2 * margin).height for runs in slide.footnotes]
-        top = bottom - sum(heights) - size * 0.3 * (len(heights) - 1)
-        for index, (runs, used) in enumerate(zip(slide.footnotes, heights, strict=True)):
-            canvas.words(
-                f"{slide.id}.footnote{index}", runs, Box(margin, top, width - 2 * margin, 0.0),
-                size=size, role="muted-ink",
-            )
-            top += used + size * 0.3
-        bottom -= sum(heights) + size * 0.3 * len(heights) + size * 0.6
+        bottom = _footnotes(canvas, slide, bottom, bool(logos))
     if slide.layout == "title":
         _title_slide(canvas, slide, foot)
     elif slide.layout == "section":
@@ -1209,21 +1205,23 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
         sizes = [size for region, box in figured if (size := _figure_words(canvas, region, box))]
         shared = min(sizes) if sizes else None
     panels = _panel_row(canvas, slide, names, boxes)
+    under = _captions_beside(canvas, slide, names, boxes)
     placed = []
     outer = canvas.layer
     for name, box in zip(names, boxes, strict=True):
         region = slide.regions[name]
+        canvas.under = under.get(name, 0.0)
         # Its room, in the slide's units: where an editor drops a part into it, empty too.
         room = " ".join(number(value) for value in (box.x, box.y, box.width, box.height))
         group = element(
             outer, "g", id=f"{slide.id}.{name}", data__flexo__talk="region", data__flexo__box=room
         )
         lists, tables = len(canvas.lists), (len(canvas.tables), len(canvas.worded))
-        canvas.layer = group
+        canvas.layer, canvas.foot = group, None
         try:
             used = _region(canvas, region, box, words=shared, panel=panels.get(name, 0.0))
         finally:
-            canvas.layer = outer
+            canvas.layer, canvas.under = outer, 0.0
         # Placed as presented: an empty object, never shown, is no part of the decision; nor
         # is one placed on the slide where it says, out of the region's flow.
         hidden = {*_aside(canvas, region), *region.at}
@@ -1234,16 +1232,24 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
         # What this region set natively (its lists, tables, words with maths): moved with it,
         # and nothing a column after it sets.
         owned = (canvas.lists[lists:], canvas.tables[tables[0]:], canvas.worded[tables[1]:])
-        placed.append((group, used, pictures, bool(shown), owned))
+        # Where its last picture ends, words under it (_feet): a picture's foot, in its place.
+        last = max((index for index in range(len(region.blocks)) if index not in hidden), default=None)
+        foot = canvas.foot[1] - box.y if pictures and canvas.foot and last is not None and (
+            canvas.foot[0] == f"{slide.id}.{name}.{last}") and not region.down else None
+        placed.append((group, used, pictures, bool(shown), owned, foot))
+    placed, lowered = _feet(placed, body.height)
     align = slide.align or style.align
     filled = [item for item in placed if item[3]]
     if align == "top" or not filled:
+        for (group, *_, owned, _), down in zip(placed, lowered, strict=True):
+            if down > 0.01:
+                _shift(group, down, *owned)
         return
     band = max(used for _, used, *_ in filled)
     worded = [used for _, used, pictures, full, *_ in filled if not pictures]
     words = max(worded, default=0.0)
     lead = max(body.height - band, 0.0) / 2.0 if align == "middle" else 0.0
-    for group, used, pictures, full, owned in placed:
+    for (group, used, pictures, full, owned, _), down in zip(placed, lowered, strict=True):
         if not full:
             continue
         if not worded:
@@ -1260,8 +1266,62 @@ def _regions(canvas: _Canvas, slide: Slide, body: Box) -> None:
             # Words start where the body starts on every slide, beside a taller
             # picture too: the eye finds them in the same place each time.
             shift = 0.0
-        if shift > 0.01:
-            _shift(group, shift, *owned)
+        if shift + down > 0.01:
+            _shift(group, shift + down, *owned)
+
+
+def _feet(placed: list[tuple], room: float) -> tuple[list[tuple], list[float]]:
+    """Pictures side by side with words under them -- a caption each, or names set under
+    their drawings -- stand on one line, so the words under them are on one line too: each
+    column of pictures whose last picture has words under it is lowered for its picture to
+    end where the lowest of theirs ends (as far as its place has room). Each is taken as
+    being as tall as the lowest, words and all, for the slide to place them as one; with
+    how far each is lowered within that."""
+
+    stood = [k for k, item in enumerate(placed) if item[2] and item[3] and item[5] is not None]
+    lowered = [0.0] * len(placed)
+    if len(stood) < 2:
+        return placed, lowered
+    line = max(placed[k][5] for k in stood)
+    under = max(placed[k][1] - placed[k][5] for k in stood)
+    placed = list(placed)
+    for k in stood:
+        group, used, pictures, full, owned, foot = placed[k]
+        lowered[k] = max(min(line - foot, room - used), 0.0)
+        placed[k] = (group, max(min(line + under, room), used), pictures, full, owned, foot)
+    return placed, lowered
+
+
+def _captions_beside(canvas: _Canvas, slide: Slide, names: list[str], boxes: list[Box]) -> dict[str, float]:
+    """Columns of pictures side by side, each ending in a captioned one: the room more than
+    its own caption each leaves under its last picture, for its pictures to be sized as if
+    its caption were as tall as the tallest beside it -- so all can end on one line, their
+    captions under it (``_feet``), and none runs off its place."""
+
+    ends = {}
+    for name, box in zip(names, boxes, strict=True):
+        region = slide.regions[name]
+        hidden = {*_aside(canvas, region), *region.at}
+        shown = [block for index, block in enumerate(region.blocks) if index not in hidden]
+        alone = bool(shown) and (all(isinstance(block, _PICTURES) for block in shown) or _placing(shown) == "captioned")
+        if alone and isinstance(shown[-1], _Figure | _Image | _Missing) and getattr(shown[-1], "caption", ()):
+            ends[name] = _captioned(canvas, shown[-1], box.width)
+    if len(ends) < 2:
+        return {}
+    deepest = max(ends.values())
+    return {name: deepest - own for name, own in ends.items()}
+
+
+def _named_under(spec: object) -> bool:
+    """Whether a figure ends in names set under its drawings (``title_side: bottom``: a
+    molecule's, a picture's), as a caption is under a picture."""
+
+    from flexo.title_sides import SIDED_KINDS, title_side
+
+    return any(
+        node.kind in SIDED_KINDS and node.label and title_side(node) == "bottom"
+        for node in getattr(spec, "nodes", ())
+    )
 
 
 def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
@@ -1387,6 +1447,9 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
         place: _captioned(canvas, block, boxes[place[0]].width)
         for place, block in there.items() if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)
     }
+    deepest = [0.0] * count
+    for (_, row), caption in captions.items():
+        deepest[row] = max(deepest[row], caption)
     several = sum(any(isinstance(blocks[column][row], _Figure) for row in shown[column]) for column in columns) > 1
     laid: dict[tuple, tuple] = {}
 
@@ -1433,8 +1496,11 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
         settled)."""
 
         diagnostics, notes = len(canvas.diagnostics), len(canvas.notes)
-        # A picture is as tall as its row lets it be, its caption under it.
-        shares = {place: heights[place[1]] - caption for place, caption in captions.items()}
+        # A picture is as tall as its row lets it be, its caption under it -- the tallest
+        # caption in its row, for the pictures captioned in a row to end on one line (_feet).
+        shares = {
+            place: heights[place[1]] - (deepest[place[1]] if caption else 0.0) for place, caption in captions.items()
+        }
         # Figures side by side set their words at one size (_regions): the largest at which
         # every one of them fits its own place.
         words = None
@@ -1458,6 +1524,9 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
                     canvas, block, f"{slide.id}.{names[column]}.{row}", boxes[column].width,
                     shares.get((column, row), 0.0), figure, panels.get(row, 0.0),
                 )
+                if captions.get((column, row)):
+                    # (Its caption on the line of the others in its row: as tall as the tallest.)
+                    own += deepest[row] - captions[column, row]
             except _FigureFailed:
                 raise
             except Exception:
@@ -1530,6 +1599,8 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
     worded = {row for (_, row), block in there.items() if not isinstance(block, _PICTURES)}
     outer = canvas.layer
     placed = []
+    # Pictures in a row with words under them, where each ends and what it drew (_feet).
+    feet: dict[int, list[tuple]] = {}
     for column, (name, region, box) in enumerate(zip(names, regions, boxes, strict=True)):
         # Its room, in the slide's units: where an editor drops a part into it, empty too.
         room = " ".join(number(value) for value in (box.x, box.y, box.width, box.height))
@@ -1547,6 +1618,7 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
                     _free(canvas, region, row, capped[column][row], identifier, box)
                     continue
                 mark = (len(group), len(canvas.lists), len(canvas.tables), len(canvas.worded))
+                canvas.foot = None
                 end = _set(
                     canvas, region, row, block, identifier, box, tops[row], placing, prepared, scales,
                     shares.get((column, row), 0.0), panels.get(row, 0.0),
@@ -1564,7 +1636,12 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
                         most = (reach(row) - captions[column, row]) / own
                         drawn.set("data-flexo-most", number(max(most, 1.0)))
                 centred = align != "top" and row in worded and isinstance(block, _PICTURES)
-                _lowered(canvas, mark, slack * region.down.get(row, 0.5 if centred else 0.0))
+                down = slack * region.down.get(row, 0.5 if centred else 0.0)
+                _lowered(canvas, mark, down)
+                if canvas.foot and canvas.foot[0] == identifier and row not in region.down:
+                    drew = (list(group)[mark[0]:], canvas.lists[mark[1]:], canvas.tables[mark[2]:],
+                            canvas.worded[mark[3]:])
+                    feet.setdefault(row, []).append((canvas.foot[1] + down, slack - down, drew))
         finally:
             canvas.layer = outer
         group.set("data-flexo-spare", number(spare))
@@ -1573,6 +1650,27 @@ def _rows(canvas: _Canvas, slide: Slide, body: Box) -> None:
         )
         owned = (canvas.lists[lists:], canvas.tables[tables:], canvas.worded[texts:])
         placed.append((group, graphic, bool(shown[column]), owned))
+    for stood in feet.values():
+        line = max(foot for foot, *_ in stood)
+        for foot, room, (drawn, *native) in stood if len(stood) > 1 else ():
+            down = min(line - foot, room)
+            if down < 0.01 or not drawn:
+                continue
+            # Moved down its row as one, in the group it was already moved down in, if it was
+            # (how far in all, for an editor: where it would stand were it not -- _lowered).
+            if len(drawn) == 1 and drawn[0].get("data-flexo-down"):
+                lowered = drawn[0]
+            else:
+                lowered = ET.Element("g", {"data-flexo-down": "0"})
+                parent = next(node for node in outer.iter() if drawn[0] in list(node))
+                parent.insert(list(parent).index(drawn[0]), lowered)
+                for node in drawn:
+                    parent.remove(node)
+                    lowered.append(node)
+            total = float(lowered.get("data-flexo-down", "0")) + down
+            lowered.set("data-flexo-down", number(total))
+            _shift(lowered, down, *native)
+            lowered.set("transform", f"translate(0 {number(total)})")
     # Down the body together: pictures alone a little above its middle, words at its top
     # (its middle with ``align="middle"``), as columns each on their own are (_regions).
     shift = 0.0
@@ -1730,6 +1828,35 @@ def _shift(
         table.y += down
     for words in worded:
         words.baseline += down
+
+
+def _footnotes(canvas: _Canvas, slide: Slide, bottom: float, logos: bool) -> float:
+    """The slide's footnotes, set as a page's are: small, in its bottom margin, the first on
+    the slide number's line, beside it, the rest under it -- taking from the body only what
+    the margin has no room for. Where the footer's row is taken (the deck's footer, its
+    logos) they stand over it, and the body ends above them. Returns where the body ends."""
+
+    style = canvas.deck.style
+    width, height, margin = style.width, style.height, style.margin
+    size = style.small_size * 0.8
+    gap = size * 0.3
+    furnished = slide.layout not in {"title", "section", "statement"}
+    taken = logos or (furnished and bool(canvas.deck.footer))
+    right = width - margin
+    number = _slide_number(slide)
+    if furnished and style.numbers and number is not None and not taken:
+        right -= canvas.measure((TextRun(str(number)),), size, None).width + LOGO_ROOM
+    across = max(right - margin, 1.0)
+    heights = [canvas.measure(runs, size, across).height for runs in slide.footnotes]
+    tall = sum(heights) + gap * (len(heights) - 1)
+    # Free, on the number's line (_furniture), as far down the margin as leaves it an edge.
+    top = bottom - tall if taken else min(height - margin + size * 0.2, height - margin / 3.0 - tall)
+    for index, (runs, used) in enumerate(zip(slide.footnotes, heights, strict=True)):
+        canvas.words(
+            f"{slide.id}.footnote{index}", runs, Box(margin, top, across, 0.0), size=size, role="muted-ink",
+        )
+        top += used + gap
+    return min(bottom, top - tall - gap - size)
 
 
 def _furniture(canvas: _Canvas, slide: Slide) -> None:
@@ -2306,7 +2433,7 @@ def _plan_figures(
     pictures = [block for block in blocks if isinstance(block, _Figure | _Image | _Plot | _Gallery | _Missing)]
     # Words take what they need (a picture's caption too); pictures share the height left.
     needed = sum(_height(canvas, block, box.width) for block in worded)
-    needed += sum(_captioned(canvas, block, box.width) for block in pictures)
+    needed += sum(_captioned(canvas, block, box.width) for block in pictures) + canvas.under
     gaps = style.block_gap * max(0, len(blocks) - 1)
     room = box.height - needed - gaps
     share = room / len(pictures) if pictures else 0.0
@@ -2625,6 +2752,10 @@ def _block(
         top += _callout(canvas, identifier, block, Box(left, top, wide, 0.0), least=panel)
     elif isinstance(block, _Math):
         top += _equation(canvas, identifier, block, Box(left, top, wide, 0.0))
+    if isinstance(block, _Figure | _Image | _Missing) and (
+        getattr(block, "caption", ()) or (isinstance(block, _Figure) and _named_under(prepared[index].spec))
+    ):
+        canvas.foot = (identifier, top)
     if isinstance(block, _Figure | _Image | _Table | _Missing) and getattr(block, "caption", ()):
         top += _caption(canvas, identifier, block.caption, box, top)
     if PLACEHOLDERS.get() and not isinstance(block, _Figure | _Image | _Missing):
