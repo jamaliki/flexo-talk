@@ -904,7 +904,9 @@ Deck) writes a figure file's figure into the deck, one step to undo; in a bundle
 goes from it, in a folder it is left alone. Export Figure as File… writes a figure out as a
 figure file of its own, the deck keeping its copy unless you ask it to show the file instead,
 and Open in Figure Editor edits a figure of the deck's in a tab of its own, its source and
-layout tree too, each edit made to the deck as it is made.
+layout tree too, each edit made to the deck as it is made. A figure whose shapes have all
+been taken out still holds room on its slide: in the studio it says "Empty figure" there,
+faintly, to be chosen and deleted, and exported it is nothing.
 
 A figure file from anywhere comes onto the slide shown with Insert › Figure from File… (Add
 Figure from File… in the palette), or dropped on the slide: its figure is written into the

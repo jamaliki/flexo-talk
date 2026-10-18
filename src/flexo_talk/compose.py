@@ -486,6 +486,10 @@ def render_slide(deck: Deck, slide: Slide) -> RenderedSlide:
                 stand_in(block, "rows", [header, *block.rows[1:]], f"{slide.id}.{name}.{index}", "Table")
             elif isinstance(block, _Math) and not block.source.strip():
                 stand_in(block, "source", "E = mc^2", f"{slide.id}.{name}.{index}", "Equation")
+            # A figure with nothing in it (its shapes all taken out): "Empty figure", faintly,
+            # in the room it holds, to be seen and deleted -- else nothing shows what takes it.
+            elif isinstance(block, _Figure) and _hollow(block.figure):
+                stand_in(block, "figure", _hollow_stand_in(block.figure), f"{slide.id}.{name}.{index}", "Figure")
             elif isinstance(block, _Stats) and not any(_worded(value) or _worded(label) 
                                                        for value, label in block.items):
                 stand_in(block, "items", [(STAT_HINT, LABEL_HINT)] * len(block.items),
@@ -606,6 +610,25 @@ CAPTION_HINT = (TextRun("Caption"),)
 
 def _worded(runs: tuple[TextRun, ...]) -> bool:
     return any(run.text.strip() for run in runs)
+
+
+def _hollow(figure: object) -> bool:
+    """Whether a slide's figure has nothing in it to draw: no shape, nothing drawn over it."""
+
+    from flexo.ir.semantic import FigureSpec
+
+    spec = getattr(figure, "spec", figure)
+    return isinstance(spec, FigureSpec) and not spec.nodes and not spec.shapes
+
+
+def _hollow_stand_in(figure: object) -> object:
+    """What an empty figure shows while it is edited: its own name for the words in it."""
+
+    from flexo.serialization import parse_figure
+
+    spec = getattr(figure, "spec", figure)
+    return parse_figure({"figure": {"id": str(getattr(spec, "id", "") or "figure")},
+                         "nodes": [{"id": "empty", "kind": "text", "label": "Empty figure"}]})
 
 
 def _placeholders(root: ET.Element, empty: dict[str, str]) -> None:
