@@ -4953,9 +4953,11 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
     # (So is whether its person asked it to turn, or left it to the deck; and, once it has
     # been seen, whether it is free to turn. Opened again, it is found as it was last seen.)
     # So are the files its parts draw, as the disk has them: a picture edited is drawn anew.
+    # And whether its photographs are named by address (drawn for the studio's page) or carry
+    # their bytes (an export): one drawn for the page, kept, would export with no photographs.
     opened = (
         spec, style, repr(figure_palette(spec)), box.width, box.height, deck.style.figure_size,
-        largest, turn, block.turn, _drawn_from(spec),
+        largest, turn, block.turn, _drawn_from(spec), picture_link.get() is not None,
     )
     key = opened if seen is None else (*opened, free)
     if layout is not None:
@@ -5224,8 +5226,9 @@ def _member(spec: Any, box: Box, words: float, largest: float, turn: bool, fold:
     from flexo_talk.framing import part_boxes
 
     style = figure_style(spec)
+    # (Photographs named by address for the page, or carried for an export: as _prepared's key.)
     key = ("frame member", spec, style, repr(figure_palette(spec)), box.width, box.height, words, largest, turn, fold,
-           layout, _drawn_from(spec))
+           layout, _drawn_from(spec), picture_link.get() is not None)
     plotted = any(node.kind == "plot" for node in spec.nodes)
     found = _FRAMED.get(key) or (None if plotted else _cached_fit(key))
     if found is None:
