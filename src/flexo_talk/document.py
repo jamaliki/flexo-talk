@@ -270,7 +270,7 @@ the units the slide's shapes are placed in) -- and whether it is locked where it
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
-    "conventions", "sketch", "style", "logos", "logos_on", "logo_height",
+    "conventions", "sketch", "style", "logos", "logos_on", "logo_height", "spelling",
 )
 COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes")
 """The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
@@ -616,6 +616,11 @@ def make_deck(data: dict[str, Any], base: Path, *, missing: list[DeckDocumentErr
     if not isinstance(data, dict):
         raise DeckDocumentError("deck", "deck must be a mapping of deck settings.")
     _only(data, DECK_KEYS, "deck")
+    # The words the deck knows that no dictionary does (Check Spelling…'s Add to Deck): never
+    # said misspelt in it. Drawn nowhere.
+    spelling = data.get("spelling", [])
+    if not isinstance(spelling, list) or not all(isinstance(word, str) for word in spelling):
+        raise DeckDocumentError("deck.spelling", "spelling must be a list of words.")
     changes = data.get("style") or {}
     if not isinstance(changes, dict):
         raise DeckDocumentError("deck.style", "style must be a mapping of DeckStyle fields.")

@@ -649,3 +649,13 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .inline-editor.shape-words.middle { justify-content: center; }
 .inline-editor.shape-words.bottom { justify-content: flex-end; }
 .inline-editor.shape-words .rich { line-height: 1.22; }
+
+/* Check Spelling… (spelling.js): Find's bar over the stage, the misspelt word in it, the
+   dictionary's guesses beside it, each one click. */
+.spell-bar .spell-title { display: flex; align-items: center; gap: 6px; margin-right: 8px; font: var(--text-label); color: var(--ink-2); white-space: nowrap; }
+.spell-bar .spell-title svg { width: 13px; height: 13px; color: var(--ink-3); }
+.spell-bar .spell-word { margin-right: 10px; font-weight: 600; color: var(--error); white-space: nowrap; }
+.spell-bar .find-row { flex-wrap: wrap; row-gap: 4px; }
+.spell-bar .spell-guesses { display: flex; flex: none; gap: 4px; margin-right: 10px; }
+.spell-bar .spell-guesses .muted { color: var(--ink-3); font: var(--text-small); white-space: nowrap; }
+.spell-bar .find-count { margin: 0 4px 0 10px; }

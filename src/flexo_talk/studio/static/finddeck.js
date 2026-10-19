@@ -231,6 +231,13 @@ export function deckFinder(studio, deck) {
     // The slide drawn again (or another shown): its marks put on it.
     drawn: () => found.shown(),
     finder: found,
+    // What finding goes by, for another to step through the deck's words as it does (the
+    // misspelt ones: spelling.js): its fields, going to one, marking, replacing, leaving.
+    parts: {
+      fields: () => deckFields(studio.doc, { files, figure: figureFields }),
+      go, show, hide, replace, leave,
+      place: (bar) => { deck.center.prepend(bar); readFiles(); },
+    },
     // The figure files read, { file: model }; read again; and who is told when they change.
     files: () => files, readFiles, onFiles: (hear) => heard.push(hear),
   };

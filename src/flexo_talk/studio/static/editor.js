@@ -35,6 +35,7 @@ import * as Snap from "/static/studio/snapping.js";
 import { gifFields, holdPaused } from "/static/kinds/deck/animated.js";
 import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
+import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
 
 const BLOCKS = {
@@ -591,6 +592,8 @@ export function mount(studio, container) {
   // Find and replace across the deck (finddeck.js): made once the editor is. So too its TODOs
   // (todos.js).
   let finding = null;
+  // Check Spelling…: the deck's misspelt words, gone through one by one (spelling.js).
+  let speller = null;
   let todos = null;
   // A part of the slide being dragged on it, and parts just moved, landing.
   let carry = null;
@@ -1947,7 +1950,7 @@ export function mount(studio, container) {
     if (renewed) cropDrawn();
     if (renewed) freeShapes.drawn();
     if (renewed) objects.drawn();
-    if (renewed) finding?.drawn();
+    if (renewed) { finding?.drawn(); speller?.drawn(); }
     if (renewed) todos?.drawn();
     if (renewed) across.drawn();
     placeChosen();
@@ -10473,6 +10476,7 @@ export function mount(studio, container) {
     ...(figureBlock() ? FIGURE_EXPORTS.map(({ label, formats, hint }) => ({ icon: "export", label: `Export Figure as ${label}…`, hint, run: () => exportFigure(figure, formats) })) : []),
     // Where the figures are kept: Embed Figure in Deck, Embed All Figures in Deck, Open in Figure Editor.
     ...(typingNow() ? [] : figureFiles.commands()),
+    ...(speller?.available() ? [{ icon: "check", label: "Check Spelling…", run: () => speller.start(state.slide) }] : []),
     { icon: "notes", label: state.notes ? "Hide Speaker Notes" : "Show Speaker Notes", run: () => showNotes(!state.notes) },
     design.command(),
     // Slides overlaid on the one shown, or no longer; and what is chosen matched on them (across.js).
@@ -10592,6 +10596,7 @@ export function mount(studio, container) {
     openWords: (edit, start, end) => { openInline(edit); if (inline?.area?.caretTo) { inline.area.focus(); inline.area.caretTo(start, end); } },
     choose: (at, part = null) => { if (blocksAt(slideAt(), at.region)[at.index]) focusBlock(at.region, at.index, part ? () => figure?.parts.select([part]) : null); },
   });
+  speller = deckSpeller(studio, { find: finding.parts, closeFind: () => { if (finding.finder.isOpen) finding.finder.close({ leave: false }); } });
   // TODOs: glowing in the slide list, marked on the slide, gone to by Next TODO (todos.js).
   todos = deckTodos(studio, { finding, rail, railList, stage, center, notes, notesArea, showNotes, pageNode: () => pageNode, slide: () => state.slide, select: (index) => select(index) });
   studio.reveal = (where, { quiet = false } = {}) => {
