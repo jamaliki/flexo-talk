@@ -631,6 +631,9 @@ def _descriptions(slide: Slide) -> dict[str, str]:
         for index, block in enumerate(region.blocks)
         if isinstance(block, _Image | _Figure)
     }
+    # Each person beside the title, by their name.
+    described |= {f"{slide.id}.person{index}": "".join(run.text for run in person.name) or "Portrait"
+                  for index, person in enumerate(slide.people)}
     for region in slide.regions.values():
         for index, block in enumerate(region.blocks):
             if isinstance(block, _Figure):

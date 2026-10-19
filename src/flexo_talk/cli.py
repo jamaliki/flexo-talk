@@ -213,7 +213,7 @@ def _relocate(data: object, origin: Path, destination: Path) -> None:
             # A theme or palette is a file only when it is named as one; else it is a name.
             if key not in {"theme", "palette"} or value.lower().endswith((".yaml", ".yml", ".json")):
                 data[key] = _beside(value, origin, destination)
-        elif key == "gallery" and isinstance(value, list):
+        elif key in {"gallery", "people"} and isinstance(value, list):
             data[key] = [_beside(item, origin, destination) if isinstance(item, str) else item for item in value]
             _relocate(data[key], origin, destination)
         elif key == "figure" and isinstance(value, dict):

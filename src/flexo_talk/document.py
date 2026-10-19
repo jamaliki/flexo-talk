@@ -281,15 +281,17 @@ SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "section": ("title", "subtitle"),
     "statement": ("words", "by"),
     "agenda": ("title",),
-    "content": ("title", "subtitle", "dark", "align", "body"),
-    "figure": ("title", "subtitle", "dark", "align", "body"),
+    "content": ("title", "subtitle", "people", "dark", "align", "body"),
+    "figure": ("title", "subtitle", "people", "dark", "align", "body"),
     "blank": ("title", "subtitle", "dark", "align", "body"),
-    "two-columns": ("title", "subtitle", "dark", "align", "split", "rows", "left", "right"),
-    "columns": ("title", "subtitle", "dark", "align", "widths", "rows", "columns"),
+    "two-columns": ("title", "subtitle", "people", "dark", "align", "split", "rows", "left", "right"),
+    "columns": ("title", "subtitle", "people", "dark", "align", "widths", "rows", "columns"),
 }
 """The keys a slide of each layout takes, beside ``COMMON_KEYS``. ``rows`` sets a slide of
 columns in rows, block *i* of every column in row *i*: a list of the rows' labels (``""``
-for a row without one, and none at all only to line the rows up)."""
+for a row without one, and none at all only to line the rows up). ``people`` are portraits
+at the end of the title, each a picture file or ``{image: file, name: words}``
+(``Slide.person``)."""
 
 STYLE_FIELDS = tuple(item.name for item in fields(DeckStyle))
 
@@ -709,6 +711,9 @@ def add_slide(
             f"{where}.layout", f"\u201c{layout}\u201d isn\u2019t a layout: drawn as Content. Choose one from Layout."
         ))
         data, layout = _as_content(data), "content"
+    if data.get("people") is not None and "people" not in SLIDE_KEYS[layout]:
+        raise DeckDocumentError(f"{where}.people", f"A {layout} slide has no title for people to stand beside: "
+                                                   f"people go on a content, two-columns, columns or figure slide.")
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
     if not isinstance(data.get("skip", False), bool):
         raise DeckDocumentError(f"{where}.skip", "skip must be true or false.")
@@ -740,6 +745,7 @@ def add_slide(
     for note in footnotes:
         slide.footnote(str(note))
     _add_shapes(slide, data.get("shapes"), where, missing, base)
+    _add_people(slide, data.get("people"), base, where, missing)
     slide.placeholders = frozenset(
         key for key in ("title", "subtitle", "words") if key in data and not str(data[key] or "").strip()
     )
@@ -747,6 +753,46 @@ def add_slide(
     if layout == "columns":
         slide.source.pop("columns", None)
     return slide
+
+
+PEOPLE_EXAMPLE = "[{image: assets/sam.jpeg, name: Sam Pellock}]"
+
+
+def _add_people(slide: Slide, value: object, base: Path, where: str,
+                missing: list[DeckDocumentError] | None) -> None:
+    """The people at the end of a slide's title, each a picture file or ``{image, name}``,
+    found beside the document. With ``missing`` given, one whose file is not there is said
+    there and keeps its place (the slide shows where, while editing); without it, an error."""
+
+    if value is None:
+        return
+    here = f"{where}.people"
+    if not isinstance(value, list):
+        raise DeckDocumentError(here, f"people must be a list of portraits, such as {PEOPLE_EXAMPLE}.")
+    for index, item in enumerate(value):
+        at = f"{here}[{index}]"
+        if isinstance(item, dict):
+            _only(item, ("image", "name"), at)
+            image, name = item.get("image"), item.get("name")
+            if name is not None and not _is_words(name):
+                raise DeckDocumentError(f"{at}.name", f"name must be text, not {described(name)}.")
+        else:
+            image, name = item, None
+        if not isinstance(image, str) or not image.strip():
+            raise DeckDocumentError(at, f"Each person is a picture file, or a mapping with image and name, "
+                                        f"such as {PEOPLE_EXAMPLE}.")
+        try:
+            found = str(_file(base, image, at))
+        except MissingFile as error:
+            if missing is None:
+                raise
+            # Kept where it stands, its file not there: the slide shows where.
+            missing.append(error)
+            found = str(base / image)
+        try:
+            slide.person(found, "" if name is None else str(name))
+        except SettingError as error:
+            raise DeckDocumentError(at, str(error)) from None
 
 
 def _add_shapes(slide: Slide, value: object, where: str, missing: list[DeckDocumentError] | None,
@@ -1659,6 +1705,10 @@ def _slide_data(
         if value is None or value == "" or value == defaults.get(key):
             continue
         data[key] = value
+    if slide.people and "people" in SLIDE_KEYS[layout] and "people" not in data:
+        # People added in Python: each as its picture, and their name where they have one.
+        data["people"] = [{"image": person.image, "name": person.written} if person.written.strip() else person.image
+                          for person in slide.people]
     if slide.footnote_sources:
         data["footnotes"] = list(slide.footnote_sources)
     if slide.shape_sources:

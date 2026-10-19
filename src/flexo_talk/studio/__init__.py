@@ -32,6 +32,7 @@ from flexo_talk.deck import (
     LOGO_HEIGHTS,
     LOGO_SUFFIXES,
     LOOKS,
+    PORTRAIT_SUFFIXES,
     SHAPE_FRAME,
     SHAPE_KEYS,
     DeckStyle,
@@ -589,6 +590,8 @@ class DeckKind:
             # least and most), how tall in a footer as a share of that, and the files they may be.
             "logos": {"height": LOGO_HEIGHT, "heights": list(LOGO_HEIGHTS), "footer": FOOTER_LOGOS,
                       "types": list(LOGO_SUFFIXES)},
+            # The files a portrait beside a slide's title may be.
+            "people": {"types": list(PORTRAIT_SUFFIXES)},
             # What the figure editor offers, for figures edited on their slides.
             "figure_editor": _figure_editor(),
             # The shapes a slide may have drawn where they are put (flexo.freeform): their kinds
@@ -2166,10 +2169,13 @@ def _files(data: object, base: Path) -> set[Path]:
             elif key == "figure" and isinstance(value, dict):
                 found |= _plot_files(value.get("nodes"), base)
                 found |= _drawn_files(value, base)
-            elif isinstance(value, dict | list):
-                found |= _files(value, base)
+            # (A gallery's pictures and a slide's people may be bare file names.)
             elif key == "gallery" and isinstance(value, list):
                 found |= _files([{"picture": item} if isinstance(item, str) else item for item in value], base)
+            elif key == "people" and isinstance(value, list):
+                found |= _files([{"image": item} if isinstance(item, str) else item for item in value], base)
+            elif isinstance(value, dict | list):
+                found |= _files(value, base)
     return found
 
 

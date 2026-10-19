@@ -129,6 +129,12 @@ picture file that fills the slide, cropped not stretched), `shade=0.4` (darkens
 a picture; words turn light), `dark=` (force light words), and `align=` (see
 *Alignment*). Methods called on the slide itself go to its first region.
 
+A `content`, `two-columns`, `columns` or `figure` slide also takes people beside its
+title: `slide.person("people/sam.jpeg", "Sam Pellock")` (`people: [{image: people/sam.jpeg,
+name: Sam Pellock}, people/other.png]` in a document) -- round portraits at the title's
+right end, names small under them, the title wrapping short of them. Use it for "done with"
+credits on a results slide rather than a picture in the body.
+
 A `two-columns` or `columns` slide also takes `rows=["", "Mechanism", "Geometry"]`
 (`rows:` in a document): block *i* of every column is in row *i*, each row's blocks
 start on one line (a row as tall as its tallest), and each label stands beside its

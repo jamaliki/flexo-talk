@@ -47,6 +47,7 @@ from flexo_talk.deck import (
     SHAPE_FRAME,
     Deck,
     ListLayout,
+    Person,
     Reference,
     Region,
     RenderedSlide,
@@ -696,7 +697,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
     elif slide.layout == "statement":
         _statement_slide(canvas, slide, foot)
     else:
-        top = _heading(canvas, slide) if slide.title_runs and slide.layout != "blank" else margin
+        top = _heading(canvas, slide) if (slide.title_runs or slide.people) and slide.layout != "blank" else margin
         body = Box(margin, top, width - 2 * margin, bottom - top)
         if slide.layout == "agenda":
             _agenda(canvas, slide, body)
@@ -857,9 +858,18 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
     width, margin = style.width, style.margin
     weight = deck.title_weight
     span = width - 2 * margin
-    heading = canvas.measure(slide.title_runs, style.title_size, span, weight, title=True)
+    # The people beside the title stand at its right end: its words (and the subtitle's)
+    # wrap short of them -- a centred title kept centred, as far in from each side.
+    people = _people_row(canvas, slide, span)
+    left, words_span = margin, span
+    if people:
+        clear = people.width + PEOPLE_ROOM
+        left, words_span = ((margin + clear, span - 2 * clear) if style.title_align == "middle"
+                            else (margin, span - clear))
+    heading = canvas.measure(slide.title_runs, style.title_size, words_span, weight, title=True)
     under = (
-        canvas.measure(slide.subtitle_runs, style.subtitle_size, span).height + 4.0 if slide.subtitle_runs else 0.0
+        canvas.measure(slide.subtitle_runs, style.subtitle_size, words_span).height + 4.0
+        if slide.subtitle_runs else 0.0
     )
     top = margin
     role, subtitle_role = style.title_role, "muted-ink"
@@ -868,6 +878,15 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
         # The title on a band of the accent across the top of the slide.
         top = margin * 0.7
         band = top + heading.height + under + margin * 0.5
+    # The portraits' middle on the middle of the title's words (and the subtitle's under it).
+    people_bottom = 0.0
+    if people:
+        middle = top + (heading.height + under) / 2.0
+        people.place(width - margin, middle)
+        people_bottom = people.bottom
+        if style.header == "band":
+            band = max(band, people_bottom + margin * 0.3)
+    if style.header == "band":
         _paint_rect(canvas, f"{slide.id}.band", Box(0.0, 0.0, width, band), None)
         role = subtitle_role = _words_on(canvas)
     # Where the title's ink ends: its last baseline and a descender below it.
@@ -875,14 +894,16 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
     ink_bottom += style.title_size * 0.22
     with _on_field(canvas) if style.header == "band" else contextlib.nullcontext():
         top += canvas.words(
-            f"{slide.id}.title", slide.title_runs, Box(margin, top, span, 0.0), size=style.title_size,
+            f"{slide.id}.title", slide.title_runs, Box(left, top, words_span, 0.0), size=style.title_size,
             weight=weight, role=role, title=True, align=style.title_align,
         )
         if slide.subtitle_runs:
             top += 4.0 + canvas.words(
-                f"{slide.id}.subtitle", slide.subtitle_runs, Box(margin, top + 4.0, span, 0.0),
+                f"{slide.id}.subtitle", slide.subtitle_runs, Box(left, top + 4.0, words_span, 0.0),
                 size=style.subtitle_size, role=subtitle_role, align=style.title_align,
             )
+        if people:
+            _people(canvas, slide, people, band=style.header == "band", role=role)
     start = style.title_align == "start"
     if style.header == "rule":
         # Below the ink, not the line box: faces sit differently in theirs, and a
@@ -892,7 +913,8 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
         _paint_rect(canvas, f"{slide.id}.rule", Box(x, y, 40.0, 3.0), "tone-1-stroke")
         top = y + 3.0
     elif style.header == "line":
-        y = max(top, ink_bottom) + 10.0
+        # (Under the people too: a line across the slide is never drawn through them.)
+        y = max(top, ink_bottom, people_bottom - 4.0) + 10.0
         _paint_rect(canvas, f"{slide.id}.rule", Box(margin, y, span, 0.75), "muted-ink", opacity=0.6)
         top = y + 0.75
     elif style.header == "band":
@@ -901,7 +923,8 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
         # No mark: the body starts where it would under a rule, so the words keep
         # one distance from the title whatever marks it.
         top = max(top, ink_bottom) + 11.0
-    return top + style.title_gap
+    # The body starts below the people, should they (their names) reach further down.
+    return max(top + style.title_gap, people_bottom + PEOPLE_CLEAR if people else 0.0)
 
 
 def _title_slide(canvas: _Canvas, slide: Slide, foot: float) -> None:
@@ -2063,6 +2086,179 @@ def _logos(canvas: _Canvas, slide: Slide, row: list[_Logo]) -> None:
             canvas.layer, "image", id=identifier, x=box.x, y=box.y, width=box.width, height=box.height,
             href=href, preserveAspectRatio="xMidYMid meet", data__flexo__talk="logo",
         )
+
+
+# -- people beside a title -----------------------------------------------------------------
+
+PORTRAIT_SIZE = 1.3
+"""How wide a portrait beside a title is, as a multiple of the title's line height."""
+PORTRAIT_GAP = 0.22
+"""The space between two portraits (or their names), as a share of how wide they are."""
+PORTRAIT_SMALLEST = 0.6
+"""How much smaller portraits may be made, as a share of their size, for many to fit."""
+PEOPLE_SHARE = 0.42
+"""The most of the width between the margins the people beside a title may take."""
+PEOPLE_ROOM = 20.0
+"""The room kept clear between the title's words and the people beside them, in points."""
+PEOPLE_CLEAR = 14.0
+"""The room kept clear under the people (their names) before the body starts, in points."""
+NAME_WIDEST = 2.2
+"""How wide a person's name may be set, as a multiple of their portrait's width, before
+it wraps onto a second line."""
+
+
+@dataclass(slots=True)
+class _Portrait:
+    """A person as they stand beside a slide's title: which of its people (``index``), what
+    is drawn of their picture (None where its file is not there or can't be read: ``said``),
+    the slot they take across (``across``: their portrait, or their name where it is wider),
+    their name's height, and where they are once placed (``box``: the portrait's)."""
+
+    index: int
+    person: Person
+    artwork: Any
+    said: str
+    across: float
+    named: float
+    box: Box | None = None
+
+
+@dataclass(slots=True)
+class _People:
+    """The people beside a title, in a row: each portrait ``size`` across, ``gap`` apart,
+    their names ``name_size`` under them. ``place`` stands the row's right end at a point
+    and its portraits' middle on a line."""
+
+    portraits: list[_Portrait]
+    size: float
+    gap: float
+    name_size: float
+    width: float = 0.0
+    bottom: float = 0.0
+
+    def place(self, right: float, middle: float) -> None:
+        x = right - self.width
+        self.bottom = middle + self.size / 2.0
+        for portrait in self.portraits:
+            centre = x + portrait.across / 2.0
+            portrait.box = Box(centre - self.size / 2.0, middle - self.size / 2.0, self.size, self.size)
+            if portrait.named:
+                self.bottom = max(self.bottom, middle + self.size / 2.0 + NAME_GAP + portrait.named)
+            x += portrait.across + self.gap
+
+
+NAME_GAP = 3.0
+"""The space between a portrait and the name under it, in points."""
+
+
+def _people_row(canvas: _Canvas, slide: Slide, span: float) -> _People | None:
+    """The people beside this slide's title, if it has any: each a round portrait about as
+    tall as a line and a third of the title, side by side with a small gap, their names
+    small under them -- made smaller together, should many not fit in their share of the
+    width. One whose picture is not there holds its place while editing (a quiet circle);
+    presented or exported, the row closes up without it."""
+
+    if not slide.people:
+        return None
+    style = canvas.deck.style
+    found = []
+    for index, person in enumerate(slide.people):
+        art, said = _portrait_picture(canvas, slide, person)
+        if art is not None or PLACEHOLDERS.get():
+            found.append((index, person, art, said))
+    if not found:
+        return None
+    line = canvas.measure((TextRun("Hg"),), style.title_size, None, canvas.deck.title_weight, title=True)
+    name_size = round(style.small_size * 0.78, 1)
+
+    def row(size: float) -> _People:
+        portraits = []
+        for index, person, art, said in found:
+            across, named = size, 0.0
+            if person.name:
+                widest = size * NAME_WIDEST
+                words = canvas.measure(person.name, name_size, widest)
+                across, named = max(size, min(words.width, widest)), words.height
+            portraits.append(_Portrait(index, person, art, said, across, named))
+        gap = size * PORTRAIT_GAP
+        made = _People(portraits, size, gap, name_size)
+        made.width = sum(portrait.across for portrait in portraits) + gap * (len(portraits) - 1)
+        return made
+
+    size = line.line_height * PORTRAIT_SIZE
+    made = row(size)
+    if made.width > span * PEOPLE_SHARE:
+        made = row(size * max(PORTRAIT_SMALLEST, span * PEOPLE_SHARE / made.width))
+    return made
+
+
+def _portrait_picture(canvas: _Canvas, slide: Slide, person: Person) -> tuple[Any, str]:
+    """A portrait's picture; for one whose file is not there, or does not read, none, and
+    why it is not drawn."""
+
+    from flexo.diagnostics import FlexoError
+
+    name = Path(person.image).name
+    if not Path(person.image).is_file() and STANDING_ASIDE.get():
+        return None, "Missing"
+    try:
+        art = load_artwork("portrait", person.image)
+    except FlexoError as error:
+        if not STANDING_ASIDE.get():
+            raise
+        from flexo.studio.plain import explain
+
+        canvas.diagnostics.append(f"{slide.id}: The portrait {name} {CANT_DRAW}: {explain(error)}")
+        return None, "Can\u2019t draw"
+    return art, ""
+
+
+def _people(canvas: _Canvas, slide: Slide, people: _People, *, band: bool, role: str) -> None:
+    """The people beside a slide's title, drawn where ``_people_row`` stands them: each
+    picture cropped to the circle in its middle (as a picture masked ``circle`` is -- a
+    picture cropped to an oval in a slide program), their name small and muted under it;
+    on a band, in the band's words, a little faint. One whose picture is not there (or does
+    not read) is a quiet dashed circle saying so, while editing."""
+
+    for portrait in people.portraits:
+        identifier = f"{slide.id}.person{portrait.index}"
+        box = portrait.box
+        if box is None:
+            continue
+        if portrait.artwork is None:
+            group = element(canvas.layer, "g", id=identifier, data__flexo__talk="missing")
+            ink = canvas.palette.get("muted-ink")
+            element(
+                group, "ellipse", id=f"{identifier}.box", cx=box.x + box.width / 2.0, cy=box.y + box.height / 2.0,
+                rx=box.width / 2.0, ry=box.height / 2.0, fill=ink, fill_opacity=0.06, stroke=ink,
+                stroke_opacity=0.6, stroke_width=1.0, stroke_dasharray="4 3",
+            )
+            runs, size = (TextRun(portrait.said),), min(people.name_size, box.height * 0.22)
+            said = canvas.measure(runs, size, None)
+            canvas.words(
+                f"{identifier}.words", runs, Box(box.x, box.y + (box.height - said.height) / 2.0, box.width, 0.0),
+                size=size, align="middle", role="muted-ink", parent=group, wrap=False,
+            )
+        else:
+            art = portrait.artwork
+            # The square in its middle, drawn round: the whole picture there still, to be
+            # cropped otherwise in a slide program.
+            aspect = art.aspect or 1.0
+            crop = ((1.0 - 1.0 / aspect) / 2.0, 0.0, 1.0 / aspect, 1.0) if aspect >= 1.0 else (
+                0.0, (1.0 - aspect) / 2.0, 1.0, aspect)
+            words = "".join(run.text for run in portrait.person.name)
+            block = _Image(portrait.person.image, mask="circle", description=words or "Portrait")
+            _cropped_image(canvas, identifier, block, art, box, crop)
+            canvas.layer[-1].set("data-flexo-talk", "person")
+        if portrait.person.name:
+            # (On the band, its words a little faint, as muted words are on the page.)
+            parent = element(canvas.layer, "g", id=f"{identifier}.name-group", opacity=0.8) if band else None
+            across = max(box.width, portrait.across)
+            canvas.words(
+                f"{identifier}.name", portrait.person.name,
+                Box(box.x + box.width / 2.0 - across / 2.0, box.y + box.height + NAME_GAP, across, 0.0),
+                size=people.name_size, align="middle", role=role if band else "muted-ink", parent=parent,
+            )
 
 
 # -- regions ---------------------------------------------------------------------------

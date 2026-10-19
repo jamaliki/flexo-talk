@@ -37,6 +37,7 @@ import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
+import { slidePeople } from "/static/kinds/deck/people.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -1977,6 +1978,13 @@ export function mount(studio, container) {
     toast(`Can’t ${what} while the studio is away: it is drawn again when the studio is back.`, { icon: "info", seconds: 4 });
     return true;
   };
+  // The people beside a slide's title: its inspector's People, Add Person to Title…, and
+  // pictures dropped on its title (people.js).
+  const people = slidePeople(studio, {
+    editSlide: (mutate, options) => editSlide(mutate, options), slideAt: () => slideAt(), slide: () => state.slide,
+    chooseFile: (options) => chooseFile(options), awayFrom, renderInspector: () => renderInspector(),
+    undoNote: (text, options) => undoNote(text, options), pageNode: () => pageNode, types: catalog.people?.types,
+  });
   // The slide each drawing was made from, by the drawing (its hash).
   const drawnFrom = new Map();
   studio.on("drawn", (result) => {
@@ -6960,7 +6968,7 @@ export function mount(studio, container) {
     event.preventDefault();
     const room = regionsOf(slideAt()).length > 0, logos = logoRoom(slideAt());
     if (!room && !logos) event.dataTransfer.dropEffect = "none";
-    const said = room ? "Drop pictures, figure files, structure files (PDB, mmCIF) or mol-sketch scenes to add them to the slide"
+    const said = people.overTitle(event) ? "Drop pictures to add people beside the title" : room ? "Drop pictures, figure files, structure files (PDB, mmCIF) or mol-sketch scenes to add them to the slide"
       : logos ? "Drop pictures to add them as logos"
         : `The ${LAYOUT_NAMES[layoutOf(slideAt())]} layout has no room for pictures: choose one with room, such as Content`;
     if (dropNote?.textContent !== said) { dropNote?.remove(); dropNote = h("div.drop-note", {}, said); center.append(dropNote); }
@@ -6988,6 +6996,7 @@ export function mount(studio, container) {
     const files = [...(event.dataTransfer?.files || [])];
     // Taken now, before anything is waited for: later, the browser would have opened the file.
     if (files.length) event.preventDefault();
+    if (files.length && await people.dropped(files, event)) return;
     if (files.length && !regionsOf(slideAt()).length && !logoRoom(slideAt())) { toast(`${noRoomSaid(slideAt())}.`, { icon: "info", seconds: 6 }); return; }
     await addFiles(files, partAt(event), event);
   });
@@ -7931,6 +7940,7 @@ export function mount(studio, container) {
         WORDLESS.has(layout) && layout !== "title" ? h("div.hint-line", {}, `${noRoomSaid(slide).replace(/^The \S+ layout/, "This layout")}.`) : null,
         layout === "blank" && (slide.title || slide.subtitle) ? h("div.hint-line", {}, "A blank slide doesn’t show its title.") : null),
     ];
+    if (people.room(slide)) parts.push(h("div.section.people-section", {}, h("div.section-title", {}, "People"), people.controls(slide)));
     const regions = regionsOf(slide);
     if (regions.length) parts.push(h("div.section", {}, h("div.section-title", {}, "Objects"), regions.map((region) => regionView(slide, region))));
     if (layout === "title") parts.push(h("div.section.logos-section", {}, h("div.section-title", {}, "Logos"), logosControls()));
@@ -10469,6 +10479,7 @@ export function mount(studio, container) {
     ...layouts.map((layout) => ({ icon: "plus", label: `New ${LAYOUT_NAMES[layout.name]} Slide`, hint: layout.note, run: () => addSlide(layout.name, state.slide + 1) })),
     // Only what can be done here: no layout the slide already has, nothing added where there is no room.
     ...(slides().length ? layouts.filter((layout) => layout.name !== layoutOf(slideAt())).map((layout) => ({ icon: "layout", label: `Layout: ${LAYOUT_NAMES[layout.name]}`, run: () => changeLayout(layout.name) })) : []),
+    ...(typingNow() || !slides().length ? [] : people.commands()),
     ...(regionsOf(slideAt()).length ? Object.entries(BLOCKS).filter(([, info]) => !info.hidden).flatMap(([kind, info]) => [{ icon: info.icon, label: `Add ${info.label}${CHOOSE.has(kind) ? "…" : ""}`, hint: info.hint, run: () => insertBlock(kind) },
       ...(kind === "figure" ? [{ icon: "figure", label: "Add Figure from File…", run: () => chooseFigureFiles() }] : [])]) : []),
     ...catalog.looks.map((look) => ({ icon: "palette", label: `Look: ${lookName(look)}`, hint: look.note, run: () => { studio.change((d) => { d.deck ||= {}; setOption(d.deck, "look", look.name, "classic"); }); renderInspector(); } })),
