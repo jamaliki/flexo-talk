@@ -1,0 +1,13 @@
+/* The people beside a slide's title, listed in its inspector: each portrait round, as the
+   slide draws it, beside their name. */
+.person-row { padding: 4px 6px 4px 4px; gap: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: grab; transition: border-color 0.12s; }
+.person-row:hover { border-color: var(--accent-line); }
+.person-row:focus-within { border-color: var(--accent-line); }
+.person-row.dragging { opacity: 0.4; }
+.person-row.drop-before { box-shadow: 0 -3px 0 -1px var(--accent); }
+.person-row.drop-after { box-shadow: 0 3px 0 -1px var(--accent); }
+.person-row .person-pic { width: 30px; height: 30px; flex: none; border-radius: 50%; object-fit: cover; border: 1px solid rgba(0, 0, 0, 0.08); box-sizing: border-box; }
+.person-row .person-pic.gone { display: grid; place-items: center; color: var(--error); background: var(--raised); }
+.person-row .person-pic.gone svg { width: 15px; height: 15px; }
+.person-row .person-name { flex: 1; min-width: 0; }
+.person-row .person-name .input { width: 100%; cursor: text; }

@@ -224,6 +224,26 @@ LOGO_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".pdf", ".ai")
 logo is drawn still, its first frame: a logo is on every slide, and one moving there would
 draw the eye from what each slide shows."""
 
+PORTRAIT_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai")
+"""The pictures a portrait may be: a photograph's kinds, and vectors (SVG, a PDF's page)."""
+PEOPLE_LAYOUTS = ("content", "two-columns", "columns", "figure")
+"""The layouts whose title may have people beside it (``Slide.person``): those that set a
+title at the top of the slide over their objects."""
+
+
+@dataclass(frozen=True, slots=True)
+class Person:
+    """Someone a slide's work was done with: a round portrait at the end of its title,
+    from ``image`` (a picture file, cropped to a centred circle), and their ``name`` set
+    small under it (none, no name)."""
+
+    image: str
+    name: tuple[TextRun, ...] = ()
+    """Their name as it is set under the portrait (inline markup read)."""
+    written: str = ""
+    """Their name as it is written."""
+
+
 SHAPE_FRAME = 960.0
 """How wide a slide is in the units its shapes are placed in. On the deck's own slide, 960
 points wide (16:9, 960 by 540), they are its points, as every size in a deck is; on a slide
@@ -1735,6 +1755,8 @@ class Slide:
         """Each shape as a deck document writes it."""
         self.placeholders: frozenset[str] = frozenset()
         """The fields written but left empty (title, subtitle, words): each holds its place."""
+        self.people: list[Person] = []
+        """The people beside its title (``person``), in the order they stand, left to right."""
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:
@@ -1909,6 +1931,21 @@ class Slide:
         """What to say: kept as the slide's speaker notes."""
 
         self.notes_text = text
+        return self
+
+    def person(self, image: str | Path, name: str = "") -> Slide:
+        """Someone the slide's work was done with: a round portrait from ``image`` (cropped
+        to a centred circle) at the right end of its title, ``name`` set small under it.
+        Several stand side by side, in the order added; the title wraps short of them."""
+
+        if self.layout not in PEOPLE_LAYOUTS:
+            raise SettingError("people", f"A {self.layout} slide has no title for people to stand beside: "
+                                         f"people go on a content, two-columns, columns or figure slide.")
+        if Path(image).suffix.lower() not in PORTRAIT_SUFFIXES:
+            raise SettingError("people", f"A portrait must be a PNG, JPEG, SVG or PDF picture: "
+                                         f"{Path(image).name} is none of these.")
+        name = _words(name or "", "name")
+        self.people.append(Person(str(image), inline(name) if name.strip() else (), name))
         return self
 
     def footnote(self, text: str) -> Slide:

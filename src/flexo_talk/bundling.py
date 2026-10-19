@@ -2,7 +2,7 @@
 found as ``flexo_talk.document`` finds it, from the deck's folder.
 
 The deck's theme and palette files, the picture behind every slide and each slide's own,
-its logos; each slide's pictures, galleries, figures (a figure file, whose own files are
+its logos; each slide's people (their portraits), pictures, galleries, figures (a figure file, whose own files are
 followed in turn; one written in the deck, whose parts' pictures, structures, maps and plots
 are found from the deck's folder; or ``file.py:function``), plots (``file.py:function``) and
 the pictures among its shapes (a drawing pasted in, its parts kept as drawn); and the files
@@ -60,6 +60,12 @@ def _slide(slide: Mapping[str, Any], base: Path, where: str) -> list[Reference]:
             and not named_colour(background):
         found.append(Reference(background, f"{where}.background", base))
     found += shape_references(slide.get("shapes"), base, f"{where}.shapes")
+    # The people beside its title: each a picture, or a mapping with one (``image``).
+    people = slide.get("people")
+    for index, person in enumerate(people if isinstance(people, list) else []):
+        picture = person.get("image") if isinstance(person, Mapping) else person
+        if isinstance(picture, str) and picture:
+            found.append(Reference(picture, f"{where}.people[{index}]", base))
     for key in ("body", "left", "right"):
         blocks = slide.get(key)
         for index, block in enumerate(blocks if isinstance(blocks, list) else []):

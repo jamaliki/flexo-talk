@@ -1899,6 +1899,8 @@ def plain_names(tree: etree._Element, blocks: dict[str, str], *, shapes: dict[st
                 said = _FURNITURE.get(rest, "Footnote")
             elif re.fullmatch(r"logo\d+", rest):
                 said = "Logo"
+            elif re.fullmatch(r"person\d+", rest):
+                said = "Portrait"
             elif re.fullmatch(r"row\d+", rest):
                 # A row's label, on a slide set in rows.
                 said = f"Row Label \u201c{words(element)}\u201d" if words(element) else "Row Label"

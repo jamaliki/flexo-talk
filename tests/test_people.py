@@ -1,0 +1,248 @@
+"""People beside a slide's title: round portraits at the right end of its title, each with
+their name small under it, read from the deck's document, drawn, bundled and exported."""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+
+import pytest
+from flexo import bundle as B
+
+from flexo_talk import Deck, compose
+from flexo_talk.document import (
+    DeckDocumentError,
+    MissingFile,
+    deck_document,
+    deck_from_document,
+    dump_document,
+)
+from flexo_talk.studio import DeckKind
+
+TITLE = "Mechazyme builds a reaction-cycle motif"
+
+
+def _portraits(folder: Path) -> list[str]:
+    from PIL import Image
+
+    (folder / "assets").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (400, 300), (200, 120, 90)).save(folder / "assets" / "sam.jpeg")
+    Image.new("RGB", (300, 420), (90, 140, 200)).save(folder / "assets" / "other.png")
+    return ["assets/sam.jpeg", "assets/other.png"]
+
+
+def _deck(folder: Path, people: object, **slide: object) -> dict:
+    return {"schema_version": 1, "deck": {"id": "people"}, "slides": [
+        {"title": TITLE, "people": people, "body": [{"text": "Words"}], **slide}]}
+
+
+def _drawn(svg: str, pattern: str) -> list[ET.Element]:
+    return [item for item in ET.fromstring(svg).iter() if re.fullmatch(pattern, item.get("id", ""))]
+
+
+def _box(item: ET.Element) -> tuple[float, float, float, float]:
+    return tuple(float(value) for value in item.get("data-flexo-box", "").split())  # type: ignore[return-value]
+
+
+def test_people_are_read_as_pictures_and_names_and_written_back_as_given(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    people = [{"image": names[0], "name": "Sam Pellock"}, names[1]]
+    deck = deck_from_document(_deck(tmp_path, people), tmp_path)
+    slide = deck.slides[0]
+    assert [person.image for person in slide.people] == [str(tmp_path / name) for name in names]
+    assert [person.written for person in slide.people] == ["Sam Pellock", ""]
+    assert deck_document(deck)["slides"][0]["people"] == people
+    # Made in Python, written as its files are named there, their names beside them.
+    made = Deck("made")
+    with made.slide(TITLE) as each:
+        each.person(tmp_path / names[0], "Sam Pellock").person(tmp_path / names[1])
+        each.bullets("A point")
+    assert deck_document(made)["slides"][0]["people"] == [
+        {"image": str(tmp_path / names[0]), "name": "Sam Pellock"}, str(tmp_path / names[1])]
+    assert "people:" in dump_document(deck_document(made))
+
+
+@pytest.mark.parametrize("layout", ["content", "two-columns", "columns", "figure"])
+def test_every_layout_with_a_title_over_its_objects_takes_people(tmp_path: Path, layout: str) -> None:
+    names = _portraits(tmp_path)
+    slide: dict = {"layout": layout, "title": TITLE, "people": names}
+    slide |= {"two-columns": {"left": [{"text": "A"}], "right": [{"text": "B"}]},
+              "columns": {"columns": [[{"text": "A"}], [{"text": "B"}]]}}.get(layout, {"body": [{"text": "A"}]})
+    deck = deck_from_document({"deck": {}, "slides": [slide]}, tmp_path)
+    svg = compose.render_slide(deck, deck.slides[0]).svg
+    assert len(_drawn(svg, r"slide1\.person\d")) == 2
+
+
+@pytest.mark.parametrize(("people", "where", "said"), [
+    ("assets/sam.jpeg", "slides[0].people", "people must be a list of portraits, such as "
+                                            "[{image: assets/sam.jpeg, name: Sam Pellock}]."),
+    ([{"image": "assets/sam.jpeg", "title": "Dr"}], "slides[0].people[0]",
+     "Unknown key title. Valid keys here: image, name"),
+    ([{"name": "Sam"}], "slides[0].people[0]", "Each person is a picture file, or a mapping with image and name"),
+    ([{"image": "assets/sam.jpeg", "name": ["Sam"]}], "slides[0].people[0].name", "name must be text, not a list"),
+    (["assets/sam.gif"], "slides[0].people[0]",
+     "A portrait must be a PNG, JPEG, SVG or PDF picture: sam.gif is none of these."),
+    (["assets/nobody.png"], "slides[0].people[0]", "Cannot find assets/nobody.png"),
+])
+def test_people_said_wrong_are_said_where_they_are(tmp_path: Path, people: object, where: str, said: str) -> None:
+    _portraits(tmp_path)
+    (tmp_path / "assets" / "sam.gif").write_bytes(b"GIF89a")
+    with pytest.raises(DeckDocumentError) as raised:
+        deck_from_document(_deck(tmp_path, people), tmp_path)
+    assert raised.value.where == where
+    assert said in str(raised.value)
+
+
+@pytest.mark.parametrize("layout", ["title", "section", "statement", "agenda", "blank"])
+def test_a_slide_with_no_title_over_objects_refuses_people(tmp_path: Path, layout: str) -> None:
+    names = _portraits(tmp_path)
+    with pytest.raises(DeckDocumentError, match="has no title for people to stand beside") as raised:
+        deck_from_document({"deck": {}, "slides": [{"layout": layout, "title": "A", "people": names}]}, tmp_path)
+    assert raised.value.where == "slides[0].people"
+
+
+def test_portraits_stand_round_at_the_right_end_of_the_title_which_wraps_short_of_them(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    people = [{"image": names[0], "name": "Sam Pellock"}, {"image": names[1], "name": "Ana Ruiz"}]
+    long = "A title long enough to run the whole width of the slide when nothing stands beside it"
+    plain = deck_from_document(_deck(tmp_path, None, title=long), tmp_path)
+    deck = deck_from_document(_deck(tmp_path, people, title=long), tmp_path)
+    style = deck.style
+    svg = compose.render_slide(deck, deck.slides[0]).svg
+    portraits = _drawn(svg, r"slide1\.person\d")
+    # Each a circle filled with its picture: the square in its middle, drawn round.
+    assert [item.tag.rsplit("}", 1)[-1] for item in portraits] == ["ellipse", "ellipse"]
+    assert all(item.get("rx") == item.get("ry") for item in portraits)
+    assert [item.get("aria-label") for item in portraits] == ["Sam Pellock", "Ana Ruiz"]
+    boxes = [_box(item) for item in portraits]
+    # About a line and a third of the title across, side by side, a small gap between them.
+    size = boxes[0][2]
+    line = compose._Canvas(deck, deck.slides[0]).measure(compose.inline("Hg"), style.title_size, None, title=True)
+    assert size == pytest.approx(line.line_height * compose.PORTRAIT_SIZE)
+    assert boxes[0][1] == boxes[1][1] and boxes[0][0] + size < boxes[1][0]
+    # The row's right end on the slide's right margin (the last a portrait no narrower than
+    # its name), and its middle on the title's.
+    names_drawn = _drawn(svg, r"slide1\.person\d\.name")
+    assert [item.get("text-anchor") for item in names_drawn] == ["middle", "middle"]
+    assert boxes[-1][0] + size == pytest.approx(style.width - style.margin, abs=0.01)
+    # The title wraps short of them, with room kept; without them, at the margin.
+    title = _drawn(svg, r"slide1\.title")[0]
+    wrap = float(title.get("data-flexo-wrap", "").split()[0])
+    assert style.margin + wrap + compose.PEOPLE_ROOM <= min(box[0] for box in boxes) + 0.01
+    before = _drawn(compose.render_slide(plain, plain.slides[0]).svg, r"slide1\.title")[0]
+    assert float(before.get("data-flexo-wrap", "").split()[0]) == pytest.approx(style.width - 2 * style.margin)
+    # The body starts below their names.
+    body = _drawn(svg, r"slide1\.body")[0]
+    assert _box(body)[1] >= max(float(item.get("y", 0)) for item in names_drawn)
+
+
+def test_many_people_are_made_smaller_together_to_fit_their_share(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    few = deck_from_document(_deck(tmp_path, names), tmp_path)
+    deck = deck_from_document(_deck(tmp_path, names * 4), tmp_path)
+    svg = compose.render_slide(deck, deck.slides[0]).svg
+    boxes = [_box(item) for item in _drawn(svg, r"slide1\.person\d+")]
+    span = deck.style.width - 2 * deck.style.margin
+    full = _box(_drawn(compose.render_slide(few, few.slides[0]).svg, r"slide1\.person0")[0])[2]
+    assert len(boxes) == 8 and boxes[0][2] < full
+    assert boxes[-1][0] + boxes[-1][2] - boxes[0][0] == pytest.approx(span * compose.PEOPLE_SHARE)
+
+
+def test_a_missing_portrait_holds_its_place_while_editing_and_is_said(tmp_path: Path) -> None:
+    from flexo.confine import folder_root
+
+    names = _portraits(tmp_path)
+    document = _deck(tmp_path, [names[0], {"image": "assets/gone.png", "name": "Gone"}])
+    root = folder_root.set(tmp_path)
+    try:
+        drawing = DeckKind().draw(document, tmp_path, {})
+    finally:
+        folder_root.reset(root)
+    svg = drawing.pages[0].svg
+    assert 'id="slide1.person1"' in svg and "Missing" in svg
+    said = [(message.text, message.where) for message in drawing.messages if message.severity == "error"]
+    assert said == [("Can't find assets/gone.png in the deck's folder.", "slides[0].people[1]")]
+    # Watched while missing, so the slide is drawn again once it is there.
+    assert tmp_path / "assets" / "gone.png" in {Path(file) for file in drawing.files}
+    with pytest.raises(MissingFile, match=r"Cannot find assets/gone\.png"):
+        deck_from_document(document, tmp_path)
+
+
+def test_a_bundle_carries_the_portraits(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    (tmp_path / "talk.yaml").write_text(dump_document(_deck(tmp_path, [{"image": names[0], "name": "Sam"}, names[1]])))
+    gathered = B.gather(tmp_path / "talk.yaml")
+    assert sorted(gathered.files) == ["assets/other.png", "assets/sam.jpeg", "talk.yaml"]
+    named = {"slides": [{"people": ["a.png", {"image": "b.png"}]}]}
+    names_in = [ref.name for ref in DeckKind().references(named, tmp_path)]
+    assert names_in == ["a.png", "b.png"]
+
+
+def test_the_powerpoint_crops_each_portrait_to_an_oval_and_the_pdf_draws_them(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    deck = deck_from_document(_deck(tmp_path, [{"image": names[0], "name": "Sam Pellock"}, names[1]]), tmp_path)
+    result = deck.build(tmp_path / "out", formats=("pptx", "pdf"))
+    slide = zipfile.ZipFile(result.pptx).read("ppt/slides/slide1.xml").decode()  # type: ignore[arg-type]
+    pictures = re.findall(r"<p:pic>.*?</p:pic>", slide, re.S)
+    assert len(pictures) == 2
+    # A native picture cropped to its middle square (the rest there still), in an oval:
+    # PowerPoint's Crop to Shape, Oval -- named, and described by the person's name.
+    assert all('<a:prstGeom prst="ellipse">' in picture and 'name="Portrait"' in picture for picture in pictures)
+    assert '<a:srcRect l="12500" t="0" r="12500" b="0"/>' in pictures[0] and 'descr="Sam Pellock"' in pictures[0]
+    assert '<a:srcRect l="0" t="14286" r="0" b="14286"/>' in pictures[1]
+    assert "Sam Pellock" in slide
+    assert result.pdf is not None and result.pdf.read_bytes().count(b"/Subtype /Image") >= 2
+
+
+PEOPLE_JS = """
+const out = {};
+const slide = { title: "A", people: ["a.png", { image: "b.png", name: "Bea" }] };
+out.can = [canHavePeople({}), canHavePeople({ layout: "two-columns" }), canHavePeople({ layout: "title" })];
+out.of = peopleOf(slide);
+const added = structuredClone(slide);
+out.at = addPeople(added, ["c.png", "d.png"], 1);
+out.added = added.people;
+const named = structuredClone(slide);
+renamePerson(named, 0, "Al");
+renamePerson(named, 1, " ");
+out.named = named.people;
+const moved = structuredClone(slide);
+movePerson(moved, 0, 1);
+out.moved = moved.people;
+const removed = structuredClone(slide);
+removePerson(removed, 0);
+removePerson(removed, 0);
+out.removed = "people" in removed;
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_the_editor_adds_names_moves_and_removes_people_as_written() -> None:
+    script = Path(__file__).parents[1] / "src/flexo_talk/studio/static/peoplelist.js"
+    names = "canHavePeople, peopleOf, addPeople, removePerson, movePerson, renamePerson"
+    code = f"import {{ {names} }} from {json.dumps(script.as_uri())};\n{PEOPLE_JS}"
+    done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
+    found = json.loads(done.stdout)
+    assert found["can"] == [True, True, False]
+    assert found["of"] == [{"image": "a.png", "name": ""}, {"image": "b.png", "name": "Bea"}]
+    assert found["at"] == 1 and found["added"] == ["a.png", "c.png", "d.png", {"image": "b.png", "name": "Bea"}]
+    # A name written keeps the mapping; none, the file alone.
+    assert found["named"] == [{"image": "a.png", "name": "Al"}, "b.png"]
+    assert found["moved"] == [{"image": "b.png", "name": "Bea"}, "a.png"]
+    assert found["removed"] is False
+
+
+def test_the_editor_offers_people_in_the_slide_s_inspector_and_the_palette() -> None:
+    static = Path(__file__).parents[1] / "src/flexo_talk/studio/static"
+    editor, people = (static / "editor.js").read_text("utf-8"), (static / "people.js").read_text("utf-8")
+    assert 'h("div.section-title", {}, "People"), people.controls(slide)' in editor
+    assert "people.commands()" in editor and "people.dropped(files, event)" in editor
+    assert 'label: "Add Person to Title…"' in people and 'ui.button("Add Person…"' in people
+    for label in ('"Add Person"', '"Remove Person"', '"Move Person"', '"Rename Person"'):
+        assert label in people
