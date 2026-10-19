@@ -659,3 +659,7 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .spell-bar .spell-guesses { display: flex; flex: none; gap: 4px; margin-right: 10px; }
 .spell-bar .spell-guesses .muted { color: var(--ink-3); font: var(--text-small); white-space: nowrap; }
 .spell-bar .find-count { margin: 0 4px 0 10px; }
+
+/* An object in line: where it stands in its place, and Place Freely under it (placing.js). */
+.position-free { display: grid; gap: 8px; justify-items: start; }
+.position-free > .position-pad { justify-self: stretch; }
