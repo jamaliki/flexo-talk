@@ -848,6 +848,15 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   labels changed in the file with the deck's in the same step. Esc closes it, the last
   match's words chosen where they are typed. The top bar's **Search** (⌘K) lists the same
   matches, by slide, above the commands; choosing one goes there as the bar does.
+- **Check Spelling…** (the palette, Edit › Spelling and Grammar in the Mac app): the deck's
+  words -- the same as Find's, its notes and figures' labels too -- gone through for those the
+  Mac's dictionary does not know, in its person's language, one after another in a bar where
+  Find's is: the word marked on its slide, the dictionary's guesses beside it, a click each to
+  put it in its place (one step in the history). **Ignore** passes over the word while the
+  bar is open; **Add to Deck** keeps it in the deck (`deck: {spelling: [Mechazyme]}`), never
+  said misspelt in it again. Code and equations, words between backticks or dollars, links
+  and words with digits (5KKA, H2O) are left alone. In the Mac app words are also underlined
+  as they are typed; in a browser that is the browser's, and Check Spelling… is not offered.
 - **TODOs**: the word `TODO` in capitals, as a word of its own (`TODO`, `TODO:`,
   `TODO —`), anywhere in a slide's words -- the same words find finds, its notes too --
   is work left, shown in the studio only. The slide's thumbnail glows amber in the
