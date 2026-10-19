@@ -5,7 +5,8 @@
 // - Where each is: its frame (compose.py's data-flexo-frame -- its words' room across, a
 //   picture's or a table's own width, from its top to its end) and what it draws (its box, as
 //   a shape's is), in the units the slide's shapes are placed in.
-// - Taken out of line: placed at its frame, that wide, so nothing about it moves or changes (a
+// - Taken out of line (Place Freely, ⌘ held as a drag starts, or X and Y given): placed at its
+//   frame, that wide, so nothing about it moves or changes (a
 //   plot keeping its proportions as its aspect, a gallery its pictures' height); the rest of its
 //   place laid out without it. Put Back in Line: in its place's flow again, where it is in its
 //   list, the width it was given dropped where it would fill its place anyway.
@@ -136,6 +137,18 @@ export function placing(ctx) {
       const block = blockOf(pick, slide);
       if (block && placed(block)) P.inLine(block, k, ctx.room(pick.region));
     }
+  }
+  // Place Freely: each of `picks` in line taken out of it where it stands, to be dragged
+  // anywhere (as ⌘ held as a drag starts does, or X and Y given), the rest of its place laid out
+  // without it.
+  function placeFreely(picks = chosen()) {
+    const free = picks.filter((pick) => !placed(blockOf(pick)) && !isLocked(pick));
+    if (!free.length || ctx.away("move objects")) return false;
+    const all = chosen(), frames = framesOf(free);
+    ctx.editSlide((slide) => outOfLine(slide, free, frames), { label: `Place ${called(free)} Freely` });
+    if (all.length > 1) ctx.markMany(all, all);
+    ctx.render();
+    return true;
   }
   function putBack(picks = chosen()) {
     const back = picks.filter((pick) => placed(blockOf(pick)));
@@ -730,6 +743,8 @@ export function placing(ctx) {
     const name = called(picks), out = [];
     const back = picks.filter((pick) => placed(blockOf(pick)));
     if (back.length) out.push({ icon: "layout", label: "Put Back in Line", hint: name, run: () => putBack(back) });
+    const free = picks.filter((pick) => !placed(blockOf(pick)) && !isLocked(pick));
+    if (free.length) out.push({ icon: "arrange", label: "Place Freely", hint: name, run: () => placeFreely(free) });
     out.push(...arranging.commands(name));
     const locked = picks.every(isLocked);
     out.push(locked ? { icon: "lock", label: "Unlock", keys: "⌥⌘L", hint: name, run: () => lock(false) } : { icon: "lock", label: "Lock", keys: "⌘L", hint: name, run: () => lock(true) });
@@ -737,7 +752,7 @@ export function placing(ctx) {
   }
 
   return {
-    placed, frameOf, boxOf, press, pressShape, size, nudge, drawn, attach, putBack, lock, moveWith, commands, arrangePanel, mixedFields,
+    placed, frameOf, boxOf, press, pressShape, size, nudge, drawn, attach, putBack, placeFreely, lock, moveWith, commands, arrangePanel, mixedFields,
     reveal: () => arranging.reveal(), align: (side) => arranging.align(side),
     showMoves: (moves) => showMoves(moves ? moves.map(({ pick, dx, dy }) => ({ key: keyOf(pick), dx, dy })) : null),
     busy: () => Boolean(gesture?.started),

@@ -443,7 +443,10 @@ every Relative to, Beside, Move as a Group, Distribute, a set gap, Arrange in a 
 palette and the Mac app's Arrange menu have them by name. Whatever of these moves an object takes
 it out of line: every object in line among those chosen is placed just where it stands, nothing
 about it changed but what the command moves (an object already where Align puts it stays in line);
-Put Back in Line puts it back in its place's flow. A placed object is dragged anywhere (⇧ along one
+**Place Freely** (under its Position, in its right-click menu, the palette and the Mac app's
+Arrange menu) takes one out of line where it stands, to be dragged anywhere -- a headshot beside a
+title, a logo in a corner -- the rest of its place laid out without it; Put Back in Line puts it
+back in its place's flow. A placed object is dragged anywhere (⇧ along one
 way, ⌥ a copy) and sized by its handles -- words wrapped again in their new width as they are, the
 rest in proportion -- catching at the slide's edges and middles, at the shapes and other objects
 and where it is as far from its neighbours as they are apart, as a shape does (the magnet; ⌘ held

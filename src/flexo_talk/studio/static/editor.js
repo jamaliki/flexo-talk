@@ -7802,7 +7802,8 @@ export function mount(studio, container) {
         // (Placed where it is put, out of line: back into its place, by the Arrange tab's X and Y.)
         kind !== "unknown" ? ui.field("Position", objects.isPlaced(at)
           ? h("div.row", {}, ui.button("Put Back in Line", () => objects.putBack([at]), { small: true, icon: "layout" }))
-          : positionPad(slide, at, block)) : null),
+          : h("div.position-free", {}, positionPad(slide, at, block),
+            ui.button("Place Freely", () => objects.placeFreely([at]), { small: true, icon: "arrange" }))) : null),
       h("div.section.block-form", { dataset: { region: at.region, index: at.index } }, blockForm(block, kind, at),
         // (A figure's and a picture's is among their own settings.)
         SIDEWAYS.has(kind) || CORNERED.has(kind) || kind === "mechanism" ? widthField(block, at) : null),
@@ -10414,7 +10415,7 @@ export function mount(studio, container) {
     const typed = inline?.target?.kind === "block" ? kindOf(blocksAt(slideAt() || {}, inline.target.region)[inline.target.index]) : null;
     const own = {
       drag: cropping?.drag?.moved ? "crop" : placedDrag === "size" ? "scale" : placedDrag ? "move"
-        : sizing?.moved || resizing?.moved || logoSizing?.moved ? "handle" : carry?.started || logoDrag?.started || band?.node ? "plain" : "",
+        : sizing?.moved || resizing?.moved || logoSizing?.moved ? "handle" : carry?.started ? "carry" : logoDrag?.started || band?.node ? "plain" : "",
       mode: cropping && !cropping.done ? "crop" : "",
       typing: !inline ? "" : inline.cell ? "cell" : inline.bullets ? "list" : inline.target?.kind === "stat" ? "stat" : inline.target?.kind === "picture" ? "caption"
         : typed === "code" ? "code" : typed === "math" ? "maths" : "words",
