@@ -176,3 +176,27 @@ def test_a_gif_travels_in_its_deck_bundle_as_it_is(folder: Path, tmp_path: Path)
     unpacked = next(out.rglob("spin.gif"))
     assert unpacked.read_bytes() == (folder / "spin.gif").read_bytes()
     assert read_deck(next(out.rglob("talk.yaml"))).slides[0].regions["body"].blocks[0].still == 2
+
+
+def test_a_figures_gif_drawn_for_the_studio_first_still_goes_into_the_powerpoint(folder: Path, tmp_path: Path) -> None:
+    """A figure's photographs are named by address while the studio draws its page, and carried
+    in an export: a figure drawn for the page, its layout kept, must not be exported so. (The
+    owner's slide 22 lost its GIF, and slide 46 its pictures, in the app's PowerPoint.)"""
+
+    from flexo.artwork import picture_link
+
+    document = deck_of({"title": "Cycle", "body": [{"figure": {"figure": {"id": "cycle"}, "nodes": [
+        {"id": "label", "label": "Motif"},
+        {"id": "motif", "kind": "image", "height": 80, "properties": {"source": "spin.gif", "still": 1}},
+    ], "edges": [{"from": "label", "to": "motif"}]}}]})
+    deck = deck_from_document(document, folder)
+    token = picture_link.set(lambda artwork: f"/api/picture?path={artwork.path.name}")
+    try:
+        page = render_slide(deck, deck.slides[0]).svg
+    finally:
+        picture_link.reset(token)
+    assert "/api/picture?path=spin.gif" in page
+    out = build_deck(deck_from_document(document, folder), tmp_path / "out", ("pptx",))
+    with zipfile.ZipFile(out.pptx) as archive:
+        assert "ppt/media/image1.gif" in archive.namelist()
+        assert archive.read("ppt/media/image1.gif") == (folder / "spin.gif").read_bytes()
