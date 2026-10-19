@@ -361,7 +361,7 @@ def test_a_long_code_line_is_set_smaller_then_wrapped_and_said() -> None:
     assert any("of code wrapped to fit the slide" in line for line in rendered.diagnostics)
     canvas = _Canvas(deck, slide)
     _, lines = _code_lines(canvas, slide.body.blocks[0], 400.0)
-    assert len(lines) > 3 and all(line.startswith("        ") for line, _ in lines[2:-1])
+    assert len(lines) > 3 and all(line.startswith("        ") for line, _, _ in lines[2:-1])
 
 
 def test_a_gallery_fits_the_height_of_its_place(tmp_path: Path) -> None:

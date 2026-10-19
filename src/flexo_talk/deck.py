@@ -28,7 +28,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import flexo
 from flexo.ir.semantic import FigureSpec, TextRun
@@ -37,6 +37,9 @@ from flexo.restyle import Restyle, restyle_of
 from flexo.style import LayoutStyle, Palette, TypographyStyle
 from flexo.themes import resolve_palette, resolve_style, with_tone_roles
 from flexo.units import pt
+
+if TYPE_CHECKING:
+    from flexo_talk.showing import Shown
 
 try:
     from flexo.markup import parse_words
@@ -249,12 +252,14 @@ SHAPE_FRAME = 960.0
 points wide (16:9, 960 by 540), they are its points, as every size in a deck is; on a slide
 of another size they are scaled with it, 960 of them across -- so a shape keeps its place
 and its proportions, a circle a circle, when the slide is made larger or smaller."""
-SHAPE_KEYS = ("behind", "build", "hidden", "locked")
+SHAPE_KEYS = ("behind", "build", "hidden", "locked", "hide", "dim", "highlight")
 """What a shape on a slide says besides how it is drawn (``flexo.freeform``): whether it is
 drawn behind the slide's words and objects rather than over them, whether it appears on a
 click when presenting (after the slide's objects that do, in the order the shapes are
-listed), whether it is hidden (drawn faintly while editing, never presented or exported),
-and whether it is locked where it is."""
+listed), whether it is locked where it is, and how it is shown, as any object on the slide
+is (``flexo_talk.showing``): hidden (``hide``: a ghost while editing, never presented or
+exported -- ``hidden``, as decks said it before), dimmed (``dim``) or highlighted
+(``highlight``: the slide's other objects and shapes drawn faint)."""
 
 _STYLE_NUMBERS: dict[str, tuple[float, float]] = {
     # PowerPoint's slides are 1 to 56 inches each way.
@@ -916,7 +921,8 @@ def inline(words: str) -> tuple[TextRun, ...]:
     """Slide text as runs: ``*emphasis*`` is italic, ``**strong**`` bold, ``$...$``
     math, ``code`` between backticks is set in the monospace family,
     ``[words](url)`` links, and ``[words]{accent}`` (or ``{accent2}``, ``{muted}``,
-    ``{#c0392b}``) colours.
+    ``{#c0392b}``) colours; ``[words]{dim}`` draws them faint, in their own colour
+    (``flexo_talk.showing``).
 
     Emphasis is slide markup only -- a figure's labels keep their asterisks.
     """
@@ -1067,6 +1073,9 @@ class Region:
         each one's top left, in the units the slide's shapes are placed in (``place(at=)``)."""
         self.locked: set[int] = set()
         """The blocks (by index) locked where they are in the studio (``locked: true``)."""
+        self.shown: dict[int, Shown] = {}
+        """How the blocks (by index) that are not simply shown are: hidden, dimmed or
+        highlighted, whole or in part (see ``show``)."""
         """The blocks (by index) that are placeholders: put there to be made one's own (the
         studio's sample table, figure or equation), drawn faintly while editing and never
         presented or exported until changed."""
@@ -1542,6 +1551,42 @@ class Region:
                 self.sources[-1][key] = share_written(share, names)
         return self
 
+    def show(
+        self, *, hide: bool | Sequence[object] | None = None, dim: bool | Sequence[object] | None = None,
+        highlight: bool | Sequence[object] | None = None,
+    ) -> Region:
+        """How the block added last is shown (``flexo_talk.showing``): ``hide=True`` keeps it
+        out of the show and the exports where it stands, its place kept (a ghost while it is
+        edited); ``dim=True`` draws it faint; ``highlight=True`` draws the slide's other objects
+        and shapes faint. Each may instead name its parts: a list's items by number (``"2.1"``
+        under item 2), a table's rows (the header row 1) or cells (``"3.2"``), a gallery's
+        pictures, numbers' figures or code's lines by theirs, a figure's parts by id --
+        ``highlight=[2]`` drawing the list's other items faint."""
+
+        from flexo_talk.showing import KEYS, Shown, kind_of, part_written, written
+
+        if not self.blocks:
+            raise ValueError("Add a block before saying how it is shown.")
+        index = len(self.blocks) - 1
+        block = self.blocks[index]
+        said = {"hide": hide, "dim": dim, "highlight": highlight}
+        kind = kind_of(block, self.sources[-1])
+        made = written(kind, {key: list(value) if isinstance(value, tuple) else value for key, value in said.items()})
+        if kind == "figure" and isinstance(block, _Figure):
+            # A figure's parts are its own (flexo.showing): hidden, dimmed or highlighted in it.
+            named = {KEYS[key]: tuple(value) for key, value in said.items() if isinstance(value, list | tuple)}
+            if named and isinstance(block.figure, FigureSpec):
+                block.figure = replace(block.figure, **named)
+        had = self.shown.get(index, Shown())
+        made = Shown(made.whole or had.whole, {**had.parts, **made.parts})
+        if made:
+            self.shown[index] = made
+        if self.sources[-1]:  # a stand-in for what is missing is written as nothing
+            for key, value in said.items():
+                if value not in (None, False):
+                    self.sources[-1][key] = value if value is True else [part_written(item) for item in value]
+        return self
+
     def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
         """A box where the ``what`` (picture, figure, plot) in the file ``name`` would be,
         saying it is missing -- or what else is wrong (``said``): the rest of the slide is
@@ -1873,6 +1918,13 @@ class Slide:
         (``at``: see ``Region.place``)."""
 
         next(iter(self.regions.values())).place(horizontal, vertical=vertical, at=at)
+        return self
+
+    def show(self, **how: bool | Sequence[object] | None) -> Slide:
+        """How the block added last is shown: hidden, dimmed or highlighted, whole or in part
+        (see ``Region.show``)."""
+
+        next(iter(self.regions.values())).show(**how)  # type: ignore[arg-type]
         return self
 
     def gallery(self, items, **options: object) -> Slide:
@@ -2684,6 +2736,9 @@ class RenderedSlide:
     """``(step, id)`` of each block that builds in: the step it appears at."""
     shapes: list[ShapeLayout] = field(default_factory=list)
     """The shapes drawn where they were put, in the order they are drawn (see ``ShapeLayout``)."""
+    shown: dict[str, str] = field(default_factory=dict)
+    """How what is on it is drawn where not plainly -- hidden or dimmed -- by the id it is drawn
+    with, what is drawn under that id as it is (``flexo_talk.showing.slide_states``)."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

@@ -635,6 +635,17 @@ body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
 .placeholder-note[hidden] { display: none; }
 .placeholder-note svg { width: 13px; height: 13px; flex: none; }
 
+/* Show (showing.js): an object's parts, each shown as it says -- a list's items, a table's rows. */
+.show-parts { display: grid; gap: 4px; margin-top: 10px; }
+.show-parts-title { font-size: 11.5px; font-weight: 600; color: var(--ink-3); }
+.show-part { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 6px; font-size: 12.5px; }
+.show-part-name { color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.show-part-words { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.show-part .select { min-width: 96px; }
+/* Words dimmed ([words]{dim}): faint as they are typed, as on the slide. */
+.rich [data-colour="dim"] { opacity: 0.28; }
+.rt-bar .rt-dim-glyph { font-weight: 600; opacity: 0.35; }
+
 /* A part a figure hides on this slide is a ghost on the slide being edited (there to be
    chosen and shown again), and gone from its thumbnail and from the slideshow. */
 .deck-stage { --flexo-ghosts: visible; --flexo-ghost: 0.2; }

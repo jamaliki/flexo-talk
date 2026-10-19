@@ -38,6 +38,7 @@ import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
+import { showStates } from "/static/kinds/deck/showing.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -265,6 +266,8 @@ function buildsSaid(slide) {
   const said = [];
   for (const { key } of regionsOf(slide || {})) {
     for (const block of blocksAt(slide, key)) {
+      // (One hidden builds in on no click: flexo_talk.showing.)
+      if (block?.hide === true) continue;
       const name = `the ${blockName(block).toLowerCase()}`;
       if (kindOf(block) === "bullets" && block.reveal) said.push(`${name}, an item at a time`);
       else if (block.build) said.push(name);
@@ -997,6 +1000,21 @@ export function mount(studio, container) {
     }
     return { step: 12, major: 5, layout };
   }
+  // Shown, highlighted, dimmed or hidden: any object, its parts, any shape (showing.js).
+  const showing = showStates({
+    studio, slideAt: () => slideAt(), blocksAt: (slide, region) => blocksAt(slide, region), editSlide: (mutate, options) => editSlide(mutate, options),
+    objectName: (block) => objectName(block), shapeName: (index) => freeShapes.nameOf?.(index) || "Shape", blockId: (at) => blockId(at), pageNode: () => pageNode,
+    render: () => { placeChosen(); renderInspector(); reportFocus(); },
+  });
+  // What the inspector's Show, its menu and the palette's act on: the objects chosen, the shapes
+  // chosen, or both (a figure's shapes chosen are its own: parts.js).
+  const showTargets = () => {
+    if (typingNow() || !slideAt()) return { blocks: [], shapes: [] };
+    const shapes = freeShapes.any() ? freeShapes.chosen() : [];
+    if (figure && figureBlock() && figure.parts.selected.length) return { blocks: [], shapes: mixed.on() ? shapes : [] };
+    const blocks = allOn() ? picksNow() : state.focus && !state.field ? [{ region: state.focus.region, index: state.focus.index }] : [];
+    return { blocks, shapes };
+  };
   const freeShapes = shapeEditor({
     studio, center, stage, catalog: studio.catalog?.shapes,
     page: () => state.slide,
@@ -1055,9 +1073,10 @@ export function mount(studio, container) {
       return spec.kind === "text" ? sizes.body / k : BOXED.includes(spec.kind) || spec.kind === "path" ? sizes.body * 0.9 / k : sizes.small * 1.1 / k;
     },
     verb: "Add", noun: "slide", crumb: () => `Slide ${state.slide + 1}`, source: () => `slide:${state.slide}`,
-    ownKeys: ["behind", "build", "hidden", "locked"],
+    ownKeys: ["behind", "build", "hidden", "locked", "hide", "dim", "highlight"],
     grouped: (specs) => (specs.every((spec) => spec?.behind) ? { behind: true } : {}),
-    ungrouped: (group) => ({ ...(group.behind ? { behind: true } : {}), ...(group.locked ? { locked: true } : {}), ...(group.hidden ? { hidden: true } : {}) }),
+    ungrouped: (group) => ({ ...(group.behind ? { behind: true } : {}), ...(group.locked ? { locked: true } : {}),
+      ...Object.fromEntries(["hidden", "hide", "dim", "highlight"].filter((key) => group[key] === true).map((key) => [key, true])) }),
     // What a zoom inset magnifies, and Mask with Shape with a shape over a picture (zoom.js).
     insetSource: (spec) => pictureTools.insetSource(spec),
     // Format's inspector shown, where it was hidden or showing Design: Align and Distribute's
@@ -1069,17 +1088,17 @@ export function mount(studio, container) {
       ...(convertible(picks.map((index) => slideAt()?.shapes?.[index])) ? [convertCommand(() => shapesToFigure(picks), name)] : []),
       ...(picks.length === 1 && pictureTools.maskPair({ shape: picks[0] }) ? [{ icon: "image", label: "Mask with Shape", hint: "The picture under it, shown only inside it", run: () => pictureTools.maskWith(pictureTools.maskPair({ shape: picks[0] })) }] : []),
       { icon: "reveal", label: everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click", hint: name, run: () => set({ build: !everyShape(picks, "build") }, everyShape(picks, "build") ? "Don’t Build In" : "Build In on Click") },
-      { icon: "eye", label: everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape", hint: name, run: () => set({ hidden: !everyShape(picks, "hidden") }, everyShape(picks, "hidden") ? "Show Shape" : "Hide Shape") },
+      // (Shown, highlighted, dimmed or hidden: the palette's Show, Highlight, Dim and Hide, as
+      // for any object -- showing.js.)
       // Match on Other Slides… (across.js).
       ...across.shapeCommands(),
     ],
     panel: (picks, specs, { set }) => [h("div.section", {},
       ui.toggle({ value: everyShape(picks, "build"), label: "Build In on Click", key: "shape.build",
-        onChange: (on) => set({ build: on }, on ? "Build In on Click" : "Don’t Build In") }),
-      h("div.hint-line", {}, "Appears on a click when presenting, after the slide’s objects that build in"),
-      ui.toggle({ value: everyShape(picks, "hidden"), label: "Hidden", key: "shape.hidden",
-        onChange: (on) => set({ hidden: on }, on ? "Hide Shape" : "Show Shape") }),
-      h("div.hint-line", {}, "Drawn faintly here; never presented or exported"))],
+        onChange: (on) => set({ build: on }, on ? "Build In on Click" : "Don’t Build In") })),
+      // Shown, highlighted, dimmed or hidden, as any object is (showing.js).
+      showing.section({ blocks: [], shapes: picks })],
+    menuItems: (picks, point) => [showing.menuItem({ blocks: [], shapes: picks }, point)],
   });
   // (Its Arrange and Align and Distribute in the inspector's Arrange tab, a line in Format going there.)
   freeShapes.arrangeIn(() => showArrange());
@@ -1159,6 +1178,7 @@ export function mount(studio, container) {
     clipChosen: (cut) => clipChosen(cut), clipItems: () => clipItems(), undoNote: (text, options) => undoNote(text, options),
     away: (what) => awayFrom(what), showPanel: () => { if (inspectorHidden || state.tab === "design") formatButton.click(); },
     swallowRelease: (held) => swallowRelease(held),
+    menuItems: (point) => [showing.menuItem(showTargets(), point)],
     get placing() { return objects; },
   });
   // The slide's objects placed where they are put, as shapes are -- taken out of line and put
@@ -4115,7 +4135,8 @@ export function mount(studio, container) {
     // One of several chosen: they stay chosen, and its menu acts on them all.
     if (inChoice(part)) {
       const count = allBlocks().length;
-      menu(point, [...across.overlaidItems(), ...clipItems(), { icon: "duplicate", label: `Duplicate ${count} Objects`, keys: "⌘D", run: () => duplicateChosen() }, "-", ...chosenCommands()]);
+      menu(point, [...across.overlaidItems(), ...clipItems(), { icon: "duplicate", label: `Duplicate ${count} Objects`, keys: "⌘D", run: () => duplicateChosen() },
+        showing.menuItem({ blocks: picksNow(), shapes: [] }, point), "-", ...chosenCommands()].filter(Boolean));
       return;
     }
     if (part?.kind === "logo") {
@@ -4159,7 +4180,7 @@ export function mount(studio, container) {
     }
     focusBlock(part.region, part.index);
     // (On a table's caption: the table's menu, not the cell over it.)
-    blockMenu(point, part, block && kindOf(block) === "table" && !ownAt(part, block, event) ? cellAt(part.id, event) : null);
+    blockMenu(point, part, block && kindOf(block) === "table" && !ownAt(part, block, event) ? cellAt(part.id, event) : null, event);
   }
   // Greyed out, as a Mac menu's are, when there is nothing to cut, copy or paste.
   const clipItems = () => [
@@ -4176,7 +4197,7 @@ export function mount(studio, container) {
   }
   // What is copied, by name, for a command: "Table", "2 Shapes", "Slide".
   const clipName = (clip) => (clip.what === "block" ? (clip.logo !== undefined ? "Logo" : blockLabel(clip.block)) : String(clip.label).replace(/(^|\s)\p{L}/gu, (first) => first.toUpperCase()));
-  function blockMenu(point, at, cell = null) {
+  function blockMenu(point, at, cell = null, event = null) {
     const slide = slideAt(), block = blocksAt(slide, at.region)[at.index];
     if (!block) return;
     const kind = kindOf(block), count = blocksAt(slide, at.region).length;
@@ -4207,6 +4228,8 @@ export function mount(studio, container) {
     // Put where it is on other slides (across.js).
     if (across.menuItem()) items.push(across.menuItem());
     if (items.length) items.push("-");
+    // Show ▸: it, and the part of it under the pointer -- a list's item, a table's row (showing.js).
+    items.push(...[showing.menuItem({ blocks: [at], shapes: [] }, point), event ? showing.partItem(at, event, point) : null].filter(Boolean), "-");
     items.push(...clipItems(), { icon: "duplicate", label: "Duplicate", keys: "⌘D", run: () => duplicateBlock(at) });
     items.push({ icon: "up", label: "Move Up", keys: "⌥↑", disabled: at.index === 0, run: () => moveBlock(at, { region: at.region, index: at.index - 1 }) },
       { icon: "down", label: "Move Down", keys: "⌥↓", disabled: at.index >= count - 1, run: () => moveBlock(at, { region: at.region, index: at.index + 2 }) });
@@ -7612,7 +7635,7 @@ export function mount(studio, container) {
       // (Arrange: what is chosen arranged, lined up and spaced.)
       else if (arrangeOn) clear(inspectorBody, [arrangeForm(), across.section()].flat().filter(Boolean));
       // (Objects, or a figure's shapes, chosen with shapes on the slide: mixed.js.)
-      else if (mixed.on()) clear(inspectorBody, mixed.panel());
+      else if (mixed.on()) clear(inspectorBody, [...mixed.panel(), showing.section(showTargets())].filter(Boolean));
       else if (block && figure && figureBlock() === block && figure.parts.model) clear(inspectorBody, placedPanel(figure.parts.panel(), slide, block));
       else if (block) clear(inspectorBody, blockPanel(slide, block));
       else if (logoChosen()) clear(inspectorBody, logoPanel(slide));
@@ -7808,6 +7831,8 @@ export function mount(studio, container) {
         // (A figure's and a picture's is among their own settings.)
         SIDEWAYS.has(kind) || CORNERED.has(kind) || kind === "mechanism" ? widthField(block, at) : null),
       kind === "image" ? pictureSections(block, at) : null,
+      // Shown, highlighted, dimmed or hidden -- it, or each of its parts (showing.js).
+      showing.section({ blocks: [at], shapes: [] }),
       buildSection(block, at),
     ];
   }
@@ -7858,6 +7883,7 @@ export function mount(studio, container) {
         all(new Set(["text", "bullets"])) ? ui.field("Colour", ui.swatches({ value: shared("colour") ?? null, colours, none: true, noneTitle: "Default", custom: true, onChange: setAll("colour") })) : null,
         all(SIZED_WORDS) ? ui.field("Font Size", ui.number({ value: shared("size"), placeholder: mixed("size") ? "Mixed" : "Auto", min: 4, max: 400, step: 1, unit: "pt", start: 18,
           key: "many.size", onChange: setAll("size") })) : null) : null,
+      showing.section({ blocks: chosenNow.map(({ region, index }) => ({ region: region.key, index })), shapes: [] }),
       // Built in, every one, or none -- a list as it was built (an item at a time, or whole).
       h("div.section", {}, ui.toggle({ value: chosenNow.every(({ block }) => built(block)), label: "Build In on Click",
         onChange: (on) => {
@@ -10457,6 +10483,12 @@ export function mount(studio, container) {
     ...(freeShapes.any() || mixed.on() || (objects.any() && !typingNow()) ? [] : [{ icon: "arrange", label: "Align and Distribute…", keys: "⇧⌘A", hint: "Arrange: Relative to, and the rest once shapes are chosen", run: () => freeShapes.revealArrange() }]),
     // Format › Set Colour… (⇧⌘C): of what is chosen, else of the slide (colours.js).
     ...(typingNow() ? [] : colours.commands()),
+    // Format › Show As: what is chosen shown, highlighted, dimmed or hidden -- a figure's shapes
+    // chosen, them -- and Show All on Slide (showing.js).
+    ...(typingNow() ? [] : figure && figureBlock() && figure.parts.selected.length && !mixed.on()
+      ? [...showing.figureCommands(figure.parts, figure.parts.selected.length === 1 ? figure.parts.nameOf(figure.parts.selected[0]) || "Shape" : `${figure.parts.selected.length} Shapes`),
+        ...showing.commands({ blocks: [], shapes: [] })]
+      : showing.commands(showTargets())),
     ...(slides().length ? slideCommands() : []),
     // Words being typed -- on the slide, or in a field of the inspector: the Mac app's Format
     // menu's Bold, Italic, Code and Inline Equation, and Link… (⌘B, ⌘I, ⌘E, ⌥⌘E and ⌘K are the

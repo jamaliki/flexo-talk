@@ -196,13 +196,15 @@ def test_a_shape_that_builds_appears_after_the_objects_that_do() -> None:
     assert element(shown, "slide1.shapes.0") is None and element(shown, "slide1.shapes.1") is not None
 
 
-def test_a_hidden_shape_is_faint_while_edited_and_never_shown() -> None:
-    document = deck_of({"kind": "star", "at": [0, 0], "size": [50, 50], "hidden": True})
-    _, editing = drawn(document, editing=True)
-    shape = element(editing, "slide1.shapes.0")
-    assert shape is not None and shape.get("data-flexo-placeholder") == "Hidden"
-    rendered, shown = drawn(document)
-    assert element(shown, "slide1.shapes.0") is None and not rendered.shapes
+def test_a_hidden_shape_is_a_ghost_while_edited_and_never_shown() -> None:
+    # ``hidden: true``, as decks said it before, is ``hide: true``: hidden as any object is.
+    for said in ({"hidden": True}, {"hide": True}):
+        document = deck_of({"kind": "star", "at": [0, 0], "size": [50, 50], **said})
+        _, editing = drawn(document, editing=True)
+        shape = element(editing, "slide1.shapes.0")
+        assert shape is not None and shape.get("data-flexo-show") == "hidden"
+        rendered, shown = drawn(document)
+        assert element(shown, "slide1.shapes.0").get("visibility") == "hidden" and not rendered.shapes
 
 
 def test_shapes_are_scaled_with_a_slide_of_another_size() -> None:
@@ -324,7 +326,7 @@ def test_drawing_a_slide_for_the_studio_draws_its_shapes_and_their_frames(tmp_pa
     words = element(root, "slide1.shapes.0.text")
     assert words is not None and words.get("data-flexo-placeholder") == "Text"
     assert element(root, "slide1.shapes.0").get("data-flexo-box")
-    assert element(root, "slide1.shapes.1").get("data-flexo-placeholder") == "Hidden"
+    assert element(root, "slide1.shapes.1").get("data-flexo-show") == "hidden"
     assert element(root, "slide1.shapes.2").get("data-flexo-turn") == "30"
     # Presented, the hidden shape is left out as any placeholder is, the slide not drawn again.
     assert "data-flexo-presented" not in page.svg

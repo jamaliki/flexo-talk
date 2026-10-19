@@ -342,7 +342,8 @@ class DeckKind:
             "in their order, in a row along the title slide's foot; logos_on: title, or every (small in every "
             "slide's footer too); logo_height: how tall on the title slide, in points (40).\n"
             + f"Looks: {', '.join(LOOKS)}. Colours for words and panels: accent, accent2, ..., muted, #rrggbb.\n"
-            "Slide words are markup: **strong**, *emphasis*, $maths$, `code`, [link](url), [words]{accent}.\n"
+            "Slide words are markup: **strong**, *emphasis*, $maths$, `code`, [link](url), [words]{accent}, "
+            "[words]{dim} (drawn faint).\n"
             + "Shapes (a slide's shapes: list, drawn where they are put, points from its top left on a 960 by 540 "
             "slide): " + "; ".join(f"{name}: {', '.join(kinds)}" for name, kinds in SECTIONS)
             + f". Every shape takes {', '.join(COMMON_SHAPE_KEYS)} and on a slide {', '.join(SHAPE_KEYS)}; "
@@ -872,6 +873,8 @@ class DeckKind:
                 data = {**data, "figure": {**(data.get("figure") or {}), **_shown_here(block, data)}}
                 made = apply_to_data(data, edit, base=path.parent)
                 for key in SHOWN_KEYS:
+                    if block.get(key) is True:
+                        continue  # (the whole figure, as any object is: flexo_talk.showing)
                     block[key] = list((made["data"].get("figure") or {}).get(key) or [])
                     if not block[key] and not (_figure_data(was, path.suffix).get("figure") or {}).get(key):
                         del block[key]
@@ -1248,6 +1251,8 @@ def _shared_edit(changed: dict[str, Any], block: dict[str, Any], name: str, edit
         own = data.get("figure") or {}
         made = apply_to_data({**data, "figure": {**own, **_shown_here(block, data)}}, edit, base=base)
         for key in SHOWN_KEYS:
+            if block.get(key) is True:
+                continue  # (the whole figure, as any object is: flexo_talk.showing)
             block[key] = list((made["data"].get("figure") or {}).get(key) or [])
             if not block[key] and not own.get(key):
                 del block[key]
@@ -2011,7 +2016,8 @@ def _figure_said(old: Any, new: Any) -> tuple[str, str] | None:
 
 
 SHOWN_KEYS = ("hide", "dim", "highlight")
-"""What a slide's figure block says of the figure's parts, over what the figure says itself."""
+"""What a slide's figure block says of the figure's parts, over what the figure says itself --
+each a list of them (``true``, the whole figure, as any object: ``flexo_talk.showing``)."""
 
 
 def _shown_here(block: Any, figure: Any) -> dict[str, list[str]]:

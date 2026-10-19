@@ -77,6 +77,7 @@ from flexo_talk.deck import (
     object_named,
     paint_role,
 )
+from flexo_talk.showing import HIDDEN, dim_words, hidden_items, mark_slide, shape_state, slide_states
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +182,11 @@ class _Canvas:
         self.free: ET.Element | None = None
         """The group the slide's objects placed where they say (``Region.at``) are drawn in:
         over what its places lay out, under its shapes (see ``_free``)."""
+        self.shown = {f"{slide.id}.{name}.{index}": shown for name, region in slide.regions.items()
+                      for index, shown in region.shown.items()}
+        """How the slide's objects not simply shown are, by id (``flexo_talk.showing``)."""
+        self.code_lines: dict[str, list[int]] = {}
+        """Each listing's lines as drawn (wrapped, a line may be several), by the line each is of."""
         """What the build did that the author may want to know (a figure turned to fit)."""
         self._figures = 0
 
@@ -716,6 +722,14 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         canvas.layer.remove(canvas.free)
         canvas.layer.append(canvas.free)
     shapes = _draw_shapes(canvas, slide, behind)
+    # What is hidden, dimmed or highlighted drawn so, where it stands (flexo_talk.showing): and
+    # what is hidden whole written natively (a PowerPoint's own lists and tables) not at all.
+    shown = slide_states(slide, canvas.code_lines)
+    mark_slide(canvas.root, shown, canvas.palette.get("canvas"))
+    dim_words(canvas.root, canvas.palette.get("canvas"))
+    if shown and not PLACEHOLDERS.get():
+        canvas.lists = [layout for layout in canvas.lists if shown.get(layout.id) != HIDDEN]
+        canvas.tables = [layout for layout in canvas.tables if shown.get(layout.id) != HIDDEN]
     if f"{slide.id}.title" in empty and (not slide.subtitle_runs or f"{slide.id}.subtitle" in empty):
         # With no heading shown, the band or rule a heading is set on is not shown either.
         # While editing it stays, round the title's place, but marked as a placeholder is,
@@ -742,7 +756,7 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
     return RenderedSlide(
         slide, xml_document(canvas.root), canvas.lists, list(dict.fromkeys(canvas.diagnostics)), canvas.tables,
         canvas.notes,
-        canvas.steps, canvas.held, canvas.worded, canvas.settled, builds=canvas.built, shapes=shapes,
+        canvas.steps, canvas.held, canvas.worded, canvas.settled, builds=canvas.built, shapes=shapes, shown=shown,
     )
 
 
@@ -2271,8 +2285,8 @@ def _draw_shapes(canvas: _Canvas, slide: Slide, behind: ET.Element | None) -> li
     """The slide's shapes (``Slide.shape``), each where it is put: those ``behind`` in the group
     kept for them under the slide's words and objects, the rest over everything, in the order
     they are listed. A line's end glued to a shape or an object is drawn where that is now; a
-    shape that builds in appears on a click after the objects that do; a hidden one is drawn
-    faintly while editing and left out of the show and the exports."""
+    shape that builds in appears on a click after the objects that do; a hidden one is a ghost
+    while editing and left out of the show and the exports (``flexo_talk.showing``)."""
 
     from flexo import freeform
 
@@ -2321,9 +2335,9 @@ def _draw_shapes(canvas: _Canvas, slide: Slide, behind: ET.Element | None) -> li
         if shape.get("locked"):
             drawn.set("data-flexo-locked", "")
         layout.layout.behind = bool(shape.get("behind"))
-        if shape.get("hidden"):
-            # Drawn faintly while edited, as a placeholder is; never presented or exported.
-            canvas.hinted[ident] = "Hidden"
+        if shape_state(shape) == HIDDEN:
+            # A ghost while edited (marked so with the rest: _render_slide); never presented or
+            # exported, nor built in on a click.
             if not editing:
                 continue
         elif shape.get("build"):
@@ -2760,6 +2774,10 @@ def _set(
     placeholder set aside): where it ends."""
 
     canvas.place = region.across.get(index)
+    # (Hidden, it builds in on no click: there is nothing to show.)
+    built = (index in region.builds and builds and not getattr(block, "reveal", False)
+             and not _hidden(canvas, identifier))
+    ahead = _ahead(canvas, block, built)
     try:
         top = _block(canvas, region, index, block, identifier, box, top, placing, prepared, scales, share, panel)
     except _FigureFailed:
@@ -2770,14 +2788,41 @@ def _set(
         if not STANDING_ASIDE.get():
             raise
         raise _object_failed(region.blocks[index], error) from error
-    built = index in region.builds and builds and not getattr(block, "reveal", False)
-    if built and (drawn := _drawn(canvas, identifier)) is not None:
+    if ahead is not None:
+        _built_ahead(canvas, identifier, ahead)
+    elif built and (drawn := _drawn(canvas, identifier)) is not None:
         # It appears on a click of its own, after what is on the slide before it.
         canvas.steps += 1
         canvas.built.append((canvas.steps, identifier))
         drawn.set("data-flexo-step", str(canvas.steps))
     canvas.place = None
     return top
+
+
+def _hidden(canvas: _Canvas, identifier: str) -> bool:
+    """Whether the object drawn as ``identifier`` is hidden whole (``flexo_talk.showing``)."""
+
+    shown = canvas.shown.get(identifier)
+    return bool(shown) and shown.whole == HIDDEN
+
+
+def _ahead(canvas: _Canvas, block: object, built: bool) -> tuple[int, int] | None:
+    """A figure that builds in whose parts appear a click at a time (``stages``) appears itself
+    first, on a click of its own before theirs: that click taken now, before they number theirs
+    after it -- ``(its step, where it goes among the builds)``; None for anything else."""
+
+    if not (built and isinstance(block, _Figure) and block.stages):
+        return None
+    canvas.steps += 1
+    return canvas.steps, len(canvas.built)
+
+
+def _built_ahead(canvas: _Canvas, identifier: str, ahead: tuple[int, int]) -> None:
+    step, at = ahead
+    drawn = _drawn(canvas, identifier)
+    if drawn is not None:
+        drawn.set("data-flexo-step", str(step))
+        canvas.built.insert(at, (step, identifier))
 
 
 PLACED_ROOM = 100_000.0
@@ -2829,6 +2874,10 @@ def _free(
     outer, before = canvas.layer, (canvas.place, canvas.alone, canvas.centred)
     # Alone where it stands, from its left: neither centred in a place nor asked across one.
     canvas.layer, canvas.place, canvas.alone, canvas.centred = canvas.free, None, True, False
+    # (A sample set aside, drawn for an editor, builds in on no click: _set. Nor does one hidden.)
+    built = (index in region.builds and not getattr(block, "reveal", False)
+             and canvas.hinted.get(identifier) != "Placeholder" and not _hidden(canvas, identifier))
+    ahead = _ahead(canvas, block, built)
     try:
         if isinstance(block, _Figure):
             blocks, at = among or ([block], 0)
@@ -2843,7 +2892,7 @@ def _free(
             _check_legible(canvas, {0: item}, {0: fit}, room)
             span = item.width * fit
             end = y + _place_figure(canvas, identifier, item, Box(x, y, span, item.height * fit), fit)
-            if block.stages:
+            if block.stages and not _hidden(canvas, identifier):
                 _stage_parts(canvas, identifier, block.stages, item.spec)
             if block.caption:
                 end += _caption(canvas, identifier, block.caption, Box(x, y, span, 0.0), end)
@@ -2861,9 +2910,9 @@ def _free(
             if PLACEHOLDERS.get():
                 # Where it stands, for an editor: its frame, as it is placed (_frame).
                 drawn.set("data-flexo-frame", " ".join(number(value) for value in (x, y, span, end - y)))
-        # (A sample set aside, drawn for an editor, builds in on no click: _set.)
-        built = index in region.builds and not getattr(block, "reveal", False)
-        if built and canvas.hinted.get(identifier) != "Placeholder" and drawn is not None:
+        if ahead is not None:
+            _built_ahead(canvas, identifier, ahead)
+        elif built and drawn is not None:
             canvas.steps += 1
             canvas.built.append((canvas.steps, identifier))
             drawn.set("data-flexo-step", str(canvas.steps))
@@ -2925,7 +2974,7 @@ def _block(
         scale = scales[index]
         height = prepared[index].height * scale
         top += _place_figure(canvas, identifier, prepared[index], Box(box.x, top, box.width, height), scale)
-        if block.stages:
+        if block.stages and not _hidden(canvas, identifier):
             _stage_parts(canvas, identifier, block.stages, prepared[index].spec)
     elif isinstance(block, _Image):
         top += _image(canvas, identifier, block, Box(box.x, top, box.width, max(share, 40.0)))
@@ -3741,7 +3790,7 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
         return height
     group = element(canvas.layer, "g", id=identifier, data__flexo__talk="code")
     widths = [
-        canvas.measure((TextRun(text, code=True),), size, None).width for text, _ in lines if text.strip()
+        canvas.measure((TextRun(text, code=True),), size, None).width for text, _, _ in lines if text.strip()
     ]
     width = min(box.width, max(widths, default=0.0) + 2 * pad)
     if block.width is not None:
@@ -3757,7 +3806,9 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
         group, "rect", id=f"{identifier}.panel", x=box.x, y=box.y, width=width, height=height,
         rx=size * 0.35, fill=panel, **({"data__flexo__fill": role} if role else {}),
     )
-    for index, (text, comment) in enumerate(lines):
+    # (Each as the line it is of, for one shown apart: flexo_talk.showing.)
+    canvas.code_lines[identifier] = [source for _, _, source in lines]
+    for index, (text, comment, source) in enumerate(lines):
         if not text.strip():
             continue
         canvas.words(
@@ -3766,15 +3817,19 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
             size=size, role="muted-ink" if comment else "ink", fill=muted if comment else ink,
             parent=group, wrap=False,
         )
+        if source != index and PLACEHOLDERS.get() and len(group):
+            # (A line wrapped, for an editor: the line of the listing it is of.)
+            group[-1].set("data-flexo-of", str(source))
     return height
 
 
 def _code_lines(
     canvas: _Canvas, block: _Code, width: float, *, said: bool = False
-) -> tuple[float, list[tuple[str, bool]]]:
+) -> tuple[float, list[tuple[str, bool, int]]]:
     """The size a listing is set at in ``width`` -- smaller, down to near the small size,
     when its longest line would run past its panel -- and its lines, each marked whether
-    it is a comment; a line still too long is wrapped, the rest of it indented under it."""
+    it is a comment, and with the line it is of; a line still too long is wrapped, the rest
+    of it indented under it."""
 
     style = canvas.deck.style
     size = _code_size(block, style)
@@ -3791,12 +3846,12 @@ def _code_lines(
         room = width - 2 * size * 0.9
     advance = canvas.measure((TextRun("M" * 20, code=True),), size, None).width / 20 or size * 0.6
     fits = max(12, int(room / advance))
-    lines: list[tuple[str, bool]] = []
+    lines: list[tuple[str, bool, int]] = []
     wrapped = 0
-    for text in block.lines:
+    for source, text in enumerate(block.lines):
         comment = text.lstrip().startswith(("#", "//", "--", "%"))
         if len(text) <= fits:
-            lines.append((text, comment))
+            lines.append((text, comment, source))
             continue
         wrapped += 1
         indent = " " * (len(text) - len(text.lstrip()) + 4)
@@ -3805,9 +3860,9 @@ def _code_lines(
             limit = fits if first else fits - len(indent)
             cut = rest.rfind(" ", int(limit * 0.6), limit)
             cut = limit if cut <= 0 else cut + 1
-            lines.append((rest[:cut] if first else indent + rest[:cut], comment))
+            lines.append((rest[:cut] if first else indent + rest[:cut], comment, source))
             rest, first = rest[cut:], False
-        lines.append((rest if first else indent + rest, comment))
+        lines.append((rest if first else indent + rest, comment, source))
     if wrapped and said:
         canvas.diagnostics.append(
             f"{canvas.slide.id}: {wrapped} line{'s' if wrapped > 1 else ''} of code wrapped to fit the slide. "
@@ -3912,7 +3967,7 @@ def _natural(canvas: _Canvas, block: object, width: float, share: float) -> floa
         if not any(text.strip() for text in block.lines):
             return None
         size, lines = _code_lines(canvas, block, width)
-        widths = [canvas.measure((TextRun(text, code=True),), size, None).width for text, _ in lines if text.strip()]
+        widths = [canvas.measure((TextRun(text, code=True),), size, None).width for text, _, _ in lines if text.strip()]
         return min(width, max(widths, default=0.0) + 2 * size * 0.9)
     if isinstance(block, _Quote):
         size = _quote_size(block, style)
@@ -4559,9 +4614,12 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
         layout.ink = ink_fill or canvas.palette.get(ink_role)
     top = box.y
     numbers = list_numbers([level for level, _ in block.items]) if block.numbered else []
+    # An item hidden takes no click (flexo_talk.showing): nor does a list hidden.
+    hidden = hidden_items(block, canvas.shown.get(identifier))
+    reveal = block.reveal and len(hidden) < len(block.items)
     # A revealed list's steps follow those of the lists revealed before it on the slide,
     # as the PowerPoint's clicks do: the left list, then the right.
-    step = canvas.steps - 1 if block.reveal else 0
+    step = canvas.steps - 1 if reveal else 0
     # A list reads one way, as most of its items do: an item that starts otherwise (an
     # English name leading a Persian line) takes the list's direction, by an invisible mark.
     leaning = sum(1 if _rtl(runs) else -1 for _, runs in block.items if any(run.text.strip() for run in runs))
@@ -4569,14 +4627,14 @@ def _bullets(canvas: _Canvas, identifier: str, block: _Bullets, box: Box) -> flo
     for index, (level, runs) in enumerate(block.items):
         if leaning and _rtl(runs) != (leaning > 0) and any(run.text.strip() for run in runs):
             runs = (TextRun(mark), *runs)
-        if level == 0:
+        if level == 0 and index not in hidden:
             step += 1
         # An item that is one formula displayed ($$...$$) is set apart from the items around it.
         apart = _apart(block.items, index, size)
         top += apart[0]
         # A revealed item (with the items under it) is its own group, tagged with its step.
-        item = element(group, "g", data__flexo__step=step + 1) if block.reveal else group
-        if block.reveal:
+        item = element(group, "g", data__flexo__step=step + 1) if reveal else group
+        if reveal:
             canvas.steps = max(canvas.steps, step + 1)
             if level == 0:
                 layout.stepped.append(step + 1)
