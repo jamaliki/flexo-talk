@@ -43,10 +43,43 @@ palette's first colour, captions and footers its muted ink.
 One figure can be shown on several slides with parts of it hidden, faint or highlighted,
 and nothing moved from slide to slide: `{figure: pipeline.yaml, hide: [store],
 highlight: [api]}` (or `dim: [...]`) on a slide's figure, each a list of the figure's
-shapes and groups by id; a figure written in the slide says the same in its own
+shapes, groups and lines by id; a figure written in the slide says the same in its own
 `figure: {hide: [...]}`. In the studio, choose shapes in a slide's figure and set
 **Show** to Highlight, Dimmed or Hidden (for a figure kept in a file, it is that
 slide's alone: written on its block, the file left as it is).
+
+So can anything on a slide, the same four ways and with the same keys: every object (words,
+a list, a table, numbers, a quote, a callout, code, an equation, a picture, a gallery, a plot,
+a mechanism, a figure, in line or placed freely), a part of one, and the slide's shapes:
+
+```yaml
+body:
+- bullets: [Encoder, [Attention, Feed-forward], Decoder]
+  highlight: [2]            # item 2; the list's other items faint ('1.2': the second under 1)
+- table: [[Model, Loss], [A, 0.31], [B, 0.27]]
+  hide: [3]                 # row 3 (the header is row 1; '3.2' a cell)
+- {image: pictures/cell.png, dim: true}        # the whole picture, faint
+- {text: The rest, highlight: true}            # the slide's other objects and shapes faint
+shapes:
+- {kind: arrow, from: [600, 420], to: [520, 330], hide: true}
+```
+
+**Hidden** is not presented or exported, its place kept -- nothing else moves -- and a ghost
+while editing; **Dimmed** is drawn as a figure's faint parts are, every colour most of the way to
+the page's (a picture or a GIF see-through); **Highlighted** is drawn as it is and what stands
+with it faint: a list's other items, a table's other rows (its header kept), the slide's other
+objects and shapes (its title kept), the rest of a figure. Each key is `true` (the whole object)
+or a list of its parts by number -- a list's items, a table's rows, a gallery's pictures,
+numbers' figures, code's lines -- or a figure's parts by id. A shape's `hidden: true`, as decks
+said it before, is `hide: true`. Words are dimmed in place with `[words]{dim}` (the Dim button
+of the words' format bar): their own colour, faint. Hidden takes no click when presenting (an
+object that builds in, a list's item revealed). The PDF and the PowerPoint keep all of it: in
+the PowerPoint a list's hidden item and a table's hidden row are see-through words that keep
+their room, and a faint picture is PowerPoint's own picture transparency. In the studio, the
+inspector's **Show** sets it for what is chosen -- objects, shapes, several at once -- and,
+for a list, a table, a gallery, numbers or code, for each of its parts; a right-click has
+**Show ▸** for the object and for the item or row under the pointer; the palette has Show,
+Highlight, Dim and Hide (Format › Show As in the Mac app) and Show All on Slide.
 
 A visualisation that changes a little from slide to slide -- a part added, a label changed,
 each slide its own figure -- is drawn as one when its blocks name one **frame**:
@@ -387,8 +420,8 @@ to fit (`flexo import-svg drawing.svg` writes them); Edit › Paste as Picture (
 it as one picture instead. An end of a line glued to a shape (`{shape: note, side: left}`) or to
 one of the slide's objects (`{object: "body[0]"}`) follows it when it moves. `behind`
 draws a shape under the slide's words, `build` makes it appear on a click (after the
-objects that do), `hidden` keeps it out of the show, `locked` keeps it in place in the
-studio.
+objects that do), `hide` keeps it out of the show (`dim` draws it faint, `highlight` the
+rest of the slide faint: as any object, above), `locked` keeps it in place in the studio.
 
 Shapes are drawn into the slide's SVG at their place and stacking, so the PDF, the PNG,
 the SVG, the show (their builds too) and the studio's thumbnails have them. In the

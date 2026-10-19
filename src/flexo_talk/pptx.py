@@ -804,6 +804,8 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
     left, top = placement.point(x, y)
     flips = (' flipH="1"' if image.flip_x else "") + (' flipV="1"' if image.flip_y else "")
     label = escape(image.id or "picture", {'"': "&quot;"})
+    # A picture drawn faint (dimmed: flexo.showing) is see-through, as on the slide.
+    faint = f'<a:alphaModFix amt="{round(image.opacity * 100000)}"/>' if image.opacity < 0.999 else ""
     number = ids()
     if ids.component is not None:
         # A component drawn as a picture (a structure) is what the figure's lines join.
@@ -812,7 +814,7 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
     return etree.fromstring(
         f'<p:pic {_NS}><p:nvPicPr><p:cNvPr id="{number}" name="{label}"/>'
         f'<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
-        f'<p:blipFill><a:blip r:embed="{embed}">{extension}</a:blip>{crop_rect}'
+        f'<p:blipFill><a:blip r:embed="{embed}">{faint}{extension}</a:blip>{crop_rect}'
         f"<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
         f'<p:spPr><a:xfrm{flips}><a:off x="{left}" y="{top}"/>'
         f'<a:ext cx="{placement.length(width)}" cy="{placement.length(height)}"/></a:xfrm>'
@@ -1372,6 +1374,11 @@ def _ink_of(run, palette, ink: str) -> str:
 
     if run.link and not run.color and (link := link_colour(palette)):
         return link
+    if run.color == "dim":
+        # Words dimmed ([words]{dim}): the text's own colour drawn faint, as the slide has them.
+        from flexo.showing import faint
+
+        return faint(ink, palette.get("canvas")) if ink.startswith("#") else ink
     return run_colour(run, palette) or ink
 
 

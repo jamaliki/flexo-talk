@@ -185,7 +185,8 @@ PowerPoint, a page in the PDF, a step when presenting.
 
 **Markup in any slide text** (titles, bullets, cells, captions): `$...$` maths
 (flexo's LaTeX subset), `*italic*`, `**bold**`, `` `code` ``, `[words](https://url)`
-a link, `[words]{accent}` a colour (`accent2`, `accent3`, ..., `muted`, `#rrggbb`).
+a link, `[words]{accent}` a colour (`accent2`, `accent3`, ..., `muted`, `#rrggbb`),
+`[words]{dim}` the words faint in their own colour.
 Right-to-left text (Persian, Arabic, Hebrew) is set right to left by itself,
 with English words, numbers, and maths inside it kept in order.
 
@@ -212,6 +213,12 @@ with English words, numbers, and maths inside it kept in order.
   (960x540 pt is 16:9; 720x540 is 4:3). `from flexo_talk import DeckStyle`.
 - **One figure, several slides**: `{figure: file.yaml, hide: [ids], dim: [ids],
   highlight: [ids]}` shows parts hidden, faint or alone at full strength; nothing moves.
+- **Anything shown apart**: every block takes `hide`, `dim` and `highlight` -- `true` for the
+  whole object (hidden: not presented, its place kept; dimmed: faint; highlighted: the slide's
+  other objects and shapes faint, its title not), or a list of its parts: a list's items by
+  number (`'2.1'` under item 2), a table's rows (header row 1; `'3.2'` a cell), a gallery's
+  pictures, numbers' figures, code's lines. `{bullets: [...], highlight: [2]}` draws the other
+  items faint. Shapes take `hide: true`, `dim: true`, `highlight: true`; words `[words]{dim}`.
   `stages: [[ids], [ids]]` on a figure block builds it up on one slide, a click each.
 - **A figure that changes from slide to slide**: give each slide's figure block the same
   `frame: smc` -- each its own figure (a part added, a label changed) -- and they are drawn as

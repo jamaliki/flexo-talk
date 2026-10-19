@@ -31,6 +31,7 @@ from flexo_talk.pptx import (
 from flexo_talk.pptx import editable_maths as editable_maths_of
 from flexo_talk.pptx_insets import inset_views
 from flexo_talk.pptx_shapes import ShapeWriter
+from flexo_talk.showing import HIDDEN, natively
 
 FORMATS = ("pptx", "pdf", "svg", "png")
 
@@ -243,11 +244,12 @@ def write_pptx(
                 outer = [index for index, (level, _, _) in enumerate(layout.items) if level == 0]
                 if layout.reveal and outer:
                     # Each outer item appears with the items under it; any before the first
-                    # are there from the start, as in the PDF.
+                    # are there from the start, as in the PDF. (One hidden takes no click.)
                     ends = [*outer[1:], len(layout.items)]
                     ranges = [(first, end - 1) for first, end in zip(outer, ends, strict=True)]
                     steps = layout.stepped if len(layout.stepped) == len(ranges) else range(len(ranges))
-                    clicks += [(step, shape_id, one) for step, one in zip(steps, ranges, strict=True)]
+                    clicks += [(step, shape_id, one) for step, one in zip(steps, ranges, strict=True)
+                               if item.shown.get(f"{layout.id}.{one[0]}") != HIDDEN]
             for layout in item.tables:
                 add_table(tree, deck, layout, formulas=formulas.get(layout.id), editable=editable_maths)
             over = set(shaped.write([layout for layout in item.shapes if not layout.behind]))
@@ -259,6 +261,11 @@ def write_pptx(
                     shapes.setdefault(named.get("name", ""), int(named.get("id", "0")))
             clicks += [(step, shapes[shown], None) for step, name in item.builds
                        for shown in (name, f"{name}.caption") if shown in shapes]
+            # What it writes as its own -- lists, tables, shapes, equations -- hidden, dimmed or
+            # highlighted as the slide draws them (flexo_talk.showing).
+            natively(tree, item.shown, _slide_palette(deck, item.slide).get("canvas"),
+                     lists=[layout.id for layout in item.lists], tables=[layout.id for layout in item.tables],
+                     shapes=[layout.id for layout in item.shapes])
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
             steps = sorted({step for step, _, _ in clicks})

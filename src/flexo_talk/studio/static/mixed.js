@@ -140,6 +140,8 @@ export function slideMixed(ctx) {
       nudge: (event) => (opened() ? false : Boolean(ctx.placing?.nudge(event, { drawn: shapes.chosen().filter((index) => !shapes.lockedAt(index)) }))),
     },
     page: () => state.slide, goTo: (index) => ctx.select(index),
+    // (The editor's own on their right-click menu: Show ▸.)
+    menuItems: (point) => ctx.menuItems?.(point) || [],
     render: () => ctx.render(), crumb: () => ctx.crumb(), frame: () => ctx.frame(),
     clipChosen: (cut) => ctx.clipChosen(cut), clipItems: () => ctx.clipItems(),
     undoNote: (text, options) => ctx.undoNote(text, options), away: (what) => ctx.away(what), showPanel: () => ctx.showPanel(),

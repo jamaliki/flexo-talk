@@ -83,6 +83,16 @@ A figure block may show its figure differently on each slide, nothing in it move
 ``hide``, ``dim`` and ``highlight`` list the figure's parts left out, drawn faint, or
 kept while the rest is drawn faint; ``stages`` lists the clicks its parts appear on
 (``stages: [[encoder, decoder], [loss]]``: two parts on the first click, one on the next).
+
+So may any object, and any shape: ``hide``, ``dim`` and ``highlight`` are every block's, each
+``true`` -- the whole object hidden (not presented or exported, its place kept: a ghost while
+edited), dimmed (drawn faint), or highlighted (the slide's other objects and shapes drawn faint,
+its title not) -- or a list of its parts, as a figure's are: a list's items by number (an item
+under another as ``'2.1'``), a table's rows (its header row 1; a cell as ``'3.2'``), a gallery's
+pictures, numbers' figures and code's lines by theirs. ``{bullets: [...], highlight: [2]}`` draws
+the list's other items faint. A shape takes ``hide: true``, ``dim: true`` and ``highlight: true``
+(``hidden: true`` is ``hide: true``, as decks said it before); words, ``[words]{dim}``
+(``flexo_talk.showing``).
 A visualisation that changes a little from slide to slide -- a part added, a label changed,
 each slide's its own figure -- is drawn as one by giving its blocks one ``frame``: figures
 naming the same frame are laid out with each other's parts (those a slide's lacks kept room
@@ -147,8 +157,9 @@ inside a closed shape (beside a line): ``font_size``, ``bold``, ``italic``, ``co
 ``left``), its ``centre`` (stopping at its outline), or, left out, the side facing the
 other end -- and follows it when it moves. ``behind: true`` draws a shape under the slide's
 words and objects; ``build: true`` makes it appear on a click, after the slide's objects
-that do, in the order the shapes are listed; ``hidden: true`` keeps it out of the show and
-the exports; ``locked: true`` keeps it where it is in the studio. In a PowerPoint each is
+that do, in the order the shapes are listed; ``hide: true`` keeps it out of the show and
+the exports (``dim: true`` draws it faint, ``highlight: true`` all else faint); ``locked: true``
+keeps it where it is in the studio. In a PowerPoint each is
 PowerPoint's own shape -- a preset where it has one, its words in it, a glued line a
 connector joined to its shapes.
 
@@ -247,7 +258,7 @@ several of them (``figures``, named from their blocks as ``'#name'``)."""
 BLOCKS: dict[str, tuple[str, ...]] = {
     "bullets": ("size", "numbered", "reveal", "colour", "plain", "width"),
     "text": ("size", "align", "muted", "colour", "width"),
-    "figure": ("turn", "width", "description", "caption", "hide", "dim", "highlight", "stages", "frame"),
+    "figure": ("turn", "width", "description", "caption", "stages", "frame"),
     "image": ("width", "crop", "mask", "description", "caption", "font", "texts", "colours", "still"),
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),
@@ -262,11 +273,13 @@ BLOCKS: dict[str, tuple[str, ...]] = {
 """Each block kind and the options it takes beside its value. Every kind takes ``width``
 (points): the most it takes across its place, set there as its place sets it."""
 
-BLOCK_KEYS = ("placeholder", "build", "horizontal", "vertical", "at", "locked")
+BLOCK_KEYS = ("placeholder", "build", "horizontal", "vertical", "at", "locked", "hide", "dim", "highlight")
 """What every block takes besides its kind's options: whether it is a placeholder, whether it
 builds in on a click, where it stands across and down its place -- or, ``at: [x, y]``, where
 it is placed on the slide, out of its place's flow (its ``width`` its width there, both in
-the units the slide's shapes are placed in) -- and whether it is locked where it is."""
+the units the slide's shapes are placed in) -- whether it is locked where it is, and how it
+is shown: ``hide``, ``dim`` and ``highlight``, each ``true`` (the whole object) or a list of
+its parts (``flexo_talk.showing``)."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
@@ -1064,8 +1077,10 @@ def add_block(
             if strays:
                 shown = {**shown, "edges": strays[1]}
             # Parts of it hidden, dimmed or highlighted on this slide alone (``hide``, ``dim``,
-            # ``highlight``: flexo.showing): a figure kept in a file, shown several ways.
-            apart = {key: options.pop(key) for key in ("hide", "dim", "highlight") if key in options}
+            # ``highlight`` naming them: flexo.showing): a figure kept in a file, shown several
+            # ways. (Said true, it is the whole figure: as any object's, below.)
+            apart = {key: block[key] for key in ("hide", "dim", "highlight") if key in block and block[key] is not True
+                     and block[key] is not False and block[key] is not None}
             region.add(_shown(_figure(base, shown, here, region), apart, here), **options)
             if strays and isinstance(region.blocks[-1], _Figure):
                 region.blocks[-1].said = (*region.blocks[-1].said, *strays[0])
@@ -1093,6 +1108,16 @@ def add_block(
     except (ValueError, TypeError, OSError) as error:
         raise DeckDocumentError(here, str(error)) from error
     region.sources[-1] = dict(block)
+    # How it is shown -- hidden, dimmed or highlighted, whole or in part (flexo_talk.showing) --
+    # checked, kept as it is written.
+    said = {key: block[key] for key in ("hide", "dim", "highlight") if key in block}
+    if said:
+        try:
+            region.show(**{key: value for key, value in said.items()
+                           if not (kind == "figure" and isinstance(value, list))})
+        except SettingError as error:
+            raise DeckDocumentError(here, str(error)) from error
+        region.sources[-1] = dict(block)
     if block.get("placeholder") or (kind == "figure" and _lone_shape(value)):
         region.placeholders.add(len(region.blocks) - 1)
     if block.get("build"):

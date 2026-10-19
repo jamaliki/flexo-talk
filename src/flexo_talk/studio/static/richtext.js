@@ -1424,6 +1424,8 @@ export function richText({ value = "", list = false, single = false, breakWith =
   const codeTool = tool("<span style=\"font-family: var(--mono); font-size: 11px\">&lt;/&gt;</span>", "Code (⌘E)", asCode, { words: true });
   const mathsTool = tool("<span style=\"font-family: Georgia, serif\">∑</span>", "Equation: the words chosen as LaTeX (⌥⌘E)", asMaths, { words: true });
   const swatchTools = swatches.map(([name, title]) => [tool(`<span class="rt-swatch" style="background:${palette[name]}"></span>`, title, () => recolour(name), { words: true }), name]);
+  // Dim: the words chosen drawn faint, in their own colour, as a dimmed object is ([words]{dim}).
+  const dimTool = tool("<span class=\"rt-dim-glyph\">A</span>", "Dim", () => recolour("dim"), { words: true });
   bar.append(
     boldTool,
     italicTool,
@@ -1431,6 +1433,7 @@ export function richText({ value = "", list = false, single = false, breakWith =
     mathsTool,
     tool(icon("link"), "Link (⌘K)", () => askLink()),
     ...swatchTools.map(([button]) => button),
+    dimTool,
     plainTool,
     linkInput,
     linkNote,
