@@ -32,6 +32,7 @@ from flexo_talk.deck import (
     LOGO_HEIGHTS,
     LOGO_SUFFIXES,
     LOOKS,
+    PEOPLE_SIZES,
     PORTRAIT_SUFFIXES,
     SHAPE_FRAME,
     SHAPE_KEYS,
@@ -170,6 +171,7 @@ FIELD_LABELS = {
     "by": "Attribution", "notes": "Notes", "footnotes": "Footnotes", "background": "Background",
     "shade": "Background", "layout": "Layout", "columns": "Columns", "widths": "Columns", "split": "Columns",
     "dark": "Background", "align": "Content Position", "skip": "Skip Slide", "rows": "Row Labels",
+    "people": "People", "people_size": "People",
     "logos": "Logos", "logos_on": "Logos", "logo_height": "Logos",
 }
 """What the studio calls a slide's settings, where a message names one."""
@@ -336,6 +338,9 @@ class DeckKind:
         return (
             "A flexo-talk deck document.\n" + (module.__doc__ or "")
             + f"\nEvery slide may also take: {', '.join(COMMON_KEYS)}.\nLayouts and their keys:\n{layouts}"
+            + "\npeople: portraits at the title's right end, each a picture file or {image, name}; people_size: "
+            f"how wide each of the slide's portraits is, in points ({PEOPLE_SIZES[0]:g} to {PEOPLE_SIZES[1]:g}; "
+            "none, nearly two lines of the title)."
             + f"\nBlocks:\n{blocks}\nEvery block also takes: {', '.join(BLOCK_KEYS)} (at: [x, y], placed on the slide "
             "out of its place's flow, its width its width there, in shape units).\n"
             + f"Deck settings: {', '.join(DECK_KEYS)}. logos: picture files (an institution's, its funders'), "
@@ -591,8 +596,9 @@ class DeckKind:
             # least and most), how tall in a footer as a share of that, and the files they may be.
             "logos": {"height": LOGO_HEIGHT, "heights": list(LOGO_HEIGHTS), "footer": FOOTER_LOGOS,
                       "types": list(LOGO_SUFFIXES)},
-            # The files a portrait beside a slide's title may be.
-            "people": {"types": list(PORTRAIT_SUFFIXES)},
+            # The files a portrait beside a slide's title may be, and how wide a slide may
+            # make its portraits (people_size: the least and most, in points).
+            "people": {"types": list(PORTRAIT_SUFFIXES), "sizes": list(PEOPLE_SIZES)},
             # What the figure editor offers, for figures edited on their slides.
             "figure_editor": _figure_editor(),
             # The shapes a slide may have drawn where they are put (flexo.freeform): their kinds

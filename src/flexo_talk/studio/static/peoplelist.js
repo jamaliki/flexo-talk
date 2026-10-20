@@ -17,10 +17,24 @@ export function peopleOf(slide) {
     : { image: String(item ?? ""), name: "" }));
 }
 
-// The list written back: a person with no name as their file alone; none left, no key.
+// The list written back: a person with no name as their file alone; none left, no key (nor
+// a size for them).
 export function setPeople(slide, people) {
   const written = people.map(({ image, name }) => (String(name ?? "").trim() ? { image, name } : image));
-  if (written.length) slide.people = written; else delete slide.people;
+  if (written.length) slide.people = written; else { delete slide.people; delete slide.people_size; }
+}
+
+// How wide each of its portraits is (`people_size`, in points); null, as wide as the title
+// sets them.
+export const peopleSize = (slide) => (typeof slide?.people_size === "number" ? slide.people_size : null);
+
+// Every portrait `size` points across, kept between `least` and `most` and to a whole point;
+// null, as the title sets them. Whether that changed it.
+export function setPeopleSize(slide, size, [least, most] = [24, 160]) {
+  const value = size === null || size === undefined ? null : Math.round(Math.min(most, Math.max(least, size)));
+  if (value === peopleSize(slide)) return false;
+  if (value === null) delete slide.people_size; else slide.people_size = value;
+  return true;
 }
 
 // People added at `at` (else at the end), each a picture file.

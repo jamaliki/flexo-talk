@@ -218,6 +218,15 @@ const removed = structuredClone(slide);
 removePerson(removed, 0);
 removePerson(removed, 0);
 out.removed = "people" in removed;
+const sized = structuredClone(slide);
+out.sizedNone = peopleSize(sized);
+out.changed = [setPeopleSize(sized, 101.4), setPeopleSize(sized, 101), setPeopleSize(sized, 900)];
+out.sized = sized.people_size;
+out.reset = [setPeopleSize(sized, null), "people_size" in sized];
+setPeopleSize(sized, 80);
+removePerson(sized, 0);
+removePerson(sized, 0);
+out.leftover = "people_size" in sized;
 console.log(JSON.stringify(out));
 """
 
@@ -225,7 +234,7 @@ console.log(JSON.stringify(out));
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 def test_the_editor_adds_names_moves_and_removes_people_as_written() -> None:
     script = Path(__file__).parents[1] / "src/flexo_talk/studio/static/peoplelist.js"
-    names = "canHavePeople, peopleOf, addPeople, removePerson, movePerson, renamePerson"
+    names = "canHavePeople, peopleOf, addPeople, removePerson, movePerson, renamePerson, peopleSize, setPeopleSize"
     code = f"import {{ {names} }} from {json.dumps(script.as_uri())};\n{PEOPLE_JS}"
     done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
     found = json.loads(done.stdout)
@@ -236,6 +245,9 @@ def test_the_editor_adds_names_moves_and_removes_people_as_written() -> None:
     assert found["named"] == [{"image": "a.png", "name": "Al"}, "b.png"]
     assert found["moved"] == [{"image": "b.png", "name": "Bea"}, "a.png"]
     assert found["removed"] is False
+    # A size kept to a whole point within its range, a change said; none left, no size either.
+    assert found["sizedNone"] is None and found["changed"] == [True, False, True] and found["sized"] == 160
+    assert found["reset"] == [True, False] and found["leftover"] is False
 
 
 def test_the_editor_offers_people_in_the_slide_s_inspector_and_the_palette() -> None:
@@ -246,3 +258,137 @@ def test_the_editor_offers_people_in_the_slide_s_inspector_and_the_palette() -> 
     assert 'label: "Add Person to Title…"' in people and 'ui.button("Add Person…"' in people
     for label in ('"Add Person"', '"Remove Person"', '"Move Person"', '"Rename Person"'):
         assert label in people
+
+
+def _portrait_boxes(deck: Deck) -> list[tuple[float, float, float, float]]:
+    return [_box(item) for item in _drawn(compose.render_slide(deck, deck.slides[0]).svg, r"slide1\.person\d+")]
+
+
+@pytest.mark.parametrize("look", ["classic", "band", "editorial"])
+def test_portraits_are_nearly_two_lines_of_the_title_across_unless_the_slide_says(tmp_path: Path, look: str) -> None:
+    names = _portraits(tmp_path)
+    people = [{"image": names[0], "name": "Sam Pellock"}]
+    document = _deck(tmp_path, people, subtitle="Designed in silico")
+    document["deck"]["look"] = look
+    deck = deck_from_document(document, tmp_path)
+    line = compose._Canvas(deck, deck.slides[0]).measure(compose.inline("Hg"), deck.style.title_size, None, title=True)
+    assert compose.PORTRAIT_SIZE >= 1.8
+    (box,) = _portrait_boxes(deck)
+    assert box[2] == pytest.approx(line.line_height * compose.PORTRAIT_SIZE)
+    # The studio is told the default, to size them from and back to.
+    svg = compose.render_slide(deck, deck.slides[0]).svg
+    (drawn,) = _drawn(svg, r"slide1\.person0")
+    assert float(drawn.get("data-flexo-default", "")) == pytest.approx(box[2], abs=0.01)
+    # Their names readable: no smaller than before, no larger than the deck's small words.
+    (name,) = _drawn(svg, r"slide1\.person0\.name")
+    size = float(name.get("font-size", ""))
+    assert deck.style.small_size * 0.78 <= size <= deck.style.small_size
+    # Set, every portrait is that wide; within the room the title leaves them.
+    document["slides"][0]["people_size"] = 100
+    sized = deck_from_document(document, tmp_path)
+    assert sized.slides[0].people_size == 100.0
+    assert [box[2] for box in _portrait_boxes(sized)] == [pytest.approx(100.0)]
+
+
+def test_people_size_is_read_checked_and_written_back_as_given(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    document = _deck(tmp_path, names, people_size=96)
+    deck = deck_from_document(document, tmp_path)
+    assert deck_document(deck)["slides"][0]["people_size"] == 96
+    text = dump_document(deck_document(deck))
+    assert "people_size: 96\n" in text
+    from flexo_talk.document import parse_document
+
+    again = deck_from_document(parse_document(text), tmp_path)
+    assert again.slides[0].people_size == 96.0
+    # Made in Python, as a document writes it; none, no key.
+    made = Deck("made")
+    with made.slide(TITLE) as each:
+        each.person(tmp_path / names[0]).size_people(72.5)
+    assert deck_document(made)["slides"][0]["people_size"] == 72.5
+    made.slides[0].size_people(None)
+    assert "people_size" not in deck_document(made)["slides"][0]
+    # The agent's guide says it, its check says one wrong, and what it writes reads back.
+    kind = DeckKind()
+    assert "people_size: how wide each of the slide's portraits is, in points (24 to 160" in kind.guide()
+    assert "people_size" in kind.catalog()["slide_keys"]["content"]
+    assert kind.catalog()["people"]["sizes"] == [24.0, 160.0]
+    written = {"schema_version": 1, **_deck(tmp_path, names, people_size=120)}
+    assert kind.parse(kind.dump(written)) == written
+    assert kind.check(_deck(tmp_path, names, people_size=500), tmp_path) == [
+        "slides[0].people_size: people_size must be between 24 and 160, not 500."]
+
+
+@pytest.mark.parametrize(("slide", "where", "said"), [
+    ({"people_size": 500}, "slides[0].people_size", "people_size must be between 24 and 160, not 500."),
+    ({"people_size": 10}, "slides[0].people_size", "people_size must be between 24 and 160, not 10."),
+    ({"people_size": "big"}, "slides[0].people_size", "people_size must be a number, such as 96 (points), not 'big'."),
+    ({"people_size": True}, "slides[0].people_size", "people_size must be a number, such as 96 (points), not True."),
+    ({"layout": "section", "people_size": 80}, "slides[0].people_size",
+     "A section slide has no title for people to stand beside"),
+])
+def test_a_people_size_said_wrong_is_said_under_its_key(tmp_path: Path, slide: dict, where: str, said: str) -> None:
+    names = _portraits(tmp_path)
+    document = _deck(tmp_path, names, **slide)
+    if slide.get("layout") == "section":
+        document["slides"][0].pop("body")
+        document["slides"][0].pop("people")
+    with pytest.raises(DeckDocumentError) as raised:
+        deck_from_document(document, tmp_path)
+    assert raised.value.where == where
+    assert said in str(raised.value)
+
+
+@pytest.mark.parametrize("look", ["classic", "band", "editorial"])
+def test_large_portraits_keep_the_title_short_of_them_and_the_body_below(tmp_path: Path, look: str) -> None:
+    names = _portraits(tmp_path)
+    long = "A title long enough to run the whole width of the slide when nothing stands beside it"
+    one = _deck(tmp_path, [{"image": names[0], "name": "Sam Pellock"}], title=long, people_size=160)
+    one["deck"]["look"] = look
+    deck = deck_from_document(one, tmp_path)
+    style = deck.style
+    svg = compose.render_slide(deck, deck.slides[0]).svg
+    (box,) = [_box(item) for item in _drawn(svg, r"slide1\.person0")]
+    assert box[2] == pytest.approx(160.0)
+    # On the slide, no nearer its top than half its margin, its right end on the margin.
+    assert box[1] >= style.margin * compose.PEOPLE_TOP - 0.01
+    assert box[0] + box[2] == pytest.approx(style.width - style.margin, abs=0.01)
+    # The title wraps short of it; the body starts below its name.
+    title = _drawn(svg, r"slide1\.title")[0]
+    assert style.margin + float(title.get("data-flexo-wrap", "").split()[0]) + compose.PEOPLE_ROOM <= box[0] + 0.01
+    name = _drawn(svg, r"slide1\.person0\.name")[0]
+    assert _box(_drawn(svg, r"slide1\.body")[0])[1] >= float(name.get("y", 0))
+    # Three that large are made smaller together to keep to their share of the width.
+    three = _deck(tmp_path, [names[0], names[1], names[0]], people_size=160)
+    three["deck"]["look"] = look
+    boxes = _portrait_boxes(deck_from_document(three, tmp_path))
+    span = style.width - 2 * style.margin
+    assert all(item[2] == pytest.approx(boxes[0][2]) for item in boxes) and boxes[0][2] < 160.0
+    assert boxes[-1][0] + boxes[-1][2] - boxes[0][0] == pytest.approx(span * compose.PEOPLE_SHARE)
+
+
+def test_the_powerpoint_draws_portraits_the_size_the_slide_sets(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    deck = deck_from_document(_deck(tmp_path, [{"image": names[0], "name": "Sam"}], people_size=110), tmp_path)
+    result = deck.build(tmp_path / "out", formats=("pptx",))
+    slide = zipfile.ZipFile(result.pptx).read("ppt/slides/slide1.xml").decode()  # type: ignore[arg-type]
+    (picture,) = re.findall(r"<p:pic>.*?</p:pic>", slide, re.S)
+    extent = re.search(r'<a:ext cx="(\d+)" cy="(\d+)"/>', picture)
+    assert extent and int(extent.group(1)) == int(extent.group(2)) == pytest.approx(110 * 12700, abs=2)
+
+
+def test_the_editor_sizes_a_slide_s_portraits_in_its_inspector_and_by_a_corner() -> None:
+    static = Path(__file__).parents[1] / "src/flexo_talk/studio/static"
+    editor, people = (static / "editor.js").read_text("utf-8"), (static / "people.js").read_text("utf-8")
+    portraits = (static / "portraits.js").read_text("utf-8")
+    # Size, in the People section, as a logo's: points, Reset Size beside it once set.
+    assert 'ui.field("Size"' in people and 'key: "people_size"' in people and 'ui.button("Reset Size"' in people
+    for label in ('"Resize People"', '"Reset People Size"'):
+        assert label in people and label in editor
+    # On the slide: chosen, framed with a handle at each corner, drawn as it is dragged.
+    assert "slidePortraits(people, {" in editor
+    for hook in ("portraits.hover(event", "portraits.press(event)", "portraits.pick(event)", "portraits.context(event)",
+                 "portraits.key(event)", "portraits?.place()", "portraits?.busy()", "portraits.commands()"):
+        assert hook in editor, hook
+    assert '"Reset People Size"' in portraits and "requestAnimationFrame(sizeDraw)" in portraits
+    assert 'event.key !== "Escape"' in portraits

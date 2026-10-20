@@ -300,12 +300,15 @@ background the slide's words and accents are set light (`dark=` overrides).
 A slide's **people** -- who the work on it was done with -- stand at the right end of its
 title: `slide.person("people/sam.jpeg", "Sam Pellock")`, once for each, in the order they
 stand. Each is a round portrait (the square in the middle of the picture, drawn round, as
-`mask="circle"` draws a picture), about a line and a third of the title across, beside the
+`mask="circle"` draws a picture), nearly two lines of the title across, beside the
 others with a small gap, their name (if given) set small and muted under it -- on a band,
-in the band's words. The row ends on the slide's right margin and its portraits' middle is
+in the band's words. `slide.size_people(96)` (`people_size: 96` in a document) makes every
+portrait on the slide 96 points across instead, from 24 to 160; their names grow and
+shrink a little with them. The row ends on the slide's right margin and its portraits' middle is
 on the title's (and subtitle's); the title and subtitle wrap short of it (a centred title
 as far in from each side), and the body starts below the names. Many people are made
-smaller together, down to six tenths, to keep to about two fifths of the width. PNG, JPEG,
+smaller together, down to under half, to keep to about two fifths of the width (a size set
+too). PNG, JPEG,
 SVG or PDF pictures; content, two-columns, columns and figure slides take them (a title,
 section, statement, agenda or blank slide refuses them). In the PowerPoint each is a
 native picture cropped to its middle square, in an oval (Crop to Shape), its name its alt
@@ -316,6 +319,7 @@ text; a bundle carries the pictures. In a document:
   people:
   - {image: assets/sam.jpeg, name: Sam Pellock}
   - assets/other.jpeg          # a bare picture: no name under it
+  people_size: 96              # each portrait 96 points across (none: the title sets it)
   body: [...]
 ```
 
@@ -893,7 +897,10 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   its title: each portrait, a **Name** field, and Remove (drag a row, or ⌥↑ ⌥↓ in it, to
   move them along the row). **Add Person…** chooses or uploads a picture, as Add Logo…
   does; so does the palette's **Add Person to Title…**, and pictures dropped on the
-  slide's title are added as people, where they are let go among them. Each change is one
+  slide's title are added as people, where they are let go among them. **Size** sets how
+  wide every portrait on the slide is, in points; so does dragging a corner of a portrait
+  chosen on the slide (all of them grow together; Esc puts them back, and a double-click
+  on a corner, or **Reset People Size**, goes back to the default). Each change is one
   step to undo.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide

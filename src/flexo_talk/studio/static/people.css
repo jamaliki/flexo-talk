@@ -11,3 +11,4 @@
 .person-row .person-pic.gone svg { width: 15px; height: 15px; }
 .person-row .person-name { flex: 1; min-width: 0; }
 .person-row .person-name .input { width: 100%; cursor: text; }
+.person-row.chosen { border-color: var(--accent); }

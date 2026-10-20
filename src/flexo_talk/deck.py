@@ -232,6 +232,9 @@ PORTRAIT_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg", ".pdf", ".ai")
 PEOPLE_LAYOUTS = ("content", "two-columns", "columns", "figure")
 """The layouts whose title may have people beside it (``Slide.person``): those that set a
 title at the top of the slide over their objects."""
+PEOPLE_SIZES = (24.0, 160.0)
+"""How wide a slide's portraits may be made (``people_size``), in points: from about a line
+of small words to well over a quarter of the slide's height."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1802,6 +1805,9 @@ class Slide:
         """The fields written but left empty (title, subtitle, words): each holds its place."""
         self.people: list[Person] = []
         """The people beside its title (``person``), in the order they stand, left to right."""
+        self.people_size: float | None = None
+        """How wide each of its portraits is, in points (``size_people``); None, as wide as
+        its look's title sets them."""
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:
@@ -1998,6 +2004,14 @@ class Slide:
                                          f"{Path(image).name} is none of these.")
         name = _words(name or "", "name")
         self.people.append(Person(str(image), inline(name) if name.strip() else (), name))
+        return self
+
+    def size_people(self, size: float | None) -> Slide:
+        """How wide each portrait beside the title is, in points (``people_size`` in a
+        document): one size for all of them, ``None`` for the size the title sets. Many are
+        still made smaller together to fit their share of the width."""
+
+        self.people_size = None if size is None else _number(size, "people_size", *PEOPLE_SIZES, "96 (points)")
         return self
 
     def footnote(self, text: str) -> Slide:

@@ -1,12 +1,13 @@
 // The people beside a slide's title, in the editor (peoplelist.js says what each change does
 // to the slide): the slide's People in its inspector -- each person's portrait, their Name, and
 // Remove; dragged up or down (⌥↑ ⌥↓ with its row's keys) to stand elsewhere in the row -- Add
-// Person…, which chooses or uploads a picture as Add Logo… does; the palette's "Add Person to
-// Title…"; and pictures dropped on the slide's title, each a person added. Each change is one
-// step, named for what it does.
+// Person…, which chooses or uploads a picture as Add Logo… does; Size, how wide every portrait
+// on the slide is (as a corner of one chosen on the slide sizes them: portraits.js); the
+// palette's "Add Person to Title…" and "Reset People Size"; and pictures dropped on the slide's
+// title, each a person added. Each change is one step, named for what it does.
 
 import { h, ui, icon, toast } from "/static/studio/studio.js";
-import { canHavePeople, peopleOf, addPeople, removePerson, movePerson, renamePerson } from "/static/kinds/deck/peoplelist.js";
+import { canHavePeople, peopleOf, addPeople, removePerson, movePerson, renamePerson, peopleSize, setPeopleSize } from "/static/kinds/deck/peoplelist.js";
 
 // `deck`, the editor's: { editSlide(mutate, options), slideAt(), slide() (its index),
 // chooseFile({ title, types, action }), awayFrom(what), renderInspector(), undoNote(text,
@@ -67,13 +68,34 @@ export function slidePeople(studio, deck) {
     if (typing) setTimeout(() => document.querySelector(`input[data-key="people.${to}.name"]`)?.focus({ preventScroll: true }), 0);
   }
 
+  // How wide its portraits are when the slide says nothing, as the slide was last drawn (the
+  // drawing says, on each portrait); null, not drawn yet.
+  const sizes = deck.sizes || [24, 160];
+  function defaultSize() {
+    const drawn = deck.pageNode()?.querySelector(`[id^="slide${deck.slide() + 1}.person"][data-flexo-default]`);
+    const value = Number(drawn?.getAttribute("data-flexo-default"));
+    return value > 0 ? value : null;
+  }
+  // Every portrait on the slide `size` points across (null: as the title sets them), one step.
+  // Whether that changed it.
+  function resize(size, label = "Resize People") {
+    const slide = deck.slideAt();
+    if (!canHavePeople(slide) || deck.awayFrom("size people")) return false;
+    if (!setPeopleSize(structuredClone(slide), size, sizes)) return false;
+    edit((s) => { setPeopleSize(s, size, sizes); }, size === null || size === undefined ? "Reset People Size" : label);
+    return true;
+  }
+  const resetSize = () => peopleSize(deck.slideAt()) !== null && resize(null);
+
+  // The one chosen on the slide, marked in its row (portraits.js says which: `choosing`).
+  let chosen = () => null;
   let dragged = null;
-  // The slide's People: a row for each, then Add Person….
+  // The slide's People: a row for each, then Add Person…, then how wide they are.
   function controls(slide) {
     const people = peopleOf(slide), at = deck.slide();
     const rows = people.map((person, index) => {
       const missing = gone.has(`${at}:${index}`);
-      const row = h("div.list-row.person-row", {
+      const row = h(`div.list-row.person-row${chosen() === index ? ".chosen" : ""}`, {
         dataset: { index, key: `person:${index}:${person.image}` }, draggable: true,
         "aria-label": `Person ${index + 1} of ${people.length}: ${person.name || fileName(person.image)}`,
         title: "Drag to reorder",
@@ -117,11 +139,17 @@ export function slidePeople(studio, deck) {
     });
     const adder = ui.button("Add Person…", () => add(), { kind: "ghost", icon: "plus", small: true });
     adder.dataset.key = "people.add";
-    return [people.length ? h("div.list-rows.people-rows", {}, rows) : null, h("div", {}, adder)];
+    const size = peopleSize(slide), fallback = defaultSize();
+    const sized = people.length ? ui.field("Size", h("div.row", {},
+      ui.number({ value: size, placeholder: fallback ? String(Math.round(fallback)) : "", min: sizes[0], max: sizes[1], step: 2, unit: "pt", key: "people_size",
+        onChange: (value) => resize(value) }),
+      size !== null ? ui.button("Reset Size", () => resetSize(), { small: true, kind: "ghost" }) : null)) : null;
+    return [people.length ? h("div.list-rows.people-rows", {}, rows) : null, h("div", {}, adder), sized];
   }
 
   // The palette's: named as the Mac app's Insert menu would name it.
-  const commands = () => (canHavePeople(deck.slideAt()) ? [{ icon: "image", label: "Add Person to Title…", run: () => add() }] : []);
+  const commands = () => (canHavePeople(deck.slideAt()) ? [{ icon: "image", label: "Add Person to Title…", run: () => add() },
+    ...(peopleSize(deck.slideAt()) !== null ? [{ icon: "undo", label: "Reset People Size", run: () => resetSize() }] : [])] : []);
 
   // Whether `event` (a drag of files) is over the slide's title -- its words, its band, the
   // people beside it -- on a slide that may have people: there, pictures are people.
@@ -154,5 +182,6 @@ export function slidePeople(studio, deck) {
     return true;
   }
 
-  return { controls, commands, add, overTitle, dropped, room: canHavePeople };
+  return { controls, commands, add, overTitle, dropped, room: canHavePeople, remove, move, resize, resetSize, defaultSize, sizes,
+    choosing: (which) => { chosen = which; } };
 }
