@@ -895,7 +895,9 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
     # The portraits' middle on the middle of the title's words (and the subtitle's under it).
     people_bottom = 0.0
     if people:
-        middle = top + (heading.height + under) / 2.0
+        # (Portraits taller than the title and subtitle stand no nearer the slide's top than
+        # half its margin: their middle comes down, the words where they are.)
+        middle = max(top + (heading.height + under) / 2.0, margin * PEOPLE_TOP + people.size / 2.0)
         people.place(width - margin, middle)
         people_bottom = people.bottom
         if style.header == "band":
@@ -2104,14 +2106,22 @@ def _logos(canvas: _Canvas, slide: Slide, row: list[_Logo]) -> None:
 
 # -- people beside a title -----------------------------------------------------------------
 
-PORTRAIT_SIZE = 1.3
-"""How wide a portrait beside a title is, as a multiple of the title's line height."""
+PORTRAIT_SIZE = 1.9
+"""How wide a portrait beside a title is, as a multiple of the title's line height, unless
+the slide says (``people_size``): nearly two lines, a face that reads from the back of a room."""
+NAME_SIZE = 0.78
+"""How large a person's name is set under a portrait a line and a third of the title across,
+as a share of the deck's small size; under a larger portrait, larger, as the square root of
+how much larger it is (no larger than the small size), and under a smaller one, smaller."""
 PORTRAIT_GAP = 0.22
 """The space between two portraits (or their names), as a share of how wide they are."""
-PORTRAIT_SMALLEST = 0.6
-"""How much smaller portraits may be made, as a share of their size, for many to fit."""
+PORTRAIT_SMALLEST = 0.45
+"""How much smaller portraits may be made, as a share of their size, for many to fit: as
+small as a line of the title, nearly."""
 PEOPLE_SHARE = 0.42
 """The most of the width between the margins the people beside a title may take."""
+PEOPLE_TOP = 0.5
+"""How near the slide's top portraits may stand, as a share of its margin."""
 PEOPLE_ROOM = 20.0
 """The room kept clear between the title's words and the people beside them, in points."""
 PEOPLE_CLEAR = 14.0
@@ -2149,6 +2159,8 @@ class _People:
     name_size: float
     width: float = 0.0
     bottom: float = 0.0
+    default: float = 0.0
+    """How wide its portraits are when the slide sets no size (``people_size``)."""
 
     def place(self, right: float, middle: float) -> None:
         x = right - self.width
@@ -2166,11 +2178,11 @@ NAME_GAP = 3.0
 
 
 def _people_row(canvas: _Canvas, slide: Slide, span: float) -> _People | None:
-    """The people beside this slide's title, if it has any: each a round portrait about as
-    tall as a line and a third of the title, side by side with a small gap, their names
-    small under them -- made smaller together, should many not fit in their share of the
-    width. One whose picture is not there holds its place while editing (a quiet circle);
-    presented or exported, the row closes up without it."""
+    """The people beside this slide's title, if it has any: each a round portrait nearly
+    two lines of the title tall (or as wide as the slide says: ``people_size``), side by
+    side with a small gap, their names small under them -- made smaller together, should
+    many not fit in their share of the width. One whose picture is not there holds its
+    place while editing (a quiet circle); presented or exported, the row closes up without it."""
 
     if not slide.people:
         return None
@@ -2183,9 +2195,11 @@ def _people_row(canvas: _Canvas, slide: Slide, span: float) -> _People | None:
     if not found:
         return None
     line = canvas.measure((TextRun("Hg"),), style.title_size, None, canvas.deck.title_weight, title=True)
-    name_size = round(style.small_size * 0.78, 1)
+    default = line.line_height * PORTRAIT_SIZE
 
     def row(size: float) -> _People:
+        grown = math.sqrt(size / (line.line_height * 1.3))
+        name_size = round(min(style.small_size, max(style.small_size * 0.6, style.small_size * NAME_SIZE * grown)), 1)
         portraits = []
         for index, person, art, said in found:
             across, named = size, 0.0
@@ -2199,10 +2213,13 @@ def _people_row(canvas: _Canvas, slide: Slide, span: float) -> _People | None:
         made.width = sum(portrait.across for portrait in portraits) + gap * (len(portraits) - 1)
         return made
 
-    size = line.line_height * PORTRAIT_SIZE
+    size = slide.people_size or default
     made = row(size)
     if made.width > span * PEOPLE_SHARE:
-        made = row(size * max(PORTRAIT_SMALLEST, span * PEOPLE_SHARE / made.width))
+        # (Made smaller to fit, a size set no smaller than the default would be.)
+        least = min(size, default) * PORTRAIT_SMALLEST
+        made = row(max(least, size * span * PEOPLE_SHARE / made.width))
+    made.default = default
     return made
 
 
@@ -2240,7 +2257,8 @@ def _people(canvas: _Canvas, slide: Slide, people: _People, *, band: bool, role:
         if box is None:
             continue
         if portrait.artwork is None:
-            group = element(canvas.layer, "g", id=identifier, data__flexo__talk="missing")
+            group = element(canvas.layer, "g", id=identifier, data__flexo__talk="missing",
+                            data__flexo__default=number(people.default))
             ink = canvas.palette.get("muted-ink")
             element(
                 group, "ellipse", id=f"{identifier}.box", cx=box.x + box.width / 2.0, cy=box.y + box.height / 2.0,
@@ -2264,6 +2282,8 @@ def _people(canvas: _Canvas, slide: Slide, people: _People, *, band: bool, role:
             block = _Image(portrait.person.image, mask="circle", description=words or "Portrait")
             _cropped_image(canvas, identifier, block, art, box, crop)
             canvas.layer[-1].set("data-flexo-talk", "person")
+            # (The studio sizes them from here, and back to this.)
+            canvas.layer[-1].set("data-flexo-default", number(people.default))
         if portrait.person.name:
             # (On the band, its words a little faint, as muted words are on the page.)
             parent = element(canvas.layer, "g", id=f"{identifier}.name-group", opacity=0.8) if band else None

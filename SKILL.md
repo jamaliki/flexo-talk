@@ -132,7 +132,8 @@ a picture; words turn light), `dark=` (force light words), and `align=` (see
 A `content`, `two-columns`, `columns` or `figure` slide also takes people beside its
 title: `slide.person("people/sam.jpeg", "Sam Pellock")` (`people: [{image: people/sam.jpeg,
 name: Sam Pellock}, people/other.png]` in a document) -- round portraits at the title's
-right end, names small under them, the title wrapping short of them. Use it for "done with"
+right end, names small under them, the title wrapping short of them;
+`slide.size_people(96)` (`people_size: 96`) makes each 96 points across (24 to 160). Use it for "done with"
 credits on a results slide rather than a picture in the body.
 
 A `two-columns` or `columns` slide also takes `rows=["", "Mechanism", "Geometry"]`

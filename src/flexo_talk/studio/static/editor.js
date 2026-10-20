@@ -38,6 +38,7 @@ import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
+import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
 
 const BLOCKS = {
@@ -1875,6 +1876,8 @@ export function mount(studio, container) {
   // A logo dragged along its row, or sized by a corner (below): declared here, for the stage
   // drawn before them to hold back a drawing while they are.
   let logoDrag = null, logoSizing = null;
+  // A slide's portraits, chosen and sized on it (portraits.js): made with the slide's people.
+  let portraits = null;
   studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
   function renderStage() {
     const list = slides();
@@ -1908,7 +1911,7 @@ export function mount(studio, container) {
     // of -- or, changed, the drawing of it changed.
     // So does a figure's part being carried: the slide drawn in full a moment after a change
     // (folded to fit, say) would take the figure from under it and end the drag, nothing done.
-    if ((sizing || resizing || logoSizing || logoDrag?.started || figure?.parts.dragging || freeShapes.busy()) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
+    if ((sizing || resizing || logoSizing || logoDrag?.started || portraits?.busy() || figure?.parts.dragging || freeShapes.busy()) && pageNode && pageNode.dataset.shows !== shows) drawingHeld = true;
     else if (!pageNode || pageNode.dataset.shows !== shows) {
       renewed = true;
       drawingHeld = false;
@@ -2003,7 +2006,15 @@ export function mount(studio, container) {
   const people = slidePeople(studio, {
     editSlide: (mutate, options) => editSlide(mutate, options), slideAt: () => slideAt(), slide: () => state.slide,
     chooseFile: (options) => chooseFile(options), awayFrom, renderInspector: () => renderInspector(),
-    undoNote: (text, options) => undoNote(text, options), pageNode: () => pageNode, types: catalog.people?.types,
+    undoNote: (text, options) => undoNote(text, options), pageNode: () => pageNode, types: catalog.people?.types, sizes: catalog.people?.sizes,
+  });
+  portraits = slidePortraits(people, {
+    pageNode: () => pageNode, slide: () => state.slide, slideAt: () => slideAt(), place: (node, box, label) => place(node, box, label), boxOf: (id) => boxOf(id),
+    tip: (text, x, y) => { if (text === null) { sizeTip.hidden = true; return; } if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip); tipAt(text, x, y); },
+    swallowRelease: (held) => swallowRelease(held), free: (event) => Snap.free(event), putHeld: () => putHeld(), dropHeld: () => { drawingHeld = false; },
+    clearChoice: () => { closeInline(); freeShapes.clear({ quiet: true }); leaveFigure(false); offRail(); allChosen = null; state.focus = null; state.field = null; state.logo = null; state.tab = "slide"; hover.hidden = true; },
+    othersChosen: () => Boolean(state.focus || state.field || logoChosen() || allOn() || inline), refresh: () => { placeChosen(); renderInspector(); reportFocus(); },
+    menu: (point, items) => menu(point, items),
   });
   // The slide each drawing was made from, by the drawing (its hash).
   const drawnFrom = new Map();
@@ -2531,6 +2542,7 @@ export function mount(studio, container) {
       place(hover, box, "");
       return;
     }
+    if (portraits.hover(event, (box, label) => place(hover, box, label))) return;
     const part = partAt(event);
     // A figure's parts are shown one by one, as they will be chosen: by the first click.
     const inner = part && figurePartAt(event, part);
@@ -2563,6 +2575,7 @@ export function mount(studio, container) {
       const holder = id && figure.parts.parentOf(id);
       if (figure.parts.connecting || (id && holder && !loneShape(figure.parts.model, id))) { figure.parts.pointerdown(event); return; }
     }
+    if (portraits.press(event)) return;
     const part = partAt(event);
     if (part?.kind === "logo") { pressLogo(event, part); return; }
     // A shape of a figure not yet chosen is dragged as the shape, the figure chosen first --
@@ -4044,6 +4057,7 @@ export function mount(studio, container) {
       figure.parts.click(event);
       return;
     }
+    if (portraits.pick(event)) return;
     const part = partAt(event);
     // What is chosen shows as chosen at once: the name tag of what the pointer was over goes.
     hover.hidden = true;
@@ -4130,6 +4144,7 @@ export function mount(studio, container) {
     if (mixed.context(event)) return;
     if (freeShapes.context(event)) return;
     freeShapes.clear({ quiet: true });
+    if (portraits.context(event)) return;
     const point = { x: event.clientX, y: event.clientY };
     const part = partAt(event);
     // One of several chosen: they stay chosen, and its menu acts on them all.
@@ -4311,6 +4326,7 @@ export function mount(studio, container) {
     freeShapes.place();
     placeAll();
     placeLogo();
+    portraits?.place();
     if (sizing || resizing) return;  // its frame follows it as it is sized
     // A picture being cropped has the crop's frame instead.
     if (cropping && !cropping.done) { chosen.hidden = true; placeCrop(); return; }
@@ -10275,6 +10291,8 @@ export function mount(studio, container) {
     if (figure && figureBlock() && figure.parts.key(event)) return;
     // Shapes chosen (or one being drawn): their keys -- the arrows nudge, ⌫ deletes, ⌘G groups.
     if (freeShapes.key(event)) { event.preventDefault(); return; }
+    // A portrait chosen: its keys (portraits.js).
+    if (portraits.key(event)) { event.preventDefault(); return; }
     if (mod && event.shiftKey && key.toLowerCase() === "n") { event.preventDefault(); newSlideLike(state.slide); }
     // ⇧⌘A, nothing to align chosen: Arrange shown all the same (shapes.js's, with shapes chosen).
     else if (mod && event.shiftKey && !event.altKey && key.toLowerCase() === "a") { event.preventDefault(); freeShapes.revealArrange(); }
@@ -10598,8 +10616,9 @@ export function mount(studio, container) {
         { icon: "trash", label: `Delete ${count} Objects`, keys: "⌫", run: () => deleteAll() },
       ];
     }
-    // A logo chosen: its menu's commands.
+    // A logo chosen: its menu's commands; a portrait, its (portraits.js).
     if (logoChosen() && !typingNow()) return logoItems(state.logo).filter((item) => item !== "-" && !item.disabled);
+    if (portraits.chosen() !== null && !typingNow()) return portraits.commands();
     const at = state.focus, block = at && !typingNow() ? blocksAt(slideAt(), at.region)[at.index] : null;
     if (!block) return [];
     const kind = kindOf(block), name = blockLabel(block), count = blocksAt(slideAt(), at.region).length;
@@ -10853,6 +10872,8 @@ export function mount(studio, container) {
       const label = (rows, n) => String(rows[n] ?? ""), n = Array.from(b.rows.length > a.rows.length ? b.rows : a.rows).findIndex((_, i) => label(a.rows, i) !== label(b.rows, i));
       return (n >= 0 && typing(label(b.rows, n), label(a.rows, n))) || "Edit Row Labels";
     }
+    // (As the portraits' corners and Size name it.)
+    if (keys.length === 1 && keys[0] === "people_size") return b.people_size == null ? "Reset People Size" : "Resize People";
     return keys.length === 1 ? `Change ${SLIDE_NAMES[keys[0]] || keyTitle(keys[0])}` : "Edit Slide";
   }
   const BLOCK_NAMES = { description: "Description", align: "Alignment", size: "Font Size", turn: "Rotation", colour: "Colour", muted: "Colour", numbered: "Numbering", plain: "Bullets",
