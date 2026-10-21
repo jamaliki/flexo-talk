@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
@@ -128,7 +129,137 @@ def test_a_page_of_a_pdf_and_files_outside_or_missing(decks) -> None:
 def test_slides_pasted_in_their_own_folder_are_as_they_were(decks) -> None:
     a, _ = decks
     slides = [{"title": "Two", "body": [{"image": "assets/shared.png"}]}]
-    assert brought(slides, a, a) == {"slides": slides, "files": [], "missing": []}
+    assert brought(slides, a, a) == {"slides": slides, "figures": {}, "files": [], "missing": []}
+
+
+def test_the_deck_s_own_figures_a_slide_shows_come_with_their_files(decks) -> None:
+    """A slide showing a figure the deck keeps once ('#pipeline') carries it: its parts' files
+    come too, renamed beside another file of their name, and the figure names them so."""
+
+    a, b = decks
+    _write(b / "pictures/logo.png", b"B's logo")
+    figures = {"pipeline": {"figure": {"id": "pipeline"}, "nodes": [
+        {"id": "logo", "kind": "image", "properties": {"source": "pictures/logo.png"}}]}}
+    slides = [{"title": "Pipeline", "body": [{"figure": "#pipeline"}]}]
+    made = brought(slides, a, b, figures)
+    assert made["slides"] == slides
+    assert made["figures"]["pipeline"]["nodes"][0]["properties"]["source"] == "pictures/logo-2.png"
+    assert (b / "pictures/logo-2.png").read_bytes() == b"logo"
+    assert figures["pipeline"]["nodes"][0]["properties"]["source"] == "pictures/logo.png"  # as given
+
+
+PASTED = Path(__file__).parents[1] / "src/flexo_talk/studio/static/pastedslides.js"
+
+
+def _node(code: str) -> object:
+    """``code`` run in Node with pastedslides.js as ``P`` (the studio's modules it imports read
+    from flexo, its notes kept in ``notes``)."""
+
+    import shutil
+    import subprocess
+
+    import flexo
+
+    if shutil.which("node") is None:
+        pytest.skip("Node is not installed")
+    static = Path(flexo.__file__).parent / "studio/static/studio"
+    stub = (
+        f"export {{ same }} from {json.dumps((static / 'merge.js').as_uri())};"
+        "export const toast = (words) => { globalThis.notes.push(String(words)); };"
+    )
+    source = PASTED.read_text(encoding="utf-8")
+    inline = "data:text/javascript," + urllib.parse.quote(stub)
+    source = source.replace('"/static/studio/studio.js"', json.dumps(inline))
+    source = source.replace('"/static/studio/mixing.js"', json.dumps((static / "mixing.js").as_uri()))
+    script = (
+        "globalThis.notes = [];\n"
+        f"const P = await import({json.dumps('data:text/javascript,' + urllib.parse.quote(source))});\n{code}"
+    )
+    done = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, check=True)
+    return json.loads(done.stdout)
+
+
+def test_a_copy_carries_the_deck_s_own_figures_it_shows_and_they_are_named_apart_here() -> None:
+    made = _node("""
+      const pipeline = { figure: { id: "pipeline" }, nodes: [{ id: "a" }] };
+      const other = { figure: { id: "pipeline" }, nodes: [{ id: "b" }] };
+      const deck = { pipeline, unused: other };
+      const block = { what: "block", block: { figure: "#pipeline" } };
+      const slides = { what: "slides", slides: [{ body: [{ figure: "#pipeline" }] },
+        { left: [{ figure: "#pipeline" }], right: [{ image: "a.png" }] }] };
+      const mixed = { what: "mixed", clips: [
+        { what: "blocks", blocks: [{ figure: "#pipeline" }, { text: "#pipeline" }] }, { what: "shapes", shapes: [] }] };
+      const out = {
+        named: [P.figuresNamed(block, deck), P.figuresNamed(slides, deck), P.figuresNamed(mixed, deck),
+                P.figuresNamed({ what: "block", block: { figure: "#gone" } }, deck)],
+      };
+      const carried = { ...slides, figures: { pipeline } };
+      // This deck has none of that name: it is added; the very same one: used as it is.
+      out.none = P.placedFigures(carried, {});
+      out.same = P.placedFigures(carried, { pipeline: structuredClone(pipeline) });
+      // Another of its name, and another of the name after: numbered past both, renamed where named.
+      out.clash = P.placedFigures(carried, { pipeline: other, "pipeline-2": other });
+      out.blocks = P.placedFigures({ ...mixed, figures: { pipeline } }, { pipeline: other });
+      console.log(JSON.stringify(out));
+    """)
+    one = {"pipeline": {"figure": {"id": "pipeline"}, "nodes": [{"id": "a"}]}}
+    assert made["named"] == [one, one, one, {}]
+    assert made["none"]["add"] == one and made["none"]["clip"]["slides"][0]["body"][0]["figure"] == "#pipeline"
+    assert made["same"]["add"] == {} and made["same"]["clip"]["slides"][1]["left"][0]["figure"] == "#pipeline"
+    clash = made["clash"]
+    assert clash["add"] == {"pipeline-3": one["pipeline"]}
+    pasted = clash["clip"]["slides"]
+    assert [pasted[0]["body"][0]["figure"], pasted[1]["left"][0]["figure"]] == ["#pipeline-3"] * 2
+    assert clash["clip"]["slides"][1]["right"] == [{"image": "a.png"}]
+    blocks = made["blocks"]["clip"]["clips"][0]["blocks"]
+    assert blocks == [{"figure": "#pipeline-2"}, {"text": "#pipeline"}]  # words are words
+
+
+def test_objects_and_shapes_copied_from_another_deck_bring_their_files_through_the_studio() -> None:
+    made = _node("""
+      const asked = [];
+      const studio = {
+        file: "talk.yaml", folder: () => "", workspace: { info: { folder: "/b" } },
+        api: async (route, body) => {
+          asked.push(body.action);
+          const moved = (value) => JSON.parse(JSON.stringify(value).replaceAll('"shared.png"', '"shared-2.png"'));
+          const figures = moved(body.action.figures || {});
+          return { slides: moved(body.action.slides), figures, missing: ["gone.png"] };
+        },
+      };
+      const out = {};
+      const picture = { image: "shared.png" };
+      out.block = await P.broughtClip(studio, { what: "block", block: picture, from: "/a", figures: {} });
+      out.logo = await P.broughtClip(studio, { what: "block", block: { image: "shared.png" }, logo: 0, from: "/a" });
+      const figures = { f: { nodes: [{ properties: { source: "shared.png" } }] } };
+      out.mixed = await P.broughtClip(studio, { what: "mixed", from: "/a", figures, clips: [
+        { what: "blocks", blocks: [{ gallery: ["shared.png"] }, { text: "x" }] },
+        { what: "shapes", shapes: [{ kind: "picture", source: "shared.png" }] },
+        { what: "parts", parts: { nodes: [] } }] });
+      out.here = await P.broughtClip(studio, { what: "block", block: { image: "shared.png" }, from: "/b" });
+      out.asked = asked.length;
+      out.slides = asked[2].slides;
+      out.notes = globalThis.notes;
+      studio.api = async () => { throw new Error("The deck these slides were copied from is no longer open"); };
+      out.failed = await P.broughtClip(studio, { what: "block", block: { image: "shared.png" }, from: "/a" });
+      out.notes = globalThis.notes;
+      console.log(JSON.stringify(out));
+    """)
+    assert made["block"]["block"] == {"image": "shared-2.png"} and made["block"]["what"] == "block"
+    assert made["logo"]["block"] == {"image": "shared-2.png"} and made["logo"]["logo"] == 0
+    clips = made["mixed"]["clips"]
+    assert clips[0]["blocks"] == [{"gallery": ["shared-2.png"]}, {"text": "x"}]
+    assert clips[1]["shapes"] == [{"kind": "picture", "source": "shared-2.png"}]
+    assert clips[2] == {"what": "parts", "parts": {"nodes": []}}
+    assert made["mixed"]["figures"]["f"]["nodes"][0]["properties"]["source"] == "shared-2.png"
+    # Pasted in a deck of the folder it came from: nothing asked, as it is.
+    assert made["here"]["block"] == {"image": "shared.png"} and made["asked"] == 3
+    assert made["slides"] == [
+        {"body": [{"gallery": ["shared.png"]}, {"text": "x"}]},
+        {"shapes": [{"kind": "picture", "source": "shared.png"}]},
+    ]
+    assert made["failed"]["block"] == {"image": "shared.png"}
+    assert any("gone.png" in note for note in made["notes"]) and any("no longer open" in note for note in made["notes"])
 
 
 # -- through the studio --
@@ -173,9 +304,12 @@ def test_the_studio_brings_slides_files_from_an_open_deck_only(studios, decks, t
     a, b = decks
     url = f"http://127.0.0.1:{server.server_address[1]}/api/act"
     slides = [{"title": "Two", "body": [{"image": "assets/shared.png"}, {"image": "assets/red.png"}]}]
-    asked = {"do": "bring-slides", "from": str(a), "slides": slides}
+    node = {"id": "n", "kind": "image", "properties": {"source": "assets/shared.png"}}
+    figures = {"f": {"figure": {"id": "f"}, "nodes": [node]}}
+    asked = {"do": "bring-slides", "from": str(a), "slides": slides, "figures": figures}
     status, answer = _call(url, workspace.token, {"file": "talk.yaml", "action": asked})
     assert status == 200, answer
+    assert answer["figures"]["f"]["nodes"][0]["properties"]["source"] == "assets/shared-2.png"
     assert [block["image"] for block in answer["slides"][0]["body"]] == ["assets/shared-2.png", "assets/red.png"]
     assert "uploaded" not in answer
     # The studio's copies: taken away if nothing comes to use them.

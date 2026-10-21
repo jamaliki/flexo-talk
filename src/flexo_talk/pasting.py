@@ -1,4 +1,4 @@
-"""Slides pasted from another deck: the files they name brought along into this deck's folder.
+"""Slides and objects pasted from another deck: the files they name brought into its folder.
 
 A slide names its files from its deck's folder -- its pictures, galleries, people's
 portraits, GIFs, figure files (with the files those name), plots' Python and data, the
@@ -42,21 +42,25 @@ never a slide's words that happen to read as a file's name."""
 _PAGE = re.compile(r"^(?P<whole>.+)#(?P<page>\d+)$")
 
 
-def brought(slides: list[Any], source: str | Path, base: Path) -> dict[str, Any]:
+def brought(
+    slides: list[Any], source: str | Path, base: Path, figures: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """``slides`` from the deck whose folder is ``source``, for the deck whose folder is
-    ``base``: the files they name copied here, and the slides naming them as they are here.
-    Answers ``{"slides", "files", "missing"}``: the slides, the files written (as the computer
-    has them), and the names of files they name that are not there."""
+    ``base`` -- and ``figures``, the figures of that deck's own they show ('#name') -- the
+    files they name copied here, and the slides and figures naming them as they are here.
+    Answers ``{"slides", "figures", "files", "missing"}``: the slides, the figures, the files
+    written (as the computer has them), and the names of files they name that are not there."""
 
     origin = Path(os.path.abspath(Path(source).expanduser()))
     here = base.resolve()
+    figures = figures if isinstance(figures, dict) else {}
     if not isinstance(slides, list) or origin.resolve() == here:
-        return {"slides": slides, "files": [], "missing": []}
+        return {"slides": slides, "figures": figures, "files": [], "missing": []}
     moves: dict[str, str] = {}
     written: list[Path] = []
     missing: list[str] = []
     seen: set[str] = set()
-    for reference in references({"slides": slides}, origin):
+    for reference in references({"slides": slides, "figures": figures}, origin):
         name = reference.name.strip()
         if not name or name in seen:
             continue
@@ -87,8 +91,9 @@ def brought(slides: list[Any], source: str | Path, base: Path) -> dict[str, Any]
         written += _copied({f"{folder}/{key}": path for key, path in files.items()}, here)
         if own is not None:
             moves[name] = f"{folder}/{own}{page}"
-    renamed = _renamed(slides, moves) if moves else slides
-    return {"slides": renamed, "files": written, "missing": missing}
+    if moves:
+        slides, figures = _renamed(slides, moves), _renamed(figures, moves)
+    return {"slides": slides, "figures": figures, "files": written, "missing": missing}
 
 
 def _own(name: str, role: str, origin: Path) -> tuple[str | None, str]:

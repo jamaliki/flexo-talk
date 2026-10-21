@@ -1204,8 +1204,9 @@ def _bring_slides(document: dict[str, Any], action: dict[str, Any], base: Path) 
     if source.resolve() != base.resolve() and sessions.find(source) is None:
         raise EditError("The deck these slides were copied from is no longer open, "
                         "so the files they name could not be brought.")
-    made = brought(slides, source, base)
-    return {"document": document, "slides": made["slides"], "missing": made["missing"],
+    figures = action.get("figures") if isinstance(action.get("figures"), dict) else None
+    made = brought(slides, source, base, figures)
+    return {"document": document, "slides": made["slides"], "figures": made["figures"], "missing": made["missing"],
             "uploaded": [str(path) for path in made["files"]]}
 
 
