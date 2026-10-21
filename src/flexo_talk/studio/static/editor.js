@@ -5,7 +5,8 @@
 // the slides they touch flash in their colour.
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE, wedgeHead } from "/static/studio/studio.js";
-import { copyOut, copiedHere, pastedOwn, pastedGif } from "/static/studio/studio.js";
+import { copyOut, copiedHere, pastedOwn, pastedGif, pastedOwnWords, heldData } from "/static/studio/studio.js";
+import { deckFolder, broughtSlides } from "/static/kinds/deck/pastedslides.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
@@ -7207,8 +7208,9 @@ export function mount(studio, container) {
     // The slide itself only when the slides have the keys (a thumbnail clicked last).
     if (!railList.contains(document.activeElement)) return null;
     const chosen = chosenSlides();
-    if (chosen.length > 1) return { what: "slides", slides: chosen.map((index) => structuredClone(slides()[index])), indices: chosen, label: `${chosen.length} slides` };
-    return { what: "slide", slide: structuredClone(slide), label: "slide" };
+    // (Where the deck is goes with them: pasted in a deck of another folder, their files come too.)
+    if (chosen.length > 1) return { what: "slides", slides: chosen.map((index) => structuredClone(slides()[index])), indices: chosen, label: `${chosen.length} slides`, from: deckFolder(studio) };
+    return { what: "slide", slide: structuredClone(slide), label: "slide", from: deckFolder(studio) };
   }
   function plainOf(clip) {
     if (clip.what === "mixed") return clipsOf(clip).map((one) => plainOf(one)).filter(Boolean).join("\n");
@@ -7310,13 +7312,17 @@ export function mount(studio, container) {
     keyed = null;
     // (Words typed in, or a field that took the paste itself, are not the slide's.)
     if (!studio.active || typingNow() || event.defaultPrevented) return;
-    const data = event.clipboardData;
+    let data = event.clipboardData;
     let clip = null;
     try { clip = JSON.parse(data?.getData(CLIP) || "null"); } catch { clip = null; }
     // A clipboard that keeps only words: what was copied here, if they are its words.
     if (!clip && clipboard && data?.getData("text/plain") === plainOf(clipboard)) clip = clipboard;
     // (Copied in another of the studio's documents, where the clipboard keeps its words alone.)
     if (!clip) clip = copiedHere(data);
+    // (Several slides copied in a window of another folder, in the Mac app: their words alone
+    // come, Flexo's own copy beside them on the clipboard, asked for -- clipboard.js.)
+    const theirs = !clip && pastedOwnWords(data);
+    if (theirs) { event.preventDefault(); data = heldData(data); clip = await theirs; }
     if (clip) { event.preventDefault(); pasteClip(clip); return; }
     const files = [...(data?.files || [])], at = state.focus ? { kind: "block", ...state.focus } : null;
     // A drawing copied in another app (Inkscape's) is pasted as its SVG -- its lines and words
@@ -7405,17 +7411,20 @@ export function mount(studio, container) {
     if (clip.what === "mixed") { mixed.paste(clip); return; }
     // Shapes, on the slide shown, whatever its layout: a slide of any kind may have them.
     if (clip.what === "shapes" && Array.isArray(clip.shapes) && clip.shapes.length) { freeShapes.paste(clip); return; }
-    if (clip.what === "slides") {
-      const at = Math.min(Math.max(...chosenSlides()) + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => copyOf(slide))); },
-        { label: clip.slides.length === 1 ? "Paste Slide" : `Paste ${clip.slides.length} Slides` });
-      select(at);
-      state.picked = clip.slides.map((_, n) => at + n);
-      renderRail();
-    } else if (clip.what === "slide") {
-      const at = Math.min(state.slide + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, copyOf(clip.slide)); }, { label: "Paste Slide" });
-      select(at);
+    if (clip.what === "slides" || clip.what === "slide") {
+      // From a deck of another folder, the files they name come first, into this one's
+      // (pastedslides.js); then they are put after the slide chosen (the last of several), in
+      // one step, and chosen.
+      const given = clip.what === "slides" ? clip.slides : [clip.slide];
+      if (!Array.isArray(given) || !given.length || !given.every(Boolean)) return;
+      broughtSlides(studio, given, clip.from).then((brought) => {
+        const at = Math.min(Math.max(...chosenSlides()) + 1, slides().length);
+        studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...brought.map((slide) => copyOf(slide))); },
+          { label: brought.length === 1 ? "Paste Slide" : `Paste ${brought.length} Slides` });
+        select(at);
+        state.picked = brought.length > 1 ? brought.map((_, n) => at + n) : [];
+        renderRail();
+      });
     } else if (clip.what === "block") {
       if (logoRoom(slideAt()) && kindOf(clip.block) === "image" && clip.block.image) { addLogos([clip.block.image], null, { pasted: true }); return; }
       if (!regionsOf(slideAt()).length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
