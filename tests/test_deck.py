@@ -269,19 +269,61 @@ def test_a_line_that_inhibits_or_catalyses_keeps_its_head_in_powerpoint(tmp_path
         assert line is not None and line.group(0).count("<a:custGeom>") >= 2, head
 
 
+def test_a_straight_and_a_bent_arrow_have_heads_the_same_size_in_powerpoint(tmp_path: Path) -> None:
+    """A straight arrow is PowerPoint's connector, its head a line end; a bent one ending at
+    words is drawn as Flexo drew it, its head a shape. PowerPoint draws a line end on a line
+    thinner than 2 pt as on a 2 pt line, so on a thin line the connector's head is its small
+    or medium one, the size of the drawn head -- not its large one, twice that."""
+
+    from flexo_talk.document import deck_from_document
+
+    nodes = [{"id": "states", "label": "States"}, {"id": "compare", "label": "Does the ensemble\nreach every state?"},
+             {"id": "keep", "kind": "text", "label": "Yes, keep the motif"},
+             {"id": "drop", "kind": "text", "label": "No, filter it out"}]
+    groups = [{"id": "verdicts", "role": "layout", "layout": {"kind": "column", "gap": 18, "align": "start"},
+               "children": ["keep", "drop"]},
+              {"id": "root", "role": "canvas", "layout": {"kind": "row", "gap": 74, "align": "center"},
+               "children": ["states", "compare", "verdicts"]}]
+    edges = [{"from": "states", "to": "compare"}, {"from": "compare", "to": "keep"}, {"from": "compare", "to": "drop"}]
+    figure = {"figure": {"id": "f", "line_width": 0.5, "head_size": 0.5}, "nodes": nodes, "groups": groups,
+              "edges": edges}
+    document = {"deck": {"id": "heads", "conventions": {"arrowheads": "triangle"}},
+                "slides": [{"title": "Heads", "body": [{"figure": figure}]}]}
+    xml = _slides(deck_from_document(document, tmp_path).build(tmp_path, formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
+    emu = 12700.0
+    straight = re.search(r'<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="\d+" name="Line from States to [^"]*"/>.*?</p:cxnSp>',
+                         xml, re.S)
+    assert straight is not None
+    width = int(re.search(r'<a:ln w="(\d+)"', straight.group(0)).group(1)) / emu  # type: ignore[union-attr]
+    end = re.search(r'<a:tailEnd type="triangle" w="(\w+)" len="(\w+)"/>', straight.group(0))
+    assert end is not None and width < 2.0
+    share = {"sm": 2.0, "med": 3.0, "lg": 5.0}
+    # PowerPoint's head, as it draws it: so many times the line's width, of at least 2 pt.
+    drawn_by_powerpoint = (share[end.group(2)] * max(width, 2.0), share[end.group(1)] * max(width, 2.0))
+    heads = [(int(cx) / emu, int(cy) / emu) for cx, cy in re.findall(
+        r'name="Arrowhead"/>(?:(?!</p:sp>).)*?<a:ext cx="(\d+)" cy="(\d+)"', xml, re.S)]
+    assert len(heads) == 2 and heads[0] == pytest.approx(heads[1])
+    for drawn, made in zip(heads[0], drawn_by_powerpoint, strict=True):
+        assert 1 / 1.3 <= made / drawn <= 1.3, (heads[0], drawn_by_powerpoint)
+
+
 def test_a_dot_or_diamond_head_is_a_slide_programs_own_line_end_round_the_lines_end(tmp_path: Path) -> None:
     from flexo_talk.document import deck_from_document
 
-    nodes = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
-    edges = [{"from": "a", "to": "b", "arrow": "both", "head": "diamond", "tail": "dot"}]
+    nodes = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}, {"id": "c", "label": "C"}]
+    edges = [{"from": "a", "to": "b", "arrow": "both", "head": "dot", "tail": "dot"},
+             {"from": "b", "to": "c", "head": "diamond"}]
     figure = {"figure": {"id": "f"}, "nodes": nodes, "edges": edges}
     deck = deck_from_document({"deck": {"id": "ends"}, "slides": [{"title": "Ends", "body": [{"figure": figure}]}]},
                               tmp_path)
     xml = _slides(deck.build(tmp_path, formats=("pptx",)).pptx)[0]  # type: ignore[arg-type]
-    assert re.findall(r'<a:(headEnd|tailEnd) type="(\w+)"', xml) == [("headEnd", "oval"), ("tailEnd", "diamond")]
+    assert re.findall(r'<a:(headEnd|tailEnd) type="(\w+)"', xml) == [("headEnd", "oval"), ("tailEnd", "oval")]
     # One connector, its heads the slide program's own: neither is drawn as a shape of its own.
     line = re.search(r"<p:cxnSp>.*?</p:cxnSp>", xml, re.S)
-    assert line is not None and "<a:custGeom>" not in line.group(0)
+    assert line is not None and "<a:custGeom>" not in line.group(0) and 'name="Line from A to B"' in line.group(0)
+    # A diamond half as long again as PowerPoint's largest is drawn as Flexo drew it, not shrunk to that.
+    diamond = re.search(r'<p:grpSp><p:nvGrpSpPr><p:cNvPr id="\d+" name="Line from B to C"/>.*?</p:grpSp>', xml, re.S)
+    assert diamond is not None and 'name="Arrowhead"' in diamond.group(0) and "End type=" not in diamond.group(0)
 
 
 def test_a_frames_part_in_a_group_is_the_frame_cut_to_the_group_in_powerpoint(tmp_path: Path) -> None:
