@@ -855,20 +855,21 @@ PLACED_REACH = 10_000.0
 placed: well off the slide, where a person may put one aside, but no further."""
 
 
-def placed_at(value: object) -> tuple[float, float]:
-    """Where an object placed on the slide stands (``at``): its top left, ``[x, y]`` in the
-    units the slide's shapes are placed in. A ``SettingError`` for anything else."""
+def placed_at(value: object, key: str = "at", what: str = "the object's") -> tuple[float, float]:
+    """Where an object placed on the slide stands (``at``; the people beside its title,
+    ``people_at``): its top left, ``[x, y]`` in the units the slide's shapes are placed in.
+    A ``SettingError`` for anything else."""
 
     import math
 
-    said = "at must be the object's top left on the slide, [x, y] in points from its top left (a slide is 960 across)"
+    said = f"{key} must be {what} top left on the slide, [x, y] in points from its top left (a slide is 960 across)"
     if isinstance(value, str | bytes) or not isinstance(value, Sequence) or len(value) != 2:
-        raise SettingError("at", f"{said}, such as [80, 120], not {value!r}.")
+        raise SettingError(key, f"{said}, such as [80, 120], not {value!r}.")
     for item in value:
         if isinstance(item, bool) or not isinstance(item, int | float) or not math.isfinite(item):
-            raise SettingError("at", f"{said}, such as [80, 120], not {list(value)!r}.")
+            raise SettingError(key, f"{said}, such as [80, 120], not {list(value)!r}.")
         if abs(item) > PLACED_REACH:
-            raise SettingError("at", f"{said}, each within {PLACED_REACH:,.0f} of it, not {list(value)!r}.")
+            raise SettingError(key, f"{said}, each within {PLACED_REACH:,.0f} of it, not {list(value)!r}.")
     return float(value[0]), float(value[1])
 
 
@@ -1808,6 +1809,9 @@ class Slide:
         self.people_size: float | None = None
         """How wide each of its portraits is, in points (``size_people``); None, as wide as
         its look's title sets them."""
+        self.people_at: tuple[float, float] | None = None
+        """Where its people stand when placed freely (``place_people``): the row's top left,
+        in the units its shapes are placed in; None, beside the title."""
         if layout == "columns":
             count = len(widths) if widths else columns
             if count < 1:
@@ -2012,6 +2016,16 @@ class Slide:
         still made smaller together to fit their share of the width."""
 
         self.people_size = None if size is None else _number(size, "people_size", *PEOPLE_SIZES, "96 (points)")
+        return self
+
+    def place_people(self, at: Sequence[float] | None) -> Slide:
+        """The people beside the title placed freely, as an object is (``at``): the row's
+        top left (its first portrait's slot, its portraits' top) at ``[x, y]`` in the units
+        the slide's shapes are placed in (``people_at`` in a document); ``None``, beside the
+        title again. Placed, they stand there together, the title no longer wrapping short
+        of them (unless they still stand beside its words) and the header no taller for them."""
+
+        self.people_at = None if at is None else placed_at(at, "people_at", "the people's")
         return self
 
     def footnote(self, text: str) -> Slide:

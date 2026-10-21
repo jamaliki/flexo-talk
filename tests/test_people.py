@@ -392,3 +392,160 @@ def test_the_editor_sizes_a_slide_s_portraits_in_its_inspector_and_by_a_corner()
         assert hook in editor, hook
     assert '"Reset People Size"' in portraits and "requestAnimationFrame(sizeDraw)" in portraits
     assert 'event.key !== "Escape"' in portraits
+
+
+# -- placed freely: people_at --
+
+
+def test_people_at_is_read_checked_and_written_back_as_given(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    document = _deck(tmp_path, names, people_at=[760, 400.5])
+    deck = deck_from_document(document, tmp_path)
+    assert deck.slides[0].people_at == (760.0, 400.5)
+    assert deck_document(deck)["slides"][0]["people_at"] == [760, 400.5]
+    text = dump_document(deck_document(deck))
+    assert "people_at:\n  - 760\n  - 400.5\n" in text
+    from flexo_talk.document import parse_document
+
+    assert deck_from_document(parse_document(text), tmp_path).slides[0].people_at == (760.0, 400.5)
+    # Made in Python, as a document writes it; put back, no key.
+    made = Deck("made")
+    with made.slide(TITLE) as each:
+        each.person(tmp_path / names[0]).place_people((700, 420.25))
+    assert deck_document(made)["slides"][0]["people_at"] == [700, 420.25]
+    made.slides[0].place_people(None)
+    assert "people_at" not in deck_document(made)["slides"][0]
+    # The agent's guide says it, its catalogue lists it, its check says one wrong, and what it
+    # writes reads back.
+    kind = DeckKind()
+    assert "people_at: [x, y], the row's top left on the slide, placed freely" in kind.guide()
+    assert "people_at" in kind.catalog()["slide_keys"]["content"]
+    written = {"schema_version": 1, **_deck(tmp_path, names, people_at=[760, 400])}
+    assert kind.parse(kind.dump(written)) == written
+    assert kind.check(_deck(tmp_path, names, people_at="corner"), tmp_path) == [
+        "slides[0].people_at: people_at must be the people's top left on the slide, [x, y] in points from its "
+        "top left (a slide is 960 across), such as [80, 120], not 'corner'."]
+
+
+@pytest.mark.parametrize(("slide", "said"), [
+    ({"people_at": "corner"}, "people_at must be the people's top left on the slide"),
+    ({"people_at": [760]}, "such as [80, 120], not [760]."),
+    ({"people_at": [760, True]}, "such as [80, 120], not [760, True]."),
+    ({"people_at": [760, "low"]}, "such as [80, 120], not [760, 'low']."),
+    ({"people_at": [20000, 0]}, "each within 10,000 of it, not [20000, 0]."),
+    ({"layout": "section", "people_at": [10, 10]}, "A section slide has no title for people to stand beside"),
+])
+def test_a_people_at_said_wrong_is_said_under_its_key(tmp_path: Path, slide: dict, said: str) -> None:
+    names = _portraits(tmp_path)
+    document = _deck(tmp_path, names, **slide)
+    if slide.get("layout") == "section":
+        document["slides"][0].pop("body")
+        document["slides"][0].pop("people")
+    with pytest.raises(DeckDocumentError) as raised:
+        deck_from_document(document, tmp_path)
+    assert raised.value.where == "slides[0].people_at"
+    assert said in str(raised.value)
+
+
+def _layout(svg: str) -> dict:
+    title = _drawn(svg, r"slide1\.title")[0]
+    return {"wrap": float(title.get("data-flexo-wrap", "").split()[0]), "body": _box(_drawn(svg, r"slide1\.body")[0]),
+            "band": [_box(item) for item in _drawn(svg, r"slide1\.band")]}
+
+
+@pytest.mark.parametrize("look", ["classic", "band", "editorial"])
+def test_people_placed_freely_stand_where_they_say_and_leave_the_header_alone(tmp_path: Path, look: str) -> None:
+    names = _portraits(tmp_path)
+    long = "A title long enough to run the whole width of the slide when nothing stands beside it"
+    people = [{"image": names[0], "name": "Sam Pellock"}, {"image": names[1], "name": "Ana Ruiz"}]
+
+    def drawn(**slide: object) -> str:
+        document = _deck(tmp_path, people, title=long, **slide)
+        document["deck"]["look"] = look
+        deck = deck_from_document(document, tmp_path)
+        return compose.render_slide(deck, deck.slides[0]).svg
+
+    plain_document = _deck(tmp_path, None, title=long)
+    plain_document["deck"]["look"] = look
+    plain_deck = deck_from_document(plain_document, tmp_path)
+    alone = _layout(compose.render_slide(plain_deck, plain_deck.slides[0]).svg)
+    beside = _layout(drawn())
+    moved_svg = drawn(people_size=96, people_at=[700, 380])
+    moved = _layout(moved_svg)
+    # Beside the title, it wraps short of them, and the header grows to hold them.
+    assert beside["wrap"] < alone["wrap"]
+    # Placed in the lower right: the title as wide, the body and band where they would be with no people.
+    assert moved["wrap"] == pytest.approx(alone["wrap"])
+    assert moved["body"][1] == pytest.approx(alone["body"][1])
+    assert moved["band"] == alone["band"]
+    # The row's top left where it says (a slide 960 across: its points); the second beside the first.
+    boxes = [_box(item) for item in _drawn(moved_svg, r"slide1\.person\d")]
+    row = [float(value) for value in _drawn(moved_svg, r"slide1\.person0")[0].get("data-flexo-row", "").split()]
+    assert row[:2] == pytest.approx([700.0, 380.0])
+    assert boxes[0][1] == pytest.approx(380.0) and boxes[0][2] == pytest.approx(96.0)
+    assert 700.0 <= boxes[0][0] < boxes[1][0]
+    # Drawn after the body, over it, as a placed object is.
+    ids = [item.get("id", "") for item in ET.fromstring(moved_svg).iter()]
+    assert ids.index("slide1.person0") > max(k for k, value in enumerate(ids) if value.startswith("slide1.body"))
+    # Still beside the title's words, in the right half across from them, it wraps short of them.
+    nudged = _layout(drawn(people_at=[700, 30]))
+    assert nudged["wrap"] < alone["wrap"]
+    assert 48 + nudged["wrap"] + compose.PEOPLE_ROOM <= 700.01
+
+
+def test_the_powerpoint_puts_people_placed_freely_where_they_stand(tmp_path: Path) -> None:
+    names = _portraits(tmp_path)
+    deck = deck_from_document(_deck(tmp_path, [names[0], names[1]], people_size=80, people_at=[760, 420]), tmp_path)
+    result = deck.build(tmp_path / "out", formats=("pptx",))
+    slide = zipfile.ZipFile(result.pptx).read("ppt/slides/slide1.xml").decode()  # type: ignore[arg-type]
+    pictures = re.findall(r"<p:pic>.*?</p:pic>", slide, re.S)
+    offsets = [re.search(r'<a:off x="(-?\d+)" y="(-?\d+)"/>', picture) for picture in pictures]
+    assert len(offsets) == 2 and all(offsets)
+    first, second = ((int(found.group(1)), int(found.group(2))) for found in offsets if found)
+    assert first == (pytest.approx(760 * 12700, abs=2), pytest.approx(420 * 12700, abs=2))
+    assert second[1] == first[1] and second[0] == pytest.approx((760 + 80 * (1 + compose.PORTRAIT_GAP)) * 12700, abs=2)
+
+
+PEOPLE_AT_JS = """
+const out = {};
+const slide = { title: "A", people: ["a.png", "b.png"], people_size: 90 };
+out.none = peopleAt(slide);
+out.changed = [setPeopleAt(slide, [700.123, 40]), setPeopleAt(slide, [700.12, 40]), setPeopleAt(slide, [701, 40])];
+out.at = slide.people_at;
+out.read = peopleAt(slide);
+out.back = [setPeopleAt(slide, null), "people_at" in slide, setPeopleAt(slide, null)];
+setPeopleAt(slide, [10, 20]);
+removePerson(slide, 0);
+removePerson(slide, 0);
+out.leftover = ["people_at" in slide, "people_size" in slide];
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_the_editor_places_people_and_puts_them_back_as_written() -> None:
+    script = Path(__file__).parents[1] / "src/flexo_talk/studio/static/peoplelist.js"
+    code = f"import {{ peopleAt, setPeopleAt, removePerson }} from {json.dumps(script.as_uri())};\n{PEOPLE_AT_JS}"
+    done = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, check=True)
+    found = json.loads(done.stdout)
+    assert found["none"] is None
+    # To a hundredth, as an object's place is written; the same place again, no change.
+    assert found["changed"] == [True, False, True] and found["at"] == [701, 40] and found["read"] == [701, 40]
+    assert found["back"] == [True, False, False]
+    # None left, no place for them either.
+    assert found["leftover"] == [False, False]
+
+
+def test_the_editor_moves_a_slide_s_people_on_it_and_puts_them_back() -> None:
+    static = Path(__file__).parents[1] / "src/flexo_talk/studio/static"
+    editor, people = (static / "editor.js").read_text("utf-8"), (static / "people.js").read_text("utf-8")
+    portraits, placing = (static / "portraits.js").read_text("utf-8"), (static / "placing.js").read_text("utf-8")
+    # Caught where an object would be: placing.js's carrier, given to the portraits.
+    assert "carry: () => objects.carrier()" in editor and "function carrier()" in placing
+    for label in ('"Move People"', '"Put People Back in Line"'):
+        assert label in people
+    assert 'label: "Put People Back in Line"' in portraits and "people.putBack()" in portraits
+    # Drawn here as they are dragged, one frame at a time; Esc puts them back; placed, the arrows nudge them.
+    assert "requestAnimationFrame(() => { if (moving === g)" in portraits
+    assert 'event.key === "Escape"' in portraits and "moveCancel()" in portraits
+    assert "nudge(event)" in portraits and "people-nudge-" in portraits

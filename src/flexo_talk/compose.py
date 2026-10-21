@@ -179,6 +179,9 @@ class _Canvas:
         self.foot: tuple[str, float] | None = None
         """The picture set last that has words under it -- a caption, or names set under its
         drawings -- and where it ends: ``(id, y)`` (see ``_feet``)."""
+        self.people_placed: tuple[Any, bool, str] | None = None
+        """The people beside the title placed freely (``Slide.people_at``), to be drawn over
+        the body once it is set: the row, whether its names are on the band, their role."""
         self.free: ET.Element | None = None
         """The group the slide's objects placed where they say (``Region.at``) are drawn in:
         over what its places lay out, under its shapes (see ``_free``)."""
@@ -709,6 +712,11 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
             _agenda(canvas, slide, body)
         else:
             _regions(canvas, slide, body)
+        if canvas.people_placed is not None:
+            # (Placed freely, they are over the slide's objects, as a placed object is.)
+            people, on_band, role = canvas.people_placed
+            with _on_field(canvas) if on_band else contextlib.nullcontext():
+                _people(canvas, slide, people, band=on_band, role=role)
     # Set first, for the body to end above them, footnotes are read after it: they follow it
     # in the drawing (which the PDF's reading order and the PowerPoint's follow).
     notes = [child for child in canvas.layer if child.get("id", "").startswith(f"{slide.id}.footnote")]
@@ -875,25 +883,51 @@ def _heading(canvas: _Canvas, slide: Slide) -> float:
     # The people beside the title stand at its right end: its words (and the subtitle's)
     # wrap short of them -- a centred title kept centred, as far in from each side.
     people = _people_row(canvas, slide, span)
+    placed = people is not None and slide.people_at is not None
     left, words_span = margin, span
-    if people:
+    if people and not placed:
         clear = people.width + PEOPLE_ROOM
         left, words_span = ((margin + clear, span - 2 * clear) if style.title_align == "middle"
                             else (margin, span - clear))
-    heading = canvas.measure(slide.title_runs, style.title_size, words_span, weight, title=True)
-    under = (
-        canvas.measure(slide.subtitle_runs, style.subtitle_size, words_span).height + 4.0
-        if slide.subtitle_runs else 0.0
-    )
-    top = margin
+
+    def measured(across: float) -> tuple[Any, float]:
+        heading = canvas.measure(slide.title_runs, style.title_size, across, weight, title=True)
+        under = (
+            canvas.measure(slide.subtitle_runs, style.subtitle_size, across).height + 4.0
+            if slide.subtitle_runs else 0.0
+        )
+        return heading, under
+
+    heading, under = measured(words_span)
+    first = margin * 0.7 if style.header == "band" else margin
+    x = y = 0.0
+    if people and placed:
+        # Placed freely (people_at, the row's top left in the shapes' units): there, the
+        # header no taller for them, nor the body moved down. The title takes the whole width
+        # -- unless they still stand beside its words, in the right half of the slide across
+        # from them: then it wraps short of them, as it does of the people in their place.
+        scale = width / SHAPE_FRAME
+        x, y = (value * scale for value in slide.people_at or (0.0, 0.0))
+        people.place(x + people.width, y + people.size / 2.0)
+        if y < first + heading.height + under and people.bottom > first and margin + span / 2.0 < x < width - margin:
+            clear = width - margin - x + PEOPLE_ROOM
+            narrower = span - 2 * clear if style.title_align == "middle" else span - clear
+            if narrower >= span * PEOPLE_NARROWEST:
+                left, words_span = (margin + clear if style.title_align == "middle" else margin), narrower
+                heading, under = measured(words_span)
+    top = first
     role, subtitle_role = style.title_role, "muted-ink"
     band = 0.0
     if style.header == "band":
         # The title on a band of the accent across the top of the slide.
-        top = margin * 0.7
         band = top + heading.height + under + margin * 0.5
     # The portraits' middle on the middle of the title's words (and the subtitle's under it).
     people_bottom = 0.0
+    if people and placed:
+        # (Drawn over the body, once it is set; their names in the band's words on the band.)
+        on_band = style.header == "band" and y < band
+        canvas.people_placed = (people, on_band, _words_on(canvas) if on_band else role)
+        people = None
     if people:
         # (Portraits taller than the title and subtitle stand no nearer the slide's top than
         # half its margin: their middle comes down, the words where they are.)
@@ -2122,6 +2156,9 @@ PEOPLE_SHARE = 0.42
 """The most of the width between the margins the people beside a title may take."""
 PEOPLE_TOP = 0.5
 """How near the slide's top portraits may stand, as a share of its margin."""
+PEOPLE_NARROWEST = 0.4
+"""How little of the width between the margins a title may be left by people placed freely
+beside its words, as a share of it; any less, and it takes the whole width under them."""
 PEOPLE_ROOM = 20.0
 """The room kept clear between the title's words and the people beside them, in points."""
 PEOPLE_CLEAR = 14.0
@@ -2161,9 +2198,13 @@ class _People:
     bottom: float = 0.0
     default: float = 0.0
     """How wide its portraits are when the slide sets no size (``people_size``)."""
+    left: float = 0.0
+    top: float = 0.0
+    """Where the row stands once placed: its first slot's left, its portraits' top."""
 
     def place(self, right: float, middle: float) -> None:
         x = right - self.width
+        self.left, self.top = x, middle - self.size / 2.0
         self.bottom = middle + self.size / 2.0
         for portrait in self.portraits:
             centre = x + portrait.across / 2.0
@@ -2251,6 +2292,9 @@ def _people(canvas: _Canvas, slide: Slide, people: _People, *, band: bool, role:
     on a band, in the band's words, a little faint. One whose picture is not there (or does
     not read) is a quiet dashed circle saying so, while editing."""
 
+    # (Where the row stands, its top left and how far it reaches, in the slide's points: the
+    # studio moves them from there, placed freely -- people_at.)
+    row = " ".join(number(value) for value in (people.left, people.top, people.width, people.bottom - people.top))
     for portrait in people.portraits:
         identifier = f"{slide.id}.person{portrait.index}"
         box = portrait.box
@@ -2258,7 +2302,7 @@ def _people(canvas: _Canvas, slide: Slide, people: _People, *, band: bool, role:
             continue
         if portrait.artwork is None:
             group = element(canvas.layer, "g", id=identifier, data__flexo__talk="missing",
-                            data__flexo__default=number(people.default))
+                            data__flexo__default=number(people.default), data__flexo__row=row)
             ink = canvas.palette.get("muted-ink")
             element(
                 group, "ellipse", id=f"{identifier}.box", cx=box.x + box.width / 2.0, cy=box.y + box.height / 2.0,
@@ -2284,6 +2328,7 @@ def _people(canvas: _Canvas, slide: Slide, people: _People, *, band: bool, role:
             canvas.layer[-1].set("data-flexo-talk", "person")
             # (The studio sizes them from here, and back to this.)
             canvas.layer[-1].set("data-flexo-default", number(people.default))
+            canvas.layer[-1].set("data-flexo-row", row)
         if portrait.person.name:
             # (On the band, its words a little faint, as muted words are on the page.)
             parent = element(canvas.layer, "g", id=f"{identifier}.name-group", opacity=0.8) if band else None

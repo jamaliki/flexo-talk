@@ -751,7 +751,47 @@ export function placing(ctx) {
     return out;
   }
 
+  // -- another's drag, caught as an object's is --
+
+  // For what is dragged on the slide that is none of its objects (the people beside its title:
+  // portraits.js): the screen read once, as it is for an object's drag. `units(x, y)`: a point
+  // on the screen in the shapes' units. `step(event, box, dx, dy)`: the box dragged
+  // ([left, top, right, bottom], where it was) and how far the pointer has gone, both in those
+  // units, caught where an object's would be (⇧ along one way, ⌘ free: the slide's edges and
+  // middles, its objects' and shapes', even spacing, the grid), its guides drawn: [dx, dy].
+  // `say(text, event)` beside the pointer; `end()` puts them away.
+  function carrier() {
+    hold();
+    held.scales = {};
+    attach();
+    const targets = targetsFor(new Set(), []), spacing = Align.spacing(targets.boxes);
+    return {
+      units: (x, y) => toUnits(x, y),
+      scale: () => ctx.scale(),
+      step(event, box, dx, dy) {
+        guides.replaceChildren();
+        if (event.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
+        if (!Snap.free(event) && box) {
+          const [x0, y0, x1, y1] = box;
+          let across = event.shiftKey && dx === 0 ? null : catchAt([x0 + dx, (x0 + x1) / 2 + dx, x1 + dx], targets.xs);
+          let down = event.shiftKey && dy === 0 ? null : catchAt([y0 + dy, (y0 + y1) / 2 + dy, y1 + dy], targets.ys);
+          const even = spacing.caught([x0 + dx, y0 + dy, x1 + dx, y1 + dy], NEAR / unit(), { x: !(event.shiftKey && dx === 0), y: !(event.shiftKey && dy === 0) });
+          [across, even.x] = nearer(across, even.x);
+          [down, even.y] = nearer(down, even.y);
+          if (across) { dx += across.gap; guide("x", across.at, Beside.besideAt(targets, "x", across.at)); } else if (even.x) dx += even.x.shift;
+          if (down) { dy += down.gap; guide("y", down.at, Beside.besideAt(targets, "y", down.at)); } else if (even.y) dy += even.y.shift;
+          const now = [x0 + dx, y0 + dy, x1 + dx, y1 + dy];
+          drawSpacing(guides, [...spacing.marks(even.x, now), ...spacing.marks(even.y, now)], 1 / unit(), S);
+        }
+        return [dx, dy];
+      },
+      say: (text, event) => say(text, event),
+      end() { guides.replaceChildren(); tip.hidden = true; held = null; },
+    };
+  }
+
   return {
+    carrier,
     placed, frameOf, boxOf, press, pressShape, size, nudge, drawn, attach, putBack, placeFreely, lock, moveWith, commands, arrangePanel, mixedFields,
     reveal: () => arranging.reveal(), align: (side) => arranging.align(side),
     showMoves: (moves) => showMoves(moves ? moves.map(({ pick, dx, dy }) => ({ key: keyOf(pick), dx, dy })) : null),

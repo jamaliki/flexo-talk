@@ -3,11 +3,12 @@
 // Remove; dragged up or down (⌥↑ ⌥↓ with its row's keys) to stand elsewhere in the row -- Add
 // Person…, which chooses or uploads a picture as Add Logo… does; Size, how wide every portrait
 // on the slide is (as a corner of one chosen on the slide sizes them: portraits.js); the
-// palette's "Add Person to Title…" and "Reset People Size"; and pictures dropped on the slide's
-// title, each a person added. Each change is one step, named for what it does.
+// palette's "Add Person to Title…", "Reset People Size" and "Put People Back in Line" (once
+// they are placed freely, dragged on the slide: portraits.js); and pictures dropped on the
+// slide's title, each a person added. Each change is one step, named for what it does.
 
 import { h, ui, icon, toast } from "/static/studio/studio.js";
-import { canHavePeople, peopleOf, addPeople, removePerson, movePerson, renamePerson, peopleSize, setPeopleSize } from "/static/kinds/deck/peoplelist.js";
+import { canHavePeople, peopleOf, addPeople, removePerson, movePerson, renamePerson, peopleSize, setPeopleSize, peopleAt, setPeopleAt } from "/static/kinds/deck/peoplelist.js";
 
 // `deck`, the editor's: { editSlide(mutate, options), slideAt(), slide() (its index),
 // chooseFile({ title, types, action }), awayFrom(what), renderInspector(), undoNote(text,
@@ -86,6 +87,19 @@ export function slidePeople(studio, deck) {
     return true;
   }
   const resetSize = () => peopleSize(deck.slideAt()) !== null && resize(null);
+  // Placed freely, the row's top left at `at` (the shapes' units: portraits.js drags and
+  // nudges them), one step -- the presses of a run of nudges one (`merge`); null, Put People
+  // Back in Line. Whether that changed it.
+  function placeAt(at, { merge = null } = {}) {
+    const slide = deck.slideAt();
+    if (!canHavePeople(slide) || !peopleOf(slide).length || deck.awayFrom("move people")) return false;
+    if (!setPeopleAt(structuredClone(slide), at)) return false;
+    const label = at ? "Move People" : "Put People Back in Line";
+    deck.editSlide((s) => { setPeopleAt(s, at); }, merge ? { label, merge, hold: true } : { label });
+    deck.renderInspector();
+    return true;
+  }
+  const putBack = () => peopleAt(deck.slideAt()) !== null && placeAt(null);
 
   // The one chosen on the slide, marked in its row (portraits.js says which: `choosing`).
   let chosen = () => null;
@@ -149,7 +163,8 @@ export function slidePeople(studio, deck) {
 
   // The palette's: named as the Mac app's Insert menu would name it.
   const commands = () => (canHavePeople(deck.slideAt()) ? [{ icon: "image", label: "Add Person to Title…", run: () => add() },
-    ...(peopleSize(deck.slideAt()) !== null ? [{ icon: "undo", label: "Reset People Size", run: () => resetSize() }] : [])] : []);
+    ...(peopleSize(deck.slideAt()) !== null ? [{ icon: "undo", label: "Reset People Size", run: () => resetSize() }] : []),
+    ...(peopleAt(deck.slideAt()) !== null ? [{ icon: "layout", label: "Put People Back in Line", run: () => putBack() }] : [])] : []);
 
   // Whether `event` (a drag of files) is over the slide's title -- its words, its band, the
   // people beside it -- on a slide that may have people: there, pictures are people.
@@ -182,6 +197,7 @@ export function slidePeople(studio, deck) {
     return true;
   }
 
-  return { controls, commands, add, overTitle, dropped, room: canHavePeople, remove, move, resize, resetSize, defaultSize, sizes,
+  return { controls, commands, add, overTitle, dropped, room: canHavePeople, remove, move, resize, resetSize, defaultSize, sizes, placeAt, putBack,
+    placed: () => peopleAt(deck.slideAt()),
     choosing: (which) => { chosen = which; } };
 }

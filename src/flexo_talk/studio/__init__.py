@@ -171,7 +171,7 @@ FIELD_LABELS = {
     "by": "Attribution", "notes": "Notes", "footnotes": "Footnotes", "background": "Background",
     "shade": "Background", "layout": "Layout", "columns": "Columns", "widths": "Columns", "split": "Columns",
     "dark": "Background", "align": "Content Position", "skip": "Skip Slide", "rows": "Row Labels",
-    "people": "People", "people_size": "People",
+    "people": "People", "people_size": "People", "people_at": "People",
     "logos": "Logos", "logos_on": "Logos", "logo_height": "Logos",
 }
 """What the studio calls a slide's settings, where a message names one."""
@@ -340,7 +340,8 @@ class DeckKind:
             + f"\nEvery slide may also take: {', '.join(COMMON_KEYS)}.\nLayouts and their keys:\n{layouts}"
             + "\npeople: portraits at the title's right end, each a picture file or {image, name}; people_size: "
             f"how wide each of the slide's portraits is, in points ({PEOPLE_SIZES[0]:g} to {PEOPLE_SIZES[1]:g}; "
-            "none, nearly two lines of the title)."
+            "none, nearly two lines of the title); people_at: [x, y], the row's top left on the slide, placed "
+            "freely as a block's at is (none, beside the title, which wraps short of them)."
             + f"\nBlocks:\n{blocks}\nEvery block also takes: {', '.join(BLOCK_KEYS)} (at: [x, y], placed on the slide "
             "out of its place's flow, its width its width there, in shape units).\n"
             + f"Deck settings: {', '.join(DECK_KEYS)}. logos: picture files (an institution's, its funders'), "

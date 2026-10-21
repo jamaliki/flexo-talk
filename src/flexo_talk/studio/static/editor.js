@@ -2014,7 +2014,7 @@ export function mount(studio, container) {
     swallowRelease: (held) => swallowRelease(held), free: (event) => Snap.free(event), putHeld: () => putHeld(), dropHeld: () => { drawingHeld = false; },
     clearChoice: () => { closeInline(); freeShapes.clear({ quiet: true }); leaveFigure(false); offRail(); allChosen = null; state.focus = null; state.field = null; state.logo = null; state.tab = "slide"; hover.hidden = true; },
     othersChosen: () => Boolean(state.focus || state.field || logoChosen() || allOn() || inline), refresh: () => { placeChosen(); renderInspector(); reportFocus(); },
-    menu: (point, items) => menu(point, items),
+    menu: (point, items) => menu(point, items), carry: () => objects.carrier(),
   });
   // The slide each drawing was made from, by the drawing (its hash).
   const drawnFrom = new Map();

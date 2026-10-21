@@ -18,10 +18,10 @@ export function peopleOf(slide) {
 }
 
 // The list written back: a person with no name as their file alone; none left, no key (nor
-// a size for them).
+// a size or a place for them).
 export function setPeople(slide, people) {
   const written = people.map(({ image, name }) => (String(name ?? "").trim() ? { image, name } : image));
-  if (written.length) slide.people = written; else { delete slide.people; delete slide.people_size; }
+  if (written.length) slide.people = written; else { delete slide.people; delete slide.people_size; delete slide.people_at; }
 }
 
 // How wide each of its portraits is (`people_size`, in points); null, as wide as the title
@@ -73,4 +73,21 @@ export function replacePortrait(slide, index, image) {
   if (index < 0 || index >= people.length) return;
   people[index] = { ...people[index], image };
   setPeople(slide, people);
+}
+
+// Where they stand placed freely (`people_at`: the row's top left, [x, y] in the units the
+// slide's shapes are placed in, as an object's `at` is); null, beside the title.
+export function peopleAt(slide) {
+  const value = slide?.people_at;
+  return Array.isArray(value) && value.length === 2 && value.every((item) => Number.isFinite(Number(item))) ? value.map(Number) : null;
+}
+
+// Placed at `at` (to a hundredth, as an object's place is written); null, back beside the
+// title. Whether that changed it.
+export function setPeopleAt(slide, at) {
+  const value = at ? at.map((item) => Math.round(Number(item) * 100) / 100) : null;
+  const was = peopleAt(slide);
+  if (value === null ? was === null : was !== null && was[0] === value[0] && was[1] === value[1]) return false;
+  if (value === null) delete slide.people_at; else slide.people_at = value;
+  return true;
 }
