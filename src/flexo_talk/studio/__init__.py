@@ -1602,14 +1602,19 @@ def _slide_pairs(old: list, new: list) -> list[tuple[str, Any, Any]]:
             if b in moves:
                 steps.append(("moved", moves[b], b))
                 continue
-            text = json.dumps(new[b], sort_keys=True, default=str)
-            best = max(((_likeness(old[i], text), i) for i in unused), default=(0.0, -1))
             placed = olds[fresh.index(b)] if len(olds) == len(fresh) else -1
             # (The one in its place with its title is itself, however much else changed: an
-            # object dragged from it to the slide beside it leaves each slide itself.)
+            # object dragged from it to the slide beside it leaves each slide itself -- and
+            # how alike the others are need not be asked: a slide of a drawing's shapes is
+            # tens of kilobytes, compared at every keystroke.)
             itself = placed in unused and _titled(old[placed]) == _titled(new[b]) != ""
-            if itself or (best[0] <= 0.5 and placed in unused and _kin(old[placed], new[b])):
+            if itself:
                 best = (1.0, placed)
+            else:
+                text = json.dumps(new[b], sort_keys=True, default=str)
+                best = max(((_likeness(old[i], text), i) for i in unused), default=(0.0, -1))
+                if best[0] <= 0.5 and placed in unused and _kin(old[placed], new[b]):
+                    best = (1.0, placed)
             if best[0] > 0.5:
                 unused.remove(best[1])
                 steps.append(("changed", best[1], b))

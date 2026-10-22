@@ -11,6 +11,7 @@ import pytest
 
 import flexo_talk.compose as compose
 import flexo_talk.document as document_module
+import flexo_talk.studio as studio
 from flexo_talk.studio import DeckKind
 
 PNG = bytes.fromhex(
@@ -96,3 +97,17 @@ def test_a_slide_taken_as_it_was_read_follows_its_files(tmp_path: Path) -> None:
     assert not [message for message in back.messages if message.severity == "error"]
     assert back.pages[7].svg == before.pages[7].svg
 
+
+def test_an_edit_to_a_slide_that_keeps_its_title_is_described_without_comparing_slides(monkeypatch) -> None:
+    def never(*args):
+        raise AssertionError("compared")
+
+    monkeypatch.setattr(studio, "_likeness", never)
+    shapes = [{"kind": "rectangle", "at": [10 * n, 10], "size": [5, 5]} for n in range(400)]
+    before = {"slides": [{"title": "Shapes", "shapes": shapes}, {"title": "After"}]}
+    after = copy.deepcopy(before)
+    after["slides"][0]["shapes"][3]["at"] = [31, 12]
+    notes = DeckKind().describe(before, after)
+    assert [note["where"]["page"] for note in notes] == [1]
+    moved = DeckKind().follow(before, after)
+    assert moved({"page": 1, "label": "Slide 1"}) == {"page": 1, "label": "Slide 1"}
