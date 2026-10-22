@@ -185,7 +185,8 @@
 .choose-band { position: absolute; z-index: 6; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 2px; pointer-events: none; }
 /* What is carried shows whole, past the slide's edge too (several stacked under the pointer). */
 .slide-page.block-dragging > svg { overflow: visible; }
-body.block-grabbing, body.block-grabbing * { cursor: grabbing !important; user-select: none; }
+/* (The closed hand on what the pointer is over, moved along with it: grabbing.js.) */
+body.block-grabbing .grab-here { cursor: grabbing !important; user-select: none; }
 .block-drop-zone, .block-drop-line { position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0; z-index: 6; transition: opacity 0.12s; }
 .block-drop-zone.on, .block-drop-line.on { transition: opacity 0.12s, left 0.1s, top 0.1s, width 0.1s, height 0.1s; }
 .block-drop-zone { border: 1.5px dashed var(--accent-line); border-radius: 6px; background: var(--accent-soft); }

@@ -41,6 +41,7 @@ import { deckTodos } from "/static/kinds/deck/todos.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
+import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 
 const BLOCKS = {
@@ -574,6 +575,7 @@ export function mount(studio, container) {
   if (!document.querySelector('link[href="/static/kinds/deck/editor.css"]')) {
     document.head.append(h("link", { rel: "stylesheet", href: "/static/kinds/deck/editor.css" }));
   }
+  grabbingHand();
   const catalog = studio.catalog;
   const layouts = LAYOUT_ORDER.map((name) => catalog.layouts.find((layout) => layout.name === name)).filter(Boolean);
   // The names the catalogue gives layouts, over the ones written here.
