@@ -746,12 +746,16 @@ class DeckKind:
         # drawn again with the best.
         settle = bool((hints or {}).get("settle"))
         started = time.perf_counter()
-        drawn_one = False
-        for index in _order(len(slides), focus):
+        drawn_one = drawn_first = False
+        order = _order(len(slides), focus)
+        for index in order:
             known = self._slides.get(keys[index])
             if index in failed or (known is not None and (known.get("settled", True) or not settle)):
                 continue
-            if drawn_one and time.perf_counter() - started > BUDGET:
+            # The slide in focus drawn, it is sent at once, alone: the page has it while the
+            # others are drawn (asked for next) -- a deck opened shows its first slide without
+            # waiting for the protein two slides on.
+            if drawn_one and (time.perf_counter() - started > BUDGET or (not settle and drawn_first)):
                 break
             slide = deck.slides[index]
             give_up_if_newer()  # (a settling given up for a change: flexo.draft)
@@ -775,6 +779,7 @@ class DeckKind:
                 EDITING.reset(editing)
                 PLACEHOLDERS.reset(placeholders)
                 STANDING_ASIDE.reset(aside)
+            drawn_first = drawn_first or index == order[0]
             drawn_one = True
         # Slides with photos carry them inside: the cache is held to a size in bytes too.
         while len(self._slides) > CACHE_SIZE or (
