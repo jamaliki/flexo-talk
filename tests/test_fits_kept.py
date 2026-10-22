@@ -5,6 +5,7 @@ replaced in its file; only the most recently used are kept."""
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def test_a_layout_kept_by_another_version_is_laid_out_again_in_its_place(monkeyp
 
 def test_laid_out_figures_kept_are_the_most_recently_used(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(compose, "FITS_KEPT", 3)
-    folder = tmp_path / "fits"
+    folder = tmp_path / compose.LAYOUTS
     folder.mkdir()
     now = time.time()
     for number in range(6):
@@ -41,3 +42,37 @@ def test_laid_out_figures_kept_are_the_most_recently_used(tmp_path: Path, monkey
     (folder / "half.json.1.2.saving").write_text("{")
     compose._prune_fits(folder)
     assert sorted(item.name for item in folder.iterdir()) == ["3.json", "4.json", "5.json", "half.json.1.2.saving"]
+
+
+def test_the_layouts_kept_stay_within_their_bound_however_many_are_kept(tmp_path: Path, monkeypatch) -> None:
+    """Kept one after another (a deck edited all day), the laid-out figures never take more than
+    their bound but for those kept since the folder was last looked through; and the folder of
+    those kept by where their files were and when they were saved, never found again, goes at the
+    first look."""
+
+    monkeypatch.setenv("FLEXO_TALK_CACHE", str(tmp_path))
+    before = tmp_path / "fits"
+    before.mkdir()
+    (before / "0123.json").write_text("{}" * 50_000)
+    monkeypatch.setattr(compose, "FITS_SIZE", 64_000)
+    monkeypatch.setattr(compose, "FITS_PRUNED", 8)
+    monkeypatch.setattr(compose, "_FITS_KEPT_SINCE", [0])
+    entry = {"svg": "x" * 4_000}
+    one = 4_100  # (an entry's bytes, its version said, at most)
+    layouts = tmp_path / compose.LAYOUTS
+
+    def looked_through() -> None:
+        for thread in threading.enumerate():
+            if thread.name == "fits pruned":
+                thread.join()
+
+    for number in range(200):
+        compose._store_fit(("figure", number), entry)
+        looked_through()
+        size = sum(item.stat().st_size for item in layouts.glob("*.json"))
+        assert size <= compose.FITS_SIZE + compose.FITS_PRUNED * one
+    assert not before.exists()
+    compose._prune_fits(layouts)
+    assert sum(item.stat().st_size for item in layouts.glob("*.json")) <= compose.FITS_SIZE
+    # (The most recently kept kept.)
+    assert compose._cache_path(("figure", 199)).is_file()

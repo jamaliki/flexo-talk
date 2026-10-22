@@ -5610,12 +5610,22 @@ _DRAWN_FROM = frozenset({"source", "density", "ss_from"})
 PDF's page), a structure, its map, the structure it is coloured by."""
 
 
-def _drawn_from(spec: Any) -> tuple:
+class _Files(tuple):
+    """The files a figure is drawn from (``_drawn_from``): each its name as the figure names it,
+    and what stands for it in what the figure's layout is kept by (``_on_disk``) -- said by that
+    alone, as is the name wherever the figure names it (``_cache_path``)."""
+
+    def __repr__(self) -> str:
+        return repr(tuple(token for _, token in self))
+
+
+def _drawn_from(spec: Any) -> _Files:
     """What a figure is drawn from besides its words: each file its parts read -- a picture,
     a structure and its map (``_DRAWN_FROM``) -- and the pictures among the shapes drawn over
-    it, as the disk has each now (``_on_disk``). In the key a figure laid out for a box is kept
+    it, as what is in each now (``_on_disk``). In the key a figure laid out for a box is kept
     by, in memory and between builds: one of them edited (a picture's viewBox changed, a
-    structure saved again), the figure is laid out afresh. A plot's files are its own
+    structure saved again otherwise), the figure is laid out afresh; one saved again as it was,
+    or the deck unpacked afresh elsewhere, finds it as it was. A plot's files are its own
     (``_plots_from``)."""
 
     found = []
@@ -5630,30 +5640,35 @@ def _drawn_from(spec: Any) -> tuple:
             from flexo.shape_pictures import sources
 
             found += [_on_disk(source) for source in sources([shape.spec])]
-    return tuple(found)
+    return _Files(found)
 
 
-def _on_disk(name: str) -> tuple:
-    """A file a figure names, as the disk has it: its name, size and when it last changed,
-    asked of the disk, never read -- or its name alone, for one that is not a file (a PDB ID,
-    a file gone). A PDF's page (``art.pdf#2``) is its file's."""
+def _on_disk(name: str) -> tuple[str, str]:
+    """A file a figure names, and what stands for it: its own name and what is in it, hashed
+    (``flexo.kept_versions.content``: asked of the disk, and read only when the disk says it
+    has changed) -- not where it is, nor when it was saved -- or its name alone, for one that is
+    not a file (a PDB ID, a file gone). A PDF's page (``art.pdf#2``) is its file's."""
 
     import os
 
+    from flexo.kept_versions import content
+
     found = os.path.expanduser(name)
     for each in (found, found.rpartition("#")[0]):
-        try:
-            stat = os.stat(each)
-        except (OSError, ValueError):
-            continue
-        return (name, stat.st_size, stat.st_mtime_ns)
-    return (name,)
+        held = content(each) if each else None
+        if held is not None:
+            return (name, f"{os.path.basename(found)} {held[:32]}")
+    return (name, name)
 
 
 def _cache_path(key: tuple) -> Path | None:
     """Where a figure laid out for a box is kept between builds (``FLEXO_TALK_CACHE=0``
     turns the cache off; ``FLEXO_TALK_CACHE=/some/dir`` moves it): by all it was laid out
-    from, its file saying which version of the code laid it out (``_kept_fit``)."""
+    from, its file saying which version of the code laid it out (``_kept_fit``). Each file it
+    is drawn from is in it by its name and what is in it (``_drawn_from``), wherever the figure
+    names it -- a structure's source, a picture's -- not by where it is: a deck unpacked afresh
+    (a copy of it, opened on another computer, its bundle put back in its place) has its files
+    elsewhere, saved as they were unpacked, and its figures are found as they were laid out."""
 
     import hashlib
     import os
@@ -5668,8 +5683,19 @@ def _cache_path(key: tuple) -> Path | None:
         folder = Path.home() / "Library/Caches/flexo-talk"
     else:
         folder = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "flexo-talk"
-    name = hashlib.sha256(repr(key).encode("utf-8")).hexdigest()[:32]
-    return folder / "fits" / f"{name}.json"
+    said = repr(key)
+    for files in key:
+        if isinstance(files, _Files):
+            for named, token in files:
+                if token != named:
+                    said = said.replace(repr(named), repr(token)).replace(f'"{named}"', f'"{token}"')
+    name = hashlib.sha256(said.encode("utf-8")).hexdigest()[:32]
+    return folder / LAYOUTS / f"{name}.json"
+
+
+LAYOUTS = "layouts"
+"""The folder in flexo-talk's cache folder its laid-out figures are kept in. (Those kept before
+they were kept by what their files hold, in ``fits``, are let go: ``_prune_fits``.)"""
 
 
 _FITS: OrderedDict[str, dict] = OrderedDict()
@@ -5684,8 +5710,8 @@ FITS_BYTES = 64_000_000
 FITS_KEPT = 2000
 """How many laid-out figures are kept on disk, the least recently used let go first (a deck of
 fifty slides keeps about seventy)."""
-FITS_SIZE = 512 << 20
-"""How many bytes of them, at most."""
+FITS_SIZE = 256 << 20
+"""How many bytes of them, at most (as flexo keeps of its molecules and pictures)."""
 FITS_PRUNED = 64
 """How many are kept between one pruning and the next: the folder is looked through on the
 first keeping of a session and then after every ``FITS_PRUNED`` more."""
@@ -5785,13 +5811,18 @@ _PRUNING = threading.Lock()
 
 def _prune_fits(where: Path) -> None:
     """The least recently used laid-out figures let go, past ``FITS_KEPT`` of them or
-    ``FITS_SIZE`` bytes (what an earlier version kept among them, by when each was last used)."""
+    ``FITS_SIZE`` bytes (what an earlier version kept among them, by when each was last used);
+    and, the first time, the folder of those kept by where their files were and when they were
+    saved (``fits``), never found again."""
 
     import os
+    import shutil
 
     if not _PRUNING.acquire(blocking=False):
         return
     try:
+        if where.name != "fits":
+            shutil.rmtree(where.parent / "fits", ignore_errors=True)
         found = []
         with os.scandir(where) as entries:
             for item in entries:

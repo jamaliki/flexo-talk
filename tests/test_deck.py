@@ -829,7 +829,7 @@ def test_a_figure_laid_out_once_is_reused(tmp_path: Path, monkeypatch: pytest.Mo
         with deck.slide("A figure") as slide, slide.figure() as figure:
             figure.block("b", label="Block", input=figure.text("x", "$x$"))
         deck.render()
-    assert len(calls) == 1 and list((tmp_path / "cache" / "fits").glob("*.json"))
+    assert len(calls) == 1 and list((tmp_path / "cache" / "layouts").glob("*.json"))
 
 
 def test_a_persian_table_reads_from_the_right(tmp_path: Path) -> None:

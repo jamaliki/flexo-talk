@@ -153,12 +153,16 @@ def test_a_structure_saved_again_between_builds_is_drawn_anew(tmp_path: Path) ->
     assert _built(deck, tmp_path / "three") == second
 
 
-def test_what_a_figure_is_drawn_from_is_asked_of_the_disk_never_read(tmp_path: Path) -> None:
+def test_what_a_figure_is_drawn_from_is_what_is_in_its_files_read_once(tmp_path: Path, monkeypatch) -> None:
+    """Each file by its name and what is in it -- read once, then asked of the disk while the disk
+    says it is the same file, unchanged -- never by where it is or when it was saved."""
+
+    from flexo import kept_versions
     from flexo.ir.semantic import FigureSpec, FreeShape, NodeSpec
 
     files = {name: tmp_path / name for name in ("art.svg", "page.pdf", "model.cif", "map.mrc", "ss.pdb", "over.png")}
     for file in files.values():
-        file.write_bytes(b"x" * 10)
+        file.write_bytes(file.name.encode() * 10)
     nodes = (
         NodeSpec("art", "image", properties=(("source", str(files["art.svg"])),)),
         NodeSpec("page", "image", properties=(("source", f"{files['page.pdf']}#2"),)),
@@ -176,37 +180,90 @@ def test_what_a_figure_is_drawn_from_is_asked_of_the_disk_never_read(tmp_path: P
     )
     over = FreeShape.of({"kind": "picture", "at": [0, 0], "size": [10, 10], "source": str(files["over.png"])})
     spec = FigureSpec("parts", nodes=nodes, shapes=(over,))
-    # Nothing is read (none of them could be), only asked of the disk.
+    read: list[str] = []
+    real = open
+
+    def opened(name, *args, **kwargs):
+        if str(name).startswith(str(tmp_path)):
+            read.append(Path(name).name)
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", opened)
+    kept_versions._CONTENTS.clear()
+    known = compose._drawn_from(spec)
+    assert [entry[0] for entry in known] == [
+        str(files["art.svg"]),
+        f"{files['page.pdf']}#2",
+        str(files["model.cif"]),
+        str(files["map.mrc"]),
+        str(files["ss.pdb"]),
+        "1BK0",
+        "auto",
+        str(files["over.png"]),
+    ]
+    assert sorted(read) == sorted(files)
+    # Asked again, asked of the disk: nothing read.
+    read.clear()
+    assert compose._drawn_from(spec) == known and read == []
+    # A file by its own name and what is in it; a PDF's page by its file's; an ID by its name.
+    assert ("1BK0", "1BK0") in known and ("auto", "auto") in known
+    assert str(tmp_path) not in repr(known) and "page.pdf#2 " in repr(known)
     for file in files.values():
-        file.chmod(0)
-    try:
+        # Saved again as it was: the same. Changed: another.
+        _edited(file, file.read_bytes())
+        assert compose._drawn_from(spec) == known, file.name
+        _edited(file, b"y" * 11)
+        assert compose._drawn_from(spec) != known, file.name
         known = compose._drawn_from(spec)
-        names = [entry[0] for entry in known]
-        assert names == [
-            str(files["art.svg"]),
-            f"{files['page.pdf']}#2",
-            str(files["model.cif"]),
-            str(files["map.mrc"]),
-            str(files["ss.pdb"]),
-            "1BK0",
-            "auto",
-            str(files["over.png"]),
-        ]
-        # A file by its size and when it changed; a PDF's page by its file's; an ID by its name alone.
-        assert all(len(entry) == 3 for entry in known if entry[0] not in {"1BK0", "auto"})
-        assert ("1BK0",) in known and ("auto",) in known
-        # Each one changed -- in its time or its size -- changes what the figure is kept by.
-        for file in files.values():
-            file.chmod(0o644)
-            _edited(file, b"y" * 10)
-            assert compose._drawn_from(spec) != known, file.name
-            known = compose._drawn_from(spec)
-            file.write_bytes(b"y" * 11)
-            assert compose._drawn_from(spec) != known, file.name
-            known = compose._drawn_from(spec)
-    finally:
-        for file in files.values():
-            file.chmod(0o644)
+
+
+def test_a_deck_unpacked_afresh_elsewhere_finds_its_figures_laid_out(tmp_path: Path, monkeypatch) -> None:
+    """A bundle opened again where it is unpacked afresh -- a copy of it, the deck opened on
+    another computer -- has its files elsewhere, saved as they were unpacked: its figures are
+    found as they were laid out, by what their files hold, and drawn byte for byte alike."""
+
+    import shutil
+
+    import flexo
+    from flexo import bundle
+    from flexo.studio.bundles import opened
+
+    from flexo_talk.document import load_document
+
+    monkeypatch.setenv("FLEXO_BUNDLES", str(tmp_path / "bundles"))
+    folder = tmp_path / "made"
+    folder.mkdir()
+    deck = _deck(folder, "{id: middle, kind: image, height: 60, properties: {source: art.svg}}")
+    (folder / "figures" / "art.svg").write_text(_picture(), encoding="utf-8")
+    names = {name: folder / name for name in ("talk.yaml", "figures/cell.yaml", "figures/art.svg")}
+    bundle.write(tmp_path / "talk.flexo", names, bundle.manifest(deck.name, "deck", files=len(names)))
+    shutil.copyfile(tmp_path / "talk.flexo", tmp_path / "talk (1).flexo")
+    laid: list[int] = []
+    real = flexo.fit_in_box
+
+    def counted(*args, **kwargs):
+        laid.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(flexo, "fit_in_box", counted)
+
+    def drawn(path: Path) -> list[str]:
+        root = opened(path).root
+        compose._FITS.clear()  # (each a studio started afresh)
+        document = load_document(root / "talk.yaml")
+        kind = DeckKind()
+        drawing = kind.draw(document, root, {"focus": 0})
+        while drawing.unfinished:
+            drawing = kind.draw(document, root, {"focus": 0})
+        return [page.svg for page in drawing.pages]
+
+    first = drawn(tmp_path / "talk.flexo")
+    assert laid
+    laid.clear()
+    copy = drawn(tmp_path / "talk (1).flexo")
+    assert opened(tmp_path / "talk (1).flexo").root != opened(tmp_path / "talk.flexo").root
+    assert laid == []
+    assert copy == first
 
 
 def test_a_picture_edited_while_its_deck_is_open_is_drawn_again(tmp_path: Path) -> None:
