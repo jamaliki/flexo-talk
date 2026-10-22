@@ -1011,6 +1011,10 @@ class DeckKind:
                         known = _stable({"slide": key(index), "export": drawn})
                         item.key = known
                         self._exports[known] = item
+                    else:
+                        # (Its slide is this deck's now, as it is in all it is drawn from: the
+                        # deck it was drawn in is let go, not kept for one slide of it.)
+                        item.slide.deck = deck
                     self._exports.move_to_end(known)
                     rendered.append(item)
         finally:
