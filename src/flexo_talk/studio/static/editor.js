@@ -7755,7 +7755,7 @@ export function mount(studio, container) {
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
     }, { undone: undoing });
-    markFills();
+    markFillsSoon();
   }
 
   // Arrange, Keynote's tab of it: what is chosen -- the slide's objects (placing.js), its
@@ -7822,7 +7822,10 @@ export function mount(studio, container) {
     return spare != null && Number(spare) < 2;
   }
   // The stops that would not move it greyed -- there it has nowhere to go -- why, in each one's
-  // tooltip. (Kept to the slide as it is drawn again: a width changed.)
+  // tooltip. (Kept to the slide as it is drawn again: a width changed.) Measured as the next
+  // frame is laid out, once, not at once as the panel is drawn: its measuring laid the page out
+  // there and then, the panel just made with it, before the rest of a click was done.
+  function markFillsSoon() { if (!markFills.soon) markFills.soon = requestAnimationFrame(() => { markFills.soon = 0; markFills(); }); }
   function markFills() {
     const pad = inspectorBody.querySelector(".position-pad"), at = state.focus;
     if (!pad || !at) return;
@@ -11385,7 +11388,7 @@ export function mount(studio, container) {
     // The panel's colours drawn again when the theme's change (its palette edited in its own
     // tab): the named colours, the tones and the palette's own order, as the swatches show them.
     const key = JSON.stringify([studio.info?.palette || {}, studio.info?.tones, studio.info?.order, studio.info?.own]);
-    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFills(); }
+    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFillsSoon(); }
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
     stage.querySelector(":scope > .deck-error")?.remove();
     if (deckError) stage.prepend(h("div.messages.deck-error", {}, messageView(deckError)));
