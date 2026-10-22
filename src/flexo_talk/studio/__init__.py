@@ -1575,11 +1575,26 @@ def _blocks(slide: Any, region: Any) -> list:
     return blocks if isinstance(blocks, list) else []
 
 
+_PAIRED: tuple = ()
+"""The last slides paired (``_slide_pairs``), by the very lists, and how: an edit is described
+and followed (``describe``, ``follow``) from the same two, one after the other."""
+
+
 def _slide_pairs(old: list, new: list) -> list[tuple[str, Any, Any]]:
     """How a deck's slides before a change are those after it, in their order after:
     ("equal", a, b), ("moved", a, b) -- the same slide taken out and put back elsewhere --
     ("changed", a, b), ("added", None, b), and ("deleted", [a, ...], b), b where they were."""
 
+    global _PAIRED
+    last = _PAIRED
+    if last and last[0] is old and last[1] is new:
+        return list(last[2])
+    steps = _paired(old, new)
+    _PAIRED = (old, new, steps)
+    return list(steps)
+
+
+def _paired(old: list, new: list) -> list[tuple[str, Any, Any]]:
     import difflib
 
     keys = [_stable(slide) for slide in old], [_stable(slide) for slide in new]
