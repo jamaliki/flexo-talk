@@ -13,6 +13,7 @@ import json
 import re
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
 from typing import Any, get_args
@@ -178,6 +179,8 @@ FIELD_LABELS = {
 
 CACHE_SIZE = 600
 CACHE_BYTES = 200_000_000
+EXPORT_BYTES = 150_000_000
+"""How many bytes of slides drawn for an export are kept for the next (``DeckKind._exported``)."""
 PNG_WIDTHS = (1280, 1920, 3840)
 """How wide the Export sheet makes a slide's PNG, in pixels: the second unless chosen."""
 BUDGET = 0.4
@@ -191,6 +194,8 @@ class DeckKind:
 
     def __init__(self) -> None:
         self._slides: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._exports: OrderedDict[str, Any] = OrderedDict()
+        """Slides as the last exports drew them (``_exported``), by what each was drawn from."""
 
     def claims(self, document: object) -> bool:
         return is_deck_document(document)
@@ -631,56 +636,8 @@ class DeckKind:
         stood_in = MissingFile | InvalidFigure | InvalidObject | UnknownLayout
         absent = [error for error in errors if isinstance(error, stood_in)]
         failed = {_slide_of(error.where): error for error in errors if not isinstance(error, stood_in)}
-        deck_data = document.get("deck") or {}
-        from flexo.studio import code_allowed
-
-        head = _stable({
-            "deck": deck_data, "base": str(base), "count": len(slides), "trusted": code_allowed.get(),
-            # A theme file edited in the studio changes every slide without changing the deck.
-            "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
-            # So does a logo's file, put there or changed (one missing is watched for).
-            "logos": [(str(path), _stamp(path)) for path in _logo_files(deck_data, base)],
-        })
-        # (A section skipped is not among them: compose._skipped.)
-        sections = [
-            (slide.get("title"), slide.get("subtitle")) for slide in slides
-            if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
-        ]
-        watched: set[Path] = set(_theme_files(deck_data, base)) | set(_logo_files(deck_data, base))
-        shared = document.get("figures") if isinstance(document.get("figures"), dict) else {}
-        from flexo_talk.framing import frames_of
-
-        frames = frames_of(document)
-
-        def key(index: int) -> str:
-            data = slides[index]
-            # (Figures it draws as one with others on other slides, in a frame: one of them changed
-            # draws it again -- flexo_talk.framing.)
-            framed = _frame_members(frames, data)
-            # (The deck's own figures it shows by name: one changed draws again those showing it.)
-            named = {name: shared.get(name) for name in sorted(_shared_names([data, framed]))}
-            files = sorted(
-                _files([data, framed], base) | _files([{"figure": figure} for figure in named.values()], base)
-            )
-            watched.update(files)
-            layout = data.get("layout", "content") if isinstance(data, dict) else "content"
-            return _stable({
-                "head": head,
-                "index": index,
-                "sections": sections if layout == "agenda" else None,
-                "before": sum(
-                    1 for item in slides[:index]
-                    if isinstance(item, dict) and item.get("layout") == "section" and not _skipped(item)
-                ),
-                # Its number counts the slides shown before it (compose._slide_number): one
-                # skipped there or shown again redraws it.
-                "shown": sum(1 for item in slides[:index] if not _skipped(item)),
-                "slide": data,
-                "frames": framed,
-                "figures": named,
-                "files": [(str(file), _stamp(file)) for file in files],
-            })
-
+        watched: set[Path] = set()
+        key = _slide_keys(document, base, watched)
         keys = [key(index) for index in range(len(slides))]
         focus = int((hints or {}).get("focus") or 0)
         # While the deck is changed its figures keep their layouts (compose.EDITING); once
@@ -917,6 +874,7 @@ class DeckKind:
         into: Path | None = None,
         steps: bool = False,
         png_width: int | None = None,
+        drawing: Any = None,
     ) -> list[Path]:
         """The deck's files, in ``build/`` beside it, named after the deck (talk.pdf,
         talk-01.png), or ``into`` a folder of the page's, where each slide's pictures go in
@@ -924,14 +882,25 @@ class DeckKind:
         slide-01.png). The PDF has a page per slide, showing it whole, as Keynote's does;
         with ``steps``, a page per stage of each list a slide reveals. A PNG is
         ``png_width`` pixels wide (1280, 1920 or 3840), as tall as the slide's proportions
-        make it."""
+        make it. The folder's turn to draw (``drawing``, the studio's) is taken only while
+        the deck is read and its slides drawn -- each as the last export drew it, where
+        nothing it is drawn from has changed (``_exported``) -- and not while its files are
+        written: the studio draws its person's edits meanwhile."""
+
+        import contextlib
+
+        from flexo.studio import taking_turns
 
         from flexo_talk.compose import CANT_DRAW, STANDING_ASIDE
         from flexo_talk.export import build_deck, file_stem
 
+        def turn() -> contextlib.AbstractContextManager:
+            return taking_turns(drawing) if drawing is not None else contextlib.nullcontext()
+
         errors: list[DeckDocumentError] = []
         try:
-            deck = deck_from_document(document, base, errors=errors)
+            with turn():
+                deck = deck_from_document(document, base, errors=errors)
             # An object that can't be drawn, or whose file is not there, is left out, and said
             # (``export_notes``): one object does not stop the export. A slide that can't be
             # made at all does, said where it is.
@@ -959,6 +928,7 @@ class DeckKind:
         # others are numbered as they are shown when presented, one after another
         # (compose._slide_number).
         skipped = {index for index, data in enumerate(document.get("slides") or []) if _skipped(data)}
+        shown = [index for index in range(len(deck.slides)) if index not in skipped]
         deck.slides = [slide for index, slide in enumerate(deck.slides) if index not in skipped]
         if not deck.slides:
             raise ValueError("Every slide is skipped: there is nothing to export.")
@@ -976,8 +946,11 @@ class DeckKind:
             images = folder / " \u2013 ".join([file_stem(deck.id), *kinds])
         aside = STANDING_ASIDE.set(True)
         try:
+            with turn():
+                rendered = self._exported(document, base, deck, shown, tuple(formats))
             result = build_deck(deck, folder, tuple(formats), handout=not steps, images=images,
-                                png_width=png_width or (PNG_WIDTHS[1] if into is not None else None))
+                                png_width=png_width or (PNG_WIDTHS[1] if into is not None else None),
+                                rendered=rendered)
         finally:
             STANDING_ASIDE.reset(aside)
         # (One that failed only as it was drawn for its slide is left empty too, and said.)
@@ -1007,6 +980,48 @@ class DeckKind:
         ]
         written = [result.pptx, result.pdf, *result.svgs, *result.pngs]
         return [path for path in written if path]
+
+    def _exported(
+        self, document: dict[str, Any], base: Path, deck: Any, shown: list[int], formats: tuple[str, ...]
+    ) -> list[Any]:
+        """The deck's slides (those ``shown``, by their place in the document) drawn for an
+        export to ``formats``, as an export draws them -- no placeholders, every figure
+        settled, pictures carried, fonts as the formats want them: each as it was drawn for
+        an export before, where nothing it is drawn from has changed since (``_slide_keys``),
+        else drawn now, and kept for the next."""
+
+        from flexo.artwork import picture_link
+        from flexo.svg_resources import fonts_are_linked
+
+        from flexo_talk.compose import EDITING, PLACEHOLDERS, STANDING_ASIDE, render_slide
+        from flexo_talk.export import drawn_for
+
+        key = _slide_keys(document, base, set())
+        rendered = []
+        editing, placeholders = EDITING.set(False), PLACEHOLDERS.set(False)
+        try:
+            with drawn_for(formats):
+                drawn = [fonts_are_linked(), picture_link.get() is not None, STANDING_ASIDE.get()]
+                for index, slide in zip(shown, deck.slides, strict=True):
+                    known = _stable({"slide": key(index), "export": drawn})
+                    item = self._exports.get(known)
+                    if item is None:
+                        item = render_slide(deck, slide)
+                        # (Kept by the files its plots read too, known once it is drawn.)
+                        known = _stable({"slide": key(index), "export": drawn})
+                        item.key = known
+                        self._exports[known] = item
+                    self._exports.move_to_end(known)
+                    rendered.append(item)
+        finally:
+            EDITING.reset(editing)
+            PLACEHOLDERS.reset(placeholders)
+        # (Slides with photos carry them inside: held to a size in bytes too.)
+        while len(self._exports) > CACHE_SIZE or (
+            len(self._exports) > 1 and sum(len(item.svg) for item in self._exports.values()) > EXPORT_BYTES
+        ):
+            self._exports.popitem(last=False)
+        return rendered
 
     def export_part(
         self,
@@ -2155,6 +2170,67 @@ SAMPLE_DECK: dict[str, Any] = {
         {"layout": "section", "title": "What next", "subtitle": "Three open questions"},
     ],
 }
+
+
+def _slide_keys(document: dict[str, Any], base: Path, watched: set[Path]) -> Callable[[int], str]:
+    """Each slide of a deck's document by what it is drawn from (its index in the document
+    given), as its drawing is kept by: the slide, what of the deck around it it shows, and
+    the files it names as the disk has them -- the deck's drawn for the studio's page
+    (``DeckKind.draw``) and for an export (``DeckKind.export``) alike. The files it names,
+    and the deck's own (its theme's, its logos'), are added to ``watched``."""
+
+    from flexo.studio import code_allowed
+
+    from flexo_talk.framing import frames_of
+
+    slides = document.get("slides") or []
+    deck_data = document.get("deck") or {}
+    head = _stable({
+        "deck": deck_data, "base": str(base), "count": len(slides), "trusted": code_allowed.get(),
+        # A theme file edited in the studio changes every slide without changing the deck.
+        "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
+        # So does a logo's file, put there or changed (one missing is watched for).
+        "logos": [(str(path), _stamp(path)) for path in _logo_files(deck_data, base)],
+    })
+    # (A section skipped is not among them: compose._skipped.)
+    sections = [
+        (slide.get("title"), slide.get("subtitle")) for slide in slides
+        if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
+    ]
+    watched.update(_theme_files(deck_data, base), _logo_files(deck_data, base))
+    shared = document.get("figures") if isinstance(document.get("figures"), dict) else {}
+    frames = frames_of(document)
+
+    def key(index: int) -> str:
+        data = slides[index]
+        # (Figures it draws as one with others on other slides, in a frame: one of them changed
+        # draws it again -- flexo_talk.framing.)
+        framed = _frame_members(frames, data)
+        # (The deck's own figures it shows by name: one changed draws again those showing it.)
+        named = {name: shared.get(name) for name in sorted(_shared_names([data, framed]))}
+        files = sorted(
+            _files([data, framed], base) | _files([{"figure": figure} for figure in named.values()], base)
+        )
+        watched.update(files)
+        layout = data.get("layout", "content") if isinstance(data, dict) else "content"
+        return _stable({
+            "head": head,
+            "index": index,
+            "sections": sections if layout == "agenda" else None,
+            "before": sum(
+                1 for item in slides[:index]
+                if isinstance(item, dict) and item.get("layout") == "section" and not _skipped(item)
+            ),
+            # Its number counts the slides shown before it (compose._slide_number): one
+            # skipped there or shown again redraws it.
+            "shown": sum(1 for item in slides[:index] if not _skipped(item)),
+            "slide": data,
+            "frames": framed,
+            "figures": named,
+            "files": [(str(file), _stamp(file)) for file in files],
+        })
+
+    return key
 
 
 def _literal(annotation: object) -> object:

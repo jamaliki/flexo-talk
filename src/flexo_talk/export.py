@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
+from collections import OrderedDict
+from collections.abc import Iterator
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
@@ -104,27 +108,23 @@ def build_deck(
     editable_maths: bool = True,
     images: Path | None = None,
     png_width: int | None = None,
+    rendered: list[RenderedSlide] | None = None,
 ) -> DeckBuild:
     """Write the deck into ``directory``: its PowerPoint and PDF, named after the deck,
     and an SVG and a PNG of each slide, beside them as talk-01.png, or in a folder of
     their own (``images``) as slide-01.png. The PDF has a page per step of each list a
     slide reveals, or, as a ``handout``, one page per slide, showing it whole. A PNG is
     ``png_width`` pixels wide, as tall as the slide's proportions make it -- else drawn
-    at 144 dpi (1920 pixels across a 16:9 slide)."""
+    at 144 dpi (1920 pixels across a 16:9 slide). Its slides are drawn here, unless they
+    are given (``rendered``, each drawn ``drawn_for`` these formats: the studio keeps them)."""
 
     unknown = set(formats) - set(FORMATS)
     if unknown:
         raise ValueError(f"Unknown {'format' if len(unknown) == 1 else 'formats'} {', '.join(sorted(unknown))}. "
                          f"Available formats: {', '.join(FORMATS)}.")
     directory.mkdir(parents=True, exist_ok=True)
-    if "svg" in formats:
-        rendered = deck.render()
-    else:
-        # Only an SVG carries its fonts: a PDF embeds its own, a PNG draws outlines, and a
-        # PowerPoint names them, so none is cut down and embedded for nothing.
-        from flexo.svg_resources import fonts_linked
-
-        with fonts_linked():
+    if rendered is None:
+        with drawn_for(formats):
             rendered = deck.render()
     name = file_stem(deck.id)
     diagnostics = [message for item in rendered for message in item.diagnostics]
@@ -169,6 +169,21 @@ def build_deck(
     return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics), notes)
 
 
+@contextlib.contextmanager
+def drawn_for(formats: tuple[str, ...] | list[str]) -> Iterator[None]:
+    """Around drawing a deck's slides for ``formats``: only an SVG carries its fonts -- a
+    PDF embeds its own, a PNG draws outlines, and a PowerPoint names them -- so without
+    one, none is cut down and embedded for nothing."""
+
+    if "svg" in formats:
+        yield
+        return
+    from flexo.svg_resources import fonts_linked
+
+    with fonts_linked():
+        yield
+
+
 def write_pptx(
     deck: Deck, rendered: list[RenderedSlide], target: Path, *, groups: bool = True, editable_maths: bool = True
 ) -> Path:
@@ -187,6 +202,13 @@ def write_pptx(
     from flexo.drawings_kept import drawing_of
 
     for item in rendered:
+        # A slide written as it was for an export before, where nothing it is drawn from has
+        # changed since (``RenderedSlide.key``, the studio's): written again as it was then.
+        known = (item.key, groups, editable_maths) if item.key else None
+        written = _WRITTEN.get(known) if known is not None else None
+        if written is not None:
+            _write_again(presentation, layouts, written, item.slide.notes_text)
+            continue
         # (Read as it was for the deck's PDF, or its PowerPoint before, where it was: its
         # groups this one's own to take apart -- flexo.drawings_kept.)
         drawing = drawing_of(clicks_lifted(item.svg, item.builds))
@@ -281,10 +303,93 @@ def write_pptx(
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
                                for region in item.slide.regions.values() for index, block in enumerate(region.blocks)},
                         shapes={**drawn_over, **_shape_names(item.shapes)})
+        if known is not None:
+            _keep_written(known, slide, chosen)
     buffer = BytesIO()
     presentation.save(buffer)
     target.write_bytes(buffer.getvalue())
     return target
+
+
+@dataclass(frozen=True, slots=True)
+class _Written:
+    """A slide as it was written into a PowerPoint: the layout it was made from, its XML, and
+    what it refers to, in the order it came to (its relationships: ``(id, type, what it is,
+    and the picture's bytes or the link's address)``)."""
+
+    layout: str
+    xml: bytes
+    refers: tuple[tuple[str, str, str, bytes | str | None], ...]
+
+    @property
+    def size(self) -> int:
+        return len(self.xml) + sum(len(what) for *_, what in self.refers if what is not None)
+
+
+_WRITTEN: OrderedDict[tuple, _Written] = OrderedDict()
+"""Slides as last written into a PowerPoint, by what each was drawn from and how it was written."""
+
+_WRITTEN_HELD = 64 << 20
+"""How many bytes of them are kept, the most recently written."""
+
+
+def _keep_written(known: tuple, slide, layout: str) -> None:
+    """``slide``, written, kept by ``known`` to be written again as it is (``_write_again``):
+    unless it refers to something not known to be made again so."""
+
+    from lxml import etree
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    refers: list[tuple[str, str, str, bytes | str | None]] = []
+    for rid, relation in slide.part.rels.items():
+        if relation.is_external:
+            refers.append((rid, relation.reltype, "address", relation.target_ref))
+        elif relation.reltype in {RT.SLIDE_LAYOUT, RT.NOTES_SLIDE}:
+            refers.append((rid, relation.reltype, relation.reltype, None))
+        elif relation.reltype == RT.IMAGE:
+            refers.append((rid, relation.reltype, relation.target_part.content_type, relation.target_part.blob))
+        else:
+            return
+    _WRITTEN[known] = _Written(layout, etree.tostring(slide.part._element), tuple(refers))
+    _WRITTEN.move_to_end(known)
+    held = sum(written.size for written in _WRITTEN.values())
+    while held > _WRITTEN_HELD and len(_WRITTEN) > 1:
+        _, gone = _WRITTEN.popitem(last=False)
+        held -= gone.size
+
+
+def _write_again(presentation, layouts: dict, written: _Written, notes: str) -> None:
+    """A slide written into ``presentation`` as it was before (``_keep_written``): made from
+    its layout, what it refers to added in the order it was -- its pictures, its links, its
+    notes -- and its XML as it was, naming them."""
+
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.oxml import parse_xml
+
+    slide = presentation.slides.add_slide(layouts[written.layout])
+    pictures = slide_pictures(slide)
+    named: dict[str, str] = {}
+    for rid, kind, what, payload in written.refers:
+        if what == RT.SLIDE_LAYOUT:
+            now = next(other for other, relation in slide.part.rels.items() if relation.reltype == RT.SLIDE_LAYOUT)
+        elif what == RT.NOTES_SLIDE:
+            slide.notes_slide.notes_text_frame.text = notes
+            now = next(other for other, relation in slide.part.rels.items() if relation.reltype == RT.NOTES_SLIDE)
+        elif what == "address":
+            now = slide.part.relate_to(payload, kind, is_external=True)
+        elif what == "image/svg+xml":
+            now = pictures.svg(payload)  # type: ignore[attr-defined]
+        else:
+            now = pictures(payload, what)
+        named[rid] = now
+    element = parse_xml(written.xml)
+    if any(rid != now for rid, now in named.items()):
+        relationships = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+        for node in element.iter():
+            for attribute, value in node.attrib.items():
+                if attribute.startswith(relationships) and value in named:
+                    node.set(attribute, named[value])
+    slide.part._element = element
 
 
 _PML = "http://schemas.openxmlformats.org/presentationml/2006/main"
