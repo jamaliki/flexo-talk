@@ -541,7 +541,7 @@ def test_the_editor_moves_a_slide_s_people_on_it_and_puts_them_back() -> None:
     editor, people = (static / "editor.js").read_text("utf-8"), (static / "people.js").read_text("utf-8")
     portraits, placing = (static / "portraits.js").read_text("utf-8"), (static / "placing.js").read_text("utf-8")
     # Caught where an object would be: placing.js's carrier, given to the portraits.
-    assert "carry: () => objects.carrier()" in editor and "function carrier(" in placing
+    assert "carry: () => objects.carrier()" in editor and "function carrier()" in placing
     for label in ('"Move People"', '"Put People Back in Line"'):
         assert label in people
     assert 'label: "Put People Back in Line"' in portraits and "people.putBack()" in portraits

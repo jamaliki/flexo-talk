@@ -38,9 +38,12 @@ import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
+import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
+import { grabbingHand } from "/static/kinds/deck/grabbing.js";
+import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -573,6 +576,7 @@ export function mount(studio, container) {
   if (!document.querySelector('link[href="/static/kinds/deck/editor.css"]')) {
     document.head.append(h("link", { rel: "stylesheet", href: "/static/kinds/deck/editor.css" }));
   }
+  grabbingHand();
   const catalog = studio.catalog;
   const layouts = LAYOUT_ORDER.map((name) => catalog.layouts.find((layout) => layout.name === name)).filter(Boolean);
   // The names the catalogue gives layouts, over the ones written here.
@@ -631,7 +635,11 @@ export function mount(studio, container) {
   // A figure's look changed at once (a colour, a dash, a layout) is settled as soon as its draft
   // is drawn, not after the usual pause: see act.
   let settleSoon = false;
-  studio.hints = () => ({ focus: state.slide, settle: settling, yields: settling });
+  // Settled, what would make a figure drawn small larger (turned, a slide of its own) is
+  // weighed a moment later, in a drawing of its own that gives way to any edit: the settling
+  // waits on nothing more (compose.LATER).
+  let weighing = false;
+  studio.hints = () => ({ focus: state.slide, settle: settling || weighing, yields: settling || weighing, ...(weighing ? { weigh: true } : {}) });
   const doc = () => studio.doc;
   // Merged, every slide's objects are in places its layout has (as the studio's DeckKind
   // puts them: _laid_out) -- an object kept where the layout has none is put in the first
@@ -901,7 +909,14 @@ export function mount(studio, container) {
   // step of their own: the run starts again at each turn. (A figure's words, made by the
   // studio and back later, are its own: parts.js.)
   // (Kept by the field's key, as the panel is drawn again under the keys.)
-  const turns = new Map(), turnOf = (target) => target.dataset?.key || target;
+  // (A field with no key -- words typed on the slide -- by itself, weakly: closed, it goes with
+  // the editor it was in, not kept until two hundred more have been typed in.)
+  const turns = (() => {
+    const named = new Map();
+    let held = new WeakMap();
+    const of = (key) => (typeof key === "string" ? named : held);
+    return { get: (key) => of(key).get(key), set: (key, turn) => of(key).set(key, turn), get size() { return named.size; }, clear: () => { named.clear(); held = new WeakMap(); } };
+  })(), turnOf = (target) => target.dataset?.key || target;
   const TYPED = /^(text|search|number|email|url|tel|password)$/;
   const typingSteps = (container) => {
     const field = (event) => {
@@ -1639,6 +1654,26 @@ export function mount(studio, container) {
     readSlideAhead();
   }
 
+  // ↓ or ↑ held, repeating faster than a large slide is drawn: the slide each press goes to is
+  // shown as the next frame is drawn -- one passed over meanwhile is not drawn whole on the
+  // way, and the keys never wait on the slides behind them, nor the stage run on after they
+  // stop. (Anything else pressed, or a click, finds that slide chosen.)
+  let goingTo = null;
+  const slideGoing = () => goingTo ?? state.slide;
+  function goTo(index, event) {
+    if (!event?.repeat) { settleGoing(); select(index); return; }
+    if (goingTo === null) requestAnimationFrame(settleGoing);
+    goingTo = index;
+  }
+  function settleGoing() {
+    if (goingTo === null) return;
+    const to = goingTo;
+    goingTo = null;
+    select(to);
+  }
+  document.addEventListener("keydown", (event) => { if (goingTo !== null && !event.repeat) settleGoing(); }, true);
+  document.addEventListener("pointerdown", () => settleGoing(), true);
+
   // Where this person is, as last told the others (see reportFocus).
   let reported = "";
   const whereNow = () => `${state.slide}:${state.focus ? `${state.focus.region}[${state.focus.index}]` : ""}:${state.field?.field ?? ""}`;
@@ -1676,28 +1711,48 @@ export function mount(studio, container) {
   // arriving for one slide leaves the others' nodes alone.
   let dragFrom = null;
   let railKeys = [];
+  // The slide on the stage, drawn again as it is edited, is seen there at full size: its
+  // thumbnail shows the drawing it had (`thumbHeld`, the slide's place and that drawing) until the
+  // drawings stop coming, half a second after the last -- a large slide's thumbnail made again at
+  // every key typed is work the next key waits for. (Slides added, moved or deleted, or
+  // another chosen, it shows its drawing at once.)
+  let thumbHeld = null, heldTimer = 0;
+  function holdThumb(index, was) {
+    if (thumbHeld?.index !== index) thumbHeld = { index, page: was };
+    clearTimeout(heldTimer);
+    heldTimer = setTimeout(() => { if (!thumbHeld) return; thumbHeld = null; renderRail(); }, 500);
+  }
+  const letThumbGo = () => { thumbHeld = null; clearTimeout(heldTimer); };
+  // (Each drawn as it comes into sight, and let go far out of it: thumbs.js.)
+  const railPicture = lazyPictures(railList, (svg, hash) => picture(svg, hash));
 
   function renderRail() {
+    if (thumbHeld && thumbHeld.index !== state.slide) letThumbGo();
     const list = slides();
     const others = studio.others();
     const old = [...railList.querySelectorAll(":scope > .thumb")];
     const keys = [];
     const nodes = list.map((slide, index) => {
-      const page = pages[index];
+      const page = thumbHeld?.index === index ? thumbHeld.page : pages[index];
       // (Python not run until the folder is trusted is said once, by the bar over the deck.)
       const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note" && m.code !== "code.untrusted");
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = others.filter((entry) => entry.where?.page === index + 1);
-      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true, index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
+      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true,
         worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
       keys.push(key);
-      // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere).
-      if (railKeys[index] === key && old[index] && (!page?.svg || old[index].querySelector(".picture"))) return old[index];
+      // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere) --
+      // chosen or not, said where it is: never made again for that (a large slide's picture
+      // copied whole).
+      if (railKeys[index] === key && old[index] && (!page?.svg || old[index].querySelector(".picture-slot")?.whole())) {
+        old[index].classList.toggle("on", index === state.slide || (state.picked.length > 1 && state.picked.includes(index)));
+        return old[index];
+      }
       return thumbNode(slide, index, page, own, worst, here);
     });
     railKeys = keys;
     const kept = new Set(nodes);
-    for (const node of old) if (!kept.has(node)) node.remove();
+    for (const node of old) if (!kept.has(node)) { node.querySelector(".picture-slot")?.drop(); node.remove(); }
     let at = railList.firstChild;
     for (const node of nodes) {
       if (at === node) { at = at.nextSibling; continue; }
@@ -1755,6 +1810,7 @@ export function mount(studio, container) {
 
   function thumbNode(slide, index, page, own, worst, here) {
     const on = index === state.slide || (state.picked.length > 1 && state.picked.includes(index));
+    const slot = page?.svg ? railPicture(page.svg, page.hash, index) : null;
     const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}${slide?.skip === true ? ".skipped" : ""}`, {
       draggable: true, dataset: { index },
       onclick: (event) => pickSlide(index, event),
@@ -1776,7 +1832,7 @@ export function mount(studio, container) {
     },
     h("div.num", {}, index + 1),
     h("div.frame", {},
-      page?.svg ? picture(page.svg, page.hash) : h("div.placeholder", {}, slideTitle(slide)),
+      slot || h("div.placeholder", {}, slideTitle(slide)),
       // Another's ring inside the frame, never in place of this person's own (the chosen
       // slide's blue, without), nor out over the slide's number beside it.
       here.length ? h("div.ring", { style: { boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 3px ${colourOf(here[0].who)}` } }) : null,
@@ -1789,6 +1845,7 @@ export function mount(studio, container) {
         here.length > 2 ? h("span.avatar.count", { style: { width: "18px", height: "18px", background: "var(--muted, #868e96)" } }, `+${here.length - 2}`) : null) : null,
       slideMoreButton(index)),
     h("button.insert-after", { type: "button", tabindex: -1, title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
+    slot?.watch(node);
     return node;
   }
 
@@ -1880,6 +1937,7 @@ export function mount(studio, container) {
   // A slide's portraits, chosen and sized on it (portraits.js): made with the slide's people.
   let portraits = null;
   studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
+  const unlinked = (root) => { for (const link of root.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); } };
   function renderStage() {
     const list = slides();
     const slide = slideAt();
@@ -1922,15 +1980,26 @@ export function mount(studio, container) {
       moved = blockLanding();
       landing = null;
       if (carry) dropCarry();
+    }
+    // The same slide drawn again, changed in a few places (a figure's part edited): patched
+    // where it changed, the rest of its drawing left as it is (slidepatch.js) -- else put in
+    // whole.
+    const kept = renewed && page?.svg && pageNode?.dataset.shows.startsWith(`${state.slide}:`) ? pageNode.querySelector(":scope > svg") : null;
+    if (kept && patchDrawing(kept, page.svg, (holder) => { holdPaused(holder); widenLines(holder); unlinked(holder); })) {
+      pageNode.dataset.shows = shows;
+      const paper = kept.querySelector('[id="canvas.background"]')?.getAttribute("fill");
+      pageNode.style.background = paper && paper !== "none" ? paper : "";
+      hover.hidden = true;
+    } else if (renewed) {
       pageNode = h("div.slide-page", { dataset: { shows } });
-      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
+      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); indexDrawing(pageNode.querySelector("svg"), page.svg); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
       else pageNode.append(away ? h("div.placeholder.away", {}, h("span.away-title")) : h("div.placeholder", {}, h("div.spinner")));
       const svg = pageNode.querySelector("svg");
       if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
       if (svg) widenLines(svg);
       // A link drawn on the slide is words, chosen and edited as any: never a place for the
       // keys, nor followed by any click (a middle-click's new tab included).
-      for (const link of pageNode.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); }
+      unlinked(pageNode);
       // The page under the drawing is the slide's own colour: a dark slide shows no light
       // edge where the drawing falls a fraction short of it.
       const paper = svg?.querySelector('[id="canvas.background"]')?.getAttribute("fill");
@@ -1950,6 +2019,11 @@ export function mount(studio, container) {
     pageNode.querySelector(".away-title")?.replaceChildren(slideTitle(slide));
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
+    // (Its drawing still on its way after a moment, or the studio away: the busy pointer --
+    // showPending. Not as each key is typed: the whole drawing styled again for it, a large
+    // slide's ten milliseconds a key, to be replaced a moment later.)
+    if (!(pending || page?.stale)) pageNode.classList.remove("waiting");
+    else if (studio.state === "offline") pageNode.classList.add("waiting");
     const own = messages.filter((m) => m.page === `slide${state.slide + 1}` && m.code !== "code.untrusted");
     const here = studio.others().filter((entry) => entry.where?.page === state.slide + 1);
     if (stageWrap.parentNode !== stage) clear(stage, stageWrap);
@@ -2161,15 +2235,22 @@ export function mount(studio, container) {
     focusBlock(where.region, where.index, shape ? () => figure?.parts.revealProblem(shape[1], shape[2]) : null);
   }
 
+  // (The stage's size, as last laid out: what is in it never changes it, so a slide put in it is
+  // fitted without the page laid out at once for it -- the observer below says when it changes.)
+  let stageRoom = null;
   function fitStage() {
-    const room = stage.getBoundingClientRect();
+    const room = stageRoom || stage.getBoundingClientRect();
     const ratio = (Number(doc().deck?.style?.width) || 960) / (Number(doc().deck?.style?.height) || 540);
     const width = Math.max(320, Math.min(room.width - 80, (room.height - 110) * ratio));
     stage.style.setProperty("--slide-max", `${width}px`);
     // (Its width inside its padding: under 820 points, nothing said under the slide. editor.css)
     stage.classList.toggle("narrow", room.width - 80 <= 820);
   }
-  new ResizeObserver(() => { fitStage(); placeChosen(); placeOthers(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline(); }).observe(stage);
+  new ResizeObserver(() => {
+    const box = stage.getBoundingClientRect();
+    stageRoom = box.width || box.height ? { width: box.width, height: box.height } : null;
+    fitStage(); placeChosen(); placeOthers(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline();
+  }).observe(stage);
 
   // -- zoom, as Keynote's View › Zoom: the slide fitted to the stage (Fit Slide, as it
   // opens), or at a size of its own -- Actual Size a point of the slide to a point of the
@@ -3009,21 +3090,7 @@ export function mount(studio, container) {
     toast(`${picks.length > 1 ? `${picks.length} objects` : blockLabel(first)} moved to slide ${index + 1}`, { icon: "slide" });
   }
   function carryCancel() { const was = finishCarry(); if (was) sendHome(was); }
-  // ⌘ pressed while it is carried over the slide, as the help bar says: taken out of line, to
-  // be placed where it is let go -- dragged on from here as a placed object is, caught at the
-  // slide's guides (placing.js). Everything carried is back where it was first, at once.
-  function carryFree() {
-    const was = carry, page = pageNode?.getBoundingClientRect(), point = was?.pointer;
-    if (!was?.started || !point || !page || point.x < page.left || point.x > page.right || point.y < page.top || point.y > page.bottom) return;
-    finishCarry();
-    const wraps = [was.lifted, ...was.group, ...was.shifted, ...was.base.keys()];
-    for (const wrap of wraps) Object.assign(wrap.style, { transition: "none", transform: "" });
-    void pageNode.getBoundingClientRect();
-    for (const wrap of wraps) wrap.style.transition = "";
-    if (!objects.carryOut({ kind: "block", ...was.from }, was.start, point)) sendHome(was);
-  }
   function carryKey(event) {
-    if (event.key === "Meta" && !event.repeat) { carryFree(); return; }
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
@@ -3134,8 +3201,7 @@ export function mount(studio, container) {
   // The chosen figure, mechanism or picture has a handle at each corner. Dragged, it grows or
   // shrinks from the edge not dragged, as a side's handle sizes words (standFor) -- standing
   // centred, about its middle -- and down from its top, or nearer its middle when it stands
-  // alone, as the slide stands it: no larger than its place allows. It catches as a placed
-  // one does where an edge it moves meets a guide (⌘ held, nowhere).
+  // alone, as the slide stands it: no larger than its place allows.
   // Let go, it is drawn that wide: an edit like any other, ⌘Z undoes it. A handle
   // double-clicked sizes it to its place again.
   const SIZED = new Set(["figure", "image", "mechanism"]);
@@ -3264,7 +3330,7 @@ export function mount(studio, container) {
       return { ...at, ...standFor(span, room, share, corner.endsWith("w") ? "w" : "e", at.width, 1.5 * unit) };
     };
     sizing = { at: { ...focus }, block, wrap, box, corner, most, least, across, unit, points, place, share, stand: share,
-      scale: 1, moved: false, start: { x: event.clientX, y: event.clientY }, column: regions.length > 1 ? "column" : "slide", edges: edgesFor(focus) };
+      scale: 1, moved: false, start: { x: event.clientX, y: event.clientY }, column: regions.length > 1 ? "column" : "slide" };
     pageNode.classList.add("block-sizing");
     if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
     window.addEventListener("pointermove", sizeMove);
@@ -3306,9 +3372,6 @@ export function mount(studio, container) {
     const full = across / box.width, caught = !Snap.free(event.metaKey);
     if (caught && full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
     if (caught && Math.abs(scale - 1) * box.width < 4) scale = 1;
-    // Else where an edge it moves comes near the slide's edges and middles, the shapes' or the
-    // other objects', as a placed one's does: its guide drawn (placing.js).
-    scale = sizing.edges.sized(sizing.place, scale, { least: sizing.least, most, free: !caught || scale === full || scale === 1 });
     sizing.scale = scale;
     const at = sizing.place(scale), k = scaleOf(sizing.wrap);
     sizing.stand = at.stand;
@@ -3328,13 +3391,9 @@ export function mount(studio, container) {
     window.removeEventListener("keydown", sizeKey, true);
     pageNode?.classList.remove("block-sizing");
     sizeTip.hidden = true;
-    was?.edges.end();
     if (was?.moved) swallowRelease();
     return was;
   }
-  // What an object sized in line at `at` catches at: not itself, nor what follows it in its
-  // place, which moves as it grows (placing.js's carrier, read once as the sizing starts).
-  const edgesFor = (at) => objects.carrier({ except: blocksAt(slideAt() || {}, at.region).map((_, index) => ({ region: at.region, index })).filter(({ index }) => index >= at.index) });
 
   function sizeEnd() {
     const was = sizeFinish();
@@ -3857,9 +3916,8 @@ export function mount(studio, container) {
   // a table's columns sharing its width, its words as they are. The edge dragged follows the
   // pointer and the other stays where it is (an object standing centred stays centred: both
   // move). It catches at the width of its place -- where it fills it again, with no width of
-  // its own -- at the width it takes of itself, at the width it was, and where an edge it moves
-  // meets a guide, as a placed one's does (placing.js); ⌘ held, at none. It is never narrower
-  // than it needs to be: its longest word, a column's, a picture's least.
+  // its own -- at the width it takes of itself, and at the width it was; ⌘ held, at none. It
+  // is never narrower than it needs to be: its longest word, a column's, a picture's least.
   // Let go, it is that wide, one step to undo ("Resize Table"); Esc puts it back as it was, and
   // a handle double-clicked gives it no width of its own again.
   const SIDEWAYS = new Set(["text", "bullets", "quote", "callout", "code", "stats", "math"]);
@@ -3926,7 +3984,7 @@ export function mount(studio, container) {
     resizing = { at: { ...focus }, block, kind, element, wrap, kept, set, after, span, room, share, natural, most, least, box, place, side, higher,
       corner: handle.length === 2 ? handle : null, centred: Math.abs(share - 0.5) < 0.001, matrix, unit: matrix.a,
       start: { x: event.clientX, y: event.clientY }, moved: false, pointer: null, width: span.width, left: span.x, stand: share, caught: null,
-      column: regions.length > 1 ? "column" : "slide", edges: edgesFor(focus) };
+      column: regions.length > 1 ? "column" : "slide" };
     pageNode.classList.add("block-sizing");
     if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
     window.addEventListener("pointermove", resizeMove);
@@ -3969,12 +4027,6 @@ export function mount(studio, container) {
       }
       if (caught) width = caught[1];
     }
-    // Else where an edge it moves comes near a guide, as a placed one's does (placing.js): in
-    // the window's pixels, its height as it is but a plot's or a gallery's, in proportion.
-    const grows = it.corner && it.kind !== "table" && it.box?.height;
-    const edgesAt = (wide) => ({ left: it.matrix.e + standAt(wide).left * unit, width: wide * unit,
-      top: grows && it.place ? it.place(it.higher(wide)).top : it.box?.top ?? 0, height: grows ? it.box.height * it.higher(wide) : it.box?.height ?? 0 });
-    width = it.edges.sized(edgesAt, width, { least: it.least, most: it.most, free: free || Boolean(caught) });
     return { width, ...standAt(width), caught: caught?.[0] || null };
   }
   // Where it stands at `width` (standFor).
@@ -4027,7 +4079,6 @@ export function mount(studio, container) {
     window.removeEventListener("keyup", resizeKey, true);
     pageNode?.classList.remove("block-sizing");
     sizeTip.hidden = true;
-    was?.edges.end();
     if (was?.moved) swallowRelease();
     return was;
   }
@@ -4671,7 +4722,9 @@ export function mount(studio, container) {
     if (!key || known.has(key) || reading.has(key)) return;
     reading.add(key);
     try {
-      const result = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "figure", at: { slide, region, index }, edit: { do: "read" } } });
+      // (As what it is, with the deck here the studio's: session.act.)
+      const action = { do: "figure", at: { slide, region, index }, edit: { do: "read" } };
+      const result = await studio.act?.(action, { keep: false }) || await studio.api("/api/act", { file: studio.file, document: studio.doc, action });
       if (result?.model) {
         if (known.size > 40) known.delete(known.keys().next().value);
         known.set(key, result.model);
@@ -4777,12 +4830,18 @@ export function mount(studio, container) {
       idOf: (id) => { const prefix = figurePrefix(); return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : null; },
       box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
       // (What is chosen has its frame: the pointer's dashed one goes from it, till it moves.)
-      changed: () => { hover.hidden = true; renderInspector(); placeFigure(); },
+      // (A part being carried hides its frame, and its panel waits for it to be let go: the
+      // drag's first move is not kept waiting on either.)
+      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } renderInspector(); placeFigure(); },
       // Landed, the figure's frame is drawn round it as it now is (grown by a part, say).
       settled: () => { placeChosen(); placeFigure(); },
       // A part let go: the drawing held back while it was carried is put in, unless the one
       // its move makes has come first (a moment's wait: that one is the one to see).
-      dragged: () => setTimeout(() => { if (!figure?.parts.dragging) putHeld(); }, 1200),
+      dragged: () => {
+        // (Once what it was let go for is on its way.)
+        setTimeout(() => { if (own.carried && figure === own && !own.parts.dragging) { own.carried = false; renderInspector(); placeFigure(); } }, 0);
+        setTimeout(() => { if (!figure?.parts.dragging) putHeld(); }, 1200);
+      },
       // A shape that can't be drawn as written, drawn as a plain box: said in its panel, as
       // the slide says it (a message whose place ends "#shape:what").
       // (A structure's own panel says what keeps it from being drawn: not said twice.)
@@ -4982,7 +5041,7 @@ export function mount(studio, container) {
       shapesDeleted = shapesDeleted.filter((item) => item !== gone);
     }
   }
-  async function runFigure(action, { merge, hold = false, label: told = null }, own = figure) {
+  async function runFigure(action, { merge, hold = false, label: told = null, once = null }, own = figure) {
     if (!own) return null;
     // (Its words, still on their way, go with it.)
     if (own === figure && action.do === "update" && [action.target, ...(action.targets || [])].some((part) => part?.type === "node" && !shapeIn(part.id))) return null;
@@ -5009,35 +5068,34 @@ export function mount(studio, container) {
     let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather", "delete", "connect", "ungroup", "line_up"].includes(action.do)
       || lineLook || groupWords || setting || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
+    // (A figure written in the deck, read as it is now: its parts as the edit that made it so
+    // answered, or as read ahead -- no request.)
+    if (action.do === "read") {
+      const model = typeof blocksAt(slides()[at.slide], at.region)[at.index]?.figure === "object" ? known.get(knownKey(at.slide, at.region, at.index)) : null;
+      if (model) return { document: studio.doc, select: [], model: structuredClone(model) };
+    }
+    // A figure's look changed at once (an arrowhead, a colour -- not words being typed) is
+    // drawn as a draft at once, as any change is, and laid out at its best as soon as that
+    // is drawn -- not after the pause typing gets: a large figure takes a while to lay out,
+    // and the draft does not wait on it.
+    const settles = action.do === "update" && !hold;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
-      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } }).catch((error) => {
-        // The studio out of reach: said so, for the edit to wait for it (figure parts hold it).
-        if (error instanceof TypeError || same(studio.doc, sent)) throw error;
-        return null;  // the deck changed meanwhile: made again on it as it is now
-      });
-      if (!same(studio.doc, sent)) {
-        if (action.do === "update" && [action.target, ...(action.targets || [])].some((part) => part?.type === "node" && !shapeIn(part.id))) return null;
-        continue;
-      }
       // An edit held while the studio was away, sent now it is back (the first sent, those it
       // held all known still, in the order they go): when it was made, for the history.
-      if (!own.sending?.length && action.do !== "read") own.sending = (own.parts?.heldEdits?.() || []).map((edit) => own.madeAt.get(edit.key) ?? edit.at);
-      const heldAt = action.do !== "read" ? own.sending?.shift() : undefined;
-      // A figure's look changed at once (an arrowhead, a colour -- not words being typed) is
-      // drawn as a draft at once, as any change is, and laid out at its best as soon as that
-      // is drawn -- not after the pause typing gets: a large figure takes a while to lay out,
-      // and the draft does not wait on it.
-      const settles = action.do === "update" && !hold;
-      // (Its parts glide there, should it be drawn another way.)
-      if (settles) own.parts?.settles?.();
-      if (result.file) {
-        if (action.do !== "read") { if (settles) settleSoon = true; studio.requestDraw(0); }
-        if (result.was !== undefined) recordFile(result, at, label, merge, hold);
-      }
-      else if (!same(result.document, sent)) {
+      let heldAt, counted = false;
+      const held = () => {
+        if (counted) return heldAt;
+        counted = true;
+        if (!own.sending?.length && action.do !== "read") own.sending = (own.parts?.heldEdits?.() || []).map((edit) => own.madeAt.get(edit.key) ?? edit.at);
+        heldAt = action.do !== "read" ? own.sending?.shift() : undefined;
+        return heldAt;
+      };
+      // The edit put in the deck, one step of its history (`drawn`: its drawing on its way).
+      const made = (document, answer, drawn = false) => {
+        held();
         const top = studio.past[studio.past.length - 1];
-        studio.change(() => result.document, { merge, hold, quiet: true, label });
+        studio.change(() => document, { merge, hold, quiet: true, label, drawn });
         // An edit held while the studio was away, sent now it is back: in the history where it
         // was made, among the deck's edits made meanwhile -- not over them, as made just now.
         const made = studio.past[studio.past.length - 1];
@@ -5052,10 +5110,65 @@ export function mount(studio, container) {
           const name = action.ids?.length === 1 ? /“.*”/.exec(told || "")?.[0] || null : null;
           shapesDeleted.push({ ids: [...(action.ids || [])], name, at: Date.now(), entry: studio.past[studio.past.length - 1] });
         }
+        // (Its parts as they now are, known: the drawing's read ahead asks nothing for them.)
+        if (answer?.model && typeof blocksAt(slides()[at.slide], at.region)[at.index]?.figure === "object") {
+          const key = knownKey(at.slide, at.region, at.index);
+          if (key) { known.delete(key); known.set(key, structuredClone(answer.model)); if (known.size > 40) known.delete(known.keys().next().value); }
+        }
+      };
+      // With the deck here the studio's, the edit goes as what it is, and the studio keeps
+      // it and draws it as it makes it: one request (session.act). Else, with the deck whole.
+      // (What only reads the figure goes so too, and is only answered.)
+      const reads = ["read", "structure-view", "structure-settings", "structure-fetch"].includes(action.do);
+      if (reads && studio.act) {
+        const answer = await studio.act({ do: "figure", at, edit: action }, { keep: false }).catch((error) => {
+          if (error instanceof TypeError || same(studio.doc, sent)) throw error;
+          return null;
+        });
+        if (answer && same(studio.doc, sent)) return answer;
+        if (!same(studio.doc, sent)) continue;
       }
+      if (!reads && studio.act) {
+        // (Its parts glide there, should it be drawn another way; the edit's drawing is a
+        // draft, a settling under way given up for it.)
+        if (settles) { own.parts?.settles?.(); settleSoon = true; }
+        settling = false;
+        weighing = false;
+        clearTimeout(settleTimer);
+        const quick = await studio.act({ do: "figure", at, edit: action }, { apply: (document, answer) => made(document, answer, true), once }).catch((error) => {
+          if (error instanceof TypeError || same(studio.doc, sent)) throw error;
+          return null;  // the deck changed meanwhile: made again on it as it is now
+        });
+        if (quick) {
+          held();
+          if (quick.file && quick.was !== undefined) recordFile(quick, at, label, merge, hold);
+          return quick;
+        }
+        if (!same(studio.doc, sent)) continue;
+      }
+      // (By its id too: one the studio made already -- its answer lost on the way -- is not made
+      // again; the deck as the studio has it is taken in instead: session.repeated.)
+      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action }, ...(once && !reads ? { once } : {}) }).catch((error) => {
+        // The studio out of reach: said so, for the edit to wait for it (figure parts hold it).
+        if (error instanceof TypeError || same(studio.doc, sent)) throw error;
+        return null;  // the deck changed meanwhile: made again on it as it is now
+      });
+      if (result?.repeat) { held(); studio.repeated?.(result); return result; }
+      if (!same(studio.doc, sent)) {
+        if (action.do === "update" && [action.target, ...(action.targets || [])].some((part) => part?.type === "node" && !shapeIn(part.id))) return null;
+        continue;
+      }
+      held();
+      // (Its parts glide there, should it be drawn another way.)
+      if (settles) own.parts?.settles?.();
+      if (result.file) {
+        if (action.do !== "read") { if (settles) settleSoon = true; studio.requestDraw(0); }
+        if (result.was !== undefined) recordFile(result, at, label, merge, hold);
+      }
+      else if (!same(result.document, sent)) made(result.document, result);
       // (A figure being settled gives way to any edit asked of it, as soon as it is asked: one
       // that changed nothing, it is settled again.)
-      else if (settling && action.do !== "read") studio.requestDraw(0);
+      else if ((settling || weighing) && action.do !== "read") studio.requestDraw(0);
       return result;
     }
     return null;
@@ -7696,6 +7809,11 @@ export function mount(studio, container) {
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
     if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
+    // (The fields of words it had let go of what they listen to once it is drawn again: kept,
+    // each held the panel it was in -- a slide's worth at every slide gone to -- and was told of
+    // every caret moved anywhere.)
+    const fields = [...inspectorBody.querySelectorAll(".rich")];
+    queueMicrotask(() => { for (const field of fields) if (!field.isConnected) field.dispose?.(); });
     keepFocus(inspectorBody, () => {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
@@ -7716,7 +7834,7 @@ export function mount(studio, container) {
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
     }, { undone: undoing });
-    markFills();
+    markFillsSoon();
   }
 
   // Arrange, Keynote's tab of it: what is chosen -- the slide's objects (placing.js), its
@@ -7783,7 +7901,10 @@ export function mount(studio, container) {
     return spare != null && Number(spare) < 2;
   }
   // The stops that would not move it greyed -- there it has nowhere to go -- why, in each one's
-  // tooltip. (Kept to the slide as it is drawn again: a width changed.)
+  // tooltip. (Kept to the slide as it is drawn again: a width changed.) Measured as the next
+  // frame is laid out, once, not at once as the panel is drawn: its measuring laid the page out
+  // there and then, the panel just made with it, before the rest of a click was done.
+  function markFillsSoon() { if (!markFills.soon) markFills.soon = requestAnimationFrame(() => { markFills.soon = 0; markFills(); }); }
   function markFills() {
     const pad = inspectorBody.querySelector(".position-pad"), at = state.focus;
     if (!pad || !at) return;
@@ -10434,8 +10555,8 @@ export function mount(studio, container) {
     else if ((key === "PageUp" || key === "PageDown") && !event.altKey && across.page(key === "PageDown" ? 1 : -1)) event.preventDefault();
     else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }
     else if (key === "End" && slides().length) { event.preventDefault(); select(slides().length - 1); }
-    else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
-    else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
+    else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && slideGoing() < slides().length - 1) { event.preventDefault(); goTo(slideGoing() + 1, event); }
+    else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && slideGoing() > 0) { event.preventDefault(); goTo(slideGoing() - 1, event); }
     else if (state.field && key === "Escape") { state.field = null; placeChosen(); }
     // Return opens what is chosen with all its words chosen, as Keynote's does.
     else if (state.field && key === "Enter") { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { selectAll: true }); }
@@ -10513,7 +10634,7 @@ export function mount(studio, container) {
     const block = state.focus && blocksAt(slideAt() || {}, state.focus.region)[state.focus.index];
     const typed = inline?.target?.kind === "block" ? kindOf(blocksAt(slideAt() || {}, inline.target.region)[inline.target.index]) : null;
     const own = {
-      drag: cropping?.drag?.moved ? "crop" : placedDrag === "size" ? "scale" : placedDrag === "out" ? "out" : placedDrag ? "move"
+      drag: cropping?.drag?.moved ? "crop" : placedDrag === "size" ? "scale" : placedDrag ? "move"
         : sizing?.moved || resizing?.moved || logoSizing?.moved ? "handle" : carry?.started ? "carry" : logoDrag?.started || band?.node ? "plain" : "",
       mode: cropping && !cropping.done ? "crop" : "",
       typing: !inline ? "" : inline.cell ? "cell" : inline.bullets ? "list" : inline.target?.kind === "stat" ? "stat" : inline.target?.kind === "picture" ? "caption"
@@ -11179,6 +11300,7 @@ export function mount(studio, container) {
     const from = (index) => (index < start ? index : index >= start + now ? index - now + was : found[index - start]);
     const old = pages;
     pages = after.map((_, index) => (from(index) >= 0 ? old[from(index)] : undefined));
+    letThumbGo();
     messages = messages.filter((m) => { const n = Number(/^slide(\d+)$/.exec(m.page || "")?.[1]); return !n || from(n - 1) === n - 1; });
   }
   studio.on("change", ({ quiet, source, who, before, entry, base, incoming, merged, answer }) => {
@@ -11208,6 +11330,7 @@ export function mount(studio, container) {
       state.focus = null;
     }
     settling = false;
+    weighing = false;
     if (state.slide >= slides().length) state.slide = Math.max(0, slides().length - 1);
     if (source === "history" && !inline) chooseChanged(was, entry);
     if (source === "history" && !inline && studio.state === "offline") standInChanged(was);
@@ -11286,14 +11409,14 @@ export function mount(studio, container) {
   // a while, for a large figure -- which the next change gives up.)
   let drawingSince = 0;
   studio.on("drawing", ({ version }) => {
-    if (settling) return;
+    if (settling || weighing) return;
     pending = true;
     drawingSince = version;
     setTimeout(() => { if (pending && drawingSince === version) showPending(); }, 150);
   });
   function showPending() {
     if (!pageNode || studio.state === "offline") return;
-    pageNode.classList.add("pending");
+    pageNode.classList.add("pending", "waiting");
     if (stageMeta.querySelector(".drawing")) return;
     stageMeta.querySelector(".stage-hint")?.remove();
     stageMeta.append(h("span.row.drawing", {}, h("span.spinner"), "Updating…"));
@@ -11302,12 +11425,17 @@ export function mount(studio, container) {
     pending = !result.latest || Boolean(result.unfinished);
     if (result.latest && !result.unfinished) {
       settling = false;
+      weighing = false;
       clearTimeout(settleTimer);
       // A figure being edited, drawn in the layout that suits it best once the edits stop,
       // lands there: its parts glide, never jump.
       if (result.info?.unsettled) settleTimer = setTimeout(() => { settling = true; if (figureBlock()) figure.parts.settles(); studio.requestDraw(0); }, settleSoon ? 0 : 1200);
+      else if (result.info?.weighing) settleTimer = setTimeout(() => { weighing = true; studio.requestDraw(0); }, 1200);
       settleSoon = false;
     }
+    // (The slide on the stage drawn anew: its thumbnail waits for the drawings to stop.)
+    const was = pages[state.slide], fresh = result.pages?.[state.slide];
+    if (was?.svg && fresh?.svg && was.hash !== fresh.hash) holdThumb(state.slide, was);
     pages = result.pages;
     drawnMessages = result.messages || [];
     // A switch left to the deck says what the slide now shows (Turn to Fit the Slide).
@@ -11342,7 +11470,7 @@ export function mount(studio, container) {
     // The panel's colours drawn again when the theme's change (its palette edited in its own
     // tab): the named colours, the tones and the palette's own order, as the swatches show them.
     const key = JSON.stringify([studio.info?.palette || {}, studio.info?.tones, studio.info?.order, studio.info?.own]);
-    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFills(); }
+    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFillsSoon(); }
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
     stage.querySelector(":scope > .deck-error")?.remove();
     if (deckError) stage.prepend(h("div.messages.deck-error", {}, messageView(deckError)));
