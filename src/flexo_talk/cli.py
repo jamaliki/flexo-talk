@@ -106,14 +106,12 @@ def _bundled(arguments: argparse.Namespace):
     if not arguments.deck.lower().endswith(".flexo"):
         yield arguments.deck
         return
-    import tempfile
-
     from flexo.bundle import Bundle, runs_python
     from flexo.confine import folder_root
     from flexo.studio import code_allowed
 
     source = Path(arguments.deck)
-    with tempfile.TemporaryDirectory(prefix="flexo-bundle-") as aside:
+    with _aside(source) as aside:
         with Bundle(source) as opened:
             python = runs_python(opened)
             if python and not arguments.trust:
@@ -122,6 +120,7 @@ def _bundled(arguments: argparse.Namespace):
                     "where it came from."
                 )
             opened.extract(aside)
+            _dated(Path(aside), opened)
             document = Path(aside) / opened.document
         root, allowed = folder_root.set(Path(aside).resolve()), code_allowed.set(bool(arguments.trust))
         try:
@@ -129,6 +128,73 @@ def _bundled(arguments: argparse.Namespace):
         finally:
             folder_root.reset(root)
             code_allowed.reset(allowed)
+
+
+@contextlib.contextmanager
+def _aside(source: Path):
+    """Where a bundle is unpacked to be built: the same folder each time it is built (one for
+    each place a bundle is, in flexo-talk's cache folder), so what was made for it before --
+    its figures laid out, its molecules and pictures drawn, each kept by where its files are
+    and when each was last changed -- is found again, not made afresh; taken away once it
+    is built. A temporary folder while another build of it is under way, or where nothing is
+    kept (``FLEXO_TALK_CACHE=0``)."""
+
+    import hashlib
+    import shutil
+    import tempfile
+
+    setting = os.environ.get("FLEXO_TALK_CACHE", "")
+    if setting == "0":
+        root = None
+    elif setting:
+        root = Path(setting)
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library/Caches/flexo-talk"
+    else:
+        root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "flexo-talk"
+    held = None
+    if root is not None:
+        try:
+            import fcntl
+
+            (root / "builds").mkdir(parents=True, exist_ok=True)
+            place = root / "builds" / hashlib.sha256(str(source.resolve()).encode("utf-8")).hexdigest()[:16]
+            held = open(place.with_suffix(".lock"), "a")  # noqa: SIM115 -- held for the build
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            shutil.rmtree(place, ignore_errors=True)
+            place.mkdir()
+        except (ImportError, OSError):
+            if held is not None:
+                held.close()
+            held = None
+    if held is None:
+        with tempfile.TemporaryDirectory(prefix="flexo-bundle-") as aside:
+            yield aside
+        return
+    try:
+        yield str(place)
+    finally:
+        shutil.rmtree(place, ignore_errors=True)
+        held.close()  # (and with it, the lock)
+
+
+def _dated(folder: Path, opened) -> None:
+    """Each file unpacked from a bundle dated as the bundle has it -- not as it was unpacked,
+    a moment ago -- with its contents' checksum in the nanoseconds, the bundle keeping only
+    the second (two apart): a file changed is told from the one before by the date, as a
+    file in a folder is, and one not changed is found as it was by the next build."""
+
+    import time
+
+    for name in opened.names:
+        info = opened.info(name)
+        try:
+            second = int(time.mktime((*info.date_time, 0, 0, -1)))
+        except (OverflowError, ValueError):
+            continue
+        stamp = second * 1_000_000_000 + info.CRC % 1_000_000_000
+        with contextlib.suppress(OSError):
+            os.utime(folder.joinpath(*name.split("/")), ns=(stamp, stamp))
 
 
 def _said(error: BaseException, target: str) -> str:

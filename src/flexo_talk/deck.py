@@ -2771,6 +2771,9 @@ class RenderedSlide:
     shown: dict[str, str] = field(default_factory=dict)
     """How what is on it is drawn where not plainly -- hidden or dimmed -- by the id it is drawn
     with, what is drawn under that id as it is (``flexo_talk.showing.slide_states``)."""
+    key: str = ""
+    """What it was drawn from, all of it, as a key -- given where it is kept to export again
+    (the studio's): a writer may keep what it makes of it by this (``export.write_pptx``)."""
 
     def at_step(self, step: int) -> str:
         """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""

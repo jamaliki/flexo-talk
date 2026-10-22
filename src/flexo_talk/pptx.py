@@ -796,14 +796,12 @@ def _picture(image: Image, placement: Placement, ids: _Ids) -> etree._Element | 
     mime, data = match.group(1), base64.b64decode(match.group(2))
     extension = ""
     if mime == "image/svg+xml":
-        import resvg_py
+        from flexo.raster_kept import png_of
 
         svg = data.decode("utf-8")
         pixels = max(1, round(image.width * placement.scale / 72.0 * 300.0))
-        from flexo.fonts import font_directories
-
-        folders = [str(folder) for folder in font_directories()]
-        data = bytes(resvg_py.svg_to_bytes(svg_string=svg, dpi=72, width=pixels, font_dirs=folders))
+        # (Drawn once, for the PDF as for this: flexo.raster_kept.)
+        data = png_of(svg, pixels)
         embed = ids.pictures(data, "image/png")
         svg_id = ids.pictures.svg(svg.encode("utf-8"))  # type: ignore[attr-defined]
         extension = (
