@@ -6,9 +6,18 @@
 // not asked for each move), about the row's right end on the title's middle, catching at the
 // size the title gives them (⌘ drags freely). Let go, they are that wide: one step, "Resize
 // People"; Esc puts them back; a double-click on a corner goes back to the default.
+//
+// A portrait's body (or its name) dragged moves the people -- all of them, the row together:
+// they are one row, sized together and standing in their order, as a logo row is moved along
+// as one -- anywhere on the slide, placed freely as an object is (`people_at`, the row's top
+// left). Drawn here as it is dragged, caught where an object would be (placing.js's carrier:
+// the slide's edges and middles, its objects and shapes, even spacing, the grid; ⇧ along one
+// way, ⌘ free); let go, one step, "Move People"; Esc puts them back. Placed, the arrows nudge
+// them (⇧ ten points), one step however many presses, as a placed object's do, and ⌥← ⌥→ still
+// move the one chosen along the row; their menu and the palette have Put People Back in Line.
 
 import { h } from "/static/studio/studio.js";
-import { peopleOf, peopleSize } from "/static/kinds/deck/peoplelist.js";
+import { peopleOf, peopleSize, peopleAt } from "/static/kinds/deck/peoplelist.js";
 
 const PERSON = /^slide(\d+)\.person(\d+)(?:\.|$)/;
 
@@ -17,9 +26,9 @@ const PERSON = /^slide(\d+)\.person(\d+)(?:\.|$)/;
 // free(event) (whether a drag snaps nowhere), putHeld() (a drawing held back while they were
 // sized, put in), dropHeld() (one held is not wanted: a drawing of the change follows),
 // clearChoice() (nothing else chosen), othersChosen(), refresh() (frames, the
-// inspector, where this person is), menu(point, items) }.
+// inspector, where this person is), menu(point, items), carry() (placing.js's carrier) }.
 export function slidePortraits(people, deck) {
-  let chosen = null, chosenOn = null, sizing = null;
+  let chosen = null, chosenOn = null, sizing = null, moving = null;
   const idOf = (index) => `slide${deck.slide() + 1}.person${index}`;
   const count = () => peopleOf(deck.slideAt()).length;
   people.choosing(() => (chosen !== null && chosenOn === deck.slide() ? chosen : null));
@@ -47,7 +56,7 @@ export function slidePortraits(people, deck) {
     const page = deck.pageNode();
     if (!page) return;
     if (frame.parentNode !== page) page.append(frame);
-    if (sizing) return;  // its frame follows them as they are sized
+    if (sizing || moving?.started) return;  // its frame follows them as they are sized or moved
     if (chosen !== null && (chosenOn !== deck.slide() || chosen >= count() || deck.othersChosen())) chosen = null;
     deck.place(frame, chosen === null ? null : deck.boxOf(idOf(chosen)), "Person");
     for (const row of document.querySelectorAll(".person-row")) row.classList.toggle("chosen", chosen !== null && Number(row.dataset.index) === chosen);
@@ -68,8 +77,15 @@ export function slidePortraits(people, deck) {
     show(index === chosen ? null : deck.boxOf(idOf(index)), "Person");
     return true;
   }
-  // Pressed: nothing to drag but its corners (the slide's other gestures leave it alone).
-  function press(event) { return at(event) !== null && event.button === 0; }
+  // Pressed: dragged, the people move (the slide's other gestures leave it alone).
+  function press(event) {
+    const index = at(event);
+    if (index === null || event.button !== 0) return false;
+    if (!event.shiftKey && !event.ctrlKey && !sizing && !moving) moveStart(event, index);
+    // (Theirs: no band across the slide from it, as from a shape pressed.)
+    event.shapes = true;
+    return true;
+  }
   // Clicked: chosen. A click anywhere else leaves the one chosen, and is the slide's.
   function pick(event) {
     const index = at(event);
@@ -83,6 +99,7 @@ export function slidePortraits(people, deck) {
       { icon: "left", label: "Move Left", keys: "⌥←", disabled: index === 0, run: () => moveTo(index, index - 1) },
       { icon: "right", label: "Move Right", keys: "⌥→", disabled: index >= many - 1, run: () => moveTo(index, index + 1) },
       { icon: "undo", label: "Reset People Size", disabled: peopleSize(deck.slideAt()) === null, run: () => people.resetSize() },
+      ...(peopleAt(deck.slideAt()) ? [{ icon: "layout", label: "Put People Back in Line", run: () => people.putBack() }] : []),
       "-",
       { icon: "trash", label: "Remove Person", keys: "⌫", danger: true, run: () => removeAt(index) },
     ];
@@ -112,6 +129,8 @@ export function slidePortraits(people, deck) {
     if (chosen === null || event.metaKey || event.ctrlKey) return false;
     if (chosenOn !== deck.slide() || deck.othersChosen()) { chosen = null; return false; }
     const now = chosen;
+    // Placed freely: the arrows nudge them all, as a placed object's do (⌥← ⌥→ still move it along the row).
+    if (event.key.startsWith("Arrow") && !event.altKey && peopleAt(deck.slideAt())) { nudge(event); return true; }
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       const to = now + (event.key === "ArrowLeft" ? -1 : 1);
       if (event.altKey) moveTo(now, to);
@@ -219,5 +238,126 @@ export function slidePortraits(people, deck) {
     deck.swallowRelease(true);
   }
 
-  return { hover, press, pick, context, key, place, commands, busy: () => Boolean(sizing), chosen: () => chosen };
+  // -- moved, all together --
+
+  // The arrows, placed: a point (⇧ ten) in the shapes' units, one step however many presses.
+  let nudged = null;
+  function nudge(event) {
+    const was = peopleAt(deck.slideAt());
+    if (!was) return;
+    const by = event.shiftKey ? 10 : 1;
+    const [dx, dy] = { ArrowLeft: [-by, 0], ArrowRight: [by, 0], ArrowUp: [0, -by], ArrowDown: [0, by] }[event.key] || [0, 0];
+    const run = nudged && nudged.slide === deck.slide() && Date.now() - nudged.at < 1500 ? nudged : { slide: deck.slide(), id: Date.now() };
+    run.at = Date.now();
+    nudged = run;
+    people.placeAt([was[0] + dx, was[1] + dy], { merge: `people-nudge-${run.id}` });
+  }
+
+  function moveStart(event, index) {
+    moving = { index, from: { x: event.clientX, y: event.clientY }, started: false, last: null, frame: 0 };
+    window.addEventListener("pointermove", moveMove);
+    window.addEventListener("pointerup", moveEnd);
+    window.addEventListener("pointercancel", moveCancel);
+    window.addEventListener("keydown", moveKey, true);
+    window.addEventListener("keyup", moveKey, true);
+  }
+  // Started: where the row stands, in the shapes' units -- as placed, else as drawn (each
+  // portrait says: data-flexo-row, in the slide's points) -- and what it reaches, to be caught.
+  function moveBegin() {
+    const elements = drawnPeople();
+    const row = String(elements.find((element) => element.hasAttribute("data-flexo-row"))?.getAttribute("data-flexo-row") || "").split(" ").map(Number);
+    if (!elements.length || row.length !== 4 || row.some((value) => !Number.isFinite(value))) return false;
+    if (chosen !== moving.index || chosenOn !== deck.slide()) choose(moving.index);
+    const carrier = deck.carry();
+    const k = carrier.scale() || 1;
+    const rects = elements.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width || rect.height);
+    const a = carrier.units(Math.min(...rects.map((rect) => rect.left)), Math.min(...rects.map((rect) => rect.top)));
+    const b = carrier.units(Math.max(...rects.map((rect) => rect.right)), Math.max(...rects.map((rect) => rect.bottom)));
+    Object.assign(moving, {
+      started: true, elements, carrier, k, box: [a[0], a[1], b[0], b[1]], start: carrier.units(moving.from.x, moving.from.y),
+      at: peopleAt(deck.slideAt()) || [row[0] / k, row[1] / k], dx: 0, dy: 0,
+      // (Each drawn moved from where it is drawn, whatever it was drawn with.)
+      own: elements.map((element) => element.getAttribute("transform") || ""),
+    });
+    deck.pageNode()?.classList.add("block-dragging");
+    document.body.classList.add("block-grabbing");
+    window.getSelection?.()?.removeAllRanges();
+    return true;
+  }
+  function moveMove(event) {
+    const g = moving;
+    if (!g) return;
+    g.last = event;
+    if (!g.started) {
+      if (Math.hypot(event.clientX - g.from.x, event.clientY - g.from.y) < 3) return;
+      if (!moveBegin()) { moveFinish(); return; }
+    }
+    event.preventDefault();
+    // (One frame's worth of moves drawn at once.)
+    if (!g.frame) g.frame = requestAnimationFrame(() => { if (moving === g) { g.frame = 0; moveDraw(g.last); } });
+  }
+  function moveDraw(event) {
+    const g = moving;
+    if (!g?.started || !event) return;
+    const point = g.carrier.units(event.clientX, event.clientY);
+    [g.dx, g.dy] = g.carrier.step(event, g.box, point[0] - g.start[0], point[1] - g.start[1]);
+    const x = g.dx * g.k, y = g.dy * g.k;
+    g.elements.forEach((element, n) => element.setAttribute("transform", `translate(${x} ${y})${g.own[n] ? ` ${g.own[n]}` : ""}`));
+    deck.place(frame, deck.boxOf(idOf(chosen)), "Person");
+    g.carrier.say(`${Math.round(g.at[0] + g.dx)}, ${Math.round(g.at[1] + g.dy)}`, event);
+  }
+  function moveFinish() {
+    window.removeEventListener("pointermove", moveMove);
+    window.removeEventListener("pointerup", moveEnd);
+    window.removeEventListener("pointercancel", moveCancel);
+    window.removeEventListener("keydown", moveKey, true);
+    window.removeEventListener("keyup", moveKey, true);
+    const was = moving;
+    moving = null;
+    if (was?.frame) cancelAnimationFrame(was.frame);
+    if (was?.started) {
+      was.carrier.end();
+      deck.pageNode()?.classList.remove("block-dragging");
+      document.body.classList.remove("block-grabbing");
+      deck.swallowRelease();
+    }
+    return was;
+  }
+  function moveEnd(event) {
+    const g = moving;
+    if (g?.started) moveDraw(event);
+    const was = moveFinish();
+    if (!was?.started) return;
+    if (Math.abs(was.dx) >= 0.005 || Math.abs(was.dy) >= 0.005) {
+      // (Drawn there until the slide is drawn again so: the drawing held meanwhile is older.)
+      deck.dropHeld();
+      if (people.placeAt([was.at[0] + was.dx, was.at[1] + was.dy])) return;
+    }
+    moveBack(was);
+  }
+  function moveBack(was) {
+    was.elements.forEach((element, n) => { if (was.own[n]) element.setAttribute("transform", was.own[n]); else element.removeAttribute("transform"); });
+    deck.putHeld();
+    place();
+  }
+  function moveCancel() { const was = moveFinish(); if (was?.started) moveBack(was); }
+  function moveKey(event) {
+    const g = moving;
+    if (!g) return;
+    if (event.type === "keydown" && event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      moveCancel();
+      deck.swallowRelease(true);
+      return;
+    }
+    // ⇧ or ⌘ pressed or let go mid-drag: drawn again with them.
+    if (g.started && g.last && ["Shift", "Alt", "Meta", "Control"].includes(event.key)) {
+      g.last = new PointerEvent("pointermove", { clientX: g.last.clientX, clientY: g.last.clientY, shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
+      moveDraw(g.last);
+    }
+  }
+
+  return { hover, press, pick, context, key, place, commands, busy: () => Boolean(sizing || moving?.started), chosen: () => chosen,
+    dragging: () => Boolean(moving?.started) };
 }

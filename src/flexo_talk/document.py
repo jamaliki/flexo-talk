@@ -294,18 +294,22 @@ SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "section": ("title", "subtitle"),
     "statement": ("words", "by"),
     "agenda": ("title",),
-    "content": ("title", "subtitle", "people", "people_size", "dark", "align", "body"),
-    "figure": ("title", "subtitle", "people", "people_size", "dark", "align", "body"),
+    "content": ("title", "subtitle", "people", "people_size", "people_at", "dark", "align", "body"),
+    "figure": ("title", "subtitle", "people", "people_size", "people_at", "dark", "align", "body"),
     "blank": ("title", "subtitle", "dark", "align", "body"),
-    "two-columns": ("title", "subtitle", "people", "people_size", "dark", "align", "split", "rows", "left", "right"),
-    "columns": ("title", "subtitle", "people", "people_size", "dark", "align", "widths", "rows", "columns"),
+    "two-columns": ("title", "subtitle", "people", "people_size", "people_at", "dark", "align", "split", "rows",
+                    "left", "right"),
+    "columns": ("title", "subtitle", "people", "people_size", "people_at", "dark", "align", "widths", "rows",
+                "columns"),
 }
 """The keys a slide of each layout takes, beside ``COMMON_KEYS``. ``rows`` sets a slide of
 columns in rows, block *i* of every column in row *i*: a list of the rows' labels (``""``
 for a row without one, and none at all only to line the rows up). ``people`` are portraits
 at the end of the title, each a picture file or ``{image: file, name: words}``
 (``Slide.person``); ``people_size`` how wide each portrait is, in points (24 to 160; none,
-as wide as the title sets them: ``Slide.size_people``)."""
+as wide as the title sets them: ``Slide.size_people``); ``people_at`` where they stand when
+placed freely, the row's top left as a block's ``at`` is (none, beside the title:
+``Slide.place_people``)."""
 
 STYLE_FIELDS = tuple(item.name for item in fields(DeckStyle))
 
@@ -725,7 +729,7 @@ def add_slide(
             f"{where}.layout", f"\u201c{layout}\u201d isn\u2019t a layout: drawn as Content. Choose one from Layout."
         ))
         data, layout = _as_content(data), "content"
-    for key in ("people", "people_size"):
+    for key in ("people", "people_size", "people_at"):
         if data.get(key) is not None and key not in SLIDE_KEYS[layout]:
             raise DeckDocumentError(f"{where}.{key}", f"A {layout} slide has no title for people to stand beside: "
                                                       f"people go on a content, two-columns, columns or figure slide.")
@@ -766,6 +770,11 @@ def add_slide(
             slide.size_people(data["people_size"])
         except SettingError as error:
             raise DeckDocumentError(f"{where}.people_size", str(error)) from None
+    if data.get("people_at") is not None:
+        try:
+            slide.place_people(data["people_at"])
+        except SettingError as error:
+            raise DeckDocumentError(f"{where}.people_at", str(error)) from None
     slide.placeholders = frozenset(
         key for key in ("title", "subtitle", "words") if key in data and not str(data[key] or "").strip()
     )
@@ -1744,6 +1753,8 @@ def _slide_data(
     if slide.people_size is not None and "people_size" in SLIDE_KEYS[layout] and "people_size" not in data:
         size = slide.people_size
         data["people_size"] = int(size) if size.is_integer() else size
+    if slide.people_at is not None and "people_at" in SLIDE_KEYS[layout] and "people_at" not in data:
+        data["people_at"] = [int(value) if float(value).is_integer() else value for value in slide.people_at]
     if slide.footnote_sources:
         data["footnotes"] = list(slide.footnote_sources)
     if slide.shape_sources:

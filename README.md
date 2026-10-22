@@ -308,7 +308,12 @@ shrink a little with them. The row ends on the slide's right margin and its port
 on the title's (and subtitle's); the title and subtitle wrap short of it (a centred title
 as far in from each side), and the body starts below the names. Many people are made
 smaller together, down to under half, to keep to about two fifths of the width (a size set
-too). PNG, JPEG,
+too). `slide.place_people((760, 400))` (`people_at: [760, 400]`) places them freely
+instead, as a block's `at` places it: the row's top left (its first portrait's slot, the
+portraits' top) at that point, in the units the slide's shapes are placed in (960 across),
+drawn over the slide's objects. Placed so, the header is no taller for them and the title
+takes the whole width -- unless they still stand beside its words, in the right half of the
+slide across from them, where it wraps short of them as before. PNG, JPEG,
 SVG or PDF pictures; content, two-columns, columns and figure slides take them (a title,
 section, statement, agenda or blank slide refuses them). In the PowerPoint each is a
 native picture cropped to its middle square, in an oval (Crop to Shape), its name its alt
@@ -320,6 +325,7 @@ text; a bundle carries the pictures. In a document:
   - {image: assets/sam.jpeg, name: Sam Pellock}
   - assets/other.jpeg          # a bare picture: no name under it
   people_size: 96              # each portrait 96 points across (none: the title sets it)
+  people_at: [760, 400]        # the row's top left, placed freely (none: beside the title)
   body: [...]
 ```
 
@@ -900,8 +906,12 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   slide's title are added as people, where they are let go among them. **Size** sets how
   wide every portrait on the slide is, in points; so does dragging a corner of a portrait
   chosen on the slide (all of them grow together; Esc puts them back, and a double-click
-  on a corner, or **Reset People Size**, goes back to the default). Each change is one
-  step to undo.
+  on a corner, or **Reset People Size**, goes back to the default). Dragging a portrait
+  itself moves all of the slide's people anywhere on it, together, caught where an object
+  would be (⇧ along one way, ⌘ free; Esc puts them back): **Move People**, written as
+  `people_at`. Once moved, the arrows nudge them (⇧ ten points; ⌥← ⌥→ still move the one
+  chosen along the row), and their menu and the palette have **Put People Back in Line**,
+  beside the title again. Each change is one step to undo.
 - **Slides** are listed on the left: drag to reorder, ⌘D to duplicate, ⌫ to
   delete, **+** between two to insert. Speaker notes sit under the slide. The slide
   being edited is drawn first; the others follow.

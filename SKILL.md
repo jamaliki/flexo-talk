@@ -133,7 +133,9 @@ A `content`, `two-columns`, `columns` or `figure` slide also takes people beside
 title: `slide.person("people/sam.jpeg", "Sam Pellock")` (`people: [{image: people/sam.jpeg,
 name: Sam Pellock}, people/other.png]` in a document) -- round portraits at the title's
 right end, names small under them, the title wrapping short of them;
-`slide.size_people(96)` (`people_size: 96`) makes each 96 points across (24 to 160). Use it for "done with"
+`slide.size_people(96)` (`people_size: 96`) makes each 96 points across (24 to 160);
+`slide.place_people((760, 400))` (`people_at: [760, 400]`, as a block's `at`) places the row's
+top left there instead, the title then taking the whole width. Use it for "done with"
 credits on a results slide rather than a picture in the body.
 
 A `two-columns` or `columns` slide also takes `rows=["", "Mechanism", "Geometry"]`
