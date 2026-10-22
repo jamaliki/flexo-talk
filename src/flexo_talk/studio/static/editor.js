@@ -4645,7 +4645,9 @@ export function mount(studio, container) {
     if (!key || known.has(key) || reading.has(key)) return;
     reading.add(key);
     try {
-      const result = await studio.api("/api/act", { file: studio.file, document: studio.doc, action: { do: "figure", at: { slide, region, index }, edit: { do: "read" } } });
+      // (As what it is, with the deck here the studio's: session.act.)
+      const action = { do: "figure", at: { slide, region, index }, edit: { do: "read" } };
+      const result = await studio.act?.(action, { keep: false }) || await studio.api("/api/act", { file: studio.file, document: studio.doc, action });
       if (result?.model) {
         if (known.size > 40) known.delete(known.keys().next().value);
         known.set(key, result.model);
@@ -4983,35 +4985,34 @@ export function mount(studio, container) {
     let label = ["move", "align", "step", "duplicate", "paste", "add", "join", "separate", "gather", "delete", "connect", "ungroup", "line_up"].includes(action.do)
       || lineLook || groupWords || setting || merge?.startsWith("as-drawn:") ? told : null;
     if (action.do === "delete" && figureCut) { figureCut = false; label = told?.replace(/^Delete\b/, "Cut") || null; }
+    // (A figure written in the deck, read as it is now: its parts as the edit that made it so
+    // answered, or as read ahead -- no request.)
+    if (action.do === "read") {
+      const model = typeof blocksAt(slides()[at.slide], at.region)[at.index]?.figure === "object" ? known.get(knownKey(at.slide, at.region, at.index)) : null;
+      if (model) return { document: studio.doc, select: [], model: structuredClone(model) };
+    }
+    // A figure's look changed at once (an arrowhead, a colour -- not words being typed) is
+    // drawn as a draft at once, as any change is, and laid out at its best as soon as that
+    // is drawn -- not after the pause typing gets: a large figure takes a while to lay out,
+    // and the draft does not wait on it.
+    const settles = action.do === "update" && !hold;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const sent = studio.doc;
-      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } }).catch((error) => {
-        // The studio out of reach: said so, for the edit to wait for it (figure parts hold it).
-        if (error instanceof TypeError || same(studio.doc, sent)) throw error;
-        return null;  // the deck changed meanwhile: made again on it as it is now
-      });
-      if (!same(studio.doc, sent)) {
-        if (action.do === "update" && [action.target, ...(action.targets || [])].some((part) => part?.type === "node" && !shapeIn(part.id))) return null;
-        continue;
-      }
       // An edit held while the studio was away, sent now it is back (the first sent, those it
       // held all known still, in the order they go): when it was made, for the history.
-      if (!own.sending?.length && action.do !== "read") own.sending = (own.parts?.heldEdits?.() || []).map((edit) => own.madeAt.get(edit.key) ?? edit.at);
-      const heldAt = action.do !== "read" ? own.sending?.shift() : undefined;
-      // A figure's look changed at once (an arrowhead, a colour -- not words being typed) is
-      // drawn as a draft at once, as any change is, and laid out at its best as soon as that
-      // is drawn -- not after the pause typing gets: a large figure takes a while to lay out,
-      // and the draft does not wait on it.
-      const settles = action.do === "update" && !hold;
-      // (Its parts glide there, should it be drawn another way.)
-      if (settles) own.parts?.settles?.();
-      if (result.file) {
-        if (action.do !== "read") { if (settles) settleSoon = true; studio.requestDraw(0); }
-        if (result.was !== undefined) recordFile(result, at, label, merge, hold);
-      }
-      else if (!same(result.document, sent)) {
+      let heldAt, counted = false;
+      const held = () => {
+        if (counted) return heldAt;
+        counted = true;
+        if (!own.sending?.length && action.do !== "read") own.sending = (own.parts?.heldEdits?.() || []).map((edit) => own.madeAt.get(edit.key) ?? edit.at);
+        heldAt = action.do !== "read" ? own.sending?.shift() : undefined;
+        return heldAt;
+      };
+      // The edit put in the deck, one step of its history (`drawn`: its drawing on its way).
+      const made = (document, answer, drawn = false) => {
+        held();
         const top = studio.past[studio.past.length - 1];
-        studio.change(() => result.document, { merge, hold, quiet: true, label });
+        studio.change(() => document, { merge, hold, quiet: true, label, drawn });
         // An edit held while the studio was away, sent now it is back: in the history where it
         // was made, among the deck's edits made meanwhile -- not over them, as made just now.
         const made = studio.past[studio.past.length - 1];
@@ -5026,10 +5027,62 @@ export function mount(studio, container) {
           const name = action.ids?.length === 1 ? /“.*”/.exec(told || "")?.[0] || null : null;
           shapesDeleted.push({ ids: [...(action.ids || [])], name, at: Date.now(), entry: studio.past[studio.past.length - 1] });
         }
+        // (Its parts as they now are, known: the drawing's read ahead asks nothing for them.)
+        if (answer?.model && typeof blocksAt(slides()[at.slide], at.region)[at.index]?.figure === "object") {
+          const key = knownKey(at.slide, at.region, at.index);
+          if (key) { known.delete(key); known.set(key, structuredClone(answer.model)); if (known.size > 40) known.delete(known.keys().next().value); }
+        }
+      };
+      // With the deck here the studio's, the edit goes as what it is, and the studio keeps
+      // it and draws it as it makes it: one request (session.act). Else, with the deck whole.
+      // (What only reads the figure goes so too, and is only answered.)
+      const reads = ["read", "structure-view", "structure-settings", "structure-fetch"].includes(action.do);
+      if (reads && studio.act) {
+        const answer = await studio.act({ do: "figure", at, edit: action }, { keep: false }).catch((error) => {
+          if (error instanceof TypeError || same(studio.doc, sent)) throw error;
+          return null;
+        });
+        if (answer && same(studio.doc, sent)) return answer;
+        if (!same(studio.doc, sent)) continue;
       }
+      if (!reads && studio.act) {
+        // (Its parts glide there, should it be drawn another way; the edit's drawing is a
+        // draft, a settling under way given up for it.)
+        if (settles) { own.parts?.settles?.(); settleSoon = true; }
+        settling = false;
+        weighing = false;
+        clearTimeout(settleTimer);
+        const quick = await studio.act({ do: "figure", at, edit: action }, { apply: (document, answer) => made(document, answer, true) }).catch((error) => {
+          if (error instanceof TypeError || same(studio.doc, sent)) throw error;
+          return null;  // the deck changed meanwhile: made again on it as it is now
+        });
+        if (quick) {
+          held();
+          if (quick.file && quick.was !== undefined) recordFile(quick, at, label, merge, hold);
+          return quick;
+        }
+        if (!same(studio.doc, sent)) continue;
+      }
+      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } }).catch((error) => {
+        // The studio out of reach: said so, for the edit to wait for it (figure parts hold it).
+        if (error instanceof TypeError || same(studio.doc, sent)) throw error;
+        return null;  // the deck changed meanwhile: made again on it as it is now
+      });
+      if (!same(studio.doc, sent)) {
+        if (action.do === "update" && [action.target, ...(action.targets || [])].some((part) => part?.type === "node" && !shapeIn(part.id))) return null;
+        continue;
+      }
+      held();
+      // (Its parts glide there, should it be drawn another way.)
+      if (settles) own.parts?.settles?.();
+      if (result.file) {
+        if (action.do !== "read") { if (settles) settleSoon = true; studio.requestDraw(0); }
+        if (result.was !== undefined) recordFile(result, at, label, merge, hold);
+      }
+      else if (!same(result.document, sent)) made(result.document, result);
       // (A figure being settled gives way to any edit asked of it, as soon as it is asked: one
       // that changed nothing, it is settled again.)
-      else if (settling && action.do !== "read") studio.requestDraw(0);
+      else if ((settling || weighing) && action.do !== "read") studio.requestDraw(0);
       return result;
     }
     return null;
