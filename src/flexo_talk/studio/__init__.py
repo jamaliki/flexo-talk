@@ -209,6 +209,8 @@ class DeckKind:
         """Drawings under way: one alone takes slides as they were read (two at once never
         share one)."""
         self._counting = threading.Lock()
+        self._pages: OrderedDict[str, None] = OrderedDict()
+        """The pages (their ``client``) drawn for, the latest last."""
         self._exports: OrderedDict[str, Any] = OrderedDict()
         """Slides as the last exports drew them (``_exported``), by what each was drawn from."""
 
@@ -693,6 +695,16 @@ class DeckKind:
         started = time.perf_counter()
         drawn_one = drawn_first = False
         order = _order(len(slides), focus)
+        # A page asking for the first time, its slide in focus drawn already (as the studio
+        # started, flexo.studio.warmup, or for another window), is sent it at once too.
+        client = str((hints or {}).get("client") or "")
+        alone = (
+            not settle and client not in self._pages and bool(order) and self._slides.get(keys[order[0]]) is not None
+        )
+        self._pages[client] = None
+        self._pages.move_to_end(client)
+        while len(self._pages) > 64:
+            self._pages.popitem(last=False)
         for index in order:
             known = self._slides.get(keys[index])
             if index in failed or (known is not None and (known.get("settled", True) or not settle)):
@@ -700,7 +712,7 @@ class DeckKind:
             # The slide in focus drawn, it is sent at once, alone: the page has it while the
             # others are drawn (asked for next) -- a deck opened shows its first slide without
             # waiting for the protein two slides on.
-            if drawn_one and (time.perf_counter() - started > BUDGET or (not settle and drawn_first)):
+            if alone or (drawn_one and (time.perf_counter() - started > BUDGET or (not settle and drawn_first))):
                 break
             slide = deck.slides[index]
             give_up_if_newer()  # (a settling given up for a change: flexo.draft)

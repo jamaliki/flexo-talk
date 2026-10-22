@@ -160,3 +160,20 @@ def test_an_installed_flexo_is_told_by_the_hashes_its_installation_recorded(monk
     assert compose._recorded(root) == b"flexo/__init__.py=sha256:abc\nflexo/text.py=sha256:abc"
     File.hash = None  # (installed to be worked on in place: read through)
     assert compose._recorded(root) is None
+
+
+def test_a_page_opened_on_a_slide_drawn_already_is_sent_it_at_once(tmp_path: Path, monkeypatch) -> None:
+    kind = DeckKind()
+    document = _deck(tmp_path)
+    # Drawn as the studio started (flexo.studio.warmup): the first slide alone.
+    warm = kind.draw(document, tmp_path, {"focus": 0, "client": "warm-up"})
+    assert warm.pages[0].svg and all(page.pending for page in warm.pages[1:])
+    drawn = _counting(monkeypatch, compose, "render_slide")
+    # The page that opens asks: it has its slide, with nothing drawn first.
+    first = kind.draw(copy.deepcopy(document), tmp_path, {"focus": 0, "client": "page"})
+    assert drawn == []
+    assert first.pages[0].svg == warm.pages[0].svg and first.unfinished
+    # And asked again, the rest are drawn.
+    while first.unfinished:
+        first = kind.draw(copy.deepcopy(document), tmp_path, {"focus": 0, "client": "page"})
+    assert len(drawn) == len(document["slides"]) - 1
