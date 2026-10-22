@@ -191,6 +191,9 @@ PNG_WIDTHS = (1280, 1920, 3840)
 """How wide the Export sheet makes a slide's PNG, in pixels: the second unless chosen."""
 BUDGET = 0.4
 """Seconds a drawing spends on slides beyond the first before it returns what it has."""
+REVALIDATING = 1.0
+"""Seconds a settling spends drawing again slides shown as an earlier version of the code drew
+them (just after an update) before it returns what it has: it gives way to any edit."""
 
 
 class DeckKind:
@@ -648,6 +651,7 @@ class DeckKind:
 
     def _draw(self, document: dict[str, Any], base: Path, hints: dict[str, Any] | None) -> Drawing:
         from flexo.draft import give_up_if_newer
+        from flexo.kept_versions import earlier as kept_earlier
         from flexo.studio import folder_root
 
         from flexo_talk.compose import CANT_DRAW, EDITING, LATER, PLACEHOLDERS, STANDING_ASIDE, render_slide
@@ -696,6 +700,14 @@ class DeckKind:
         # weighed once the settled slide is shown, when the page asks (``weigh``): settling a
         # figure just edited waits on nothing more (compose.LATER).
         weigh = settle and bool((hints or {}).get("weigh"))
+        # Just after an update, a slide is first drawn from what the version before laid out of
+        # its figures, where this version has laid out none yet (flexo.kept_versions.earlier):
+        # every slide shows at once, as on any other day, said to be ``revalidating``. It is
+        # drawn again by this version as the page settles -- the slide in focus first, then its
+        # neighbours, giving way to any edit -- and its drawing sent only should it differ. The
+        # page asking for its slides ``fresh`` (to present them, to copy one out) has them drawn
+        # by this version at once; an export never draws from what another version kept.
+        fresh = bool((hints or {}).get("fresh"))
         started = time.perf_counter()
         drawn_one = drawn_first = False
         order = _order(len(slides), focus)
@@ -711,33 +723,41 @@ class DeckKind:
             self._pages.popitem(last=False)
         for index in order:
             known = self._slides.get(keys[index])
+            earlier = known is not None and known.get("earlier", False)
             if index in failed or (
-                known is not None and (known.get("settled", True) or not settle)
+                known is not None and not (earlier and fresh) and (known.get("settled", True) or not settle)
                 and (known.get("weighed", True) or not weigh)
             ):
                 continue
             # The slide in focus drawn, it is sent at once, alone: the page has it while the
             # others are drawn (asked for next) -- a deck opened shows its first slide without
             # waiting for the protein two slides on.
-            if alone or (drawn_one and (time.perf_counter() - started > BUDGET or (not settle and drawn_first))):
+            budget = REVALIDATING if earlier and settle else BUDGET
+            if alone or (drawn_one and (time.perf_counter() - started > budget or (not settle and drawn_first))):
                 break
             slide = deck.slides[index]
             give_up_if_newer()  # (a settling given up for a change: flexo.draft)
-            editing, placeholders, aside = EDITING.set(not settle), PLACEHOLDERS.set(True), STANDING_ASIDE.set(True)
+            # (One shown as an earlier version drew it is drawn again as it was first drawn --
+            # as this version draws a deck opened afresh -- however it is asked for.)
+            editing = EDITING.set(not settle or earlier)
+            placeholders, aside = PLACEHOLDERS.set(True), STANDING_ASIDE.set(True)
             # (Settled -- or drawn at its best though changed -- what would make its figures
             # larger is left for the drawing the page asks for next, the slide said to be
             # weighing until then.)
             deferred: list = []
             later = LATER.set(None if weigh else deferred)
             try:
-                rendered = render_slide(deck, slide)
+                # (What an earlier version laid out may stand in only as the page first draws
+                # it: drawn again, as the page settles or asks for it fresh, it is this version's.)
+                with kept_earlier() if not settle and not fresh else contextlib.nullcontext([]) as taken:
+                    rendered = render_slide(deck, slide)
                 # (The data a plot in one of its figures reads is known once it has been
                 # drawn: the slide is kept by those files too, and they are watched.)
                 keys[index] = key(index)
                 self._slides[keys[index]] = {"svg": _presentable(rendered.svg, deck, slide), "steps": rendered.steps,
                                              "diagnostics": rendered.diagnostics, "notes": rendered.notes,
-                                             "held": rendered.held, "settled": rendered.settled,
-                                             "weighed": not deferred}
+                                             "held": rendered.held, "settled": rendered.settled and not taken,
+                                             "weighed": not deferred, "earlier": bool(taken)}
             except UntrustedCode as error:
                 self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
             except DeckDocumentError as error:
@@ -780,8 +800,11 @@ class DeckKind:
                 error = failed[index]
                 messages.append(Message(_plain_message(error), "error", error.where, identifier, "deck.document"))
                 pages.append(Page(identifier, _blank(deck, slide), _label(data), extra=_extra(data, error=True)))
-            elif done is None:
-                pages.append(Page(identifier, "", _label(data), extra=_extra(data), pending=True))
+            elif done is None or (fresh and done.get("earlier")):
+                # (Asked for fresh, one drawn as an earlier version drew it is still to be drawn:
+                # still said to be, the page keeping what it shows of it meanwhile.)
+                checking = {"revalidating": True} if done is not None else {}
+                pages.append(Page(identifier, "", _label(data), extra=_extra(data) | checking, pending=True))
             elif "error" in done:
                 # Python held back until the folder is trusted is not a mistake in the deck.
                 held = done.get("code") == "code.untrusted"
@@ -802,7 +825,9 @@ class DeckKind:
                     messages.append(_sized(_diagnostic(text, identifier, index, "note")))
                 for text in done.get("held", []):
                     messages.append(Message(text, "warning", f"slides[{index}]", identifier, "code.untrusted"))
-                pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
+                # (Drawn from what an earlier version of the code laid out: being drawn again.)
+                shown = _extra(data) | ({"revalidating": True} if done.get("earlier") else {})
+                pages.append(Page(identifier, done["svg"], _label(data), done["steps"], shown))
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
         weighing = any(not self._slides.get(key, {}).get("weighed", True) for key in keys)
         return Drawing(pages, _placed(messages, document), sorted(watched),
@@ -2765,16 +2790,29 @@ def _blank(deck, slide) -> str:
 def _tones(deck) -> dict[str, Any]:
     """The deck's tone colours, for the colour chips of a figure on a slide."""
 
+    def paints(**roles: str) -> dict[str, str]:
+        # (Each role the palette has: a tone's fill and outline always, its words' and its
+        # marks' colours where it names them -- a shape given a tone is painted with them on
+        # the page at once, as the slide will draw it.)
+        found = {}
+        for part, role in roles.items():
+            try:
+                found[part] = deck.palette.get(role)
+            except (KeyError, ValueError):
+                if part in ("fill", "stroke"):
+                    raise
+        return found
+
     colours = []
     for index in range(1, 9):
         try:
-            colours.append({"fill": deck.palette.get(f"tone-{index}-fill"),
-                            "stroke": deck.palette.get(f"tone-{index}-stroke")})
+            colours.append(paints(fill=f"tone-{index}-fill", stroke=f"tone-{index}-stroke",
+                                  ink=f"tone-{index}-ink", motif=f"tone-{index}-motif"))
         except (KeyError, ValueError):
             break
     # The theme's grey, as a shape toned ``neutral`` is painted.
     try:
-        neutral = {"fill": deck.palette.get("block-fill"), "stroke": deck.palette.get("block-stroke")}
+        neutral = paints(fill="block-fill", stroke="block-stroke", motif="block-motif", ink="ink")
     except (KeyError, ValueError):
         neutral = None
     return {"colours": colours, "used": {}, **({"neutral": neutral} if neutral else {})}

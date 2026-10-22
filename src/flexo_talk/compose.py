@@ -33,6 +33,7 @@ from flexo.artwork import load_artwork, picture_href, picture_link
 from flexo.draft import GivenUp, give_up_if_newer
 from flexo.ir.measured import TextMetrics
 from flexo.ir.semantic import TextRun
+from flexo.kept_versions import allowed, took
 from flexo.lint import lint_compilation
 from flexo.render_common import displayed_alone, render_runs
 from flexo.structures import structure_problem
@@ -5056,6 +5057,15 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
     # as arranged.)
     fold = turn or (block.turn is False and not _arranged(spec))
     where = (deck.id, canvas.slide.id, spec.id)
+    if where in _EARLIER_SEEN:
+        # Shown as an earlier version of the code laid it out (just after an update), it is
+        # still drawn so for the page, and said to be; drawn by this version (the page checking
+        # it, an export), it is laid out as if never seen -- as this version would draw it on
+        # a deck opened afresh.
+        if allowed():
+            took("figure seen as laid out earlier")
+        else:
+            _seen_afresh(where)
     _SETTLED.discard(where)
     _kept_as_written(where, spec)
     # A figure its person has seen keeps the way it was drawn -- turned to fit the slide, or
@@ -5090,7 +5100,15 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         key = (*opened, "frame", layout)
     # (A figure with plots is laid out again when their Python or their data has changed.)
     plotted = any(node.kind == "plot" for node in spec.nodes)
-    laid = _plotted_fit(key, spec) if plotted else _cached_fit(key)
+    # (Kept by this version of the code -- or, for the studio's page just after an update, by
+    # the version before, shown while this one lays it out again: flexo.kept_versions. Not a
+    # frame's: laid out with the frame's others, it is this version's alone.)
+    laid, earlier = (_plotted_fit(key, spec), False) if plotted else _kept_fit(key, earlier=layout is None)
+    if earlier and not _shown_as_kept(laid):
+        laid, earlier = None, False
+    if earlier:
+        took("figure laid out")
+        _EARLIER_SEEN.add(where)
     if laid is not None and block.frame and "parts" not in laid:
         laid = None  # (kept before frames asked where its parts are)
     if laid is None:
@@ -5226,8 +5244,9 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         # (One about a part of it -- a line -- names it: "#edge.2.b-to-nowhere: ...".)
         canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}{text if text.startswith('#') else ': ' + text}")
     # A structure that can't be drawn as written is a panel saying why: said under the slide too,
-    # naming it and its file, to be chosen and put right.
-    for node in spec.nodes:
+    # naming it and its file, to be chosen and put right. (Not of one shown as an earlier version
+    # laid it out: its molecules are checked as this version lays it out again, a moment later.)
+    for node in () if earlier else spec.nodes:
         problem = structure_problem(node, style) if node.kind == "structure" else None
         if problem is not None:
             canvas.diagnostics.append(f"{canvas.slide.id} {spec.id}#{node.id}:source: {problem.message}")
@@ -5434,6 +5453,37 @@ _ASIDE: dict[tuple, float] = {}
 as last found once its changes stopped: kept for while it is changed again (``_settled_only``)."""
 
 
+_EARLIER_SEEN: set[tuple] = set()
+"""Figures (by deck, slide and figure) shown as an earlier version of the code laid them out
+(``flexo.kept_versions.earlier``): what was seen of them -- their layout, their place -- is
+that version's, forgotten as this version lays them out (``_seen_afresh``)."""
+
+
+def _seen_afresh(where: tuple) -> None:
+    """A figure laid out as if never seen before: all that was kept of how it was last drawn
+    let go."""
+
+    for seen in (_LAYOUTS, _SCALES, _SHOWN, _PLACES, _ASKED, _TURNS, _FINDING):
+        seen.pop(where, None)
+    _SETTLED.discard(where)
+    for key in [key for key in _ASIDE if key[0] == where]:
+        _ASIDE.pop(key, None)
+    _EARLIER_SEEN.discard(where)
+
+
+def _shown_as_kept(laid: object) -> bool:
+    """Whether a layout an earlier version of the code kept has all this one shows of it."""
+
+    if not isinstance(laid, dict):
+        return False
+    ink = laid.get("ink")
+    return (
+        isinstance(laid.get("svg"), str) and isinstance(laid.get("layout"), str)
+        and isinstance(laid.get("codes"), list) and isinstance(ink, list) and len(ink) == 4
+        and all(isinstance(value, int | float) for value in ink)
+    )
+
+
 _SETTLED: set[tuple] = set()
 """Figures drawn at their best as they were changed (``flexo.fit_in_box``'s ``whole``): what
 would make them larger is found as it is for a figure settled (``_settled_only``)."""
@@ -5543,59 +5593,16 @@ its own words (``_plots_said``), not as a check of its figure."""
 
 # -- the figure cache --------------------------------------------------------------------
 
-_FLEXO_FINGERPRINT: list[str] = []
-
-
 def _fingerprint() -> str:
-    """A hash of flexo's own source: any change to the engine makes cached layouts stale.
+    """The version of the code a figure is laid out by: flexo's own source and mol-sketch's,
+    with what draws for them (``flexo.kept_versions.code``) -- a molecule drawn otherwise is a
+    figure laid out otherwise. Not in the name a layout is kept by but in its file's first line:
+    what the version before laid out is there after an update until this version lays it out
+    again, for the studio's page to be shown meanwhile (``_kept_fit``)."""
 
-    An installed flexo (the app's) is told by the hashes its installation recorded of each of
-    its files (``_recorded``): one file read, not every one -- in a busy studio each read is a
-    wait, and reading them all took seconds at the first figure drawn. One worked on in place
-    is read through."""
+    from flexo.kept_versions import code
 
-    if not _FLEXO_FINGERPRINT:
-        import hashlib
-
-        root = Path(flexo.__file__).parent
-        recorded = _recorded(root)
-        if recorded is not None:
-            _FLEXO_FINGERPRINT.append(hashlib.sha256(recorded).hexdigest()[:16])
-            return _FLEXO_FINGERPRINT[0]
-        digest = hashlib.sha256()
-        for path in sorted(root.rglob("*.py")):
-            digest.update(path.read_bytes())
-        _FLEXO_FINGERPRINT.append(digest.hexdigest()[:16])
-    return _FLEXO_FINGERPRINT[0]
-
-
-def _recorded(root: Path) -> bytes | None:
-    """What flexo's installation recorded of its Python files: each one's name and hash -- or
-    None where it recorded no hash of one, or none of them (installed to be worked on in
-    place), or its record is not of the copy at ``root``."""
-
-    import importlib.metadata
-    import os
-
-    try:
-        installed = importlib.metadata.distribution("flexo")
-    except importlib.metadata.PackageNotFoundError:
-        return None
-    found = []
-    for item in installed.files or ():
-        if not item.parts or item.parts[0] != "flexo" or item.suffix != ".py":
-            continue
-        if item.hash is None:
-            return None
-        found.append(f"{item.as_posix()}={item.hash.mode}:{item.hash.value}")
-    if not found:
-        return None
-    try:
-        if not os.path.samefile(installed.locate_file("flexo/__init__.py"), root / "__init__.py"):
-            return None
-    except OSError:
-        return None
-    return "\n".join(sorted(found)).encode("utf-8")
+    return code()
 
 
 _DRAWN_FROM = frozenset({"source", "density", "ss_from"})
@@ -5603,12 +5610,22 @@ _DRAWN_FROM = frozenset({"source", "density", "ss_from"})
 PDF's page), a structure, its map, the structure it is coloured by."""
 
 
-def _drawn_from(spec: Any) -> tuple:
+class _Files(tuple):
+    """The files a figure is drawn from (``_drawn_from``): each its name as the figure names it,
+    and what stands for it in what the figure's layout is kept by (``_on_disk``) -- said by that
+    alone, as is the name wherever the figure names it (``_cache_path``)."""
+
+    def __repr__(self) -> str:
+        return repr(tuple(token for _, token in self))
+
+
+def _drawn_from(spec: Any) -> _Files:
     """What a figure is drawn from besides its words: each file its parts read -- a picture,
     a structure and its map (``_DRAWN_FROM``) -- and the pictures among the shapes drawn over
-    it, as the disk has each now (``_on_disk``). In the key a figure laid out for a box is kept
+    it, as what is in each now (``_on_disk``). In the key a figure laid out for a box is kept
     by, in memory and between builds: one of them edited (a picture's viewBox changed, a
-    structure saved again), the figure is laid out afresh. A plot's files are its own
+    structure saved again otherwise), the figure is laid out afresh; one saved again as it was,
+    or the deck unpacked afresh elsewhere, finds it as it was. A plot's files are its own
     (``_plots_from``)."""
 
     found = []
@@ -5623,29 +5640,35 @@ def _drawn_from(spec: Any) -> tuple:
             from flexo.shape_pictures import sources
 
             found += [_on_disk(source) for source in sources([shape.spec])]
-    return tuple(found)
+    return _Files(found)
 
 
-def _on_disk(name: str) -> tuple:
-    """A file a figure names, as the disk has it: its name, size and when it last changed,
-    asked of the disk, never read -- or its name alone, for one that is not a file (a PDB ID,
-    a file gone). A PDF's page (``art.pdf#2``) is its file's."""
+def _on_disk(name: str) -> tuple[str, str]:
+    """A file a figure names, and what stands for it: its own name and what is in it, hashed
+    (``flexo.kept_versions.content``: asked of the disk, and read only when the disk says it
+    has changed) -- not where it is, nor when it was saved -- or its name alone, for one that is
+    not a file (a PDB ID, a file gone). A PDF's page (``art.pdf#2``) is its file's."""
 
     import os
 
+    from flexo.kept_versions import content
+
     found = os.path.expanduser(name)
     for each in (found, found.rpartition("#")[0]):
-        try:
-            stat = os.stat(each)
-        except (OSError, ValueError):
-            continue
-        return (name, stat.st_size, stat.st_mtime_ns)
-    return (name,)
+        held = content(each) if each else None
+        if held is not None:
+            return (name, f"{os.path.basename(found)} {held[:32]}")
+    return (name, name)
 
 
 def _cache_path(key: tuple) -> Path | None:
     """Where a figure laid out for a box is kept between builds (``FLEXO_TALK_CACHE=0``
-    turns the cache off; ``FLEXO_TALK_CACHE=/some/dir`` moves it)."""
+    turns the cache off; ``FLEXO_TALK_CACHE=/some/dir`` moves it): by all it was laid out
+    from, its file saying which version of the code laid it out (``_kept_fit``). Each file it
+    is drawn from is in it by its name and what is in it (``_drawn_from``), wherever the figure
+    names it -- a structure's source, a picture's -- not by where it is: a deck unpacked afresh
+    (a copy of it, opened on another computer, its bundle put back in its place) has its files
+    elsewhere, saved as they were unpacked, and its figures are found as they were laid out."""
 
     import hashlib
     import os
@@ -5660,38 +5683,88 @@ def _cache_path(key: tuple) -> Path | None:
         folder = Path.home() / "Library/Caches/flexo-talk"
     else:
         folder = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "flexo-talk"
-    name = hashlib.sha256(repr((key, _fingerprint())).encode("utf-8")).hexdigest()[:32]
-    return folder / "fits" / f"{name}.json"
+    said = repr(key)
+    for files in key:
+        if isinstance(files, _Files):
+            for named, token in files:
+                if token != named:
+                    said = said.replace(repr(named), repr(token)).replace(f'"{named}"', f'"{token}"')
+    name = hashlib.sha256(said.encode("utf-8")).hexdigest()[:32]
+    return folder / LAYOUTS / f"{name}.json"
+
+
+LAYOUTS = "layouts"
+"""The folder in flexo-talk's cache folder its laid-out figures are kept in. (Those kept before
+they were kept by what their files hold, in ``fits``, are let go: ``_prune_fits``.)"""
 
 
 _FITS: OrderedDict[str, dict] = OrderedDict()
 """Figures laid out for a box as this program has read or kept them (``_cached_fit``), by
 their file between builds: a slide drawn again at each keystroke on it reads its figure's
-layout from here, not from its file -- a protein's surface, laid out, is 1.5 MB of JSON."""
+layout from here, not from its file -- a protein's surface, laid out, is 1.5 MB of JSON.
+(Only what this version of the code laid out: what an earlier one did is read each time.)"""
 _FITS_LOCK = threading.Lock()
 FITS_BYTES = 64_000_000
 """Characters of laid-out drawings kept so, at most."""
 
+FITS_KEPT = 2000
+"""How many laid-out figures are kept on disk, the least recently used let go first (a deck of
+fifty slides keeps about seventy)."""
+FITS_SIZE = 256 << 20
+"""How many bytes of them, at most (as flexo keeps of its molecules and pictures)."""
+FITS_PRUNED = 64
+"""How many are kept between one pruning and the next: the folder is looked through on the
+first keeping of a session and then after every ``FITS_PRUNED`` more."""
+_FITS_KEPT_SINCE = [0]
+_FITS_USED: set[str] = set()
+"""Kept layouts read back this session, and marked used (once each)."""
+
 
 def _cached_fit(key: tuple) -> dict | None:
+    """The figure laid out for ``key`` by this version of the code, if it was kept."""
+
+    return _kept_fit(key)[0]
+
+
+def _kept_fit(key: tuple, earlier: bool = False) -> tuple[dict | None, bool]:
+    """The figure kept for ``key``, and whether an earlier version of the code laid it out:
+    one this version laid out (kept in memory too, ``_FITS``), or, with ``earlier`` and where
+    it may be shown (``flexo.kept_versions.allowed``), another's -- read, never remembered."""
+
     import json
+    import os
+
+    from flexo.kept_versions import STAMP, allowed
 
     path = _cache_path(key)
     if path is None:
-        return None
+        return None, False
     with _FITS_LOCK:
         found = _FITS.get(str(path))
         if found is not None:
             _FITS.move_to_end(str(path))
-            return found
-    if not path.is_file():
-        return None
+            return found, False
+    stale = earlier and allowed()
     try:
-        found = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb") as handle:
+            # (The first line says which version laid it out: read alone, should it be another's.)
+            line = handle.readline(64)
+            ours = line == STAMP + _fingerprint().encode("ascii") + b"\n"
+            if not ours and not (stale and line.startswith(STAMP)):
+                return None, False
+            found = json.loads(handle.read())
     except (OSError, ValueError):
-        return None
+        return None, False
+    if not isinstance(found, dict):
+        return None, False
+    if str(path) not in _FITS_USED:
+        _FITS_USED.add(str(path))
+        with contextlib.suppress(OSError):
+            os.utime(path)  # used now: kept the longest (marked once a session)
+    if not ours:
+        return found, True
     _remember_fit(str(path), found)
-    return found
+    return found, False
 
 
 def _remember_fit(name: str, laid: dict) -> None:
@@ -5705,7 +5778,12 @@ def _remember_fit(name: str, laid: dict) -> None:
 
 
 def _store_fit(key: tuple, laid: dict) -> None:
+    """``laid`` kept for ``key``, said to be this version's (over what an earlier one kept)."""
+
     import json
+    import os
+
+    from flexo.kept_versions import stamped
 
     path = _cache_path(key)
     if path is None:
@@ -5713,11 +5791,59 @@ def _store_fit(key: tuple, laid: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(laid)
-        path.write_text(text, encoding="utf-8")
+        # (Written aside and put in its place: never read half written by another studio.)
+        partial = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.saving")
+        partial.write_bytes(stamped(text.encode("utf-8")))
+        partial.replace(path)
     except OSError:
         return
+    _FITS_USED.add(str(path))
+    if _FITS_KEPT_SINCE[0] % FITS_PRUNED == 0:
+        # (Looked through on a thread of its own: a drawing does not wait on the disk for it.)
+        threading.Thread(target=_prune_fits, args=(path.parent,), name="fits pruned", daemon=True).start()
+    _FITS_KEPT_SINCE[0] += 1
     # (Kept as it reads back from its file: as the next drawing would have found it there.)
     _remember_fit(str(path), json.loads(text))
+
+
+_PRUNING = threading.Lock()
+
+
+def _prune_fits(where: Path) -> None:
+    """The least recently used laid-out figures let go, past ``FITS_KEPT`` of them or
+    ``FITS_SIZE`` bytes (what an earlier version kept among them, by when each was last used);
+    and, the first time, the folder of those kept by where their files were and when they were
+    saved (``fits``), never found again."""
+
+    import os
+    import shutil
+
+    if not _PRUNING.acquire(blocking=False):
+        return
+    try:
+        if where.name != "fits":
+            shutil.rmtree(where.parent / "fits", ignore_errors=True)
+        found = []
+        with os.scandir(where) as entries:
+            for item in entries:
+                if not item.name.endswith(".json"):
+                    continue
+                try:
+                    stat = item.stat()
+                except OSError:
+                    continue
+                found.append((stat.st_mtime, stat.st_size, item.path))
+        found.sort(reverse=True)
+        total = 0
+        for place, (_, size, item) in enumerate(found):
+            total += size
+            if place >= FITS_KEPT or total > FITS_SIZE:
+                with contextlib.suppress(OSError):
+                    os.unlink(item)
+    except OSError:
+        pass
+    finally:
+        _PRUNING.release()
 
 
 _PLOTTED: dict[tuple, tuple[dict, tuple]] = {}
