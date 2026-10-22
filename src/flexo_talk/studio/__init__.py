@@ -816,6 +816,10 @@ class DeckKind:
 
             names = [structure_caption(base / str(source)) for source in action.get("sources") or []]
             return {"document": document, "names": names}
+        if action.get("do") == "bring-slides":
+            # Slides pasted from a deck of another folder, with the files they name
+            # (flexo_talk.pasting): the studio's copies, taken away if nothing uses them.
+            return _bring_slides(document, action, base)
         if action.get("do") == "mechanism":
             return _mechanism(document, action, base)
         if action.get("do") == "inline":
@@ -1180,6 +1184,30 @@ def _held_figure(document: Any, key: str) -> tuple[dict[str, Any] | None, Any]:
         if isinstance(value, dict) and isinstance(value.get("figure"), dict) and str(value["figure"].get("id")) == key:
             return value, lambda figure, block=block: block.__setitem__("figure", figure)
     return None, None
+
+
+def _bring_slides(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
+    """Slides copied in a deck of another folder (``from``: that deck's folder), pasted here: the
+    files they name copied into this deck's folder and the slides naming them so
+    (``flexo_talk.pasting``). Only from a folder a studio has open on this computer: the page
+    names it, and nothing else is read."""
+
+    from flexo.studio import sessions
+    from flexo.studio.figure_edit import EditError
+
+    from flexo_talk.pasting import brought
+
+    source = Path(str(action.get("from") or "")).expanduser()
+    slides = action.get("slides")
+    if not source.is_absolute() or not isinstance(slides, list):
+        raise EditError("There are no slides to paste.")
+    if source.resolve() != base.resolve() and sessions.find(source) is None:
+        raise EditError("The deck these slides were copied from is no longer open, "
+                        "so the files they name could not be brought.")
+    figures = action.get("figures") if isinstance(action.get("figures"), dict) else None
+    made = brought(slides, source, base, figures)
+    return {"document": document, "slides": made["slides"], "figures": made["figures"], "missing": made["missing"],
+            "uploaded": [str(path) for path in made["files"]]}
 
 
 def _embedding(document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:

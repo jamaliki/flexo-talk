@@ -5,7 +5,8 @@
 // the slides they touch flash in their colour.
 
 import { h, clear, icon, ui, menu, popover, closeMenu, dialog, toast, keepFocus, avatar, colourOf, nameOf, picture, ownResources, same, themeField, readable, mathWords, inQuotes, typingName, suggestedFonts, pastedDrawing, drawingPaster, DRAWING_FILE, wedgeHead } from "/static/studio/studio.js";
-import { copyOut, copiedHere, pastedOwn, pastedGif } from "/static/studio/studio.js";
+import { copyOut, copiedHere, pastedOwn, pastedGif, pastedOwnWords, pastedOwnWeb, heldData } from "/static/studio/studio.js";
+import { deckFolder, figuresNamed, broughtClip, placedFigures } from "/static/kinds/deck/pastedslides.js";
 import { figureParts, widenLines, fileLabel, markupOf, oneLine, drawnRect } from "/static/kinds/figure/parts.js";
 import { drawingSections, describeDrawing, drawnUrl } from "/static/kinds/figure/drawing.js";
 import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcross, acrossDrop, autoAcross } from "/static/kinds/deck/slidedrop.js";
@@ -1173,7 +1174,7 @@ export function mount(studio, container) {
     partElement: (id) => { const prefix = figurePrefix(); return prefix && pageNode ? pageNode.querySelector(`[id="${CSS.escape(prefix + id)}"]`) : null; },
     blocksAt: (slide, region) => blocksAt(slide, region), slideAt: () => slideAt(), regionsOf: (slide) => regionsOf(slide),
     blockName: (block) => blockName(block), element: (region, index) => blockElement(region, index), partAt: (event) => partAt(event),
-    editSlide: (mutate, options) => editSlide(mutate, options), copyOf: (block) => duplicateOf(block), pasteClip: (clip) => pasteClip(clip),
+    editSlide: (mutate, options) => editSlide(mutate, options), copyOf: (block) => duplicateOf(block), pasteClip: (clip) => pasteHere(clip),
     select: (index) => select(index), render: () => { placeChosen(); renderInspector(); reportFocus(); },
     crumb: () => [glyph(layoutOf(slideAt() || {})), `Slide ${state.slide + 1}`], frame: () => [0, 0, SHAPE_FRAME, slideView().height / shapeScale()],
     clipChosen: (cut) => clipChosen(cut), clipItems: () => clipItems(), undoNote: (text, options) => undoNote(text, options),
@@ -7184,7 +7185,13 @@ export function mount(studio, container) {
   const wordsChosen = () => { const chosenWords = window.getSelection(); return Boolean(chosenWords?.toString()) && !pageNode?.contains(chosenWords.anchorNode); };
   const typingNow = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable
     || Boolean(document.querySelector(".scrim, .present"));
-  function clipOf() {
+  // (Where the deck is goes with what is copied, and the deck's own figures it shows: pasted
+  // in a deck of another folder, their files come too -- pastedslides.js.)
+  const clipOf = () => {
+    const clip = clipOfHere();
+    return clip && clip.what !== "parts" ? { ...clip, from: deckFolder(studio), figures: figuresNamed(clip, studio.doc?.figures) } : clip;
+  };
+  function clipOfHere() {
     // Objects and shapes chosen together (mixed.js): each kind's copy, in one.
     const both = mixed.clip();
     if (both) return both;
@@ -7310,13 +7317,19 @@ export function mount(studio, container) {
     keyed = null;
     // (Words typed in, or a field that took the paste itself, are not the slide's.)
     if (!studio.active || typingNow() || event.defaultPrevented) return;
-    const data = event.clipboardData;
+    let data = event.clipboardData;
     let clip = null;
     try { clip = JSON.parse(data?.getData(CLIP) || "null"); } catch { clip = null; }
     // A clipboard that keeps only words: what was copied here, if they are its words.
     if (!clip && clipboard && data?.getData("text/plain") === plainOf(clipboard)) clip = clipboard;
     // (Copied in another of the studio's documents, where the clipboard keeps its words alone.)
     if (!clip) clip = copiedHere(data);
+    // (Several slides copied in a window of another folder, in the Mac app: their words alone
+    // come, Flexo's own copy beside them on the clipboard, asked for -- clipboard.js.)
+    // (And in a browser, copied in a studio of another folder: a picture alone comes, Flexo's
+    // own copy kept beside it on the clipboard, read -- clipboard.js.)
+    const theirs = !clip && (pastedOwnWords(data) || pastedOwnWeb(data));
+    if (theirs) { event.preventDefault(); data = heldData(data); clip = await theirs; }
     if (clip) { event.preventDefault(); pasteClip(clip); return; }
     const files = [...(data?.files || [])], at = state.focus ? { kind: "block", ...state.focus } : null;
     // A drawing copied in another app (Inkscape's) is pasted as its SVG -- its lines and words
@@ -7400,22 +7413,33 @@ export function mount(studio, container) {
       return { bullets: bulletsFrom(block.items.map((item) => "  ".repeat((item.depth || 0) - least) + item.markup.trim()).join("\n")), ...(outer.every((item) => item.ordered) ? { numbered: true } : {}) };
     });
   }
+  // A copy from a deck of another folder brings the files it names, and the figures of that
+  // deck's own it shows, first (pastedslides.js); then it is pasted, those figures put among
+  // this deck's in the same step as what shows them.
+  let figuresToAdd = null;
+  const addFigures = (d) => { if (figuresToAdd && Object.keys(figuresToAdd).length) d.figures = { ...(d.figures || {}), ...figuresToAdd }; figuresToAdd = null; };
   function pasteClip(clip) {
+    broughtClip(studio, clip).then((ready) => {
+      const placed = placedFigures(ready, studio.doc?.figures);
+      figuresToAdd = placed.add;
+      try { pasteHere(placed.clip); } finally { figuresToAdd = null; }
+    });
+  }
+  function pasteHere(clip) {
     // Objects and shapes copied together: each where it goes, both chosen, one step (mixed.js).
     if (clip.what === "mixed") { mixed.paste(clip); return; }
     // Shapes, on the slide shown, whatever its layout: a slide of any kind may have them.
     if (clip.what === "shapes" && Array.isArray(clip.shapes) && clip.shapes.length) { freeShapes.paste(clip); return; }
-    if (clip.what === "slides") {
+    if (clip.what === "slides" || clip.what === "slide") {
+      // After the slide chosen (the last of several), in one step, and chosen.
+      const given = clip.what === "slides" ? clip.slides : [clip.slide];
+      if (!Array.isArray(given) || !given.length || !given.every(Boolean)) return;
       const at = Math.min(Math.max(...chosenSlides()) + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...clip.slides.map((slide) => copyOf(slide))); },
-        { label: clip.slides.length === 1 ? "Paste Slide" : `Paste ${clip.slides.length} Slides` });
+      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, ...given.map((slide) => copyOf(slide))); addFigures(d); },
+        { label: given.length === 1 ? "Paste Slide" : `Paste ${given.length} Slides` });
       select(at);
-      state.picked = clip.slides.map((_, n) => at + n);
+      state.picked = given.length > 1 ? given.map((_, n) => at + n) : [];
       renderRail();
-    } else if (clip.what === "slide") {
-      const at = Math.min(state.slide + 1, slides().length);
-      studio.change((d) => { d.slides ||= []; d.slides.splice(at, 0, copyOf(clip.slide)); }, { label: "Paste Slide" });
-      select(at);
     } else if (clip.what === "block") {
       if (logoRoom(slideAt()) && kindOf(clip.block) === "image" && clip.block.image) { addLogos([clip.block.image], null, { pasted: true }); return; }
       if (!regionsOf(slideAt()).length) { toast("This layout has no room for objects. Choose a different layout first.", { icon: "info" }); return; }
@@ -7524,6 +7548,7 @@ export function mount(studio, container) {
     let index = 0;
     const before = moving && moving.slide === state.slide && moving.region === anchor?.region && moving.index < anchor.index ? 1 : 0;
     editSlide((s, d) => {
+      addFigures(d);
       if (moving) blocksAt(d.slides[moving.slide], moving.region).splice(moving.index, 1);
       const list = blocksAt(s, region, true);
       // Where there is only the layout's placeholder (an empty text or list, a Figure slide's
