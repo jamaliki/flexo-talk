@@ -1639,6 +1639,26 @@ export function mount(studio, container) {
     readSlideAhead();
   }
 
+  // ↓ or ↑ held, repeating faster than a large slide is drawn: the slide each press goes to is
+  // shown as the next frame is drawn -- one passed over meanwhile is not drawn whole on the
+  // way, and the keys never wait on the slides behind them, nor the stage run on after they
+  // stop. (Anything else pressed, or a click, finds that slide chosen.)
+  let goingTo = null;
+  const slideGoing = () => goingTo ?? state.slide;
+  function goTo(index, event) {
+    if (!event?.repeat) { settleGoing(); select(index); return; }
+    if (goingTo === null) requestAnimationFrame(settleGoing);
+    goingTo = index;
+  }
+  function settleGoing() {
+    if (goingTo === null) return;
+    const to = goingTo;
+    goingTo = null;
+    select(to);
+  }
+  document.addEventListener("keydown", (event) => { if (goingTo !== null && !event.repeat) settleGoing(); }, true);
+  document.addEventListener("pointerdown", () => settleGoing(), true);
+
   // Where this person is, as last told the others (see reportFocus).
   let reported = "";
   const whereNow = () => `${state.slide}:${state.focus ? `${state.focus.region}[${state.focus.index}]` : ""}:${state.field?.field ?? ""}`;
@@ -10429,8 +10449,8 @@ export function mount(studio, container) {
     else if ((key === "PageUp" || key === "PageDown") && !event.altKey && across.page(key === "PageDown" ? 1 : -1)) event.preventDefault();
     else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }
     else if (key === "End" && slides().length) { event.preventDefault(); select(slides().length - 1); }
-    else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
-    else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
+    else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && slideGoing() < slides().length - 1) { event.preventDefault(); goTo(slideGoing() + 1, event); }
+    else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && slideGoing() > 0) { event.preventDefault(); goTo(slideGoing() - 1, event); }
     else if (state.field && key === "Escape") { state.field = null; placeChosen(); }
     // Return opens what is chosen with all its words chosen, as Keynote's does.
     else if (state.field && key === "Enter") { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { selectAll: true }); }
