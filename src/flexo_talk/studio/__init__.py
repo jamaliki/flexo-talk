@@ -7,10 +7,14 @@ and files are as they were is not drawn again.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import copy
 import hashlib
 import json
+import os
 import re
+import stat
 import time
 from collections import OrderedDict
 from dataclasses import fields
@@ -48,6 +52,7 @@ from flexo_talk.document import (
     DeckDocumentError,
     InvalidFigure,
     InvalidObject,
+    KeptSlides,
     MissingFile,
     UnknownLayout,
     UntrustedCode,
@@ -191,6 +196,14 @@ class DeckKind:
 
     def __init__(self) -> None:
         self._slides: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._kept = KeptSlides(CACHE_SIZE)
+        """The slides as last read (``deck_from_document``), taken again while unchanged."""
+        self._found: OrderedDict[str, tuple[frozenset[Path], list[tuple[Path, Any]]]] = OrderedDict()
+        """The files each slide names (``_files``), with what the disk said of each path asked
+        to find them: found again only once one of those has changed (``_files_of``)."""
+        self._drawing = 0
+        """Drawings under way: one alone takes slides as they were read (two at once never
+        share one)."""
 
     def claims(self, document: object) -> bool:
         return is_deck_document(document)
@@ -613,75 +626,120 @@ class DeckKind:
         """Draw what has changed, the slide in focus first and its neighbours next;
         slides not reached within ``BUDGET`` seconds are left pending for the next call."""
 
+        # (Each file the slides name asked of the disk once in a drawing: ``_Look``.)
+        look = _LOOK.set(_Look())
+        self._drawing += 1
+        try:
+            return self._draw(document, base, hints)
+        finally:
+            self._drawing -= 1
+            _LOOK.reset(look)
+
+    def _draw(self, document: dict[str, Any], base: Path, hints: dict[str, Any] | None) -> Drawing:
         from flexo.draft import give_up_if_newer
+        from flexo.studio import code_allowed, folder_root
 
         from flexo_talk.compose import CANT_DRAW, EDITING, PLACEHOLDERS, STANDING_ASIDE, render_slide
-
-        errors: list[DeckDocumentError] = []
-        try:
-            deck = deck_from_document(document, base, errors=errors)
-        except DeckDocumentError as error:
-            return Drawing([], _placed([Message(_plain_message(error), "error", error.where)], document))
-        except Exception as error:
-            return Drawing([], _placed([Message(explain(error), "error", "deck")], document))
-        slides = document.get("slides") or []
-        # A picture or figure whose file is missing is said, and a box stands in for it:
-        # the rest of its slide is drawn. So is a figure, or any object, that cannot be
-        # drawn as written.
-        stood_in = MissingFile | InvalidFigure | InvalidObject | UnknownLayout
-        absent = [error for error in errors if isinstance(error, stood_in)]
-        failed = {_slide_of(error.where): error for error in errors if not isinstance(error, stood_in)}
-        deck_data = document.get("deck") or {}
-        from flexo.studio import code_allowed
-
-        head = _stable({
-            "deck": deck_data, "base": str(base), "count": len(slides), "trusted": code_allowed.get(),
-            # A theme file edited in the studio changes every slide without changing the deck.
-            "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
-            # So does a logo's file, put there or changed (one missing is watched for).
-            "logos": [(str(path), _stamp(path)) for path in _logo_files(deck_data, base)],
-        })
-        # (A section skipped is not among them: compose._skipped.)
-        sections = [
-            (slide.get("title"), slide.get("subtitle")) for slide in slides
-            if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
-        ]
-        watched: set[Path] = set(_theme_files(deck_data, base)) | set(_logo_files(deck_data, base))
-        shared = document.get("figures") if isinstance(document.get("figures"), dict) else {}
         from flexo_talk.framing import frames_of
 
-        frames = frames_of(document)
-
         def key(index: int) -> str:
-            data = slides[index]
+            data, words = slides[index], texts[index]
             # (Figures it draws as one with others on other slides, in a frame: one of them changed
             # draws it again -- flexo_talk.framing.)
-            framed = _frame_members(frames, data)
+            framed = _frame_members(frames, data) if frames else []
             # (The deck's own figures it shows by name: one changed draws again those showing it.)
-            named = {name: shared.get(name) for name in sorted(_shared_names([data, framed]))}
-            files = sorted(
-                _files([data, framed], base) | _files([{"figure": figure} for figure in named.values()], base)
+            named = (
+                {name: shared.get(name) for name in sorted(_shared_names([data, framed]))}
+                if framed or '"figure": "#' in words else {}
             )
+            files = sorted(self._files_of(base, words, data, framed, named))
             watched.update(files)
             layout = data.get("layout", "content") if isinstance(data, dict) else "content"
             return _stable({
                 "head": head,
                 "index": index,
                 "sections": sections if layout == "agenda" else None,
-                "before": sum(
-                    1 for item in slides[:index]
-                    if isinstance(item, dict) and item.get("layout") == "section" and not _skipped(item)
-                ),
+                "before": befores[index],
                 # Its number counts the slides shown before it (compose._slide_number): one
                 # skipped there or shown again redraws it.
-                "shown": sum(1 for item in slides[:index] if not _skipped(item)),
-                "slide": data,
+                "shown": showns[index],
+                "slide": words,
                 "frames": framed,
                 "figures": named,
                 "files": [(str(file), _stamp(file)) for file in files],
             })
 
-        keys = [key(index) for index in range(len(slides))]
+        def prepare() -> None:
+            nonlocal slides, texts, befores, showns, deck_data, head, sections, watched, shared, frames
+            slides = document.get("slides") or []
+            # Each slide's words as JSON, once a drawing: what it is keyed and found by.
+            texts = [json.dumps(slide, sort_keys=True, ensure_ascii=False, default=str) for slide in slides]
+            befores, showns, before, shown = [], [], 0, 0
+            for item in slides:
+                befores.append(before)
+                showns.append(shown)
+                before += isinstance(item, dict) and item.get("layout") == "section" and not _skipped(item)
+                shown += not _skipped(item)
+            deck_data = document.get("deck") or {}
+            head = _stable({
+                "deck": deck_data, "base": str(base), "count": len(slides), "trusted": code_allowed.get(),
+                # A theme file edited in the studio changes every slide without changing the deck.
+                "themes": [(str(path), _stamp(path)) for path in _theme_files(deck_data, base)],
+                # So does a logo's file, put there or changed (one missing is watched for).
+                "logos": [(str(path), _stamp(path)) for path in _logo_files(deck_data, base)],
+            })
+            # (A section skipped is not among them: compose._skipped.)
+            sections = [
+                (slide.get("title"), slide.get("subtitle")) for slide in slides
+                if isinstance(slide, dict) and slide.get("layout") == "section" and not _skipped(slide)
+            ]
+            watched = set(_theme_files(deck_data, base)) | set(_logo_files(deck_data, base))
+            shared = document.get("figures") if isinstance(document.get("figures"), dict) else {}
+            frames = frames_of(document)
+
+        slides: Any = []
+        texts: list[str] = []
+        befores: list[int] = []
+        showns: list[int] = []
+        deck_data: Any = {}
+        head = ""
+        sections: list[Any] = []
+        watched: set[Path] = set()
+        shared: Any = {}
+        frames: Any = {}
+        # The slides' keys first, for the slides read as they are now at the last drawing to be
+        # taken as they were (``KeptSlides``): only the slide typed in is read again. (One that
+        # runs Python, or names a picture drawn as a shape, is read anew each time.) A document
+        # that does not read so far is read as ever, to say why.
+        keys: list[str] | None = None
+        with contextlib.suppress(Exception):
+            if isinstance(document, dict) and isinstance(document.get("slides"), list):
+                prepare()
+                keys = [key(index) for index in range(len(slides))]
+        kept = self._kept if keys is not None and self._drawing == 1 else None
+        if kept is not None and keys is not None:
+            root = str(folder_root.get())
+            kept.keys = [
+                None if _read_anew(words) else f"{key}\0{root}" for key, words in zip(keys, texts, strict=True)
+            ]
+        errors: list[DeckDocumentError] = []
+        try:
+            deck = deck_from_document(document, base, errors=errors, kept=kept)
+        except DeckDocumentError as error:
+            return Drawing([], _placed([Message(_plain_message(error), "error", error.where)], document))
+        except Exception as error:
+            return Drawing([], _placed([Message(explain(error), "error", "deck")], document))
+        if keys is None:
+            prepare()
+        # A picture or figure whose file is missing is said, and a box stands in for it:
+        # the rest of its slide is drawn. So is a figure, or any object, that cannot be
+        # drawn as written.
+        stood_in = MissingFile | InvalidFigure | InvalidObject | UnknownLayout
+        absent = [error for error in errors if isinstance(error, stood_in)]
+        failed = {_slide_of(error.where): error for error in errors if not isinstance(error, stood_in)}
+
+        if keys is None:
+            keys = [key(index) for index in range(len(slides))]
         focus = int((hints or {}).get("focus") or 0)
         # While the deck is changed its figures keep their layouts (compose.EDITING); once
         # the changes stop the page asks to settle, and the slides that kept one are
@@ -774,6 +832,32 @@ class DeckKind:
                        {"palette": _palette(deck), "tones": _tones(deck), "order": _palette_order(deck),
                         "own": _palette_order(deck, own=True), "fonts": _fonts(deck), "roles": _roles(deck),
                         "sizes": _sizes(deck), "width": deck.style.width, "unsettled": unsettled})
+
+    def _files_of(self, base: Path, words: str, data: object, framed: object, named: dict[str, Any]) -> set[Path]:
+        """The files a slide names (``_files``), with the frames' figures it is drawn with and
+        the deck's figures it shows: found as they were found at the last drawing while the
+        disk says the same of every path asked to find them -- unless the slide runs Python,
+        or names a figure file (whose plots know what they read only once run). ``words``:
+        the slide as JSON."""
+
+        others = json.dumps([framed, named], sort_keys=True, ensure_ascii=False, default=str)
+        text = f"{base}\0{words}\0{others}"
+        dynamic = ".py" in text or '"plot"' in text or re.search(r'"figure": "(?!#)', text) is not None
+        known = None if dynamic else self._found.get(text)
+        if known is not None and all(_signature(path) == said for path, said in known[1]):
+            self._found.move_to_end(text)
+            return set(known[0])
+        probed: list[Path] = []
+        token = _PROBED.set(probed)
+        try:
+            found = _files([data, framed], base) | _files([{"figure": figure} for figure in named.values()], base)
+        finally:
+            _PROBED.reset(token)
+        if not dynamic:
+            self._found[text] = (frozenset(found), [(path, _signature(path)) for path in dict.fromkeys(probed)])
+            while len(self._found) > CACHE_SIZE:
+                self._found.popitem(last=False)
+        return found
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck
@@ -2173,10 +2257,77 @@ def _stable(value: object) -> str:
 
 
 def _stamp(path: Path) -> float:
+    found = _looked(path)
+    return found.st_mtime if found is not None else 0.0
+
+
+class _Look:
+    """One drawing's look at the disk: what it said of each file (its ``os.stat``, or None for
+    one not there) and where each name led (``Path.resolve``), asked once however many slides
+    name the file -- fifty slides keyed at every keystroke ask of the same few files."""
+
+    def __init__(self) -> None:
+        self.stats: dict[Path, os.stat_result | None] = {}
+        self.resolved: dict[Path, Path] = {}
+
+
+_LOOK: contextvars.ContextVar[_Look | None] = contextvars.ContextVar("flexo_talk_look", default=None)
+_PROBED: contextvars.ContextVar[list[Path] | None] = contextvars.ContextVar("flexo_talk_probed", default=None)
+"""While a slide's files are found (``_files``), the paths asked of the disk to find them: kept
+with them, they are found again only once what the disk says of one of these has changed."""
+
+
+def _looked(path: Path) -> os.stat_result | None:
+    look = _LOOK.get()
+    if look is not None and path in look.stats:
+        return look.stats[path]
     try:
-        return path.stat().st_mtime
+        found: os.stat_result | None = os.stat(path)
     except OSError:
-        return 0.0
+        found = None
+    if look is not None:
+        look.stats[path] = found
+    return found
+
+
+def _probe(path: Path) -> Path:
+    probed = _PROBED.get()
+    if probed is not None:
+        probed.append(path)
+    return path
+
+
+def _resolved(path: Path) -> Path:
+    _probe(path)
+    look = _LOOK.get()
+    if look is None:
+        return path.resolve()
+    if path not in look.resolved:
+        look.resolved[path] = path.resolve()
+    return look.resolved[path]
+
+
+def _is_file(path: Path) -> bool:
+    found = _looked(_probe(path))
+    return found is not None and stat.S_ISREG(found.st_mode)
+
+
+def _signature(path: Path) -> tuple[int, ...] | None:
+    """What the disk says of a file, to tell when it has changed: there or not, which file it
+    is (a link pointed elsewhere is another), what kind, when it last changed, its size."""
+
+    found = _looked(path)
+    if found is None:
+        return None
+    return found.st_mode, found.st_dev, found.st_ino, found.st_mtime_ns, found.st_size
+
+
+def _read_anew(words: str) -> bool:
+    """Whether a slide (``words``: as JSON) is read anew at each drawing rather than taken as it
+    was read: one that runs Python (a plot, a figure made in code), or names a picture drawn as
+    a shape (whose file the slide's key does not watch)."""
+
+    return ".py" in words or '"plot"' in words or '"picture"' in words
 
 
 def _slide_of(where: str) -> int:
@@ -2196,8 +2347,8 @@ def _files(data: object, base: Path) -> set[Path]:
             if key in {"image", "background", "picture", "figure", "plot"} and isinstance(value, str):
                 name = value.rpartition(":")[0] if ".py:" in value else value
                 if name and not name.startswith("#"):
-                    path = (base / name).resolve()
-                    if path.is_file():
+                    path = _resolved(base / name)
+                    if _is_file(path):
                         found.add(path)
                         if path.suffix == ".py":
                             # Python beside it may be what it imports: a change there counts.
@@ -2205,7 +2356,7 @@ def _files(data: object, base: Path) -> set[Path]:
                         elif key == "figure":
                             found |= _plot_files(_plots_in(path), path.parent)
                             found |= _drawn_in(path)
-                    elif not path.exists():
+                    elif _looked(path) is None:
                         found.add(path)  # missing: watched, so the slide is drawn again once it is there
             elif key == "figure" and isinstance(value, dict):
                 found |= _plot_files(value.get("nodes"), base)
@@ -2332,13 +2483,15 @@ def _drawn_files(figure: object, base: Path) -> set[Path]:
             value = properties.get(key) if isinstance(properties, dict) else None
             if isinstance(value, str) and value.strip():
                 names.append(value.strip())
+    for source in sources(figure.get("shapes")):
+        _probe(base / source)  # (looked at by ``anchored``)
     names += sources(anchored(figure.get("shapes"), base))
     for name in names:
         path = base / name
-        if not path.is_file() and "#" in name:
-            path = base / name.rpartition("#")[0]  # (a PDF's page: art.pdf#2)
+        if not _is_file(path) and "#" in name:
+            path = _probe(base / name.rpartition("#")[0])  # (a PDF's page: art.pdf#2)
         if path.suffix:
-            found.add(path.resolve())
+            found.add(_resolved(path))
     return found
 
 

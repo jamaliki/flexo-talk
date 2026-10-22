@@ -24,6 +24,7 @@ size, and scaled to fit; it is the same flexo figure a paper would print.
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, fields, replace
@@ -921,6 +922,9 @@ def displayed(words: str) -> bool:
     return bool(_DISPLAYED.fullmatch(words))
 
 
+# (The studio reads every slide's words at every keystroke: the same words, the same runs --
+# frozen, so one answer serves every asking.)
+@functools.lru_cache(maxsize=8192)
 def inline(words: str) -> tuple[TextRun, ...]:
     """Slide text as runs: ``*emphasis*`` is italic, ``**strong**`` bold, ``$...$``
     math, ``code`` between backticks is set in the monospace family,
