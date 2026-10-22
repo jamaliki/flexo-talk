@@ -639,7 +639,19 @@ export function mount(studio, container) {
   // weighed a moment later, in a drawing of its own that gives way to any edit: the settling
   // waits on nothing more (compose.LATER).
   let weighing = false;
-  studio.hints = () => ({ focus: state.slide, settle: settling || weighing, yields: settling || weighing, ...(weighing ? { weigh: true } : {}) });
+  // Just after an update each slide is shown at once as the version before drew it, marked
+  // `revalidating`, and drawn again behind as the deck settles: presented or copied out, a slide
+  // is this version's drawing -- asked for `fresh`, and waited for (drawnAfresh).
+  const afresh = [];
+  studio.hints = () => ({ focus: state.slide, settle: settling || weighing, yields: settling || weighing, ...(weighing ? { weigh: true } : {}), ...(afresh.length ? { fresh: true } : {}) });
+  function drawnAfresh(ready = (shown) => !shown.some((page) => page?.revalidating || page?.pending)) {
+    if (ready(pages)) return Promise.resolve();
+    return new Promise((done) => { afresh.push({ ready, done }); studio.requestDraw(0); });
+  }
+  studio.on("drawn", (result) => {
+    if (!result.latest || !afresh.length) return;
+    for (const waiting of afresh.splice(0)) (waiting.ready(result.pages || []) ? waiting.done() : afresh.push(waiting));
+  });
   const doc = () => studio.doc;
   // Merged, every slide's objects are in places its layout has (as the studio's DeckKind
   // puts them: _laid_out) -- an object kept where the layout has none is put in the first
@@ -7378,8 +7390,17 @@ export function mount(studio, container) {
     clipboard = clip;
     event.clipboardData?.setData(CLIP, JSON.stringify(clip));
     event.clipboardData?.setData("text/plain", plainOf(clip));
-    copyOut(studio, drawingOf(clip));
+    copiedOut(clip);
     return clip;
+  }
+  // (Copied out from a slide still shown as the version before an update drew it: with this
+  // version's drawing once it is drawn -- or, cut, the copy without a drawing.)
+  function copiedOut(clip, wrote, cut = false) {
+    const drawn = drawingOf(clip), at = state.slide;
+    if (!drawn.svg || !pages[at]?.revalidating) { copyOut(studio, drawn, wrote); return; }
+    if (cut) { copyOut(studio, { ...drawn, svg: "" }, wrote); return; }
+    drawnAfresh((shown) => !shown[at]?.revalidating && !shown[at]?.pending)
+      .then(() => copyOut(studio, { ...drawn, svg: pages[at]?.svg || "" }, wrote));
   }
   // What is copied, drawn for other apps (copyout.js): the slide's drawing, and the ids in it of
   // what is copied -- the shapes, the figure's parts (with the lines between them), the objects
@@ -7451,7 +7472,7 @@ export function mount(studio, container) {
       if (!clip) { uncopied(letter === "x"); return; }
       clipboard = clip;
       const wrote = navigator.clipboard?.writeText(plainOf(clip)).catch(() => {});
-      copyOut(studio, drawingOf(clip), wrote);
+      copiedOut(clip, wrote, letter === "x");
       if (letter === "c") copied(clip); else cutAway(clip);
     }, 80);
   }
@@ -9786,7 +9807,9 @@ export function mount(studio, container) {
   function present(fromStart = Boolean(window.event?.altKey)) {
     if (!slides().length) { toast("This deck has no slides to present.", { icon: "play" }); return; }
     if (slides().every((slide) => slide?.skip === true)) { toast("Every slide is skipped: there is nothing to present.", { icon: "play" }); return; }
-    presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index), note: todos?.said() || "" });
+    const show = () => presentSlides({ pages: () => pages, slides, start: fromStart ? 0 : state.slide, done: (index) => select(index), note: todos?.said() || "" });
+    // (Slides still shown as the version before an update drew them: presented once drawn by this one.)
+    if (pages.some((page) => page?.revalidating)) drawnAfresh().then(show); else show();
   }
 
   // ⌘B and ⌘I with words chosen, not being typed in (a text, a list, a title): all their
