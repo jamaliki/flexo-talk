@@ -219,7 +219,8 @@ export function patchDrawing(svg, text, prepare) {
   const known = svg && drawn.get(svg);
   if (!known || !svg.isConnected) return refuse("not put in from words");
   if (known.text === text) return true;
-  const before = known.text.split("\n"), after = text.split("\n");
+  // (Its lines kept from the last patch, read once: a large slide's words are long.)
+  const before = known.lines || known.text.split("\n"), after = text.split("\n");
   const elements = elementsOf(before);
   if (!elements || elements.length !== known.elements.length) return refuse("its words do not read as its elements");
   // (Nothing the page put over the drawing -- a part lifted as it is carried, a copy left where
@@ -282,7 +283,7 @@ export function patchDrawing(svg, text, prepare) {
   }
   const list = [...known.elements];
   for (const { at, count, fresh } of [...made].sort((one, other) => other.at - one.at)) list.splice(at, count, ...fresh);
-  drawn.set(svg, { text, elements: list });
+  drawn.set(svg, { text, elements: list, lines: after });
   refused = null;
   return true;
 }

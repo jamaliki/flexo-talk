@@ -44,6 +44,7 @@ import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
+import { stageAhead } from "/static/kinds/deck/stageahead.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -730,10 +731,12 @@ export function mount(studio, container) {
 
   const editSlide = (mutate, options = {}) => studio.change((d) => { const slide = (d.slides || [])[state.slide]; if (slide) mutate(slide, d); }, options);
   // A placeholder changed (a sample table typed in) is its person's own: presented and exported.
+  // (What changes an object reaches its slide alone: that is all that is copied for it -- see
+  // session.js's change.)
   const editBlock = (place, mutate, options = {}) => editSlide((slide) => {
     const block = blocksAt(slide, place.region)[place.index];
     if (block) { mutate(block, slide); delete block.placeholder; }
-  }, { quiet: true, ...options });
+  }, { quiet: true, within: ["slides", state.slide], ...options });
   // Words made a list, a list words, or its bullets numbers, as Keynote's Bullets & Lists:
   // a line an item, the words kept, and what the other kind does not take left off.
   // None is words with no bullets: a list's keeps its levels (Keynote's None: a plain list),
@@ -822,7 +825,7 @@ export function mount(studio, container) {
   // (Each time it is typed in, from focusing it to leaving it, a step of its own: `notesRun`.)
   let notesRun = 0;
   const notesArea = ui.textarea({ rows: 3, key: "notes", onInput: (text) =>
-    editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}-${notesRun}`, hold: true }) });
+    editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}-${notesRun}`, hold: true, within: ["slides", state.slide] }) });
   notesArea.addEventListener("focusin", () => { notesRun += 1; });
   // The notes being typed in, changed by another (or an undo): the caret stays among the words
   // it was in, not sent to their end (an undo's words put back chosen, as TextEdit chooses them).
@@ -1649,21 +1652,22 @@ export function mount(studio, container) {
     renderStage();
     renderInspector();
     renderBar();
-    // Its thumbnail whole in view, ring and all (a new slide's, at the foot of the list) --
-    // again once the list is laid out, as a new thumbnail's size is known only then.
-    const inView = () => {
-      const thumb = railList.querySelector(".thumb.on");
-      if (!thumb) return;
-      // (WebKit's and Chromium's "nearest" take a thumbnail its ring short of the edge as shown.)
-      const box = thumb.getBoundingClientRect(), port = railList.getBoundingClientRect();
-      if (box.bottom + 8 > port.bottom) thumb.scrollIntoView({ block: "end" });
-      else if (box.top - 8 < port.top) thumb.scrollIntoView({ block: "start" });
-    };
-    inView();
-    requestAnimationFrame(inView);
+    // Its thumbnail whole in view, ring and all (a new slide's, at the foot of the list), as the
+    // next frame is drawn: once the list is laid out, as a new thumbnail's size is known only
+    // then. (Measured here too, the window was laid out twice for each slide gone to.)
+    requestAnimationFrame(thumbInView);
     if (pages[state.slide]?.stale) studio.requestDraw(0);
     reportFocus();
     readSlideAhead();
+  }
+
+  function thumbInView() {
+    const thumb = railList.querySelector(".thumb.on");
+    if (!thumb) return;
+    // (WebKit's and Chromium's "nearest" take a thumbnail its ring short of the edge as shown.)
+    const box = thumb.getBoundingClientRect(), port = railList.getBoundingClientRect();
+    if (box.bottom + 8 > port.bottom) thumb.scrollIntoView({ block: "end" });
+    else if (box.top - 8 < port.top) thumb.scrollIntoView({ block: "start" });
   }
 
   // ↓ or ↑ held, repeating faster than a large slide is drawn: the slide each press goes to is
@@ -1682,6 +1686,8 @@ export function mount(studio, container) {
     const to = goingTo;
     goingTo = null;
     select(to);
+    // (Gone to as a frame is drawn: its thumbnail in view in that frame, not the next.)
+    thumbInView();
   }
   document.addEventListener("keydown", (event) => { if (goingTo !== null && !event.repeat) settleGoing(); }, true);
   document.addEventListener("pointerdown", () => settleGoing(), true);
@@ -1738,18 +1744,23 @@ export function mount(studio, container) {
   // (Each drawn as it comes into sight, and let go far out of it: thumbs.js.)
   const railPicture = lazyPictures(railList, (svg, hash) => picture(svg, hash));
 
+  const groupedBy = (items, keyOf) => { const groups = new Map(); for (const item of items) { const key = keyOf(item); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(item); } return groups; };
   function renderRail() {
     if (thumbHeld && thumbHeld.index !== state.slide) letThumbGo();
     const list = slides();
     const others = studio.others();
     const old = [...railList.querySelectorAll(":scope > .thumb")];
     const keys = [];
+    // (What is said of each slide, and who is on it, sorted once: not looked for through all of
+    // it for every slide.)
+    // (Python not run until the folder is trusted is said once, by the bar over the deck.)
+    const said = groupedBy(messages.filter((m) => m.severity !== "note" && m.code !== "code.untrusted"), (m) => m.page);
+    const onIt = groupedBy(others, (entry) => entry.where?.page);
     const nodes = list.map((slide, index) => {
       const page = thumbHeld?.index === index ? thumbHeld.page : pages[index];
-      // (Python not run until the folder is trusted is said once, by the bar over the deck.)
-      const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note" && m.code !== "code.untrusted");
+      const own = said.get(`slide${index + 1}`) || [];
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
-      const here = others.filter((entry) => entry.where?.page === index + 1);
+      const here = onIt.get(index + 1) || [];
       const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true,
         worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
       keys.push(key);
@@ -1940,7 +1951,7 @@ export function mount(studio, container) {
   // A figure's shape's words typed in (in a box beside the page): shown the others as editing.
   for (const type of ["focusin", "focusout"]) stageWrap.addEventListener(type, () => setTimeout(() => { if (figure) reportFocus(); }));
 
-  let notesFor = null;
+  let notesFor = null, notesFitted = null;
   let wasOffline = false;
   let drawingHeld = false;
   // A logo dragged along its row, or sized by a corner (below): declared here, for the stage
@@ -1950,6 +1961,20 @@ export function mount(studio, container) {
   let portraits = null;
   studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
   const unlinked = (root) => { for (const link of root.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); } };
+  // A slide's drawing as the stage shows it: as wide as the stage lets it be, its figures'
+  // lines easy to click (widenLines).
+  const sizedToStage = (svg) => { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); widenLines(svg); };
+  // The slides either side of the one shown, read as the stage reads one it puts in, while the
+  // window is left alone (stageahead.js): going to one, its drawing is ready.
+  const ahead = stageAhead((text) => {
+    const holder = document.createElement("div");
+    holder.innerHTML = text.replace(/^<\?xml[^>]*>\s*/, "");
+    const svg = holder.querySelector("svg");
+    indexDrawing(svg, text);
+    ownResources(svg);
+    if (svg) sizedToStage(svg);
+    return holder;
+  });
   function renderStage() {
     const list = slides();
     const slide = slideAt();
@@ -1957,7 +1982,12 @@ export function mount(studio, container) {
     if (document.activeElement !== notesArea || notesFor !== state.slide) {
       notesFor = state.slide;
       notesArea.value = slide?.notes || "";
-      requestAnimationFrame(() => { notesArea.style.height = "auto"; notesArea.style.height = `${Math.max(notesArea.scrollHeight + 2, 60)}px`; });
+      // (Fitted to them again only when they are other words -- measured, the window was laid
+      // out at every drawing, each key typed on a slide; the box follows its width itself.)
+      if (notesArea.value !== notesFitted) {
+        notesFitted = notesArea.value;
+        requestAnimationFrame(() => { notesArea.style.height = "auto"; notesArea.style.height = `${Math.max(notesArea.scrollHeight + 2, 60)}px`; });
+      }
     }
     // The first words of the slide's notes beside the bar's name; none, nothing.
     notesPreview.textContent = slide?.notes ? plain(slide.notes) : "";
@@ -2004,11 +2034,14 @@ export function mount(studio, container) {
       hover.hidden = true;
     } else if (renewed) {
       pageNode = h("div.slide-page", { dataset: { shows } });
-      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); indexDrawing(pageNode.querySelector("svg"), page.svg); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
+      // (A slide beside the last read ahead while the window was left alone, ready as below:
+      // stageahead.js.)
+      const ready = page?.svg ? ahead.take(shows) : null;
+      if (ready) { pageNode.append(...ready.childNodes); holdPaused(pageNode.querySelector("svg")); }
+      else if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); indexDrawing(pageNode.querySelector("svg"), page.svg); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
       else pageNode.append(away ? h("div.placeholder.away", {}, h("span.away-title")) : h("div.placeholder", {}, h("div.spinner")));
       const svg = pageNode.querySelector("svg");
-      if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
-      if (svg) widenLines(svg);
+      if (svg && !ready) sizedToStage(svg);
       // A link drawn on the slide is words, chosen and edited as any: never a place for the
       // keys, nor followed by any click (a middle-click's new tab included).
       unlinked(pageNode);
@@ -2073,6 +2106,8 @@ export function mount(studio, container) {
     if (before && figureBlock()) figure.parts.land(before);
     if (moved) landBlocks(moved);
     placeStandIns();
+    ahead.want([state.slide + 1, state.slide - 1].map((index) => [index, pages[index]]).filter(([, near]) => near?.svg)
+      .map(([index, near]) => [`${index}:${near.hash}`, near.svg]));
   }
 
   // Words typed with the studio away stay on the slide as typed once the typing ends -- in
@@ -5316,7 +5351,7 @@ export function mount(studio, container) {
       if (state.focus) { state.focus = null; leaveFigure(false); renderInspector(); reportFocus(); }
       const merge = `${state.slide}-row-${n}-${session}`;
       editor = rich(written(slide), { placeholder: fieldHint(key, slide) },
-        (text) => editSlide((s) => { if (written(s) !== undefined) setLabel(s, n, text); }, { quiet: true, merge, hold: true }));
+        (text) => editSlide((s) => { if (written(s) !== undefined) setLabel(s, n, text); }, { quiet: true, merge, hold: true, within: ["slides", state.slide] }));
       idOf = () => fieldId(key);
     } else if (target.kind === "field" && FOOT.test(target.field)) {
       // A footnote, or the deck's footer (the same on every slide), typed where it is drawn,
@@ -5329,7 +5364,7 @@ export function mount(studio, container) {
       if (state.focus) { state.focus = null; leaveFigure(false); renderInspector(); reportFocus(); }
       const merge = note ? `${state.slide}-fn-${n}-${session}` : `deck-footer-${session}`;
       editor = rich(read(doc()) ?? "", { placeholder: fieldHint(key, slide) }, (text) => (note
-        ? editSlide((s) => { const notes = notesOf(s); if (notes[n] === undefined) return; notes[n] = text; s.footnotes = notes; }, { quiet: true, merge, hold: true })
+        ? editSlide((s) => { const notes = notesOf(s); if (notes[n] === undefined) return; notes[n] = text; s.footnotes = notes; }, { quiet: true, merge, hold: true, within: ["slides", state.slide] })
         : studio.change((d) => { d.deck ||= {}; setOption(d.deck, "footer", text); }, { quiet: true, merge, hold: true })));
       idOf = () => fieldId(key);
     } else if (target.kind === "field") {
@@ -5354,7 +5389,8 @@ export function mount(studio, container) {
       editor = rich(slide[key] ?? "", { placeholder: fieldHint(key, slide) },
         (text) => {
           if (placed?.key === key && studio.past[studio.past.length - 1] === placed.entry) studio.lastMerge = { key: merge, at: Date.now() };
-          editSlide((s) => { s[key] = text; }, { quiet: true, merge, hold: true });
+          // (Its slide alone copied for it: see session.js's change.)
+          editSlide((s) => { s[key] = text; }, { quiet: true, merge, hold: true, within: ["slides", state.slide] });
         });
       idOf = () => fieldId(key);
     } else if (target.kind === "cell") {
@@ -5561,9 +5597,11 @@ export function mount(studio, container) {
     area.addEventListener("input", () => { if (inline?.area === area) inline.typedAt = area.rich ? area.caretAt()?.[1] : area.selectionEnd; });
     // Code is as wide as its longest line: the box widens as a line grows.
     if (code) { area.wrap = "off"; area.addEventListener("input", () => positionInline()); }
-    // The inspector shows what is typed, as it is typed.
+    // The inspector shows what is typed, as it is typed. (Its field found again only once the
+    // panel is drawn again, not looked for through the panel at every key.)
+    let twin = null;
     if (mirror) area.addEventListener("input", () => {
-      const twin = inspectorBody.querySelector(`[data-key="${CSS.escape(mirror)}"]`);
+      if (!twin?.isConnected) twin = inspectorBody.querySelector(`[data-key="${CSS.escape(mirror)}"]`);
       if (twin && twin !== document.activeElement && twin.value !== area.value) twin.value = area.value;
     });
     center.append(node);
@@ -8164,7 +8202,7 @@ export function mount(studio, container) {
     // kept -- with the placeholder it shows there.
     const text = (key, label, { rows = 1 } = {}) => {
       if (!allowed.has(key)) return null;
-      const onInput = (value) => editSlide((s) => setOption(s, key, value), { quiet: true, merge: `${state.slide}-${key}`, hold: true });
+      const onInput = (value) => editSlide((s) => setOption(s, key, value), { quiet: true, merge: `${state.slide}-${key}`, hold: true, within: ["slides", state.slide] });
       return ui.field(label, richField({ value: slide[key] ?? "", short: rows === 1, placeholder: fieldHint(key, slide), key: `slide.${key}`, onInput }));
     };
     const parts = [
