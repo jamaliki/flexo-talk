@@ -111,3 +111,26 @@ def test_an_edit_to_a_slide_that_keeps_its_title_is_described_without_comparing_
     assert [note["where"]["page"] for note in notes] == [1]
     moved = DeckKind().follow(before, after)
     assert moved({"page": 1, "label": "Slide 1"}) == {"page": 1, "label": "Slide 1"}
+
+
+def test_a_figure_drawn_again_takes_its_layout_from_memory_not_its_file(tmp_path: Path, monkeypatch) -> None:
+    kind = DeckKind()
+    document = _deck(tmp_path)
+    document["deck"]["id"] = "remembered"  # (a figure no drawing in this program has seen)
+    _drawn(kind, document, tmp_path, focus=4)
+    fits = Path(os.environ["FLEXO_TALK_CACHE"])
+    assert list(fits.rglob("*.json"))  # (laid out, and kept there)
+    read: list[Path] = []
+    original = Path.read_text
+
+    def counted(self: Path, *args, **kwargs):
+        if fits in self.parents:
+            read.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted)
+    for words in ("Say this.", "Say this slowly."):
+        noted = copy.deepcopy(document)
+        noted["slides"][4]["notes"] = words  # (the slide drawn again, its figure where it was)
+        _drawn(kind, noted, tmp_path, focus=4)
+    assert read == []

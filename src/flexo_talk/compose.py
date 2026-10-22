@@ -5543,16 +5543,44 @@ def _cache_path(key: tuple) -> Path | None:
     return folder / "fits" / f"{name}.json"
 
 
+_FITS: OrderedDict[str, dict] = OrderedDict()
+"""Figures laid out for a box as this program has read or kept them (``_cached_fit``), by
+their file between builds: a slide drawn again at each keystroke on it reads its figure's
+layout from here, not from its file -- a protein's surface, laid out, is 1.5 MB of JSON."""
+_FITS_LOCK = threading.Lock()
+FITS_BYTES = 64_000_000
+"""Characters of laid-out drawings kept so, at most."""
+
+
 def _cached_fit(key: tuple) -> dict | None:
     import json
 
     path = _cache_path(key)
-    if path is None or not path.is_file():
+    if path is None:
+        return None
+    with _FITS_LOCK:
+        found = _FITS.get(str(path))
+        if found is not None:
+            _FITS.move_to_end(str(path))
+            return found
+    if not path.is_file():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        found = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    _remember_fit(str(path), found)
+    return found
+
+
+def _remember_fit(name: str, laid: dict) -> None:
+    with _FITS_LOCK:
+        _FITS[name] = laid
+        _FITS.move_to_end(name)
+        while len(_FITS) > 1 and (
+            len(_FITS) > 512 or sum(len(str(item.get("svg", ""))) for item in _FITS.values()) > FITS_BYTES
+        ):
+            _FITS.popitem(last=False)
 
 
 def _store_fit(key: tuple, laid: dict) -> None:
@@ -5563,9 +5591,12 @@ def _store_fit(key: tuple, laid: dict) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(laid), encoding="utf-8")
+        text = json.dumps(laid)
+        path.write_text(text, encoding="utf-8")
     except OSError:
         return
+    # (Kept as it reads back from its file: as the next drawing would have found it there.)
+    _remember_fit(str(path), json.loads(text))
 
 
 _PLOTTED: dict[tuple, tuple[dict, tuple]] = {}
