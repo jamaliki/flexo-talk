@@ -4766,12 +4766,18 @@ export function mount(studio, container) {
       idOf: (id) => { const prefix = figurePrefix(); return prefix && id.startsWith(prefix) ? id.slice(prefix.length) : null; },
       box: (id) => { const prefix = figurePrefix(); return prefix ? boxOf(prefix + id) : null; },
       // (What is chosen has its frame: the pointer's dashed one goes from it, till it moves.)
-      changed: () => { hover.hidden = true; renderInspector(); placeFigure(); },
+      // (A part being carried hides its frame, and its panel waits for it to be let go: the
+      // drag's first move is not kept waiting on either.)
+      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } renderInspector(); placeFigure(); },
       // Landed, the figure's frame is drawn round it as it now is (grown by a part, say).
       settled: () => { placeChosen(); placeFigure(); },
       // A part let go: the drawing held back while it was carried is put in, unless the one
       // its move makes has come first (a moment's wait: that one is the one to see).
-      dragged: () => setTimeout(() => { if (!figure?.parts.dragging) putHeld(); }, 1200),
+      dragged: () => {
+        // (Once what it was let go for is on its way.)
+        setTimeout(() => { if (own.carried && figure === own && !own.parts.dragging) { own.carried = false; renderInspector(); placeFigure(); } }, 0);
+        setTimeout(() => { if (!figure?.parts.dragging) putHeld(); }, 1200);
+      },
       // A shape that can't be drawn as written, drawn as a plain box: said in its panel, as
       // the slide says it (a message whose place ends "#shape:what").
       // (A structure's own panel says what keeps it from being drawn: not said twice.)
