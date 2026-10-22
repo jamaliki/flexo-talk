@@ -41,6 +41,7 @@ import { deckTodos } from "/static/kinds/deck/todos.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
+import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -1708,6 +1709,8 @@ export function mount(studio, container) {
     heldTimer = setTimeout(() => { if (!thumbHeld) return; thumbHeld = null; renderRail(); }, 250);
   }
   const letThumbGo = () => { thumbHeld = null; clearTimeout(heldTimer); };
+  // (Each drawn as it comes into sight, and let go far out of it: thumbs.js.)
+  const railPicture = lazyPictures(railList, (svg, hash) => picture(svg, hash));
 
   function renderRail() {
     if (thumbHeld && thumbHeld.index !== state.slide) letThumbGo();
@@ -1727,7 +1730,7 @@ export function mount(studio, container) {
       // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere) --
       // chosen or not, said where it is: never made again for that (a large slide's picture
       // copied whole).
-      if (railKeys[index] === key && old[index] && (!page?.svg || old[index].querySelector(".picture"))) {
+      if (railKeys[index] === key && old[index] && (!page?.svg || old[index].querySelector(".picture-slot")?.whole())) {
         old[index].classList.toggle("on", index === state.slide || (state.picked.length > 1 && state.picked.includes(index)));
         return old[index];
       }
@@ -1735,7 +1738,7 @@ export function mount(studio, container) {
     });
     railKeys = keys;
     const kept = new Set(nodes);
-    for (const node of old) if (!kept.has(node)) node.remove();
+    for (const node of old) if (!kept.has(node)) { node.querySelector(".picture-slot")?.drop(); node.remove(); }
     let at = railList.firstChild;
     for (const node of nodes) {
       if (at === node) { at = at.nextSibling; continue; }
@@ -1793,6 +1796,7 @@ export function mount(studio, container) {
 
   function thumbNode(slide, index, page, own, worst, here) {
     const on = index === state.slide || (state.picked.length > 1 && state.picked.includes(index));
+    const slot = page?.svg ? railPicture(page.svg, page.hash, index) : null;
     const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}${slide?.skip === true ? ".skipped" : ""}`, {
       draggable: true, dataset: { index },
       onclick: (event) => pickSlide(index, event),
@@ -1814,7 +1818,7 @@ export function mount(studio, container) {
     },
     h("div.num", {}, index + 1),
     h("div.frame", {},
-      page?.svg ? picture(page.svg, page.hash) : h("div.placeholder", {}, slideTitle(slide)),
+      slot || h("div.placeholder", {}, slideTitle(slide)),
       // Another's ring inside the frame, never in place of this person's own (the chosen
       // slide's blue, without), nor out over the slide's number beside it.
       here.length ? h("div.ring", { style: { boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 3px ${colourOf(here[0].who)}` } }) : null,
@@ -1827,6 +1831,7 @@ export function mount(studio, container) {
         here.length > 2 ? h("span.avatar.count", { style: { width: "18px", height: "18px", background: "var(--muted, #868e96)" } }, `+${here.length - 2}`) : null) : null,
       slideMoreButton(index)),
     h("button.insert-after", { type: "button", tabindex: -1, title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
+    slot?.watch(node);
     return node;
   }
 
