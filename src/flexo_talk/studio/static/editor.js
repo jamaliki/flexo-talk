@@ -42,6 +42,8 @@ import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
+import { grabbingHand } from "/static/kinds/deck/grabbing.js";
+import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -574,6 +576,7 @@ export function mount(studio, container) {
   if (!document.querySelector('link[href="/static/kinds/deck/editor.css"]')) {
     document.head.append(h("link", { rel: "stylesheet", href: "/static/kinds/deck/editor.css" }));
   }
+  grabbingHand();
   const catalog = studio.catalog;
   const layouts = LAYOUT_ORDER.map((name) => catalog.layouts.find((layout) => layout.name === name)).filter(Boolean);
   // The names the catalogue gives layouts, over the ones written here.
@@ -906,7 +909,14 @@ export function mount(studio, container) {
   // step of their own: the run starts again at each turn. (A figure's words, made by the
   // studio and back later, are its own: parts.js.)
   // (Kept by the field's key, as the panel is drawn again under the keys.)
-  const turns = new Map(), turnOf = (target) => target.dataset?.key || target;
+  // (A field with no key -- words typed on the slide -- by itself, weakly: closed, it goes with
+  // the editor it was in, not kept until two hundred more have been typed in.)
+  const turns = (() => {
+    const named = new Map();
+    let held = new WeakMap();
+    const of = (key) => (typeof key === "string" ? named : held);
+    return { get: (key) => of(key).get(key), set: (key, turn) => of(key).set(key, turn), get size() { return named.size; }, clear: () => { named.clear(); held = new WeakMap(); } };
+  })(), turnOf = (target) => target.dataset?.key || target;
   const TYPED = /^(text|search|number|email|url|tel|password)$/;
   const typingSteps = (container) => {
     const field = (event) => {
@@ -1644,6 +1654,26 @@ export function mount(studio, container) {
     readSlideAhead();
   }
 
+  // ↓ or ↑ held, repeating faster than a large slide is drawn: the slide each press goes to is
+  // shown as the next frame is drawn -- one passed over meanwhile is not drawn whole on the
+  // way, and the keys never wait on the slides behind them, nor the stage run on after they
+  // stop. (Anything else pressed, or a click, finds that slide chosen.)
+  let goingTo = null;
+  const slideGoing = () => goingTo ?? state.slide;
+  function goTo(index, event) {
+    if (!event?.repeat) { settleGoing(); select(index); return; }
+    if (goingTo === null) requestAnimationFrame(settleGoing);
+    goingTo = index;
+  }
+  function settleGoing() {
+    if (goingTo === null) return;
+    const to = goingTo;
+    goingTo = null;
+    select(to);
+  }
+  document.addEventListener("keydown", (event) => { if (goingTo !== null && !event.repeat) settleGoing(); }, true);
+  document.addEventListener("pointerdown", () => settleGoing(), true);
+
   // Where this person is, as last told the others (see reportFocus).
   let reported = "";
   const whereNow = () => `${state.slide}:${state.focus ? `${state.focus.region}[${state.focus.index}]` : ""}:${state.field?.field ?? ""}`;
@@ -1681,28 +1711,48 @@ export function mount(studio, container) {
   // arriving for one slide leaves the others' nodes alone.
   let dragFrom = null;
   let railKeys = [];
+  // The slide on the stage, drawn again as it is edited, is seen there at full size: its
+  // thumbnail shows the drawing it had (`thumbHeld`, the slide's place and that drawing) until the
+  // drawings stop coming, half a second after the last -- a large slide's thumbnail made again at
+  // every key typed is work the next key waits for. (Slides added, moved or deleted, or
+  // another chosen, it shows its drawing at once.)
+  let thumbHeld = null, heldTimer = 0;
+  function holdThumb(index, was) {
+    if (thumbHeld?.index !== index) thumbHeld = { index, page: was };
+    clearTimeout(heldTimer);
+    heldTimer = setTimeout(() => { if (!thumbHeld) return; thumbHeld = null; renderRail(); }, 500);
+  }
+  const letThumbGo = () => { thumbHeld = null; clearTimeout(heldTimer); };
+  // (Each drawn as it comes into sight, and let go far out of it: thumbs.js.)
+  const railPicture = lazyPictures(railList, (svg, hash) => picture(svg, hash));
 
   function renderRail() {
+    if (thumbHeld && thumbHeld.index !== state.slide) letThumbGo();
     const list = slides();
     const others = studio.others();
     const old = [...railList.querySelectorAll(":scope > .thumb")];
     const keys = [];
     const nodes = list.map((slide, index) => {
-      const page = pages[index];
+      const page = thumbHeld?.index === index ? thumbHeld.page : pages[index];
       // (Python not run until the folder is trusted is said once, by the bar over the deck.)
       const own = messages.filter((m) => m.page === `slide${index + 1}` && m.severity !== "note" && m.code !== "code.untrusted");
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = others.filter((entry) => entry.where?.page === index + 1);
-      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true, index === state.slide || (state.picked.length > 1 && state.picked.includes(index)),
+      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true,
         worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
       keys.push(key);
-      // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere).
-      if (railKeys[index] === key && old[index] && (!page?.svg || old[index].querySelector(".picture"))) return old[index];
+      // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere) --
+      // chosen or not, said where it is: never made again for that (a large slide's picture
+      // copied whole).
+      if (railKeys[index] === key && old[index] && (!page?.svg || old[index].querySelector(".picture-slot")?.whole())) {
+        old[index].classList.toggle("on", index === state.slide || (state.picked.length > 1 && state.picked.includes(index)));
+        return old[index];
+      }
       return thumbNode(slide, index, page, own, worst, here);
     });
     railKeys = keys;
     const kept = new Set(nodes);
-    for (const node of old) if (!kept.has(node)) node.remove();
+    for (const node of old) if (!kept.has(node)) { node.querySelector(".picture-slot")?.drop(); node.remove(); }
     let at = railList.firstChild;
     for (const node of nodes) {
       if (at === node) { at = at.nextSibling; continue; }
@@ -1760,6 +1810,7 @@ export function mount(studio, container) {
 
   function thumbNode(slide, index, page, own, worst, here) {
     const on = index === state.slide || (state.picked.length > 1 && state.picked.includes(index));
+    const slot = page?.svg ? railPicture(page.svg, page.hash, index) : null;
     const node = h(`div.thumb${on ? ".on" : ""}${page?.stale ? ".stale" : ""}${slide?.skip === true ? ".skipped" : ""}`, {
       draggable: true, dataset: { index },
       onclick: (event) => pickSlide(index, event),
@@ -1781,7 +1832,7 @@ export function mount(studio, container) {
     },
     h("div.num", {}, index + 1),
     h("div.frame", {},
-      page?.svg ? picture(page.svg, page.hash) : h("div.placeholder", {}, slideTitle(slide)),
+      slot || h("div.placeholder", {}, slideTitle(slide)),
       // Another's ring inside the frame, never in place of this person's own (the chosen
       // slide's blue, without), nor out over the slide's number beside it.
       here.length ? h("div.ring", { style: { boxShadow: `inset 0 0 0 1px rgba(255, 255, 255, 0.9), inset 0 0 0 3px ${colourOf(here[0].who)}` } }) : null,
@@ -1794,6 +1845,7 @@ export function mount(studio, container) {
         here.length > 2 ? h("span.avatar.count", { style: { width: "18px", height: "18px", background: "var(--muted, #868e96)" } }, `+${here.length - 2}`) : null) : null,
       slideMoreButton(index)),
     h("button.insert-after", { type: "button", tabindex: -1, title: "Add a slide here", onclick: (event) => { event.stopPropagation(); newSlidePopover(event.currentTarget, index + 1); } }, icon("plus")));
+    slot?.watch(node);
     return node;
   }
 
@@ -1967,6 +2019,11 @@ export function mount(studio, container) {
     pageNode.querySelector(".away-title")?.replaceChildren(slideTitle(slide));
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
+    // (Its drawing still on its way after a moment, or the studio away: the busy pointer --
+    // showPending. Not as each key is typed: the whole drawing styled again for it, a large
+    // slide's ten milliseconds a key, to be replaced a moment later.)
+    if (!(pending || page?.stale)) pageNode.classList.remove("waiting");
+    else if (studio.state === "offline") pageNode.classList.add("waiting");
     const own = messages.filter((m) => m.page === `slide${state.slide + 1}` && m.code !== "code.untrusted");
     const here = studio.others().filter((entry) => entry.where?.page === state.slide + 1);
     if (stageWrap.parentNode !== stage) clear(stage, stageWrap);
@@ -2178,15 +2235,22 @@ export function mount(studio, container) {
     focusBlock(where.region, where.index, shape ? () => figure?.parts.revealProblem(shape[1], shape[2]) : null);
   }
 
+  // (The stage's size, as last laid out: what is in it never changes it, so a slide put in it is
+  // fitted without the page laid out at once for it -- the observer below says when it changes.)
+  let stageRoom = null;
   function fitStage() {
-    const room = stage.getBoundingClientRect();
+    const room = stageRoom || stage.getBoundingClientRect();
     const ratio = (Number(doc().deck?.style?.width) || 960) / (Number(doc().deck?.style?.height) || 540);
     const width = Math.max(320, Math.min(room.width - 80, (room.height - 110) * ratio));
     stage.style.setProperty("--slide-max", `${width}px`);
     // (Its width inside its padding: under 820 points, nothing said under the slide. editor.css)
     stage.classList.toggle("narrow", room.width - 80 <= 820);
   }
-  new ResizeObserver(() => { fitStage(); placeChosen(); placeOthers(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline(); }).observe(stage);
+  new ResizeObserver(() => {
+    const box = stage.getBoundingClientRect();
+    stageRoom = box.width || box.height ? { width: box.width, height: box.height } : null;
+    fitStage(); placeChosen(); placeOthers(); if (inline) positionInline(); placeFigure(); figure?.parts.placeInline();
+  }).observe(stage);
 
   // -- zoom, as Keynote's View › Zoom: the slide fitted to the stage (Fit Slide, as it
   // opens), or at a size of its own -- Actual Size a point of the slide to a point of the
@@ -3026,21 +3090,7 @@ export function mount(studio, container) {
     toast(`${picks.length > 1 ? `${picks.length} objects` : blockLabel(first)} moved to slide ${index + 1}`, { icon: "slide" });
   }
   function carryCancel() { const was = finishCarry(); if (was) sendHome(was); }
-  // ⌘ pressed while it is carried over the slide, as the help bar says: taken out of line, to
-  // be placed where it is let go -- dragged on from here as a placed object is, caught at the
-  // slide's guides (placing.js). Everything carried is back where it was first, at once.
-  function carryFree() {
-    const was = carry, page = pageNode?.getBoundingClientRect(), point = was?.pointer;
-    if (!was?.started || !point || !page || point.x < page.left || point.x > page.right || point.y < page.top || point.y > page.bottom) return;
-    finishCarry();
-    const wraps = [was.lifted, ...was.group, ...was.shifted, ...was.base.keys()];
-    for (const wrap of wraps) Object.assign(wrap.style, { transition: "none", transform: "" });
-    void pageNode.getBoundingClientRect();
-    for (const wrap of wraps) wrap.style.transition = "";
-    if (!objects.carryOut({ kind: "block", ...was.from }, was.start, point)) sendHome(was);
-  }
   function carryKey(event) {
-    if (event.key === "Meta" && !event.repeat) { carryFree(); return; }
     if (event.key !== "Escape") return;
     event.preventDefault();
     event.stopPropagation();
@@ -3151,8 +3201,7 @@ export function mount(studio, container) {
   // The chosen figure, mechanism or picture has a handle at each corner. Dragged, it grows or
   // shrinks from the edge not dragged, as a side's handle sizes words (standFor) -- standing
   // centred, about its middle -- and down from its top, or nearer its middle when it stands
-  // alone, as the slide stands it: no larger than its place allows. It catches as a placed
-  // one does where an edge it moves meets a guide (⌘ held, nowhere).
+  // alone, as the slide stands it: no larger than its place allows.
   // Let go, it is drawn that wide: an edit like any other, ⌘Z undoes it. A handle
   // double-clicked sizes it to its place again.
   const SIZED = new Set(["figure", "image", "mechanism"]);
@@ -3281,7 +3330,7 @@ export function mount(studio, container) {
       return { ...at, ...standFor(span, room, share, corner.endsWith("w") ? "w" : "e", at.width, 1.5 * unit) };
     };
     sizing = { at: { ...focus }, block, wrap, box, corner, most, least, across, unit, points, place, share, stand: share,
-      scale: 1, moved: false, start: { x: event.clientX, y: event.clientY }, column: regions.length > 1 ? "column" : "slide", edges: edgesFor(focus) };
+      scale: 1, moved: false, start: { x: event.clientX, y: event.clientY }, column: regions.length > 1 ? "column" : "slide" };
     pageNode.classList.add("block-sizing");
     if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
     window.addEventListener("pointermove", sizeMove);
@@ -3323,9 +3372,6 @@ export function mount(studio, container) {
     const full = across / box.width, caught = !Snap.free(event.metaKey);
     if (caught && full <= most && Math.abs(scale - full) * box.width < 8) scale = full;
     if (caught && Math.abs(scale - 1) * box.width < 4) scale = 1;
-    // Else where an edge it moves comes near the slide's edges and middles, the shapes' or the
-    // other objects', as a placed one's does: its guide drawn (placing.js).
-    scale = sizing.edges.sized(sizing.place, scale, { least: sizing.least, most, free: !caught || scale === full || scale === 1 });
     sizing.scale = scale;
     const at = sizing.place(scale), k = scaleOf(sizing.wrap);
     sizing.stand = at.stand;
@@ -3345,13 +3391,9 @@ export function mount(studio, container) {
     window.removeEventListener("keydown", sizeKey, true);
     pageNode?.classList.remove("block-sizing");
     sizeTip.hidden = true;
-    was?.edges.end();
     if (was?.moved) swallowRelease();
     return was;
   }
-  // What an object sized in line at `at` catches at: not itself, nor what follows it in its
-  // place, which moves as it grows (placing.js's carrier, read once as the sizing starts).
-  const edgesFor = (at) => objects.carrier({ except: blocksAt(slideAt() || {}, at.region).map((_, index) => ({ region: at.region, index })).filter(({ index }) => index >= at.index) });
 
   function sizeEnd() {
     const was = sizeFinish();
@@ -3874,9 +3916,8 @@ export function mount(studio, container) {
   // a table's columns sharing its width, its words as they are. The edge dragged follows the
   // pointer and the other stays where it is (an object standing centred stays centred: both
   // move). It catches at the width of its place -- where it fills it again, with no width of
-  // its own -- at the width it takes of itself, at the width it was, and where an edge it moves
-  // meets a guide, as a placed one's does (placing.js); ⌘ held, at none. It is never narrower
-  // than it needs to be: its longest word, a column's, a picture's least.
+  // its own -- at the width it takes of itself, and at the width it was; ⌘ held, at none. It
+  // is never narrower than it needs to be: its longest word, a column's, a picture's least.
   // Let go, it is that wide, one step to undo ("Resize Table"); Esc puts it back as it was, and
   // a handle double-clicked gives it no width of its own again.
   const SIDEWAYS = new Set(["text", "bullets", "quote", "callout", "code", "stats", "math"]);
@@ -3943,7 +3984,7 @@ export function mount(studio, container) {
     resizing = { at: { ...focus }, block, kind, element, wrap, kept, set, after, span, room, share, natural, most, least, box, place, side, higher,
       corner: handle.length === 2 ? handle : null, centred: Math.abs(share - 0.5) < 0.001, matrix, unit: matrix.a,
       start: { x: event.clientX, y: event.clientY }, moved: false, pointer: null, width: span.width, left: span.x, stand: share, caught: null,
-      column: regions.length > 1 ? "column" : "slide", edges: edgesFor(focus) };
+      column: regions.length > 1 ? "column" : "slide" };
     pageNode.classList.add("block-sizing");
     if (sizeTip.parentNode !== pageNode) pageNode.append(sizeTip);
     window.addEventListener("pointermove", resizeMove);
@@ -3986,12 +4027,6 @@ export function mount(studio, container) {
       }
       if (caught) width = caught[1];
     }
-    // Else where an edge it moves comes near a guide, as a placed one's does (placing.js): in
-    // the window's pixels, its height as it is but a plot's or a gallery's, in proportion.
-    const grows = it.corner && it.kind !== "table" && it.box?.height;
-    const edgesAt = (wide) => ({ left: it.matrix.e + standAt(wide).left * unit, width: wide * unit,
-      top: grows && it.place ? it.place(it.higher(wide)).top : it.box?.top ?? 0, height: grows ? it.box.height * it.higher(wide) : it.box?.height ?? 0 });
-    width = it.edges.sized(edgesAt, width, { least: it.least, most: it.most, free: free || Boolean(caught) });
     return { width, ...standAt(width), caught: caught?.[0] || null };
   }
   // Where it stands at `width` (standFor).
@@ -4044,7 +4079,6 @@ export function mount(studio, container) {
     window.removeEventListener("keyup", resizeKey, true);
     pageNode?.classList.remove("block-sizing");
     sizeTip.hidden = true;
-    was?.edges.end();
     if (was?.moved) swallowRelease();
     return was;
   }
@@ -7775,6 +7809,11 @@ export function mount(studio, container) {
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
     if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
+    // (The fields of words it had let go of what they listen to once it is drawn again: kept,
+    // each held the panel it was in -- a slide's worth at every slide gone to -- and was told of
+    // every caret moved anywhere.)
+    const fields = [...inspectorBody.querySelectorAll(".rich")];
+    queueMicrotask(() => { for (const field of fields) if (!field.isConnected) field.dispose?.(); });
     keepFocus(inspectorBody, () => {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
@@ -7795,7 +7834,7 @@ export function mount(studio, container) {
       else clear(inspectorBody, slidePanel(slide));
       markBlockErrors();
     }, { undone: undoing });
-    markFills();
+    markFillsSoon();
   }
 
   // Arrange, Keynote's tab of it: what is chosen -- the slide's objects (placing.js), its
@@ -7862,7 +7901,10 @@ export function mount(studio, container) {
     return spare != null && Number(spare) < 2;
   }
   // The stops that would not move it greyed -- there it has nowhere to go -- why, in each one's
-  // tooltip. (Kept to the slide as it is drawn again: a width changed.)
+  // tooltip. (Kept to the slide as it is drawn again: a width changed.) Measured as the next
+  // frame is laid out, once, not at once as the panel is drawn: its measuring laid the page out
+  // there and then, the panel just made with it, before the rest of a click was done.
+  function markFillsSoon() { if (!markFills.soon) markFills.soon = requestAnimationFrame(() => { markFills.soon = 0; markFills(); }); }
   function markFills() {
     const pad = inspectorBody.querySelector(".position-pad"), at = state.focus;
     if (!pad || !at) return;
@@ -10513,8 +10555,8 @@ export function mount(studio, container) {
     else if ((key === "PageUp" || key === "PageDown") && !event.altKey && across.page(key === "PageDown" ? 1 : -1)) event.preventDefault();
     else if (key === "Home" && slides().length) { event.preventDefault(); select(0); }
     else if (key === "End" && slides().length) { event.preventDefault(); select(slides().length - 1); }
-    else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && state.slide < slides().length - 1) { event.preventDefault(); select(state.slide + 1); }
-    else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && state.slide > 0) { event.preventDefault(); select(state.slide - 1); }
+    else if (["ArrowDown", "ArrowRight", "PageDown"].includes(key) && slideGoing() < slides().length - 1) { event.preventDefault(); goTo(slideGoing() + 1, event); }
+    else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key) && slideGoing() > 0) { event.preventDefault(); goTo(slideGoing() - 1, event); }
     else if (state.field && key === "Escape") { state.field = null; placeChosen(); }
     // Return opens what is chosen with all its words chosen, as Keynote's does.
     else if (state.field && key === "Enter") { event.preventDefault(); openInline({ kind: "field", field: state.field.field }, { selectAll: true }); }
@@ -10592,7 +10634,7 @@ export function mount(studio, container) {
     const block = state.focus && blocksAt(slideAt() || {}, state.focus.region)[state.focus.index];
     const typed = inline?.target?.kind === "block" ? kindOf(blocksAt(slideAt() || {}, inline.target.region)[inline.target.index]) : null;
     const own = {
-      drag: cropping?.drag?.moved ? "crop" : placedDrag === "size" ? "scale" : placedDrag === "out" ? "out" : placedDrag ? "move"
+      drag: cropping?.drag?.moved ? "crop" : placedDrag === "size" ? "scale" : placedDrag ? "move"
         : sizing?.moved || resizing?.moved || logoSizing?.moved ? "handle" : carry?.started ? "carry" : logoDrag?.started || band?.node ? "plain" : "",
       mode: cropping && !cropping.done ? "crop" : "",
       typing: !inline ? "" : inline.cell ? "cell" : inline.bullets ? "list" : inline.target?.kind === "stat" ? "stat" : inline.target?.kind === "picture" ? "caption"
@@ -11258,6 +11300,7 @@ export function mount(studio, container) {
     const from = (index) => (index < start ? index : index >= start + now ? index - now + was : found[index - start]);
     const old = pages;
     pages = after.map((_, index) => (from(index) >= 0 ? old[from(index)] : undefined));
+    letThumbGo();
     messages = messages.filter((m) => { const n = Number(/^slide(\d+)$/.exec(m.page || "")?.[1]); return !n || from(n - 1) === n - 1; });
   }
   studio.on("change", ({ quiet, source, who, before, entry, base, incoming, merged, answer }) => {
@@ -11373,7 +11416,7 @@ export function mount(studio, container) {
   });
   function showPending() {
     if (!pageNode || studio.state === "offline") return;
-    pageNode.classList.add("pending");
+    pageNode.classList.add("pending", "waiting");
     if (stageMeta.querySelector(".drawing")) return;
     stageMeta.querySelector(".stage-hint")?.remove();
     stageMeta.append(h("span.row.drawing", {}, h("span.spinner"), "Updating…"));
@@ -11390,6 +11433,9 @@ export function mount(studio, container) {
       else if (result.info?.weighing) settleTimer = setTimeout(() => { weighing = true; studio.requestDraw(0); }, 1200);
       settleSoon = false;
     }
+    // (The slide on the stage drawn anew: its thumbnail waits for the drawings to stop.)
+    const was = pages[state.slide], fresh = result.pages?.[state.slide];
+    if (was?.svg && fresh?.svg && was.hash !== fresh.hash) holdThumb(state.slide, was);
     pages = result.pages;
     drawnMessages = result.messages || [];
     // A switch left to the deck says what the slide now shows (Turn to Fit the Slide).
@@ -11424,7 +11470,7 @@ export function mount(studio, container) {
     // The panel's colours drawn again when the theme's change (its palette edited in its own
     // tab): the named colours, the tones and the palette's own order, as the swatches show them.
     const key = JSON.stringify([studio.info?.palette || {}, studio.info?.tones, studio.info?.order, studio.info?.own]);
-    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFills(); }
+    if (key !== lastKey) { lastKey = key; renderInspector(); } else { markBlockErrors(); markFillsSoon(); }
     const deckError = messages.find((m) => m.severity === "error" && !m.page && !placeOf(m.where));
     stage.querySelector(":scope > .deck-error")?.remove();
     if (deckError) stage.prepend(h("div.messages.deck-error", {}, messageView(deckError)));

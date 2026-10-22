@@ -1540,6 +1540,11 @@ export function richText({ value = "", list = false, single = false, breakWith =
   };
   let barLeft = null, barTop = null;
   document.addEventListener("selectionchange", showBar);
+  // Put in the page as it is made (a panel's field, drawn with the panel), it is seen there at
+  // once: dropped with the panel drawn again before the selection next changes, it lets go of
+  // its listener then, not never -- each kept the panel it was in, and ran at every caret move,
+  // a few more for every slide gone to, click and undo.
+  queueMicrotask(() => { if (area.isConnected) seen = true; });
   // A panel's field shows its bar while it has the keys, chosen words or not.
   if (docked) for (const name of ["focus", "blur"]) area.addEventListener(name, () => setTimeout(() => showBar(), 0));
 
