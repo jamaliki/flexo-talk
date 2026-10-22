@@ -615,7 +615,7 @@ class DeckKind:
 
         from flexo.draft import give_up_if_newer
 
-        from flexo_talk.compose import CANT_DRAW, EDITING, PLACEHOLDERS, STANDING_ASIDE, render_slide
+        from flexo_talk.compose import CANT_DRAW, EDITING, LATER, PLACEHOLDERS, STANDING_ASIDE, render_slide
 
         errors: list[DeckDocumentError] = []
         try:
@@ -687,17 +687,29 @@ class DeckKind:
         # the changes stop the page asks to settle, and the slides that kept one are
         # drawn again with the best.
         settle = bool((hints or {}).get("settle"))
+        # What would make a figure drawn small larger (turned, or with a slide of its own) is
+        # weighed once the settled slide is shown, when the page asks (``weigh``): settling a
+        # figure just edited waits on nothing more (compose.LATER).
+        weigh = settle and bool((hints or {}).get("weigh"))
         started = time.perf_counter()
         drawn_one = False
         for index in _order(len(slides), focus):
             known = self._slides.get(keys[index])
-            if index in failed or (known is not None and (known.get("settled", True) or not settle)):
+            if index in failed or (
+                known is not None and (known.get("settled", True) or not settle)
+                and (known.get("weighed", True) or not weigh)
+            ):
                 continue
             if drawn_one and time.perf_counter() - started > BUDGET:
                 break
             slide = deck.slides[index]
             give_up_if_newer()  # (a settling given up for a change: flexo.draft)
             editing, placeholders, aside = EDITING.set(not settle), PLACEHOLDERS.set(True), STANDING_ASIDE.set(True)
+            # (Settled -- or drawn at its best though changed -- what would make its figures
+            # larger is left for the drawing the page asks for next, the slide said to be
+            # weighing until then.)
+            deferred: list = []
+            later = LATER.set(None if weigh else deferred)
             try:
                 rendered = render_slide(deck, slide)
                 # (The data a plot in one of its figures reads is known once it has been
@@ -705,7 +717,8 @@ class DeckKind:
                 keys[index] = key(index)
                 self._slides[keys[index]] = {"svg": _presentable(rendered.svg, deck, slide), "steps": rendered.steps,
                                              "diagnostics": rendered.diagnostics, "notes": rendered.notes,
-                                             "held": rendered.held, "settled": rendered.settled}
+                                             "held": rendered.held, "settled": rendered.settled,
+                                             "weighed": not deferred}
             except UntrustedCode as error:
                 self._slides[keys[index]] = {"error": error.message, "code": "code.untrusted"}
             except DeckDocumentError as error:
@@ -717,6 +730,7 @@ class DeckKind:
                 EDITING.reset(editing)
                 PLACEHOLDERS.reset(placeholders)
                 STANDING_ASIDE.reset(aside)
+                LATER.reset(later)
             drawn_one = True
         # Slides with photos carry them inside: the cache is held to a size in bytes too.
         while len(self._slides) > CACHE_SIZE or (
@@ -770,10 +784,12 @@ class DeckKind:
                     messages.append(Message(text, "warning", f"slides[{index}]", identifier, "code.untrusted"))
                 pages.append(Page(identifier, done["svg"], _label(data), done["steps"], _extra(data)))
         unsettled = any(not self._slides.get(key, {}).get("settled", True) for key in keys)
+        weighing = any(not self._slides.get(key, {}).get("weighed", True) for key in keys)
         return Drawing(pages, _placed(messages, document), sorted(watched),
                        {"palette": _palette(deck), "tones": _tones(deck), "order": _palette_order(deck),
                         "own": _palette_order(deck, own=True), "fonts": _fonts(deck), "roles": _roles(deck),
-                        "sizes": _sizes(deck), "width": deck.style.width, "unsettled": unsettled})
+                        "sizes": _sizes(deck), "width": deck.style.width, "unsettled": unsettled,
+                        "weighing": weighing})
 
     def act(self, document: dict[str, Any], action: dict[str, Any], base: Path) -> dict[str, Any]:
         """An edit to a figure on a slide, made where the figure is written: in the deck

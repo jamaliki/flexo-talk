@@ -5054,6 +5054,7 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
     # as arranged.)
     fold = turn or (block.turn is False and not _arranged(spec))
     where = (deck.id, canvas.slide.id, spec.id)
+    _SETTLED.discard(where)
     _kept_as_written(where, spec)
     # A figure its person has seen keeps the way it was drawn -- turned to fit the slide, or
     # as written -- however it is changed (a shape added to a long column, a part put under
@@ -5098,9 +5099,11 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         keep = layout if layout is not None else seen if EDITING.get() and not asked else None
         started = time.perf_counter()
         try:
+            # (Kept in the layout it has, drawn in full should that be the best it could have:
+            # settled at once, as it would be once the changes stop -- flexo.fit_in_box's whole.)
             fit = _fit_in_box(
                 spec, box.width, box.height, words=min(deck.style.figure_size, largest), largest=largest,
-                turn=free, fold=fold, keep=keep,
+                turn=free, fold=fold, keep=keep, whole=layout is None,
             )
         except GivenUp:
             # Given up for a change: it takes at least this long to find, however long it took
@@ -5108,6 +5111,9 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
             if keep is None:
                 _FINDING[where] = max(_FINDING.get(where, 0.0), time.perf_counter() - started)
             raise
+        if keep is not None and fit.best:
+            keep = None
+            _SETTLED.add(where)
         if keep is None:
             _FINDING[where] = time.perf_counter() - started
         shown = _SCALES.get(where)
@@ -5373,14 +5379,31 @@ _ASIDE: dict[tuple, float] = {}
 as last found once its changes stopped: kept for while it is changed again (``_settled_only``)."""
 
 
+_SETTLED: set[tuple] = set()
+"""Figures drawn at their best as they were changed (``flexo.fit_in_box``'s ``whole``): what
+would make them larger is found as it is for a figure settled (``_settled_only``)."""
+
+LATER: contextvars.ContextVar[list | None] = contextvars.ContextVar("flexo_talk_later", default=None)
+"""Where what would make a figure drawn small larger -- turned, or with a slide of its own,
+each found by laying it out afresh another way -- is left to be weighed once the slide is
+shown, rather than as it is drawn (the studio settling a figure just edited, which then waits
+on nothing more): a list, told each figure left so; meanwhile the slide says what was found
+last (``_settled_only``)."""
+
+
 def _settled_only(where: tuple, what: str, find, otherwise: float):
     """``find``, which lays a figure out afresh another way, done only once its changes
     stop: while it is changed (``EDITING``), what it found then -- or ``otherwise`` -- so a
-    figure being dragged is not laid out twice over at every move."""
+    figure being dragged is not laid out twice over at every move. (Left for later, ``LATER``:
+    the same, and said so -- as it is for one changed but drawn at its best, ``_SETTLED``.)"""
 
     def answer(*args) -> float:
         key = (where, what, args)
-        if EDITING.get():
+        if EDITING.get() and where not in _SETTLED:
+            return _ASIDE.get(key, otherwise)
+        later = LATER.get()
+        if later is not None:
+            later.append((where, what))
             return _ASIDE.get(key, otherwise)
         _ASIDE[key] = value = find(*args)
         while len(_ASIDE) > 256:

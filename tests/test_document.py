@@ -1729,7 +1729,14 @@ def test_a_figure_changed_on_a_slide_is_drawn_as_a_draft_and_tried_other_ways_on
     seen.clear()
     settled = kind.draw(document, tmp_path, {"settle": True})
     assert settled.info["unsettled"] is False
-    assert (False, False) in seen and (False, True) in seen and not any(draft for draft, _ in seen)
+    # Settled, it is laid out in full as arranged; whether turning it would set its words
+    # larger is weighed once that is shown, when the page asks -- and the slide is as it was.
+    assert (False, False) in seen and (False, True) not in seen and not any(draft for draft, _ in seen)
+    assert settled.info["weighing"] is True
+    seen.clear()
+    weighed = kind.draw(document, tmp_path, {"settle": True, "weigh": True})
+    assert (False, True) in seen and not any(draft for draft, _ in seen)
+    assert weighed.info["weighing"] is False and weighed.pages[0].svg == settled.pages[0].svg
 
 
 def test_a_folded_chart_keeps_its_fold_when_its_words_are_changed(tmp_path: Path, monkeypatch) -> None:
@@ -3171,7 +3178,10 @@ def test_a_figure_arranged_by_hand_drawn_small_says_turning_would_draw_it_larger
             {"id": "line", "layout": {"kind": "row"}, "role": "layout", "children": steps[:8]},
         ],
     }
-    drawing = DeckKind().draw({"slides": [{"title": "Long", "body": [{"figure": figure}]}]}, tmp_path, {"settle": True})
+    kind, document = DeckKind(), {"slides": [{"title": "Long", "body": [{"figure": figure}]}]}
+    # (Weighed once the settled slide is shown, when the page asks: compose.LATER.)
+    assert kind.draw(document, tmp_path, {"settle": True}).info["weighing"] is True
+    drawing = kind.draw(document, tmp_path, {"settle": True, "weigh": True})
     (note,) = [message for message in drawing.messages if message.code.startswith("figure.small")]
     # Coded for the studio to offer the switch in one click.
     assert note.code == "figure.small.turn" and note.text.endswith("Turned to fit the slide, it would be larger.")

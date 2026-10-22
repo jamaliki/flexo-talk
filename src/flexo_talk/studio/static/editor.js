@@ -631,7 +631,11 @@ export function mount(studio, container) {
   // A figure's look changed at once (a colour, a dash, a layout) is settled as soon as its draft
   // is drawn, not after the usual pause: see act.
   let settleSoon = false;
-  studio.hints = () => ({ focus: state.slide, settle: settling, yields: settling });
+  // Settled, what would make a figure drawn small larger (turned, a slide of its own) is
+  // weighed a moment later, in a drawing of its own that gives way to any edit: the settling
+  // waits on nothing more (compose.LATER).
+  let weighing = false;
+  studio.hints = () => ({ focus: state.slide, settle: settling || weighing, yields: settling || weighing, ...(weighing ? { weigh: true } : {}) });
   const doc = () => studio.doc;
   // Merged, every slide's objects are in places its layout has (as the studio's DeckKind
   // puts them: _laid_out) -- an object kept where the layout has none is put in the first
@@ -11178,6 +11182,7 @@ export function mount(studio, container) {
       state.focus = null;
     }
     settling = false;
+    weighing = false;
     if (state.slide >= slides().length) state.slide = Math.max(0, slides().length - 1);
     if (source === "history" && !inline) chooseChanged(was, entry);
     if (source === "history" && !inline && studio.state === "offline") standInChanged(was);
@@ -11256,7 +11261,7 @@ export function mount(studio, container) {
   // a while, for a large figure -- which the next change gives up.)
   let drawingSince = 0;
   studio.on("drawing", ({ version }) => {
-    if (settling) return;
+    if (settling || weighing) return;
     pending = true;
     drawingSince = version;
     setTimeout(() => { if (pending && drawingSince === version) showPending(); }, 150);
@@ -11272,10 +11277,12 @@ export function mount(studio, container) {
     pending = !result.latest || Boolean(result.unfinished);
     if (result.latest && !result.unfinished) {
       settling = false;
+      weighing = false;
       clearTimeout(settleTimer);
       // A figure being edited, drawn in the layout that suits it best once the edits stop,
       // lands there: its parts glide, never jump.
       if (result.info?.unsettled) settleTimer = setTimeout(() => { settling = true; if (figureBlock()) figure.parts.settles(); studio.requestDraw(0); }, settleSoon ? 0 : 1200);
+      else if (result.info?.weighing) settleTimer = setTimeout(() => { weighing = true; studio.requestDraw(0); }, 1200);
       settleSoon = false;
     }
     pages = result.pages;
