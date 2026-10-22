@@ -2657,6 +2657,9 @@ export function mount(studio, container) {
   }
 
   function onHover(event) {
+    // (A figure's part being carried: nothing is pointed at -- not the shapes drawn over the
+    // slide either, measured afresh from the drawing as the part is lifted.)
+    if (figure?.parts.dragging) return;
     // A shape pointed at frames itself (shapes.js).
     if (freeShapes.hover(event)) { hover.hidden = true; return; }
     // A picture being cropped: nothing else is pointed at meanwhile.
@@ -4879,14 +4882,16 @@ export function mount(studio, container) {
       // (What is chosen has its frame: the pointer's dashed one goes from it, till it moves.)
       // (A part being carried hides its frame, and its panel waits for it to be let go: the
       // drag's first move is not kept waiting on either.)
-      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } renderInspector(); placeFigure(); },
+      // (Its marks first, measured from the drawing as it stands, then its panel: the page laid
+      // out once for the two, not again for the marks after the panel is drawn.)
+      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } placeFigure(); renderInspector(); },
       // Landed, the figure's frame is drawn round it as it now is (grown by a part, say).
       settled: () => { placeChosen(); placeFigure(); },
       // A part let go: the drawing held back while it was carried is put in, unless the one
       // its move makes has come first (a moment's wait: that one is the one to see).
       dragged: () => {
         // (Once what it was let go for is on its way.)
-        setTimeout(() => { if (own.carried && figure === own && !own.parts.dragging) { own.carried = false; renderInspector(); placeFigure(); } }, 0);
+        setTimeout(() => { if (own.carried && figure === own && !own.parts.dragging) { own.carried = false; placeFigure(); renderInspector(); } }, 0);
         setTimeout(() => { if (!figure?.parts.dragging) putHeld(); }, 1200);
       },
       // A shape that can't be drawn as written, drawn as a plain box: said in its panel, as
@@ -5246,9 +5251,11 @@ export function mount(studio, container) {
     holding();
     const block = figureBlock();
     if (!block || !figure.parts.model || !pageNode) { clear(figureMarks); figureBar.hidden = true; return; }
-    clear(figureMarks, figure.parts.markViews());
+    // (The figure's box read with its parts', before any is marked: the page laid out once.)
+    const views = figure.parts.markViews();
     const region = regionsOf(slideAt()).find((r) => r.key === figure.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${figure.index}`);
+    clear(figureMarks, views);
     figureBar.hidden = !box;
     if (!box) return;
     const words = figure.parts.hint();

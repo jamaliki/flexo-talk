@@ -2790,16 +2790,29 @@ def _blank(deck, slide) -> str:
 def _tones(deck) -> dict[str, Any]:
     """The deck's tone colours, for the colour chips of a figure on a slide."""
 
+    def paints(**roles: str) -> dict[str, str]:
+        # (Each role the palette has: a tone's fill and outline always, its words' and its
+        # marks' colours where it names them -- a shape given a tone is painted with them on
+        # the page at once, as the slide will draw it.)
+        found = {}
+        for part, role in roles.items():
+            try:
+                found[part] = deck.palette.get(role)
+            except (KeyError, ValueError):
+                if part in ("fill", "stroke"):
+                    raise
+        return found
+
     colours = []
     for index in range(1, 9):
         try:
-            colours.append({"fill": deck.palette.get(f"tone-{index}-fill"),
-                            "stroke": deck.palette.get(f"tone-{index}-stroke")})
+            colours.append(paints(fill=f"tone-{index}-fill", stroke=f"tone-{index}-stroke",
+                                  ink=f"tone-{index}-ink", motif=f"tone-{index}-motif"))
         except (KeyError, ValueError):
             break
     # The theme's grey, as a shape toned ``neutral`` is painted.
     try:
-        neutral = {"fill": deck.palette.get("block-fill"), "stroke": deck.palette.get("block-stroke")}
+        neutral = paints(fill="block-fill", stroke="block-stroke", motif="block-motif", ink="ink")
     except (KeyError, ValueError):
         neutral = None
     return {"colours": colours, "used": {}, **({"neutral": neutral} if neutral else {})}

@@ -927,6 +927,10 @@ def test_one_theme_file_is_put_to_use_in_a_deck_and_a_figure_at_once(
     assert yaml.safe_load((tmp_path / "figure.yaml").read_text())["figure"]["style"] == "themes/lab.theme.yaml"
     assert cards[0]["value"] == "themes/lab.theme.yaml"
     assert drawn.info["tones"]["colours"][0]["stroke"].startswith("#")
+    # Each tone's words' and marks' colours too, and the grey's: a figure's shape given a tone
+    # is painted with them on the slide at once.
+    assert all({"fill", "stroke", "ink", "motif"} <= set(colour) for colour in drawn.info["tones"]["colours"])
+    assert {"fill", "stroke", "ink", "motif"} <= set(drawn.info["tones"]["neutral"])
 
 
 def test_a_deck_s_python_is_kept_to_itself(tmp_path: Path) -> None:
