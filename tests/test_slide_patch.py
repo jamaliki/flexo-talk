@@ -116,3 +116,108 @@ def test_a_change_the_drawing_shown_cannot_be_patched_with_is_put_in_whole() -> 
     assert plans[1]["same"] and plans[1]["read"] == [["a", "b"]]
     assert plans[2]["same"] and plans[2]["put"] == ['    <circle id="b.c" r="1" />']
     assert plans[3] is None
+
+
+# A start tag's attributes, as the page reads them (the drawings' values are written plainly).
+# A page element, fake: its attributes by name, its style property by property, its class.
+ELEMENTS = r"""
+const attributes = (line) => Object.fromEntries([...line.matchAll(/\s([\w:.-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]]));
+const element = (given) => {
+  const own = new Map(Object.entries(given).filter(([name]) => name !== "style" && name !== "class"));
+  const style = new Map(P.styleOf(given.style));
+  const classes = new Set((given.class || "").split(/\s+/).filter(Boolean));
+  const styled = () => [...style].map(([p, v]) => `${p}: ${v}`).join("; ") || null;
+  const named = () => [...classes].join(" ") || null;
+  return {
+    getAttribute: (name) => (name === "style" ? styled() : name === "class" ? named() : own.get(name) ?? null),
+    getAttributeNode: (name) => ({ namespaceURI: null, name, value: own.get(name) }),
+    setAttributeNS: (namespace, name, value) => own.set(name, value),
+    removeAttribute: (name) => own.delete(name),
+    style: {
+      setProperty: (p, v, important) => style.set(p, important ? `${v} !important` : v),
+      removeProperty: (p) => style.delete(p),
+    },
+    classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
+    seen: () => ({ ...Object.fromEntries(own), style: Object.fromEntries(style), class: [...classes] }),
+  };
+};
+"""
+
+
+def _node(script: str):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    module = f"const P = await import({json.dumps(PATCH.as_uri())});\n{ELEMENTS}{script}"
+    done = subprocess.run([node, "--input-type=module", "-e", module], capture_output=True, text=True, check=True)
+    return json.loads(done.stdout)
+
+
+def _list(tmp_path: Path, bullets: list[str]) -> str:
+    document = {"deck": {"id": "patch"}, "slides": [{"title": "Uses", "body": [{"bullets": bullets}]}]}
+    return DeckKind().draw(document, tmp_path, {"settle": True}).pages[0].svg
+
+
+def test_a_list_typed_in_keeps_its_drawn_words_hidden_under_the_editor_as_each_key_is_drawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FLEXO_TALK_CACHE", "0")
+    first, last = "Therapeutic enzymes", "Enzymes useful in sustainability"
+    shown = _list(tmp_path, [first, "Industrial enzymes", last])
+    typed = _list(tmp_path, [first, "Industrial enzymes (drug production)", last])
+    # The list's own start tag changes with its lines (its natural width, say): it is retagged,
+    # while the editor has the list hidden, its words typed over it.
+    seen = _node(
+        f"const before = {json.dumps(shown)}.split('\\n'), after = {json.dumps(typed)}.split('\\n');\n"
+        "const plan = P.patchPlan(before, after);\n"
+        "const list = plan.retagged.find((tag) => tag.element.id === 'slide1.body.0');\n"
+        "const was = attributes(before[list.element.start]), now = attributes(list.line);\n"
+        "const live = { ...was, style: 'visibility: hidden' }, own = element(live);\n"
+        "const changes = P.tagChanges(was, now, live);\n"
+        "P.retag(own, element(now), changes);\n"
+        "const retagged = plan.retagged.map((tag) => tag.element.id);\n"
+        "console.log(JSON.stringify({ retagged, changes, own: own.seen(), now }));"
+    )
+    assert "slide1.body.0" in seen["retagged"]
+    assert seen["changes"]["set"] and not seen["changes"]["removed"]
+    # The drawn words stay hidden under the editor; what the drawing changed is made anew.
+    assert seen["own"]["style"] == {"visibility": "hidden"}
+    for name in seen["changes"]["set"]:
+        assert seen["own"][name] == seen["now"][name]
+
+
+def test_a_start_tag_made_anew_has_the_drawings_attributes_and_keeps_the_pages_own_style_and_class() -> None:
+    seen = _node(
+        "const was = { id: 'g', transform: 'translate(1 2)', opacity: '0.5',\n"
+        "  style: 'fill: red; stroke: blue', class: 'a b' };\n"
+        "const now = { id: 'g', transform: 'translate(1 2)', 'data-flexo-natural': '12',\n"
+        "  style: 'fill: green; --tint: Red', class: 'b c' };\n"
+        # In the page: a part sized a moment (its transform), a mark of the page's own, the words
+        # typed hidden under their editor, the closed hand.
+        "const live = { ...was, transform: 'scale(2)', 'data-held': '1',\n"
+        "  style: 'fill: red; stroke: blue; visibility: hidden', class: 'a b grab-here' };\n"
+        "const changes = P.tagChanges(was, now, live), own = element(live);\n"
+        "P.retag(own, element(now), changes);\n"
+        "const unchanged = P.tagChanges(was, { ...was }, { ...was });\n"
+        'const styled = P.styleOf(\'fill: url("#a;b") ; font: 12px "A; B"; color: red !important;; bad\');\n'
+        "console.log(JSON.stringify({ changes, own: own.seen(), unchanged, styled: Object.fromEntries(styled) }));"
+    )
+    assert seen["changes"] == {
+        "set": ["transform", "data-flexo-natural"],
+        "removed": ["opacity", "data-held"],
+        "styled": ["fill", "--tint"],
+        "unstyled": ["stroke"],
+        "classed": ["c"],
+        "unclassed": ["a"],
+    }
+    # Its attributes the drawing's, as a slide put in whole has them; of its style and class,
+    # the drawing's changes made and the page's own kept.
+    assert seen["own"] == {
+        "id": "g",
+        "transform": "translate(1 2)",
+        "data-flexo-natural": "12",
+        "style": {"fill": "green", "visibility": "hidden", "--tint": "Red"},
+        "class": ["b", "grab-here", "c"],
+    }
+    assert all(not value for value in seen["unchanged"].values())
+    assert seen["styled"] == {"fill": 'url("#a;b")', "font": '12px "A; B"', "color": "red !important"}
