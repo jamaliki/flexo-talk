@@ -141,6 +141,7 @@ def test_an_installed_flexo_is_told_by_the_hashes_its_installation_recorded(monk
     from pathlib import PurePosixPath
 
     import flexo
+    from flexo import kept_versions
 
     root = Path(flexo.__file__).parent
 
@@ -157,9 +158,10 @@ def test_an_installed_flexo_is_told_by_the_hashes_its_installation_recorded(monk
             return root.parent / name
 
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: Installed())
-    assert compose._recorded(root) == b"flexo/__init__.py=sha256:abc\nflexo/text.py=sha256:abc"
+    recorded = kept_versions._recorded("flexo", root, True, (".py",))
+    assert recorded == b"flexo/__init__.py=sha256:abc\nflexo/text.py=sha256:abc"
     File.hash = None  # (installed to be worked on in place: read through)
-    assert compose._recorded(root) is None
+    assert kept_versions._recorded("flexo", root, True, (".py",)) is None
 
 
 def test_a_page_opened_on_a_slide_drawn_already_is_sent_it_at_once(tmp_path: Path, monkeypatch) -> None:
