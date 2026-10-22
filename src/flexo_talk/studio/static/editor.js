@@ -4977,7 +4977,7 @@ export function mount(studio, container) {
       shapesDeleted = shapesDeleted.filter((item) => item !== gone);
     }
   }
-  async function runFigure(action, { merge, hold = false, label: told = null }, own = figure) {
+  async function runFigure(action, { merge, hold = false, label: told = null, once = null }, own = figure) {
     if (!own) return null;
     // (Its words, still on their way, go with it.)
     if (own === figure && action.do === "update" && [action.target, ...(action.targets || [])].some((part) => part?.type === "node" && !shapeIn(part.id))) return null;
@@ -5071,7 +5071,7 @@ export function mount(studio, container) {
         settling = false;
         weighing = false;
         clearTimeout(settleTimer);
-        const quick = await studio.act({ do: "figure", at, edit: action }, { apply: (document, answer) => made(document, answer, true) }).catch((error) => {
+        const quick = await studio.act({ do: "figure", at, edit: action }, { apply: (document, answer) => made(document, answer, true), once }).catch((error) => {
           if (error instanceof TypeError || same(studio.doc, sent)) throw error;
           return null;  // the deck changed meanwhile: made again on it as it is now
         });
@@ -5082,11 +5082,14 @@ export function mount(studio, container) {
         }
         if (!same(studio.doc, sent)) continue;
       }
-      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action } }).catch((error) => {
+      // (By its id too: one the studio made already -- its answer lost on the way -- is not made
+      // again; the deck as the studio has it is taken in instead: session.repeated.)
+      const result = await studio.api("/api/act", { file: studio.file, document: sent, action: { do: "figure", at, edit: action }, ...(once && !reads ? { once } : {}) }).catch((error) => {
         // The studio out of reach: said so, for the edit to wait for it (figure parts hold it).
         if (error instanceof TypeError || same(studio.doc, sent)) throw error;
         return null;  // the deck changed meanwhile: made again on it as it is now
       });
+      if (result?.repeat) { held(); studio.repeated?.(result); return result; }
       if (!same(studio.doc, sent)) {
         if (action.do === "update" && [action.target, ...(action.targets || [])].some((part) => part?.type === "node" && !shapeIn(part.id))) return null;
         continue;
