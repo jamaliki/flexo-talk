@@ -1995,6 +1995,11 @@ export function mount(studio, container) {
     pageNode.querySelector(".away-title")?.replaceChildren(slideTitle(slide));
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
+    // (Its drawing still on its way after a moment, or the studio away: the busy pointer --
+    // showPending. Not as each key is typed: the whole drawing styled again for it, a large
+    // slide's ten milliseconds a key, to be replaced a moment later.)
+    if (!(pending || page?.stale)) pageNode.classList.remove("waiting");
+    else if (studio.state === "offline") pageNode.classList.add("waiting");
     const own = messages.filter((m) => m.page === `slide${state.slide + 1}` && m.code !== "code.untrusted");
     const here = studio.others().filter((entry) => entry.where?.page === state.slide + 1);
     if (stageWrap.parentNode !== stage) clear(stage, stageWrap);
@@ -11316,7 +11321,7 @@ export function mount(studio, container) {
   });
   function showPending() {
     if (!pageNode || studio.state === "offline") return;
-    pageNode.classList.add("pending");
+    pageNode.classList.add("pending", "waiting");
     if (stageMeta.querySelector(".drawing")) return;
     stageMeta.querySelector(".stage-hint")?.remove();
     stageMeta.append(h("span.row.drawing", {}, h("span.spinner"), "Updating…"));

@@ -84,7 +84,7 @@
 /* Letters at the widths they were set at: rounded to whole pixels at small sizes, a line of code ran past its panel. */
 .slide-page svg { text-rendering: geometricPrecision; }
 .slide-page > svg { width: 100%; height: 100%; display: block; border-radius: 3px; -webkit-user-select: none; user-select: none; }
-.slide-page.pending > svg { cursor: progress; }
+.slide-page.pending.waiting > svg { cursor: progress; }
 .slide-page.error { outline: 2px solid var(--error); outline-offset: 3px; }
 .slide-page .placeholder { display: grid; place-items: center; height: 100%; }
 .slide-page .placeholder.away { padding: 8%; color: #8c8c88; font: 500 clamp(15px, 2.4vw, 26px)/1.3 var(--font); text-align: center; overflow-wrap: anywhere; }
