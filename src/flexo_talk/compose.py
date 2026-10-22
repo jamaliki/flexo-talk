@@ -5464,17 +5464,55 @@ _FLEXO_FINGERPRINT: list[str] = []
 
 
 def _fingerprint() -> str:
-    """A hash of flexo's own source: any change to the engine makes cached layouts stale."""
+    """A hash of flexo's own source: any change to the engine makes cached layouts stale.
+
+    An installed flexo (the app's) is told by the hashes its installation recorded of each of
+    its files (``_recorded``): one file read, not every one -- in a busy studio each read is a
+    wait, and reading them all took seconds at the first figure drawn. One worked on in place
+    is read through."""
 
     if not _FLEXO_FINGERPRINT:
         import hashlib
 
-        digest = hashlib.sha256()
         root = Path(flexo.__file__).parent
+        recorded = _recorded(root)
+        if recorded is not None:
+            _FLEXO_FINGERPRINT.append(hashlib.sha256(recorded).hexdigest()[:16])
+            return _FLEXO_FINGERPRINT[0]
+        digest = hashlib.sha256()
         for path in sorted(root.rglob("*.py")):
             digest.update(path.read_bytes())
         _FLEXO_FINGERPRINT.append(digest.hexdigest()[:16])
     return _FLEXO_FINGERPRINT[0]
+
+
+def _recorded(root: Path) -> bytes | None:
+    """What flexo's installation recorded of its Python files: each one's name and hash -- or
+    None where it recorded no hash of one, or none of them (installed to be worked on in
+    place), or its record is not of the copy at ``root``."""
+
+    import importlib.metadata
+    import os
+
+    try:
+        installed = importlib.metadata.distribution("flexo")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    found = []
+    for item in installed.files or ():
+        if not item.parts or item.parts[0] != "flexo" or item.suffix != ".py":
+            continue
+        if item.hash is None:
+            return None
+        found.append(f"{item.as_posix()}={item.hash.mode}:{item.hash.value}")
+    if not found:
+        return None
+    try:
+        if not os.path.samefile(installed.locate_file("flexo/__init__.py"), root / "__init__.py"):
+            return None
+    except OSError:
+        return None
+    return "\n".join(sorted(found)).encode("utf-8")
 
 
 _DRAWN_FROM = frozenset({"source", "density", "ss_from"})

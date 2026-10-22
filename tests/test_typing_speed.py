@@ -134,3 +134,29 @@ def test_a_figure_drawn_again_takes_its_layout_from_memory_not_its_file(tmp_path
         noted["slides"][4]["notes"] = words  # (the slide drawn again, its figure where it was)
         _drawn(kind, noted, tmp_path, focus=4)
     assert read == []
+
+
+def test_an_installed_flexo_is_told_by_the_hashes_its_installation_recorded(monkeypatch) -> None:
+    import importlib.metadata
+    from pathlib import PurePosixPath
+
+    import flexo
+
+    root = Path(flexo.__file__).parent
+
+    class Hash:
+        mode, value = "sha256", "abc"
+
+    class File(PurePosixPath):
+        hash: Hash | None = Hash()
+
+    class Installed:
+        files = (File("flexo/__init__.py"), File("flexo/text.py"), File("flexo-1.0.dist-info/RECORD"))
+
+        def locate_file(self, name: str) -> Path:
+            return root.parent / name
+
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: Installed())
+    assert compose._recorded(root) == b"flexo/__init__.py=sha256:abc\nflexo/text.py=sha256:abc"
+    File.hash = None  # (installed to be worked on in place: read through)
+    assert compose._recorded(root) is None
