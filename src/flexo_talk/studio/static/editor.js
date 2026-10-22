@@ -1708,14 +1708,14 @@ export function mount(studio, container) {
   let railKeys = [];
   // The slide on the stage, drawn again as it is edited, is seen there at full size: its
   // thumbnail shows the drawing it had (`thumbHeld`, the slide's place and that drawing) until the
-  // drawings stop coming, a moment after the last -- a large slide's thumbnail made again at
+  // drawings stop coming, half a second after the last -- a large slide's thumbnail made again at
   // every key typed is work the next key waits for. (Slides added, moved or deleted, or
   // another chosen, it shows its drawing at once.)
   let thumbHeld = null, heldTimer = 0;
   function holdThumb(index, was) {
     if (thumbHeld?.index !== index) thumbHeld = { index, page: was };
     clearTimeout(heldTimer);
-    heldTimer = setTimeout(() => { if (!thumbHeld) return; thumbHeld = null; renderRail(); }, 250);
+    heldTimer = setTimeout(() => { if (!thumbHeld) return; thumbHeld = null; renderRail(); }, 500);
   }
   const letThumbGo = () => { thumbHeld = null; clearTimeout(heldTimer); };
   // (Each drawn as it comes into sight, and let go far out of it: thumbs.js.)
