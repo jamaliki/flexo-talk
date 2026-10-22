@@ -44,6 +44,7 @@ import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
+import { stageAhead } from "/static/kinds/deck/stageahead.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -1948,6 +1949,20 @@ export function mount(studio, container) {
   let portraits = null;
   studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
   const unlinked = (root) => { for (const link of root.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); } };
+  // A slide's drawing as the stage shows it: as wide as the stage lets it be, its figures'
+  // lines easy to click (widenLines).
+  const sizedToStage = (svg) => { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); widenLines(svg); };
+  // The slides either side of the one shown, read as the stage reads one it puts in, while the
+  // window is left alone (stageahead.js): going to one, its drawing is ready.
+  const ahead = stageAhead((text) => {
+    const holder = document.createElement("div");
+    holder.innerHTML = text.replace(/^<\?xml[^>]*>\s*/, "");
+    const svg = holder.querySelector("svg");
+    indexDrawing(svg, text);
+    ownResources(svg);
+    if (svg) sizedToStage(svg);
+    return holder;
+  });
   function renderStage() {
     const list = slides();
     const slide = slideAt();
@@ -2007,11 +2022,14 @@ export function mount(studio, container) {
       hover.hidden = true;
     } else if (renewed) {
       pageNode = h("div.slide-page", { dataset: { shows } });
-      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); indexDrawing(pageNode.querySelector("svg"), page.svg); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
+      // (A slide beside the last read ahead while the window was left alone, ready as below:
+      // stageahead.js.)
+      const ready = page?.svg ? ahead.take(shows) : null;
+      if (ready) { pageNode.append(...ready.childNodes); holdPaused(pageNode.querySelector("svg")); }
+      else if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); indexDrawing(pageNode.querySelector("svg"), page.svg); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
       else pageNode.append(away ? h("div.placeholder.away", {}, h("span.away-title")) : h("div.placeholder", {}, h("div.spinner")));
       const svg = pageNode.querySelector("svg");
-      if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
-      if (svg) widenLines(svg);
+      if (svg && !ready) sizedToStage(svg);
       // A link drawn on the slide is words, chosen and edited as any: never a place for the
       // keys, nor followed by any click (a middle-click's new tab included).
       unlinked(pageNode);
@@ -2076,6 +2094,8 @@ export function mount(studio, container) {
     if (before && figureBlock()) figure.parts.land(before);
     if (moved) landBlocks(moved);
     placeStandIns();
+    ahead.want([state.slide + 1, state.slide - 1].map((index) => [index, pages[index]]).filter(([, near]) => near?.svg)
+      .map(([index, near]) => [`${index}:${near.hash}`, near.svg]));
   }
 
   // Words typed with the studio away stay on the slide as typed once the typing ends -- in
