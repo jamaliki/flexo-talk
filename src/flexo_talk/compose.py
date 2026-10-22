@@ -5291,20 +5291,31 @@ def _probed(key: tuple | None, what: str, find):
     if key is None:
         return find
 
-    def kept(*args) -> float:
+    def found(*args) -> float | None:
         known = (*key, what, args)
         value = _PROBED.get(known)
         if value is None:
             stored = _cached_fit(known)
             value = stored.get("probed") if isinstance(stored, dict) else None
             if not isinstance(value, int | float):
-                value = find(*args)
-                _store_fit(known, {"probed": value})
+                return None
             _PROBED[known] = value = float(value)
             while len(_PROBED) > 256:
                 _PROBED.pop(next(iter(_PROBED)))
         return value
 
+    def kept(*args) -> float:
+        value = found(*args)
+        if value is None:
+            value = float(find(*args))
+            _store_fit((*key, what, args), {"probed": value})
+            _PROBED[(*key, what, args)] = value
+            while len(_PROBED) > 256:
+                _PROBED.pop(next(iter(_PROBED)))
+        return value
+
+    # (What was found before, without finding it: ``_settled_only`` asks, leaving it for later.)
+    kept.found = found
     return kept
 
 
@@ -5446,9 +5457,16 @@ def _settled_only(where: tuple, what: str, find, otherwise: float):
         if EDITING.get() and where not in _SETTLED:
             return _ASIDE.get(key, otherwise)
         later = LATER.get()
-        if later is not None:
+        # (Found already for the figure as it is -- an undo, a deck opened again: _probed -- it
+        # is said at once; else left for later.)
+        known = getattr(find, "found", None)
+        value = known(*args) if later is not None and known is not None else None
+        if later is not None and value is None:
             later.append((where, what))
             return _ASIDE.get(key, otherwise)
+        if value is not None:
+            _ASIDE[key] = value
+            return value
         _ASIDE[key] = value = find(*args)
         while len(_ASIDE) > 256:
             _ASIDE.pop(next(iter(_ASIDE)))
