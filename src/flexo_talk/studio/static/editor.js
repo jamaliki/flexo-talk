@@ -38,6 +38,7 @@ import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
+import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
@@ -1884,6 +1885,7 @@ export function mount(studio, container) {
   // A slide's portraits, chosen and sized on it (portraits.js): made with the slide's people.
   let portraits = null;
   studio.on("status", () => { const now = studio.state === "offline"; if (now !== wasOffline) { wasOffline = now; renderStage(); } });
+  const unlinked = (root) => { for (const link of root.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); } };
   function renderStage() {
     const list = slides();
     const slide = slideAt();
@@ -1926,15 +1928,26 @@ export function mount(studio, container) {
       moved = blockLanding();
       landing = null;
       if (carry) dropCarry();
+    }
+    // The same slide drawn again, changed in a few places (a figure's part edited): patched
+    // where it changed, the rest of its drawing left as it is (slidepatch.js) -- else put in
+    // whole.
+    const kept = renewed && page?.svg && pageNode?.dataset.shows.startsWith(`${state.slide}:`) ? pageNode.querySelector(":scope > svg") : null;
+    if (kept && patchDrawing(kept, page.svg, (holder) => { holdPaused(holder); widenLines(holder); unlinked(holder); })) {
+      pageNode.dataset.shows = shows;
+      const paper = kept.querySelector('[id="canvas.background"]')?.getAttribute("fill");
+      pageNode.style.background = paper && paper !== "none" ? paper : "";
+      hover.hidden = true;
+    } else if (renewed) {
       pageNode = h("div.slide-page", { dataset: { shows } });
-      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
+      if (page?.svg) { pageNode.innerHTML = page.svg.replace(/^<\?xml[^>]*>\s*/, ""); indexDrawing(pageNode.querySelector("svg"), page.svg); ownResources(pageNode.querySelector("svg")); holdPaused(pageNode.querySelector("svg")); }
       else pageNode.append(away ? h("div.placeholder.away", {}, h("span.away-title")) : h("div.placeholder", {}, h("div.spinner")));
       const svg = pageNode.querySelector("svg");
       if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); svg.setAttribute("preserveAspectRatio", "xMidYMid meet"); }
       if (svg) widenLines(svg);
       // A link drawn on the slide is words, chosen and edited as any: never a place for the
       // keys, nor followed by any click (a middle-click's new tab included).
-      for (const link of pageNode.querySelectorAll("a")) { link.removeAttribute("href"); link.removeAttributeNS("http://www.w3.org/1999/xlink", "href"); }
+      unlinked(pageNode);
       // The page under the drawing is the slide's own colour: a dark slide shows no light
       // edge where the drawing falls a fraction short of it.
       const paper = svg?.querySelector('[id="canvas.background"]')?.getAttribute("fill");
