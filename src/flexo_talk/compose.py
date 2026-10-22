@@ -18,8 +18,10 @@ import contextvars
 import functools
 import math
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -5188,7 +5190,13 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         else:
             # (Found again as it is seen -- by the next drawing, free to turn as this one is
             # turned or not; and by the deck opened next, drawn as it was last seen.)
-            for also in dict.fromkeys((key, (*opened, fit.layout.startswith("turned")), opened)):
+            kept = dict.fromkeys((key, (*opened, fit.layout.startswith("turned")), opened))
+            if picture_link.get() is not None and not re.search(r'href="(?!data:|#)', laid["svg"]):
+                # Drawn for the studio's page with no photograph named by address: an export
+                # draws it no differently, and finds it so -- not laid out again.
+                linked = len(opened) - 1
+                kept |= dict.fromkeys((*also[:linked], False, *also[linked + 1:]) for also in list(kept))
+            for also in kept:
                 if plotted:
                     _keep_plotted(also, spec, laid)
                 else:
@@ -5257,11 +5265,47 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         return min(wide / max(ink_wide, 1e-6), high / max(ink_high, 1e-6), most)
 
     # (Turned off by its person, or arranged by hand: either way, said if turning would help.)
-    turnable = _settled_only(where, "turned", larger_turned, 1.0) if not free else None
+    # (Each found once for the figure as it is, and kept: _probed.)
+    # (How large another way would draw it is the same whether its photographs are named by
+    # address or carried: kept for the studio's page and an export alike.)
+    probe = None if plotted else (*opened[:-1], most, width, height)
+    turnable = _settled_only(where, "turned", _probed(probe, "turned", larger_turned), 1.0) if not free else None
     return _Prepared(
-        laid["svg"], left, top, width, height, most, base, spec.id, turnable, _settled_only(where, "alone", alone, 0.0),
-        spec, laid.get("parts"),
+        laid["svg"], left, top, width, height, most, base, spec.id, turnable,
+        _settled_only(where, "alone", _probed(probe, "alone", alone), 0.0), spec, laid.get("parts"),
     )
+
+
+_PROBED: dict[tuple, float] = {}
+"""What laying a figure out another way gave it (``_probed``), by all it was laid out from."""
+
+
+def _probed(key: tuple | None, what: str, find):
+    """``find``, which lays a figure out another way (turned, or on a slide of its own) to
+    see how much larger it would be, done once for the figure as it is and its place: what
+    it gave is kept, in memory and between builds, by all the figure is laid out from -- as
+    its own layout is kept (``_cached_fit``) -- so a slide drawn again, or exported, does not
+    lay its figures out twice over for what it says of them. (``key`` None: a figure with
+    plots, whose data may change under it, is laid out again each time.)"""
+
+    if key is None:
+        return find
+
+    def kept(*args) -> float:
+        known = (*key, what, args)
+        value = _PROBED.get(known)
+        if value is None:
+            stored = _cached_fit(known)
+            value = stored.get("probed") if isinstance(stored, dict) else None
+            if not isinstance(value, int | float):
+                value = find(*args)
+                _store_fit(known, {"probed": value})
+            _PROBED[known] = value = float(value)
+            while len(_PROBED) > 256:
+                _PROBED.pop(next(iter(_PROBED)))
+        return value
+
+    return kept
 
 
 _FRAMED: dict[tuple, dict] = {}
@@ -5485,17 +5529,55 @@ _FLEXO_FINGERPRINT: list[str] = []
 
 
 def _fingerprint() -> str:
-    """A hash of flexo's own source: any change to the engine makes cached layouts stale."""
+    """A hash of flexo's own source: any change to the engine makes cached layouts stale.
+
+    An installed flexo (the app's) is told by the hashes its installation recorded of each of
+    its files (``_recorded``): one file read, not every one -- in a busy studio each read is a
+    wait, and reading them all took seconds at the first figure drawn. One worked on in place
+    is read through."""
 
     if not _FLEXO_FINGERPRINT:
         import hashlib
 
-        digest = hashlib.sha256()
         root = Path(flexo.__file__).parent
+        recorded = _recorded(root)
+        if recorded is not None:
+            _FLEXO_FINGERPRINT.append(hashlib.sha256(recorded).hexdigest()[:16])
+            return _FLEXO_FINGERPRINT[0]
+        digest = hashlib.sha256()
         for path in sorted(root.rglob("*.py")):
             digest.update(path.read_bytes())
         _FLEXO_FINGERPRINT.append(digest.hexdigest()[:16])
     return _FLEXO_FINGERPRINT[0]
+
+
+def _recorded(root: Path) -> bytes | None:
+    """What flexo's installation recorded of its Python files: each one's name and hash -- or
+    None where it recorded no hash of one, or none of them (installed to be worked on in
+    place), or its record is not of the copy at ``root``."""
+
+    import importlib.metadata
+    import os
+
+    try:
+        installed = importlib.metadata.distribution("flexo")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    found = []
+    for item in installed.files or ():
+        if not item.parts or item.parts[0] != "flexo" or item.suffix != ".py":
+            continue
+        if item.hash is None:
+            return None
+        found.append(f"{item.as_posix()}={item.hash.mode}:{item.hash.value}")
+    if not found:
+        return None
+    try:
+        if not os.path.samefile(installed.locate_file("flexo/__init__.py"), root / "__init__.py"):
+            return None
+    except OSError:
+        return None
+    return "\n".join(sorted(found)).encode("utf-8")
 
 
 _DRAWN_FROM = frozenset({"source", "density", "ss_from"})
@@ -5564,16 +5646,44 @@ def _cache_path(key: tuple) -> Path | None:
     return folder / "fits" / f"{name}.json"
 
 
+_FITS: OrderedDict[str, dict] = OrderedDict()
+"""Figures laid out for a box as this program has read or kept them (``_cached_fit``), by
+their file between builds: a slide drawn again at each keystroke on it reads its figure's
+layout from here, not from its file -- a protein's surface, laid out, is 1.5 MB of JSON."""
+_FITS_LOCK = threading.Lock()
+FITS_BYTES = 64_000_000
+"""Characters of laid-out drawings kept so, at most."""
+
+
 def _cached_fit(key: tuple) -> dict | None:
     import json
 
     path = _cache_path(key)
-    if path is None or not path.is_file():
+    if path is None:
+        return None
+    with _FITS_LOCK:
+        found = _FITS.get(str(path))
+        if found is not None:
+            _FITS.move_to_end(str(path))
+            return found
+    if not path.is_file():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        found = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    _remember_fit(str(path), found)
+    return found
+
+
+def _remember_fit(name: str, laid: dict) -> None:
+    with _FITS_LOCK:
+        _FITS[name] = laid
+        _FITS.move_to_end(name)
+        while len(_FITS) > 1 and (
+            len(_FITS) > 512 or sum(len(str(item.get("svg", ""))) for item in _FITS.values()) > FITS_BYTES
+        ):
+            _FITS.popitem(last=False)
 
 
 def _store_fit(key: tuple, laid: dict) -> None:
@@ -5584,9 +5694,12 @@ def _store_fit(key: tuple, laid: dict) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(laid), encoding="utf-8")
+        text = json.dumps(laid)
+        path.write_text(text, encoding="utf-8")
     except OSError:
         return
+    # (Kept as it reads back from its file: as the next drawing would have found it there.)
+    _remember_fit(str(path), json.loads(text))
 
 
 _PLOTTED: dict[tuple, tuple[dict, tuple]] = {}
@@ -6454,24 +6567,8 @@ def _place_svg(
     starts from that.
     """
 
-    source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
+    source, universal = _prefixed(svg, identifier)
     prefix = f"{identifier}."
-    universal: dict[str, str] = {}
-    for item in source.iter():
-        if local_name(item.tag) == "style" and item.text:
-            for rule in re.finditer(r"(?:^|[}\s])\*\s*\{([^}]*)\}", item.text):
-                for declaration in rule.group(1).split(";"):
-                    name, _, value = declaration.partition(":")
-                    if name.strip() and value.strip():
-                        universal[name.strip()] = value.strip()
-    for item in source.iter():
-        if item.get("id"):
-            item.set("id", prefix + item.get("id"))  # type: ignore[operator]
-        for name, value in list(item.attrib.items()):
-            if "url(#" in value:
-                item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
-            if name.endswith("href") and value.startswith("#"):
-                item.set(name, "#" + prefix + value[1:])
     group = element(
         canvas.layer, "g", id=identifier,
         transform=f"translate({number(x)},{number(y)}) scale({number(scale)})",
@@ -6494,6 +6591,62 @@ def _place_svg(
         else:
             child.attrib.pop(inkscape_attr("groupmode"), None)
             group.append(child)
+
+
+_PREFIXED: OrderedDict[tuple[str, str], tuple[ET.Element, dict[str, str]]] = OrderedDict()
+"""Drawings placed on slides (``_place_svg``), read and their ids given their place's prefix:
+a slide drawn again as its words are typed places the same figure -- a protein's surface is
+a megabyte and a half of SVG -- copied from here, not read again."""
+_PREFIXED_LOCK = threading.Lock()
+PREFIXED_BYTES = 64_000_000
+"""Characters of drawings kept so, at most."""
+
+
+def _prefixed(svg: str, identifier: str) -> tuple[ET.Element, dict[str, str]]:
+    """An SVG read for its place on a slide: its ids prefixed with ``identifier`` (and what
+    points at them), and the declarations of a ``*`` rule in its stylesheet -- a copy of its
+    own, to be put on the slide."""
+
+    key = (identifier, svg)
+    with _PREFIXED_LOCK:
+        found = _PREFIXED.get(key)
+        if found is not None:
+            _PREFIXED.move_to_end(key)
+    if found is None:
+        source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
+        prefix = f"{identifier}."
+        universal: dict[str, str] = {}
+        for item in source.iter():
+            if local_name(item.tag) == "style" and item.text:
+                for rule in re.finditer(r"(?:^|[}\s])\*\s*\{([^}]*)\}", item.text):
+                    for declaration in rule.group(1).split(";"):
+                        name, _, value = declaration.partition(":")
+                        if name.strip() and value.strip():
+                            universal[name.strip()] = value.strip()
+        for item in source.iter():
+            if item.get("id"):
+                item.set("id", prefix + item.get("id"))  # type: ignore[operator]
+            for name, value in list(item.attrib.items()):
+                if "url(#" in value:
+                    item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
+                if name.endswith("href") and value.startswith("#"):
+                    item.set(name, "#" + prefix + value[1:])
+        found = (source, universal)
+        with _PREFIXED_LOCK:
+            _PREFIXED[key] = found
+            while len(_PREFIXED) > 1 and sum(len(svg) for _, svg in _PREFIXED) > PREFIXED_BYTES:
+                _PREFIXED.popitem(last=False)
+    return _copied(found[0]), dict(found[1])
+
+
+def _copied(item: ET.Element) -> ET.Element:
+    """A copy of a tree of elements of its own (as ``copy.deepcopy`` makes one, without its
+    asking the copy module about every attribute's words, which are strings and never change)."""
+
+    made = item.makeelement(item.tag, item.attrib.copy())
+    made.text, made.tail = item.text, item.tail
+    made.extend(_copied(child) for child in item)
+    return made
 
 
 def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> float:

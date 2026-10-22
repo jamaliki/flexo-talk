@@ -270,6 +270,8 @@ def test_a_missing_picture_or_figure_file_stands_aside_and_its_slide_is_drawn(tm
     root = folder_root.set(tmp_path)
     try:
         drawing = kind.draw(document, tmp_path, {})
+        while drawing.unfinished:  # (the slide in focus comes first, alone)
+            drawing = kind.draw(document, tmp_path, {})
     finally:
         folder_root.reset(root)
     assert [page.extra["error"] for page in drawing.pages] == [False, False]
@@ -2264,7 +2266,10 @@ def test_the_studio_draws_a_deck_and_says_the_order_its_tones_take(tmp_path: Pat
     from flexo.themes import palette_order
 
     document = {"deck": {"id": "o", "palette": "Deep Sea Harvest"}, "slides": [{"title": "One"}, {"title": "Two"}]}
-    drawing = DeckKind().draw(document, tmp_path, {"focus": 1})
+    kind = DeckKind()
+    drawing = kind.draw(document, tmp_path, {"focus": 1})
+    while drawing.unfinished:  # (the slide in focus comes first, alone)
+        drawing = kind.draw(document, tmp_path, {"focus": 1})
     assert len(drawing.pages) == 2 and all(page.svg for page in drawing.pages)
     assert drawing.info["order"] == palette_order("paper", "Deep Sea Harvest")
 
@@ -3287,6 +3292,8 @@ def test_a_missing_logo_holds_its_place_while_editing_and_is_said_once(tmp_path:
     root = folder_root.set(tmp_path)
     try:
         drawing = kind.draw(document, tmp_path, {})
+        while drawing.unfinished:  # (the slide in focus comes first, alone)
+            drawing = kind.draw(document, tmp_path, {})
     finally:
         folder_root.reset(root)
     first, title, thanks = (page.svg for page in drawing.pages)
