@@ -18,8 +18,10 @@ import contextvars
 import functools
 import math
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -6431,24 +6433,8 @@ def _place_svg(
     starts from that.
     """
 
-    source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
+    source, universal = _prefixed(svg, identifier)
     prefix = f"{identifier}."
-    universal: dict[str, str] = {}
-    for item in source.iter():
-        if local_name(item.tag) == "style" and item.text:
-            for rule in re.finditer(r"(?:^|[}\s])\*\s*\{([^}]*)\}", item.text):
-                for declaration in rule.group(1).split(";"):
-                    name, _, value = declaration.partition(":")
-                    if name.strip() and value.strip():
-                        universal[name.strip()] = value.strip()
-    for item in source.iter():
-        if item.get("id"):
-            item.set("id", prefix + item.get("id"))  # type: ignore[operator]
-        for name, value in list(item.attrib.items()):
-            if "url(#" in value:
-                item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
-            if name.endswith("href") and value.startswith("#"):
-                item.set(name, "#" + prefix + value[1:])
     group = element(
         canvas.layer, "g", id=identifier,
         transform=f"translate({number(x)},{number(y)}) scale({number(scale)})",
@@ -6471,6 +6457,62 @@ def _place_svg(
         else:
             child.attrib.pop(inkscape_attr("groupmode"), None)
             group.append(child)
+
+
+_PREFIXED: OrderedDict[tuple[str, str], tuple[ET.Element, dict[str, str]]] = OrderedDict()
+"""Drawings placed on slides (``_place_svg``), read and their ids given their place's prefix:
+a slide drawn again as its words are typed places the same figure -- a protein's surface is
+a megabyte and a half of SVG -- copied from here, not read again."""
+_PREFIXED_LOCK = threading.Lock()
+PREFIXED_BYTES = 64_000_000
+"""Characters of drawings kept so, at most."""
+
+
+def _prefixed(svg: str, identifier: str) -> tuple[ET.Element, dict[str, str]]:
+    """An SVG read for its place on a slide: its ids prefixed with ``identifier`` (and what
+    points at them), and the declarations of a ``*`` rule in its stylesheet -- a copy of its
+    own, to be put on the slide."""
+
+    key = (identifier, svg)
+    with _PREFIXED_LOCK:
+        found = _PREFIXED.get(key)
+        if found is not None:
+            _PREFIXED.move_to_end(key)
+    if found is None:
+        source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
+        prefix = f"{identifier}."
+        universal: dict[str, str] = {}
+        for item in source.iter():
+            if local_name(item.tag) == "style" and item.text:
+                for rule in re.finditer(r"(?:^|[}\s])\*\s*\{([^}]*)\}", item.text):
+                    for declaration in rule.group(1).split(";"):
+                        name, _, value = declaration.partition(":")
+                        if name.strip() and value.strip():
+                            universal[name.strip()] = value.strip()
+        for item in source.iter():
+            if item.get("id"):
+                item.set("id", prefix + item.get("id"))  # type: ignore[operator]
+            for name, value in list(item.attrib.items()):
+                if "url(#" in value:
+                    item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
+                if name.endswith("href") and value.startswith("#"):
+                    item.set(name, "#" + prefix + value[1:])
+        found = (source, universal)
+        with _PREFIXED_LOCK:
+            _PREFIXED[key] = found
+            while len(_PREFIXED) > 1 and sum(len(svg) for _, svg in _PREFIXED) > PREFIXED_BYTES:
+                _PREFIXED.popitem(last=False)
+    return _copied(found[0]), dict(found[1])
+
+
+def _copied(item: ET.Element) -> ET.Element:
+    """A copy of a tree of elements of its own (as ``copy.deepcopy`` makes one, without its
+    asking the copy module about every attribute's words, which are strings and never change)."""
+
+    made = item.makeelement(item.tag, item.attrib.copy())
+    made.text, made.tail = item.text, item.tail
+    made.extend(_copied(child) for child in item)
+    return made
 
 
 def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> float:

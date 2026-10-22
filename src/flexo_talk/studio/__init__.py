@@ -2745,7 +2745,12 @@ def _presentable(svg: str, deck: Any, slide: Any) -> str:
 
     from flexo_talk.compose import PLACEHOLDERS, render_slide
 
-    held = re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', svg)
+    # (Looked for only where there is one: the pattern is slow to run over a slide of a
+    # protein's surface, a megabyte and a half.)
+    held = (
+        re.findall(r'id="([^"]+)"[^>]*data-flexo-placeholder="([^"]+)"', svg)
+        if "data-flexo-placeholder=" in svg else []
+    )
     block = re.compile(rf"{re.escape(slide.id)}\.[^.]+\.\d+")
     # (An object that can't be drawn, or whose file is not there, says so on the stage, and
     # is a quiet box presented.)
