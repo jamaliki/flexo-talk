@@ -15,6 +15,7 @@ import json
 import os
 import re
 import stat
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import fields
@@ -204,6 +205,7 @@ class DeckKind:
         self._drawing = 0
         """Drawings under way: one alone takes slides as they were read (two at once never
         share one)."""
+        self._counting = threading.Lock()
 
     def claims(self, document: object) -> bool:
         return is_deck_document(document)
@@ -628,11 +630,13 @@ class DeckKind:
 
         # (Each file the slides name asked of the disk once in a drawing: ``_Look``.)
         look = _LOOK.set(_Look())
-        self._drawing += 1
+        with self._counting:
+            self._drawing += 1
         try:
             return self._draw(document, base, hints)
         finally:
-            self._drawing -= 1
+            with self._counting:
+                self._drawing -= 1
             _LOOK.reset(look)
 
     def _draw(self, document: dict[str, Any], base: Path, hints: dict[str, Any] | None) -> Drawing:
