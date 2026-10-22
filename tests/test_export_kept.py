@@ -1,6 +1,7 @@
 """A deck exported again is exported as it was -- its slides as the last export drew, read and
 wrote them, kept -- and comes out the same, byte for byte, as one made afresh; an edit made
-between shows in the next."""
+between shows in the next. A figure the studio drew for its page is not laid out again to be
+exported."""
 
 from __future__ import annotations
 
@@ -172,3 +173,35 @@ def test_an_edit_between_exports_shows_in_the_next_and_the_rest_is_as_it_was(tmp
     _forget()
     (fresh,) = DeckKind().export(document, tmp_path, "talk", ["pptx"], into=tmp_path / "fresh")
     assert _entries(fresh) == two
+
+
+def test_a_figure_drawn_for_the_studio_s_page_is_not_laid_out_again_to_be_exported(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from flexo.artwork import picture_link
+    from flexo.svg_resources import fonts_linked
+
+    document = _talk(tmp_path)
+    kind = DeckKind()
+    # Drawn as the studio draws for its page: photographs named by an address of its own.
+    token = picture_link.set(lambda art: f"/api/picture?path={art.path.name}")
+    try:
+        with fonts_linked():
+            for _ in range(20):
+                drawing = kind.draw(document, tmp_path, {"settle": True})
+                if not any(page.pending for page in drawing.pages):
+                    break
+    finally:
+        picture_link.reset(token)
+    assert any("/api/picture?" in page.svg for page in drawing.pages)
+    fits = _counted(monkeypatch, flexo, "fit_in_box")
+    (pptx,) = kind.export(document, tmp_path, "talk", ["pptx"], into=tmp_path / "out")
+    # The flow, with no photograph, is found as it was drawn for the page; the figure with a
+    # photograph is laid out for the export, carrying the photograph itself.
+    assert len(fits) == 1
+    rendered = [item.svg for item in kind._exports.values()]
+    assert rendered and not any("/api/picture?" in svg for svg in rendered)
+    _forget()
+    kind._exports.clear()
+    (fresh,) = DeckKind().export(document, tmp_path, "talk", ["pptx"], into=tmp_path / "fresh")
+    assert _entries(pptx) == _entries(fresh)

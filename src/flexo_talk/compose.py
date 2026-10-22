@@ -5182,7 +5182,13 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         else:
             # (Found again as it is seen -- by the next drawing, free to turn as this one is
             # turned or not; and by the deck opened next, drawn as it was last seen.)
-            for also in dict.fromkeys((key, (*opened, fit.layout.startswith("turned")), opened)):
+            kept = dict.fromkeys((key, (*opened, fit.layout.startswith("turned")), opened))
+            if picture_link.get() is not None and not re.search(r'href="(?!data:|#)', laid["svg"]):
+                # Drawn for the studio's page with no photograph named by address: an export
+                # draws it no differently, and finds it so -- not laid out again.
+                linked = len(opened) - 1
+                kept |= dict.fromkeys((*also[:linked], False, *also[linked + 1:]) for also in list(kept))
+            for also in kept:
                 if plotted:
                     _keep_plotted(also, spec, laid)
                 else:
@@ -5251,11 +5257,47 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         return min(wide / max(ink_wide, 1e-6), high / max(ink_high, 1e-6), most)
 
     # (Turned off by its person, or arranged by hand: either way, said if turning would help.)
-    turnable = _settled_only(where, "turned", larger_turned, 1.0) if not free else None
+    # (Each found once for the figure as it is, and kept: _probed.)
+    # (How large another way would draw it is the same whether its photographs are named by
+    # address or carried: kept for the studio's page and an export alike.)
+    probe = None if plotted else (*opened[:-1], most, width, height)
+    turnable = _settled_only(where, "turned", _probed(probe, "turned", larger_turned), 1.0) if not free else None
     return _Prepared(
-        laid["svg"], left, top, width, height, most, base, spec.id, turnable, _settled_only(where, "alone", alone, 0.0),
-        spec, laid.get("parts"),
+        laid["svg"], left, top, width, height, most, base, spec.id, turnable,
+        _settled_only(where, "alone", _probed(probe, "alone", alone), 0.0), spec, laid.get("parts"),
     )
+
+
+_PROBED: dict[tuple, float] = {}
+"""What laying a figure out another way gave it (``_probed``), by all it was laid out from."""
+
+
+def _probed(key: tuple | None, what: str, find):
+    """``find``, which lays a figure out another way (turned, or on a slide of its own) to
+    see how much larger it would be, done once for the figure as it is and its place: what
+    it gave is kept, in memory and between builds, by all the figure is laid out from -- as
+    its own layout is kept (``_cached_fit``) -- so a slide drawn again, or exported, does not
+    lay its figures out twice over for what it says of them. (``key`` None: a figure with
+    plots, whose data may change under it, is laid out again each time.)"""
+
+    if key is None:
+        return find
+
+    def kept(*args) -> float:
+        known = (*key, what, args)
+        value = _PROBED.get(known)
+        if value is None:
+            stored = _cached_fit(known)
+            value = stored.get("probed") if isinstance(stored, dict) else None
+            if not isinstance(value, int | float):
+                value = find(*args)
+                _store_fit(known, {"probed": value})
+            _PROBED[known] = value = float(value)
+            while len(_PROBED) > 256:
+                _PROBED.pop(next(iter(_PROBED)))
+        return value
+
+    return kept
 
 
 _FRAMED: dict[tuple, dict] = {}
