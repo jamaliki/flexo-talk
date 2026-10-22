@@ -7,8 +7,9 @@ A drawing (``flexo.drawing``) is placed straight into a slide's shape tree:
   path is a freeform shape with the same lines and curves;
 - a figure's line that runs straight or turns through right angles is the slide
   program's own connector, joined to the shapes at its ends so it follows them when
-  they move, its arrowheads its own line ends; any other line is drawn exactly, an
-  arrowhead as a small filled shape grouped with it. Each is named for what it joins;
+  they move, its arrowheads its own line ends (where it has one near the head's size: it has
+  three, so many times the line's width, at least 2 pt's); any other line is drawn exactly,
+  an arrowhead as a small filled shape grouped with it. Each is named for what it joins;
 - text is a text box per label, its lines and runs as written -- italic,
   weight, face, colour, raised scripts -- placed so each baseline lands where
   Flexo set it. A label whose runs step back over one another (stacked
@@ -530,15 +531,61 @@ _HEADS = {"triangle": "triangle", "latex": "triangle", "stealth": "stealth", "op
 _CENTRED = {"oval", "diamond"}
 """The line ends a slide program draws centred on the line's end, not with their tip there."""
 
+_END_SIZES = (("sm", 2.0), ("med", 3.0), ("lg", 5.0))
+"""A slide program's line end sizes, by name: so many times the line's width, long and wide."""
+_END_FLOOR = 2.0
+"""PowerPoint sizes a line end on a line thinner than 2 pt as on a 2 pt line: a hairline's
+arrowhead is as large as a 2 pt line's."""
+_END_LEEWAY = 1.3
+"""How far a slide program's line end may be from the arrowhead Flexo drew, larger or smaller,
+and stand for it: its nearest size, which between the smallest and the largest is never
+further off than this. A head beyond them -- smaller than the smallest, as on a thin line,
+or larger than the largest -- is drawn as Flexo drew it."""
+
+
+def end_size(value: float, width: float) -> str | None:
+    """The size (``sm``, ``med``, ``lg``) of the line end PowerPoint draws ``value`` points long
+    (or wide) on a line ``width`` points wide, or None where none of its sizes comes near."""
+
+    import math
+
+    base = max(width, _END_FLOOR)
+    off = {name: abs(math.log(max(value, 1e-6) / (base * share))) for name, share in _END_SIZES}
+    name = min(off, key=off.__getitem__)
+    return name if off[name] <= math.log(_END_LEEWAY) + 1e-9 else None
+
+
+def _flat(outline: tuple[Segment, ...]) -> list[tuple[float, float]]:
+    """An outline's points, its curves cut into short lines (not their handles, which reach
+    beyond them)."""
+
+    from flexo import freeform
+
+    return freeform.flattened([(segment.kind, *(value for point in segment.points for value in point))
+                               for segment in outline], 16)
+
+
+def head_reach(points: list[tuple[float, float]], angle: float) -> tuple[float, float]:
+    """How far an arrowhead's outline (its points, its curves cut into lines) reaches along the
+    way it points (``angle``, in radians) and across it: its length and its width."""
+
+    import math
+
+    if not points:
+        return 0.0, 0.0
+    along = [x * math.cos(angle) + y * math.sin(angle) for x, y in points]
+    across = [y * math.cos(angle) - x * math.sin(angle) for x, y in points]
+    return max(along) - min(along), max(across) - min(across)
+
+
 _CONNECTORS = {2: "straightConnector1", 3: "bentConnector2", 4: "bentConnector3", 5: "bentConnector4",
                6: "bentConnector5"}
 """The slide program's connector for a line with so many corners (its ends among them)."""
 
 
 def _connector(shape: Shape, placement: Placement, ids: _Ids) -> etree._Element | None:
-    """A line as the slide program's own connector, or None where none draws it."""
-
-    import math
+    """A line as the slide program's own connector, or None where none draws it, or none
+    draws its arrowheads at their size."""
 
     paint = shape.paint
     if paint.fill is not None or paint.stroke is None:
@@ -555,13 +602,15 @@ def _connector(shape: Shape, placement: Placement, ids: _Ids) -> etree._Element 
         # The line runs on to the head's tip, where the slide program's line end has its own
         # (to its middle, for one drawn round the line's end).
         points[0 if head.end == "start" else -1] = _middle(head) if kind in _CENTRED else _tip(head)
-
-        def size(value: float) -> str:
-            share = max(value / max(paint.stroke_width, 1e-6), 1e-6)
-            return min(("sm", 2.0), ("med", 3.0), ("lg", 5.0), key=lambda pair: abs(math.log(share / pair[1])))[0]
-
+        # PowerPoint's line end at the size of the head Flexo drew, on the slide; where it has
+        # none near that size (a thin line's, at the least), the line is drawn as Flexo drew it.
+        length, breadth = head_reach(_flat(head.outline), head.angle)
+        stroke = paint.stroke_width * placement.scale
+        long, wide = (end_size(value * placement.scale, stroke) for value in (length, breadth))
+        if long is None or wide is None:
+            return None
         tag = "headEnd" if head.end == "start" else "tailEnd"
-        ends[tag] = f'<a:{tag} type="{kind}" w="{size(head.width)}" len="{size(head.length)}"/>'
+        ends[tag] = f'<a:{tag} type="{kind}" w="{wide}" len="{long}"/>'
     fitted = _fitted(points)
     if fitted is None:
         return None

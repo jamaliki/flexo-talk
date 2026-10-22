@@ -272,6 +272,24 @@ def test_a_glued_arrow_is_a_connector_joined_to_its_shape(tmp_path: Path) -> Non
     assert 'tailEnd type="triangle"' in ET.tostring(arrow._element).decode()
 
 
+def test_a_thin_arrow_s_head_is_powerpoint_s_line_end_of_its_size_or_drawn(tmp_path: Path) -> None:
+    """PowerPoint draws a line end on a line thinner than 2 pt as on a 2 pt line: a 1 pt arrow's
+    7 pt head is its medium one, straight or bent alike, not its large one (10 pt); a head
+    smaller than its smallest is drawn as a shape, with the line."""
+
+    document = deck_of({"kind": "arrow", "from": [100, 100], "to": [300, 100], "line_width": 1},
+                       {"kind": "elbow", "from": [100, 200], "to": [300, 300], "line_width": 1},
+                       {"kind": "arrow", "from": [100, 400], "to": [300, 400], "line_width": 0.5, "head_size": 0.5})
+    written = DeckKind().export(document, tmp_path, "talk", ["pptx"], into=tmp_path / "out")
+    straight, bent, small = [shape for shape in Presentation(str(written[0])).slides[0].shapes
+                             if shape.name in ("Arrow", "Elbow Connector")]
+    for line in (straight, bent):
+        end = line._element.find(".//{http://schemas.openxmlformats.org/drawingml/2006/main}tailEnd")
+        assert line._element.tag.endswith("cxnSp") and end is not None
+        assert (end.get("type"), end.get("w"), end.get("len")) == ("triangle", "med", "med")
+    assert small.shape_type == 6 and "End type=" not in ET.tostring(small._element).decode()  # a group
+
+
 def test_a_shape_that_builds_is_a_click_in_the_powerpoint(tmp_path: Path) -> None:
     written = DeckKind().export(deck_of(*SHAPES), tmp_path, "talk", ["pptx"], into=tmp_path / "out")
     slide = Presentation(str(written[0])).slides[0]

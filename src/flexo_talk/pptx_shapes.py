@@ -6,7 +6,8 @@ adjustments, so it is edited there as what it is; any other kind a freeform of t
 outline, a path too (its pieces, holes and all, filled as it fills them). Its words are its
 own text, in it, as PowerPoint sets words in that shape. A
 straight line or an elbow is a connector, joined to the shapes its ends are glued to, its
-arrowheads its line ends; any other line a freeform with the same ends. A shape that builds
+arrowheads its line ends (each at the size Flexo draws it, or near: where PowerPoint has no
+size near, they are drawn as shapes); any other line a freeform with the same ends. A shape that builds
 in is named as the slide's drawing names it, so its click finds it (``export.write_pptx``).
 """
 
@@ -28,6 +29,8 @@ from flexo_talk.pptx import (
     _Ids,
     _picture,
     _runs_xml,
+    end_size,
+    head_reach,
 )
 
 _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -321,7 +324,8 @@ class ShapeWriter:
 
         spec, made = layout.spec, layout.geometry
         heads = [spec.get(end) or "none" for end in ("start", "end")]
-        native = all(head == "none" or head in _HEADS for head in heads)
+        ends = _ends(made, spec, placement) if all(head == "none" or head in _HEADS for head in heads) else None
+        native = ends is not None
         bare = made if not made.heads else freeform.geometry({**spec, "start": "none", "end": "none"})
         number = self.number()
         self.numbers[layout.id] = number
@@ -359,7 +363,7 @@ class ShapeWriter:
             f'<p:sp {_NS}><p:nvSpPr><p:cNvPr id="{number}" name="{escape(name)}"/><p:cNvSpPr/><p:nvPr/>'
             f'</p:nvSpPr><p:spPr><a:xfrm{turn}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/>'
             f"</a:xfrm>{geometry}{self._fill(spec, closed=True)}"
-            f"{self._ln(spec, placement, heads if native else None)}{self._shadow(spec, placement)}</p:spPr>"
+            f"{self._ln(spec, placement, ends or '')}{self._shadow(spec, placement)}</p:spPr>"
             f"{self._body(layout, placement)}</p:sp>"
         )
         if native:
@@ -384,24 +388,26 @@ class ShapeWriter:
         if kind in ("brace", "bracket"):
             return self._brace(layout, placement)
         heads = [spec.get(end) or "none" for end in ("start", "end")]
-        native = all(head == "none" or head in _HEADS for head in heads)
+        ends = _ends(made, spec, placement) if all(head == "none" or head in _HEADS for head in heads) else None
+        native = ends is not None
         bare = freeform.geometry({**spec, "start": "none", "end": "none"}, made.ends)
         if native and kind in ("line", "arrow", "double-arrow", "elbow", "dimension", "scale-bar") and made.ends:
             corners = [point for point in freeform.flattened(bare.segments, 1)]
-            connector = self._connector(layout, corners, heads, placement)
+            connector = self._connector(layout, corners, ends or "", placement)
             if connector is not None:
                 return connector
         number = self.number()
         self.numbers[layout.id] = number
         if native:
-            return self._freeform(layout.id, number, bare, spec, placement, heads)
-        # Heads PowerPoint has no line end for (a bar, a ring): drawn as shapes, with the line.
-        parts = [self._freeform(f"{layout.id}.line", number, made, spec, placement, ["none", "none"])]
+            return self._freeform(layout.id, number, bare, spec, placement, ends or "")
+        # Heads PowerPoint has no line end for (a bar, a ring), or none at their size: drawn as
+        # shapes, with the line.
+        parts = [self._freeform(f"{layout.id}.line", number, made, spec, placement)]
         for head in made.heads:
             parts.append(self._head(layout.id, head, spec, placement))
         return self._group(parts, layout.id)
 
-    def _connector(self, layout: ShapeLayout, corners: list, heads: list[str], placement: Placement
+    def _connector(self, layout: ShapeLayout, corners: list, ends: str, placement: Placement
                    ) -> etree._Element | None:
         spec = layout.spec
         kept = [corners[0]]
@@ -427,7 +433,7 @@ class ShapeWriter:
             f'<p:spPr><a:xfrm{turned}><a:off x="{x}" y="{y}"/>'
             f'<a:ext cx="{placement.length(width)}" cy="{placement.length(height)}"/></a:xfrm>'
             f'<a:prstGeom prst="{preset}"><a:avLst>{guides}</a:avLst></a:prstGeom>'
-            f"{self._ln(spec, placement, heads)}{self._shadow(spec, placement)}</p:spPr></p:cxnSp>"
+            f"{self._ln(spec, placement, ends)}{self._shadow(spec, placement)}</p:spPr></p:cxnSp>"
         )
         joined = made.find(f".//{{{_P}}}cNvCxnSpPr")
         for tag, glue in zip(("stCxn", "endCxn"), layout.glue, strict=True):
@@ -435,7 +441,7 @@ class ShapeWriter:
                 self.pending.append((joined, tag, *glue))
         return made
 
-    def _freeform(self, name: str, number: int, made, spec: dict, placement: Placement, heads: list[str]
+    def _freeform(self, name: str, number: int, made, spec: dict, placement: Placement, ends: str = ""
                   ) -> etree._Element:
         x, y, w, h = made.box
         left, top = placement.point(x, y)
@@ -445,7 +451,7 @@ class ShapeWriter:
             f'<p:sp {_NS}><p:nvSpPr><p:cNvPr id="{number}" name="{escape(name)}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
             f'<p:spPr><a:xfrm><a:off x="{left}" y="{top}"/>'
             f'<a:ext cx="{max(1, placement.length(w))}" cy="{max(1, placement.length(h))}"/></a:xfrm>'
-            f"{geometry}{fill}{self._ln(spec, placement, heads)}{self._shadow(spec, placement)}</p:spPr></p:sp>"
+            f"{geometry}{fill}{self._ln(spec, placement, ends)}{self._shadow(spec, placement)}</p:spPr></p:sp>"
         )
 
     def _head(self, owner: str, head, spec: dict, placement: Placement) -> etree._Element:
@@ -456,7 +462,7 @@ class ShapeWriter:
         made = freeform.Geometry(head.segments, head.filled, (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)))
         painted = {**spec, "fill": spec.get("line") if head.filled else "none", "fill_opacity": 1.0,
                    "line": spec.get("line") if head.stroked else "none", "dash": "solid"}
-        return self._freeform(f"{owner}.head-{head.end}", self.number(), made, painted, placement, ["none", "none"])
+        return self._freeform(f"{owner}.head-{head.end}", self.number(), made, painted, placement)
 
     def _brace(self, layout: ShapeLayout, placement: Placement) -> etree._Element:
         """A brace or a bracket as PowerPoint's own (leftBrace, leftBracket), turned so its tip
@@ -563,7 +569,7 @@ class ShapeWriter:
             way = f'<a:lin ang="{round(float(fill.get("angle", 0.0)) * 60000) % 21600000}" scaled="0"/>'
         return f'<a:gradFill rotWithShape="1"><a:gsLst>{listed}</a:gsLst>{way}</a:gradFill>'
 
-    def _ln(self, spec: dict, placement: Placement, heads: list[str] | None = None) -> str:
+    def _ln(self, spec: dict, placement: Placement, ends: str = "") -> str:
         from flexo import freeform
 
         colour = freeform.paint(spec.get("line"), self.palette)[0]
@@ -575,11 +581,6 @@ class ShapeWriter:
         written = spec.get("dash") or "solid"
         dash = _DASHES.get(str(written)) if isinstance(written, str) else None
         join = {"round": "<a:round/>", "bevel": "<a:bevel/>"}.get(str(spec.get("join")), '<a:miter lim="800000"/>')
-        ends = ""
-        length, breadth = freeform.head_size(spec)
-        for tag, kind in zip(("headEnd", "tailEnd"), heads or ["none", "none"], strict=True):
-            if kind in _HEADS:
-                ends += f'<a:{tag} type="{_HEADS[kind]}" w="{_size(breadth, width)}" len="{_size(length, width)}"/>'
         return (f'<a:ln w="{placement.length(width)}" cap="{_CAPS.get(str(spec.get("cap")), "flat")}">'
                 f'<a:solidFill><a:srgbClr val="{_colour(colour)}">{extra}</a:srgbClr></a:solidFill>'
                 f'{f"<a:prstDash val=\"{dash}\"/>" if dash else _custom_dash(written, width)}{join}{ends}</a:ln>')
@@ -659,11 +660,25 @@ class ShapeWriter:
         return group
 
 
-def _size(value: float, width: float) -> str:
-    """A line end's size as PowerPoint names it: small, medium or large, against the line's width."""
+def _ends(made, spec: dict, placement: Placement) -> str | None:
+    """A line's arrowheads as PowerPoint's line ends, each at the size Flexo draws it on the
+    slide; None where PowerPoint has no size near one's (which is then drawn as a shape)."""
 
-    share = max(value / max(width, 1e-6), 1e-6)
-    return min(("sm", 2.0), ("med", 3.0), ("lg", 5.0), key=lambda pair: abs(math.log(share / pair[1])))[0]
+    from flexo import freeform
+
+    width = float(spec.get("line_width") or 0.0) * placement.scale
+    ends = {}
+    for head in made.heads:
+        kind = _HEADS.get(head.kind)
+        if kind is None:
+            return None
+        length, breadth = head_reach(freeform.flattened(head.segments, 16), math.radians(head.angle))
+        long, wide = (end_size(value * placement.scale, width) for value in (length, breadth))
+        if long is None or wide is None:
+            return None
+        tag = "headEnd" if head.end == "start" else "tailEnd"
+        ends[tag] = f'<a:{tag} type="{kind}" w="{wide}" len="{long}"/>'
+    return ends.get("headEnd", "") + ends.get("tailEnd", "")
 
 
 def _fields(run) -> dict:
