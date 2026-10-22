@@ -1,7 +1,7 @@
 """A deck exported again is exported as it was -- its slides as the last export drew, read and
 wrote them, kept -- and comes out the same, byte for byte, as one made afresh; an edit made
 between shows in the next. A figure the studio drew for its page is not laid out again to be
-exported."""
+exported, and a bundle built again on the command line finds what was made for it before."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import pytest
 
 from flexo_talk import compose
 from flexo_talk import export as exporting
+from flexo_talk.cli import main as talk_main
 from flexo_talk.studio import DeckKind
 
 ART = (
@@ -205,3 +206,26 @@ def test_a_figure_drawn_for_the_studio_s_page_is_not_laid_out_again_to_be_export
     kind._exports.clear()
     (fresh,) = DeckKind().export(document, tmp_path, "talk", ["pptx"], into=tmp_path / "fresh")
     assert _entries(pptx) == _entries(fresh)
+
+
+def test_a_bundle_built_again_finds_what_was_laid_out_for_it_before(tmp_path: Path, monkeypatch) -> None:
+    from flexo import bundle
+
+    folder = tmp_path / "talk"
+    folder.mkdir()
+    document = _talk(folder)
+    from flexo_talk.document import dump_document
+
+    (folder / "talk.yaml").write_text(dump_document(document), encoding="utf-8")
+    made = bundle.pack(folder / "talk.yaml", tmp_path / "talk.flexo")
+    out = tmp_path / "build"
+    assert talk_main(["build", str(made.path), "-o", str(out), "--formats", "pptx,pdf"]) == 0
+    first = _entries(out / "kept.pptx")
+    compose._PROBED.clear()
+    fits = _counted(monkeypatch, flexo, "fit_in_box")
+    assert talk_main(["build", str(made.path), "-o", str(out), "--formats", "pptx,pdf"]) == 0
+    assert fits == []
+    assert _entries(out / "kept.pptx") == first
+    # Unpacked where it was the first time, and taken away once built.
+    builds = Path(os.environ["FLEXO_TALK_CACHE"]) / "builds"
+    assert [item.suffix for item in builds.iterdir()] == [".lock"]
