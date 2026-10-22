@@ -144,3 +144,14 @@ def test_the_editor_draws_thumbnails_lazily_marks_the_chosen_one_and_holds_the_e
     # Never a rule over every element as a drag starts: WebKit styles the whole window again.
     assert "body.block-grabbing *" not in css
     assert "body.block-grabbing .grab-here" in css
+
+
+def test_a_panel_drawn_again_lets_go_of_its_fields_of_words() -> None:
+    # Each field of words listens to the document's selection; dropped with a panel drawn again
+    # (every slide gone to, every click), it lets go, or it keeps the panel it was in for good.
+    editor = (STATIC / "editor.js").read_text("utf-8")
+    rich = (STATIC / "richtext.js").read_text("utf-8")
+    assert 'const fields = [...inspectorBody.querySelectorAll(".rich")];' in editor
+    assert "if (!field.isConnected) field.dispose?.();" in editor
+    assert "queueMicrotask(() => { if (area.isConnected) seen = true; });" in rich
+    assert 'document.removeEventListener("selectionchange", showBar);' in rich

@@ -904,7 +904,14 @@ export function mount(studio, container) {
   // step of their own: the run starts again at each turn. (A figure's words, made by the
   // studio and back later, are its own: parts.js.)
   // (Kept by the field's key, as the panel is drawn again under the keys.)
-  const turns = new Map(), turnOf = (target) => target.dataset?.key || target;
+  // (A field with no key -- words typed on the slide -- by itself, weakly: closed, it goes with
+  // the editor it was in, not kept until two hundred more have been typed in.)
+  const turns = (() => {
+    const named = new Map();
+    let held = new WeakMap();
+    const of = (key) => (typeof key === "string" ? named : held);
+    return { get: (key) => of(key).get(key), set: (key, turn) => of(key).set(key, turn), get size() { return named.size; }, clear: () => { named.clear(); held = new WeakMap(); } };
+  })(), turnOf = (target) => target.dataset?.key || target;
   const TYPED = /^(text|search|number|email|url|tel|password)$/;
   const typingSteps = (container) => {
     const field = (event) => {
@@ -7723,6 +7730,11 @@ export function mount(studio, container) {
     // A figure is edited while it is the part chosen on the slide shown.
     const focus = state.focus;
     if (figure && !(focus && figure.slide === state.slide && focus.region === figure.region && focus.index === figure.index)) leaveFigure(false);
+    // (The fields of words it had let go of what they listen to once it is drawn again: kept,
+    // each held the panel it was in -- a slide's worth at every slide gone to -- and was told of
+    // every caret moved anywhere.)
+    const fields = [...inspectorBody.querySelectorAll(".rich")];
+    queueMicrotask(() => { for (const field of fields) if (!field.isConnected) field.dispose?.(); });
     keepFocus(inspectorBody, () => {
       const slide = slideAt();
       const block = slide && state.focus && blocksAt(slide, state.focus.region)[state.focus.index];
