@@ -101,6 +101,22 @@ def test_a_thumbnail_made_again_where_one_was_seen_is_drawn_at_once() -> None:
     assert found == [1, 0, False]
 
 
+def test_thumbnails_out_of_sight_are_read_ahead_once_the_window_is_left_alone() -> None:
+    found = run("""
+      const made = [];
+      const picture = (svg, hash) => { made.push(hash); return new Element("picture"); };
+      const slot = T.lazyPictures(new Element("list"), picture, { quiet: 5 });
+      const far = slot("<svg/>", "far", 7), gone = slot("<svg/>", "gone", 8);
+      gone.isConnected = false;
+      fire("keydown", null);
+      const before = made.length;
+      await new Promise((done) => setTimeout(done, 120));
+      // Read ahead into the cache, not shown: it is put in when it comes near.
+      return { before, made, shown: far.children.length };
+    """)
+    assert found == {"before": 0, "made": ["far"], "shown": 0}
+
+
 def test_a_picture_taken_for_another_drawing_leaves_its_thumbnail_not_whole() -> None:
     assert (
         run("""

@@ -11,9 +11,26 @@
 // where one was seen, so a thumbnail made again never shows blank for a moment. (The thumbnail
 // is watched, not the slot: a frame out of sight is not laid out -- content-visibility -- and
 // what is in it is never seen to come near.)
-export function lazyPictures(root, make, { margin = "600px 0px" } = {}) {
+//
+// Those not near yet are read ahead, one at a time, once the window has been left alone a moment
+// (no key, click or scroll for `quiet` ms): parsed into studio.js's cache, out of the page, so a
+// thumbnail coming into sight -- the list scrolled, ↓ going down it -- is put in ready, not
+// parsed between two keys.
+export function lazyPictures(root, make, { margin = "600px 0px", quiet = 300 } = {}) {
   const Observer = globalThis.IntersectionObserver;
   const near = new Set();
+  const ahead = [];
+  let touched = 0, aheadTimer = 0;
+  const now = () => globalThis.performance?.now?.() ?? Date.now();
+  for (const type of ["keydown", "pointerdown", "wheel"]) globalThis.document?.addEventListener?.(type, () => { touched = now(); }, { capture: true, passive: true });
+  const readAhead = () => {
+    aheadTimer = 0;
+    const wait = touched + quiet - now();
+    if (wait > 0) { aheadTimer = setTimeout(readAhead, wait); return; }
+    while (ahead.length && !ahead.shift().warm());
+    if (ahead.length) aheadTimer = setTimeout(readAhead, 50);
+  };
+  const later = (slot) => { ahead.push(slot); if (!aheadTimer) aheadTimer = setTimeout(readAhead, quiet); };
   const sight = Observer ? new Observer((entries) => {
     for (const entry of entries) {
       const slot = entry.target.pictureSlot;
@@ -27,7 +44,14 @@ export function lazyPictures(root, make, { margin = "600px 0px" } = {}) {
     const node = document.createElement("div");
     node.className = "picture-slot";
     node.at = at;
-    let shown = null, watched = null;
+    let shown = null, watched = null, read = false;
+    // (Read ahead: whether it was -- not one gone from the list, or shown already.)
+    node.warm = () => {
+      if (read || shown || !node.isConnected) return false;
+      read = true;
+      make(svg, hash);
+      return true;
+    };
     node.near = (seen) => {
       if (seen && !shown) { shown = make(svg, hash); node.replaceChildren(shown); }
       else if (!seen && shown) { shown = null; node.replaceChildren(); }
@@ -42,6 +66,7 @@ export function lazyPictures(root, make, { margin = "600px 0px" } = {}) {
     node.whole = () => !shown || shown.parentNode === node;
     node.drop = () => { if (watched) sight?.unobserve(watched); };
     if (!sight || near.has(at)) node.near(true);
+    else later(node);
     return node;
   };
 }
