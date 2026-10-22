@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 from io import BytesIO
 from pathlib import Path
 
 from flexo.animated import stilled
-from flexo.drawing import Drawing, Group, Image, Shape, Text, ink_bounds, read_drawing
+from flexo.drawing import Drawing, Group, Image, Shape, Text, ink_bounds
 from flexo.export import rasterise
 from flexo.pdf import ARTIFACT, Tag, Tagger, write_pdf
 from flexo.portable import portable_svg
@@ -183,8 +184,12 @@ def write_pptx(
     presentation.slide_height = Pt(deck.style.height)
     _properties(presentation, deck)
     layouts = {layout.name: layout for layout in presentation.slide_layouts}
+    from flexo.drawings_kept import drawing_of
+
     for item in rendered:
-        drawing = read_drawing(clicks_lifted(item.svg, item.builds))
+        # (Read as it was for the deck's PDF, or its PowerPoint before, where it was: its
+        # groups this one's own to take apart -- flexo.drawings_kept.)
+        drawing = drawing_of(clicks_lifted(item.svg, item.builds))
         formulas = _drop_lists(drawing.root)
         # (What a zoom inset among them shows is drawn from their drawing: a picture.)
         views = inset_views(drawing.root)
@@ -555,8 +560,22 @@ _SMALL_WORDS = frozenset({
 def _structure_title(source: str) -> str:
     """The title a structure's file gives it (a PDB file's TITLE, an mmCIF file's
     ``_struct.title``, else its molecule's name), in sentence case where it is set in
-    capitals, as the Protein Data Bank's files are: names (HIV, DNA, E2) stay as they are."""
+    capitals, as the Protein Data Bank's files are: names (HIV, DNA, E2) stay as they are.
+    (Read once for the file as it is: a deck's export describes each of its molecules on
+    every slide it is on, for its PowerPoint and its PDF alike.)"""
 
+    import os
+
+    try:
+        found = os.stat(source)
+    except (OSError, ValueError):
+        return ""
+    return _title_of(source, found.st_size, found.st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=64)
+def _title_of(source: str, size: int, stamp: int) -> str:
+    del size, stamp  # (the file as it is: part of the key)
     import re
 
     try:
