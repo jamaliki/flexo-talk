@@ -148,7 +148,7 @@ def build_deck(
             # Drawn from outlines, so the preview shows exactly the glyphs measured -- and a
             # GIF as the frame its picture names (flexo.animated: a PNG does not play).
             path = folder / f"{stem}.png"
-            path.write_bytes(rasterise(portable_svg(stilled(item.svg)), dpi=dpi))
+            path.write_bytes(_slide_png(item.svg, dpi))
             pngs.append(path)
     pdf = None
     if "pdf" in formats:
@@ -167,6 +167,30 @@ def build_deck(
         write_pptx(deck, rendered, pptx, editable_maths=editable_maths)
     notes = tuple(note for item in rendered for note in item.notes)
     return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics), notes)
+
+
+def _slide_png(svg: str, dpi: float) -> bytes:
+    """A slide drawn as a PNG at ``dpi`` -- as it was for the last export, where nothing of it
+    has changed (``flexo.raster_kept.remembered``): its words as outlines, and a GIF as the
+    frame its picture names (flexo.animated: a PNG does not play)."""
+
+    import re
+    import xml.etree.ElementTree as ET
+
+    from flexo.drawings_kept import drawing_of
+    from flexo.raster_kept import remembered
+
+    still = stilled(svg)
+
+    def drawn() -> bytes:
+        # (Read as it was for the deck's PDF, where it was: flexo.drawings_kept. Sized as
+        # the slide's SVG says, as portable_svg sizes one given as text.)
+        found = re.search(r"<svg\b[^>]*>", still)
+        root = ET.fromstring(f"{found.group(0)}</svg>") if found else ET.Element("svg")
+        portable = portable_svg(drawing_of(still), width=root.get("width"), height=root.get("height"))
+        return rasterise(portable, dpi=dpi)
+
+    return remembered(still, ("slide", dpi), drawn)
 
 
 @contextlib.contextmanager

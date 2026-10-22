@@ -153,6 +153,23 @@ def test_an_export_made_again_from_what_was_kept_is_the_export_made_afresh(
     assert any(b"Say hello." in data for name, data in parts.items() if name.startswith("ppt/notesSlides/"))
 
 
+def test_slides_exported_as_pngs_again_are_the_pngs_drawn_before(tmp_path: Path, monkeypatch) -> None:
+    from flexo import raster_kept
+
+    document = _talk(tmp_path)
+    kind = DeckKind()
+    first = kind.export(document, tmp_path, "talk", ["png"], into=tmp_path / "one")
+    drawn = _counted(monkeypatch, exporting, "rasterise")
+    again = kind.export(document, tmp_path, "talk", ["png"], into=tmp_path / "two")
+    assert drawn == []
+    assert [path.read_bytes() for path in again] == [path.read_bytes() for path in first]
+    # (And as drawn afresh.)
+    raster_kept._KEPT.clear()
+    fresh = DeckKind().export(document, tmp_path, "talk", ["png"], into=tmp_path / "fresh")
+    assert len(drawn) == len(document["slides"])
+    assert [path.read_bytes() for path in fresh] == [path.read_bytes() for path in first]
+
+
 def test_an_edit_between_exports_shows_in_the_next_and_the_rest_is_as_it_was(tmp_path: Path) -> None:
     document = _talk(tmp_path)
     kind = DeckKind()
