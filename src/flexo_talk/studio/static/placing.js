@@ -20,9 +20,8 @@
 //   catching at the slide's edges and middles and at the shapes' and other objects', and where
 //   it is as far from its neighbours as they are apart, as a shape does (the magnet, ⌘ free:
 //   snapping.js) -- or, snapping to the grid, at the grid's lines and the slide's layout's
-//   (grid.js). An object in line is dragged between places as ever; ⌘ held as it starts, or
-//   pressed as it is carried, takes it out of line, to be placed where it is let go -- caught
-//   as it goes, that ⌘ held or not (let go and pressed again, it drags freely).
+//   (grid.js). An object in line is dragged between places as ever; ⌘ held as it starts
+//   takes it out of line, to be placed where it is let go (⌘ let go, it catches again).
 // - The arrows nudge placed objects (⇧: ten points), one step however many presses; those in
 //   line keep the arrows for going from one object to the next.
 // - With shapes chosen too (mixed.js): Align and the rest move both, a drag of either kind
@@ -49,7 +48,6 @@ import * as Grid from "/static/studio/grid.js";
 import * as F from "/static/studio/freeform.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import * as P from "/static/kinds/deck/places.js";
-import { sizeCaught } from "/static/kinds/deck/sizecatch.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 function S(name, attributes = {}, ...children) {
@@ -292,18 +290,7 @@ export function placing(ctx) {
     // shapes chosen with them; else it alone.
     const objects = (mine ? all : [pick]).filter((each) => (out || placed(blockOf(each))) && !isLocked(each));
     const drawn = mine && ctx.mixedOn() ? shapes.chosen().filter((index) => !shapes.lockedAt(index)) : [];
-    // (The ⌘ that takes it out of line is not ⌘ to drag freely: it catches as a shape does,
-    // with that ⌘ held -- let go and pressed again, it is free.)
-    begin(event, { type: "move", pick, objects, drawn, out, copy: false, mine, taken: out });
-    return true;
-  }
-  // One in line carried in its place (editor.js) when ⌘ is pressed: carried on as one pressed
-  // with ⌘ held is, from where it was pressed (`start`, { x, y } in the window) -- taken out of
-  // line, caught at once -- to where the pointer is now (`pointer`). (Not one that can be: false.)
-  function carryOut(part, start, pointer) {
-    if (!press({ button: 0, clientX: start.x, clientY: start.y, metaKey: true, shiftKey: false, ctrlKey: false }, part)) return false;
-    if (!gesture) return true;
-    onMove(new PointerEvent("pointermove", { clientX: pointer.x, clientY: pointer.y, metaKey: true }));
+    begin(event, { type: "move", pick, objects, drawn, out, copy: false, mine });
     return true;
   }
   // Pressed on a shape chosen with placed objects (mixed.js): they all move together.
@@ -367,8 +354,6 @@ export function placing(ctx) {
       ctx.swallowRelease(true);
       return;
     }
-    // (The ⌘ that took it out of line let go: pressed again, it drags freely.)
-    if (event.type === "keyup" && event.key === "Meta") g.taken = false;
     // ⇧, ⌥ or ⌘ pressed or let go mid-drag: drawn again with them.
     if (g.started && g.last && ["Shift", "Alt", "Meta", "Control"].includes(event.key)) {
       g.last = new PointerEvent("pointermove", { clientX: g.last.clientX, clientY: g.last.clientY, shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
@@ -414,7 +399,7 @@ export function placing(ctx) {
     if (!g?.started) return;
     guides.replaceChildren();
     if (g.type === "size") { stepSize(g, event); return; }
-    const point = toUnits(event.clientX, event.clientY), free = Snap.free(g.taken ? Boolean(event.ctrlKey) : event);
+    const point = toUnits(event.clientX, event.clientY), free = Snap.free(event);
     let dx = point[0] - g.from[0], dy = point[1] - g.from[1];
     if (event.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
     if (!free && g.box) {
@@ -774,30 +759,13 @@ export function placing(ctx) {
   // ([left, top, right, bottom], where it was) and how far the pointer has gone, both in those
   // units, caught where an object's would be (⇧ along one way, ⌘ free: the slide's edges and
   // middles, its objects' and shapes', even spacing, the grid), its guides drawn: [dx, dy].
-  // `say(text, event)` beside the pointer; `end()` puts them away. And for one of the slide's
-  // objects in line sized by the editor's own handles: `except` (picks: it, and what moves as
-  // it grows) not caught at, and `sized(place, size, { least, most, free })`, the size the
-  // pointer gives caught where an edge that moves as it grows comes near a guide, as a placed
-  // one's does (sizecatch.js) -- `place(size)` where it then stands, { left, top, width,
-  // height } in the window's pixels -- its guide drawn: the size. (`free`: caught nowhere.)
-  function carrier({ except = [] } = {}) {
+  // `say(text, event)` beside the pointer; `end()` puts them away.
+  function carrier() {
     hold();
     held.scales = {};
     attach();
-    const targets = targetsFor(new Set(except.map(keyOf)), []), spacing = Align.spacing(targets.boxes);
-    const inUnits = (box) => {
-      if (!box) return null;
-      const a = toUnits(box.left, box.top), b = toUnits(box.left + box.width, box.top + box.height);
-      return { left: a[0], top: a[1], width: b[0] - a[0], height: b[1] - a[1] };
-    };
+    const targets = targetsFor(new Set(), []), spacing = Align.spacing(targets.boxes);
     return {
-      sized(place, size, { least = 0, most = Infinity, free = false } = {}) {
-        guides.replaceChildren();
-        const hit = free ? null : sizeCaught((grown) => inUnits(place(grown)), size, (axis, values) => catchAt(values, axis === "x" ? targets.xs : targets.ys), { least, most });
-        if (!hit) return size;
-        guide(hit.axis, hit.at, Beside.besideAt(targets, hit.axis, hit.at));
-        return hit.size;
-      },
       units: (x, y) => toUnits(x, y),
       scale: () => ctx.scale(),
       step(event, box, dx, dy) {
@@ -823,14 +791,13 @@ export function placing(ctx) {
   }
 
   return {
-    carrier, carryOut,
+    carrier,
     placed, frameOf, boxOf, press, pressShape, size, nudge, drawn, attach, putBack, placeFreely, lock, moveWith, commands, arrangePanel, mixedFields,
     reveal: () => arranging.reveal(), align: (side) => arranging.align(side),
     showMoves: (moves) => showMoves(moves ? moves.map(({ pick, dx, dy }) => ({ key: keyOf(pick), dx, dy })) : null),
     busy: () => Boolean(gesture?.started),
-    // (Which, for the help bar's keys: "move" or "size" -- "out" while the ⌘ that took it out
-    // of line is held.)
-    dragging: () => (gesture?.started ? (gesture.taken ? "out" : gesture.type) : null),
+    // (Which, for the help bar's keys: "move" or "size".)
+    dragging: () => (gesture?.started ? gesture.type : null),
     // (A press on one of them, held: they are carried together if it is dragged.)
     pressing: () => Boolean(gesture && gesture.type === "move" && gesture.objects.length > 1),
     any: () => chosen().length > 0,
