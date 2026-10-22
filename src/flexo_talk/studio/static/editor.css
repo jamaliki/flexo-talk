@@ -366,7 +366,9 @@ body.block-grabbing .grab-here { cursor: grabbing !important; user-select: none;
   transition: grid-template-rows 0.15s ease-out, padding 0.15s ease-out, visibility 0s linear 0.15s; }
 .notes.open .notes-body { grid-template-rows: minmax(0, 1fr); padding-top: 3px; padding-bottom: 12px; visibility: visible;
   transition: grid-template-rows 0.15s ease-out, padding 0.15s ease-out; }
-.notes-body .textarea { max-height: 28vh; overflow: auto; }
+/* (Its own height in the row, not stretched to it: measured closed (a slide shown, the notes
+   shut), it is as tall as it will be open -- not grown at the first key typed once opened.) */
+.notes-body .textarea { max-height: 28vh; overflow: auto; align-self: start; }
 
 /* -- the inspector -- */
 .inspector { border-left: 1px solid var(--line); }

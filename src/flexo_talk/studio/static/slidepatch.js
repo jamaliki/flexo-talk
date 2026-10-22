@@ -5,7 +5,8 @@
 //
 // The studio writes a slide's SVG an element to a line (some lines holding a run of words'
 // own elements, start and end): what changed is found line by line. A run of changed lines
-// that is start tags alone has those elements' attributes made anew, what they hold kept;
+// that is start tags alone has those elements' attributes made anew -- those the drawing
+// changed, what the page put on them kept (tagChanges) -- what they hold kept;
 // any other is put in as the run of elements side by side that holds it, each read anew whole
 // from the drawing that came (in place of those that were there: as many, more or fewer, in
 // the order it has them). Anything else (its markers or gradients changed, a run whose
@@ -254,13 +255,11 @@ export function patchDrawing(svg, text, prepare) {
   const tags = [];
   for (const { element, line } of plan.retagged) {
     const own = live(element);
-    const tag = START_TAG.exec(line);
-    if (!own?.isConnected || !svg.contains(own) || !tag || tag[1].endsWith("/>") || tag[2] !== element.tag) return refuse(`${element.id || element.tag} retagged as another`);
-    const holder = document.createElement("div");
-    holder.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg">${tag[1]}</${tag[2]}></svg>`;
-    const read = holder.firstElementChild, fresh = read?.firstElementChild;
-    if (!fresh || fresh.localName !== own.localName || (fresh.getAttribute("id") ?? null) !== element.id || (own.getAttribute("id") ?? null) !== element.id) return refuse(`${element.id || element.tag} renamed`);
-    tags.push({ own, fresh, read });
+    const tag = START_TAG.exec(line), was = START_TAG.exec(before[element.start]);
+    if (!own?.isConnected || !svg.contains(own) || !tag || !was || tag[1].endsWith("/>") || tag[2] !== element.tag || was[2] !== element.tag) return refuse(`${element.id || element.tag} retagged as another`);
+    const read = tagRead(tag), fresh = read?.firstElementChild, old = tagRead(was)?.firstElementChild;
+    if (!fresh || !old || fresh.localName !== own.localName || (fresh.getAttribute("id") ?? null) !== element.id || (own.getAttribute("id") ?? null) !== element.id) return refuse(`${element.id || element.tag} renamed`);
+    tags.push({ own, fresh, read, was: attributesOf(old) });
   }
   // All read: put in.
   const owned = ownedIn(svg);
@@ -276,10 +275,10 @@ export function patchDrawing(svg, text, prepare) {
     }
     for (const node of trimmed([...read.childNodes])) parent.insertBefore(node, next);
   }
-  for (const { own, fresh, read } of tags) {
+  for (const { own, fresh, read, was } of tags) {
     owned(read);
-    for (const name of own.getAttributeNames()) if (!fresh.hasAttribute(name)) own.removeAttribute(name);
-    for (const name of fresh.getAttributeNames()) if (own.getAttribute(name) !== fresh.getAttribute(name)) own.setAttribute(name, fresh.getAttribute(name));
+    prepare(read);
+    retag(own, fresh, tagChanges(was, attributesOf(fresh), attributesOf(own)));
   }
   const list = [...known.elements];
   for (const { at, count, fresh } of [...made].sort((one, other) => other.at - one.at)) list.splice(at, count, ...fresh);
@@ -293,6 +292,81 @@ function trimmed(nodes) {
   while (nodes.length && nodes[0].nodeType === 3 && !nodes[0].textContent.trim()) nodes.shift();
   while (nodes.length && nodes[nodes.length - 1].nodeType === 3 && !nodes[nodes.length - 1].textContent.trim()) nodes.pop();
   return nodes;
+}
+
+// A start tag (START_TAG's match) read as an element, alone, in an SVG of its own.
+function tagRead(tag) {
+  const holder = document.createElement("div");
+  holder.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg">${tag[1]}</${tag[2]}></svg>`;
+  return holder.firstElementChild;
+}
+
+const attributesOf = (element) => Object.fromEntries(element.getAttributeNames().map((name) => [name, element.getAttribute(name)]));
+
+// What an element's start tag made anew changes of it (`live`, its attributes in the page, by
+// name), from its tag in the drawing shown (`was`) to the one in the drawing that came (`now`):
+// its attributes made the drawing's (`set` and `removed`, as the slide put in whole has them:
+// what the page set on them a moment -- a part sized, say -- goes); but of its style and its
+// class, only the properties and the names the drawing changed (`styled` and `unstyled`,
+// `classed` and `unclassed`). The page's own there stay, as they stay on what is not drawn
+// anew: the words being typed hidden under their editor (else drawn under them, a list's
+// lines twice over as each key is drawn), a picture hidden under its crop.
+export function tagChanges(was, now, live) {
+  const changes = { set: [], removed: [], styled: [], unstyled: [], classed: [], unclassed: [] };
+  const own = (name) => name === "style" || name === "class";
+  for (const [name, value] of Object.entries(now)) if (!own(name) && live[name] !== value) changes.set.push(name);
+  for (const name of Object.keys(live)) if (!own(name) && !(name in now)) changes.removed.push(name);
+  if ((was.style ?? null) !== (now.style ?? null)) {
+    const old = styleOf(was.style), fresh = styleOf(now.style);
+    for (const [property, value] of fresh) if (old.get(property) !== value) changes.styled.push(property);
+    for (const property of old.keys()) if (!fresh.has(property)) changes.unstyled.push(property);
+  }
+  if ((was.class ?? null) !== (now.class ?? null)) {
+    const old = new Set(classesOf(was.class)), fresh = new Set(classesOf(now.class));
+    for (const one of fresh) if (!old.has(one)) changes.classed.push(one);
+    for (const one of old) if (!fresh.has(one)) changes.unclassed.push(one);
+  }
+  return changes;
+}
+
+const classesOf = (text) => (text || "").split(/\s+/).filter(Boolean);
+
+// A style attribute's declarations, each property's value (its "!important" with it), in order.
+export function styleOf(written) {
+  const found = new Map(), text = written || "";
+  let quote = null, depth = 0, start = 0;
+  const declaration = (end) => {
+    const words = text.slice(start, end), colon = words.indexOf(":");
+    const property = colon < 0 ? "" : words.slice(0, colon).trim();
+    if (property) found.set(property.startsWith("--") ? property : property.toLowerCase(), words.slice(colon + 1).trim());
+  };
+  for (let at = 0; at < text.length; at += 1) {
+    const letter = text[at];
+    if (quote) { if (letter === "\\") at += 1; else if (letter === quote) quote = null; }
+    else if (letter === '"' || letter === "'") quote = letter;
+    else if (letter === "(") depth += 1;
+    else if (letter === ")") depth = Math.max(0, depth - 1);
+    else if (letter === ";" && !depth) { declaration(at); start = at + 1; }
+  }
+  declaration(text.length);
+  return found;
+}
+
+// The element `own` made as its start tag read anew (`fresh`) has it, by `changes` alone.
+export function retag(own, fresh, changes) {
+  for (const name of changes.removed) own.removeAttribute(name);
+  for (const name of changes.set) {
+    const attribute = fresh.getAttributeNode(name);
+    own.setAttributeNS(attribute.namespaceURI, attribute.name, attribute.value);
+  }
+  const style = styleOf(fresh.getAttribute("style"));
+  for (const property of changes.unstyled) own.style.removeProperty(property);
+  for (const property of changes.styled) {
+    const value = style.get(property), important = /\s*!\s*important\s*$/i.exec(value);
+    own.style.setProperty(property, important ? value.slice(0, important.index) : value, important ? "important" : "");
+  }
+  for (const name of changes.unclassed) own.classList.remove(name);
+  for (const name of changes.classed) own.classList.add(name);
 }
 
 // What the drawing's markers, gradients and clips are named in the page (drawings.js
