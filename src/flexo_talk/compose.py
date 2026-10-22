@@ -5543,59 +5543,16 @@ its own words (``_plots_said``), not as a check of its figure."""
 
 # -- the figure cache --------------------------------------------------------------------
 
-_FLEXO_FINGERPRINT: list[str] = []
-
-
 def _fingerprint() -> str:
-    """A hash of flexo's own source: any change to the engine makes cached layouts stale.
+    """The version of the code a figure is laid out by: flexo's own source and mol-sketch's,
+    with what draws for them (``flexo.kept_versions.code``) -- a molecule drawn otherwise is a
+    figure laid out otherwise. Not in the name a layout is kept by but in its file's first line
+    (``_cached_fit``): laid out again after an update, a figure replaces what the version before
+    kept of it, rather than leaving it to take a place among those kept."""
 
-    An installed flexo (the app's) is told by the hashes its installation recorded of each of
-    its files (``_recorded``): one file read, not every one -- in a busy studio each read is a
-    wait, and reading them all took seconds at the first figure drawn. One worked on in place
-    is read through."""
+    from flexo.kept_versions import code
 
-    if not _FLEXO_FINGERPRINT:
-        import hashlib
-
-        root = Path(flexo.__file__).parent
-        recorded = _recorded(root)
-        if recorded is not None:
-            _FLEXO_FINGERPRINT.append(hashlib.sha256(recorded).hexdigest()[:16])
-            return _FLEXO_FINGERPRINT[0]
-        digest = hashlib.sha256()
-        for path in sorted(root.rglob("*.py")):
-            digest.update(path.read_bytes())
-        _FLEXO_FINGERPRINT.append(digest.hexdigest()[:16])
-    return _FLEXO_FINGERPRINT[0]
-
-
-def _recorded(root: Path) -> bytes | None:
-    """What flexo's installation recorded of its Python files: each one's name and hash -- or
-    None where it recorded no hash of one, or none of them (installed to be worked on in
-    place), or its record is not of the copy at ``root``."""
-
-    import importlib.metadata
-    import os
-
-    try:
-        installed = importlib.metadata.distribution("flexo")
-    except importlib.metadata.PackageNotFoundError:
-        return None
-    found = []
-    for item in installed.files or ():
-        if not item.parts or item.parts[0] != "flexo" or item.suffix != ".py":
-            continue
-        if item.hash is None:
-            return None
-        found.append(f"{item.as_posix()}={item.hash.mode}:{item.hash.value}")
-    if not found:
-        return None
-    try:
-        if not os.path.samefile(installed.locate_file("flexo/__init__.py"), root / "__init__.py"):
-            return None
-    except OSError:
-        return None
-    return "\n".join(sorted(found)).encode("utf-8")
+    return code()
 
 
 _DRAWN_FROM = frozenset({"source", "density", "ss_from"})
@@ -5645,7 +5602,8 @@ def _on_disk(name: str) -> tuple:
 
 def _cache_path(key: tuple) -> Path | None:
     """Where a figure laid out for a box is kept between builds (``FLEXO_TALK_CACHE=0``
-    turns the cache off; ``FLEXO_TALK_CACHE=/some/dir`` moves it)."""
+    turns the cache off; ``FLEXO_TALK_CACHE=/some/dir`` moves it): by all it was laid out
+    from, its file saying which version of the code laid it out (``_cached_fit``)."""
 
     import hashlib
     import os
@@ -5660,7 +5618,7 @@ def _cache_path(key: tuple) -> Path | None:
         folder = Path.home() / "Library/Caches/flexo-talk"
     else:
         folder = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "flexo-talk"
-    name = hashlib.sha256(repr((key, _fingerprint())).encode("utf-8")).hexdigest()[:32]
+    name = hashlib.sha256(repr(key).encode("utf-8")).hexdigest()[:32]
     return folder / "fits" / f"{name}.json"
 
 
@@ -5672,9 +5630,27 @@ _FITS_LOCK = threading.Lock()
 FITS_BYTES = 64_000_000
 """Characters of laid-out drawings kept so, at most."""
 
+FITS_KEPT = 2000
+"""How many laid-out figures are kept on disk, the least recently used let go first (a deck of
+fifty slides keeps about seventy)."""
+FITS_SIZE = 512 << 20
+"""How many bytes of them, at most."""
+FITS_PRUNED = 64
+"""How many are kept between one pruning and the next: the folder is looked through on the
+first keeping of a session and then after every ``FITS_PRUNED`` more."""
+_FITS_KEPT_SINCE = [0]
+_FITS_USED: set[str] = set()
+"""Kept layouts read back this session, and marked used (once each)."""
+
 
 def _cached_fit(key: tuple) -> dict | None:
+    """The figure laid out for ``key`` by this version of the code, if it was kept: in memory
+    (``_FITS``), or in its file, whose first line says which version laid it out."""
+
     import json
+    import os
+
+    from flexo.kept_versions import STAMP
 
     path = _cache_path(key)
     if path is None:
@@ -5684,12 +5660,20 @@ def _cached_fit(key: tuple) -> dict | None:
         if found is not None:
             _FITS.move_to_end(str(path))
             return found
-    if not path.is_file():
-        return None
     try:
-        found = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb") as handle:
+            # (The first line says which version laid it out: read alone, should it be another's.)
+            if handle.readline(64) != STAMP + _fingerprint().encode("ascii") + b"\n":
+                return None
+            found = json.loads(handle.read())
     except (OSError, ValueError):
         return None
+    if not isinstance(found, dict):
+        return None
+    if str(path) not in _FITS_USED:
+        _FITS_USED.add(str(path))
+        with contextlib.suppress(OSError):
+            os.utime(path)  # used now: kept the longest (marked once a session)
     _remember_fit(str(path), found)
     return found
 
@@ -5705,7 +5689,12 @@ def _remember_fit(name: str, laid: dict) -> None:
 
 
 def _store_fit(key: tuple, laid: dict) -> None:
+    """``laid`` kept for ``key``, said to be this version's (over what an earlier one kept)."""
+
     import json
+    import os
+
+    from flexo.kept_versions import stamped
 
     path = _cache_path(key)
     if path is None:
@@ -5713,11 +5702,54 @@ def _store_fit(key: tuple, laid: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(laid)
-        path.write_text(text, encoding="utf-8")
+        # (Written aside and put in its place: never read half written by another studio.)
+        partial = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.saving")
+        partial.write_bytes(stamped(text.encode("utf-8")))
+        partial.replace(path)
     except OSError:
         return
+    _FITS_USED.add(str(path))
+    if _FITS_KEPT_SINCE[0] % FITS_PRUNED == 0:
+        # (Looked through on a thread of its own: a drawing does not wait on the disk for it.)
+        threading.Thread(target=_prune_fits, args=(path.parent,), name="fits pruned", daemon=True).start()
+    _FITS_KEPT_SINCE[0] += 1
     # (Kept as it reads back from its file: as the next drawing would have found it there.)
     _remember_fit(str(path), json.loads(text))
+
+
+_PRUNING = threading.Lock()
+
+
+def _prune_fits(where: Path) -> None:
+    """The least recently used laid-out figures let go, past ``FITS_KEPT`` of them or
+    ``FITS_SIZE`` bytes (what an earlier version kept among them, by when each was last used)."""
+
+    import os
+
+    if not _PRUNING.acquire(blocking=False):
+        return
+    try:
+        found = []
+        with os.scandir(where) as entries:
+            for item in entries:
+                if not item.name.endswith(".json"):
+                    continue
+                try:
+                    stat = item.stat()
+                except OSError:
+                    continue
+                found.append((stat.st_mtime, stat.st_size, item.path))
+        found.sort(reverse=True)
+        total = 0
+        for place, (_, size, item) in enumerate(found):
+            total += size
+            if place >= FITS_KEPT or total > FITS_SIZE:
+                with contextlib.suppress(OSError):
+                    os.unlink(item)
+    except OSError:
+        pass
+    finally:
+        _PRUNING.release()
 
 
 _PLOTTED: dict[tuple, tuple[dict, tuple]] = {}

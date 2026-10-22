@@ -1,5 +1,5 @@
 """Tests lay figures out afresh: the figure cache goes to a scratch directory, and so do the
-molecules and pictures flexo keeps drawn."""
+molecules and pictures flexo keeps drawn and the noised structures' trajectories."""
 
 from __future__ import annotations
 
@@ -11,3 +11,4 @@ def _fresh_figure_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: p
     monkeypatch.setenv("FLEXO_TALK_CACHE", str(tmp_path_factory.mktemp("fits")))
     monkeypatch.setenv("FLEXO_STRUCTURE_CACHE", str(tmp_path_factory.mktemp("structures")))
     monkeypatch.setenv("FLEXO_PICTURE_CACHE", str(tmp_path_factory.mktemp("pictures")))
+    monkeypatch.setenv("FLEXO_NOISE_CACHE", str(tmp_path_factory.mktemp("noise")))
