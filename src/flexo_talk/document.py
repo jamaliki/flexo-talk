@@ -482,14 +482,23 @@ _DEEPEST = 100
 deeper is refused in words, before Python runs out of room to read it."""
 
 
-def _bounded(document: object, name: str) -> None:
+def _bounded(document: object, name: str, known: dict[int, int] | None = None) -> int:
+    """How many items ``document`` holds, refused in words where it is more than a deck can
+    hold, nests too deep or holds what is no character. ``known``: parts of it (by ``id``)
+    found within bounds before, at the same depth, counted as their number of items without
+    being looked through again."""
+
     count = 0
     stack = [(document, 0)]
     while stack:
         item, depth = stack.pop()
+        if known and id(item) in known:
+            count += known[id(item)] - 1
         count += 1
         if count > _MOST_PARTS:
             raise DeckDocumentError("", f"{name} has more than {_MOST_PARTS:,} items, more than a deck can hold.")
+        if known and id(item) in known:
+            continue
         if depth > _DEEPEST:
             raise DeckDocumentError("", f"{name} nests lists or mappings more than {_DEEPEST} levels deep.")
         if isinstance(item, dict):
@@ -505,6 +514,7 @@ def _bounded(document: object, name: str) -> None:
                 raise DeckDocumentError(
                     "", f"{name} contains an invalid character (half of a surrogate pair) in {item!r:.40}."
                 ) from None
+    return count
 
 
 def read_deck(source: str | Path) -> Deck:
@@ -523,6 +533,7 @@ def deck_from_document(
     base: str | Path = ".",
     *,
     errors: list[DeckDocumentError] | None = None,
+    kept: KeptSlides | None = None,
 ) -> Deck:
     """A deck from its document. Files it names are found from ``base``.
 
@@ -531,12 +542,22 @@ def deck_from_document(
     picture or figure whose file is missing is reported there and stands in its
     slide as a box saying so; without it, the first such slide raises
     ``DeckDocumentError``.
+
+    ``kept``: slides read before, each taken again as it was read (with what was said of
+    it) where ``kept`` has it for its place -- the studio, reading the deck at every
+    keystroke, reads again only the slides that changed (``KeptSlides``).
     """
 
     base = Path(base).resolve()
     if not isinstance(document, dict):
         raise DeckDocumentError("", "A deck document must be a mapping with deck and slides.")
-    _bounded(document, "The document")  # one not read from a file too (the studio's, an agent's)
+    # (One not read from a file too: the studio's, an agent's. The slides taken as they were
+    # read were looked through then.)
+    slides = document.get("slides")
+    known = {} if kept is None or not isinstance(slides, list) else {
+        id(data): count for index, data in enumerate(slides) if (count := kept.count(index)) is not None
+    }
+    _bounded(document, "The document", known)
     _only(document, DOCUMENT_KEYS, "")
     version = document.get("schema_version", SCHEMA_VERSION)
     if isinstance(version, bool) or version != SCHEMA_VERSION:
@@ -553,8 +574,20 @@ def deck_from_document(
     try:
         for index, data in enumerate(slides):
             where = f"slides[{index}]"
+            found = kept.get(index) if kept is not None else None
+            if found is not None:
+                slide, said = found
+                slide.deck = deck
+                deck.slides.append(slide)
+                if errors is not None:
+                    errors.extend(said)
+                continue
+            mark = len(errors) if errors is not None else 0
             try:
                 add_slide(deck, data, base, where, missing=errors)
+                if kept is not None:
+                    said = list(errors[mark:]) if errors is not None else []
+                    kept.put(index, deck.slides[index], said, _bounded(data, where))
             except DeckDocumentError as error:
                 if errors is None:
                     raise
@@ -568,6 +601,41 @@ def deck_from_document(
     finally:
         _SHARED.reset(shared)
     return deck
+
+
+class KeptSlides:
+    """Slides of a deck as they were read, for ``deck_from_document`` to take again rather than
+    read anew: each by its place, under the key its reader gives it now (``keys``, one for each
+    place, None for one to read anew) -- a key that changes whenever anything its reading reads
+    does (its words, its place, the deck's settings, the files it names)."""
+
+    def __init__(self, size: int = 600) -> None:
+        self.keys: list[str | None] = []
+        self.size = size
+        self._kept: OrderedDict[str, tuple[Slide, list[DeckDocumentError], int]] = OrderedDict()
+
+    def get(self, index: int) -> tuple[Slide, list[DeckDocumentError]] | None:
+        key = self.keys[index] if index < len(self.keys) else None
+        found = self._kept.get(key) if key is not None else None
+        if found is None:
+            return None
+        self._kept.move_to_end(key)  # type: ignore[arg-type]
+        return found[0], found[1]
+
+    def count(self, index: int) -> int | None:
+        """How many items the slide at ``index`` holds, if it is kept (``_bounded``)."""
+
+        key = self.keys[index] if index < len(self.keys) else None
+        found = self._kept.get(key) if key is not None else None
+        return found[2] if found is not None else None
+
+    def put(self, index: int, slide: Slide, said: list[DeckDocumentError], count: int) -> None:
+        key = self.keys[index] if index < len(self.keys) else None
+        if key is None:
+            return
+        self._kept[key] = (slide, said, count)
+        while len(self._kept) > self.size:
+            self._kept.popitem(last=False)
 
 
 def shared_figures(document: object) -> dict[str, Any]:
