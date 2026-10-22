@@ -718,10 +718,12 @@ export function mount(studio, container) {
 
   const editSlide = (mutate, options = {}) => studio.change((d) => { const slide = (d.slides || [])[state.slide]; if (slide) mutate(slide, d); }, options);
   // A placeholder changed (a sample table typed in) is its person's own: presented and exported.
+  // (What changes an object reaches its slide alone: that is all that is copied for it -- see
+  // session.js's change.)
   const editBlock = (place, mutate, options = {}) => editSlide((slide) => {
     const block = blocksAt(slide, place.region)[place.index];
     if (block) { mutate(block, slide); delete block.placeholder; }
-  }, { quiet: true, ...options });
+  }, { quiet: true, within: ["slides", state.slide], ...options });
   // Words made a list, a list words, or its bullets numbers, as Keynote's Bullets & Lists:
   // a line an item, the words kept, and what the other kind does not take left off.
   // None is words with no bullets: a list's keeps its levels (Keynote's None: a plain list),
@@ -810,7 +812,7 @@ export function mount(studio, container) {
   // (Each time it is typed in, from focusing it to leaving it, a step of its own: `notesRun`.)
   let notesRun = 0;
   const notesArea = ui.textarea({ rows: 3, key: "notes", onInput: (text) =>
-    editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}-${notesRun}`, hold: true }) });
+    editSlide((slide) => setOption(slide, "notes", text), { quiet: true, merge: `notes-${state.slide}-${notesRun}`, hold: true, within: ["slides", state.slide] }) });
   notesArea.addEventListener("focusin", () => { notesRun += 1; });
   // The notes being typed in, changed by another (or an undo): the caret stays among the words
   // it was in, not sent to their end (an undo's words put back chosen, as TextEdit chooses them).
@@ -5317,7 +5319,7 @@ export function mount(studio, container) {
       if (state.focus) { state.focus = null; leaveFigure(false); renderInspector(); reportFocus(); }
       const merge = `${state.slide}-row-${n}-${session}`;
       editor = rich(written(slide), { placeholder: fieldHint(key, slide) },
-        (text) => editSlide((s) => { if (written(s) !== undefined) setLabel(s, n, text); }, { quiet: true, merge, hold: true }));
+        (text) => editSlide((s) => { if (written(s) !== undefined) setLabel(s, n, text); }, { quiet: true, merge, hold: true, within: ["slides", state.slide] }));
       idOf = () => fieldId(key);
     } else if (target.kind === "field" && FOOT.test(target.field)) {
       // A footnote, or the deck's footer (the same on every slide), typed where it is drawn,
@@ -5330,7 +5332,7 @@ export function mount(studio, container) {
       if (state.focus) { state.focus = null; leaveFigure(false); renderInspector(); reportFocus(); }
       const merge = note ? `${state.slide}-fn-${n}-${session}` : `deck-footer-${session}`;
       editor = rich(read(doc()) ?? "", { placeholder: fieldHint(key, slide) }, (text) => (note
-        ? editSlide((s) => { const notes = notesOf(s); if (notes[n] === undefined) return; notes[n] = text; s.footnotes = notes; }, { quiet: true, merge, hold: true })
+        ? editSlide((s) => { const notes = notesOf(s); if (notes[n] === undefined) return; notes[n] = text; s.footnotes = notes; }, { quiet: true, merge, hold: true, within: ["slides", state.slide] })
         : studio.change((d) => { d.deck ||= {}; setOption(d.deck, "footer", text); }, { quiet: true, merge, hold: true })));
       idOf = () => fieldId(key);
     } else if (target.kind === "field") {
@@ -5355,7 +5357,8 @@ export function mount(studio, container) {
       editor = rich(slide[key] ?? "", { placeholder: fieldHint(key, slide) },
         (text) => {
           if (placed?.key === key && studio.past[studio.past.length - 1] === placed.entry) studio.lastMerge = { key: merge, at: Date.now() };
-          editSlide((s) => { s[key] = text; }, { quiet: true, merge, hold: true });
+          // (Its slide alone copied for it: see session.js's change.)
+          editSlide((s) => { s[key] = text; }, { quiet: true, merge, hold: true, within: ["slides", state.slide] });
         });
       idOf = () => fieldId(key);
     } else if (target.kind === "cell") {
@@ -5562,9 +5565,11 @@ export function mount(studio, container) {
     area.addEventListener("input", () => { if (inline?.area === area) inline.typedAt = area.rich ? area.caretAt()?.[1] : area.selectionEnd; });
     // Code is as wide as its longest line: the box widens as a line grows.
     if (code) { area.wrap = "off"; area.addEventListener("input", () => positionInline()); }
-    // The inspector shows what is typed, as it is typed.
+    // The inspector shows what is typed, as it is typed. (Its field found again only once the
+    // panel is drawn again, not looked for through the panel at every key.)
+    let twin = null;
     if (mirror) area.addEventListener("input", () => {
-      const twin = inspectorBody.querySelector(`[data-key="${CSS.escape(mirror)}"]`);
+      if (!twin?.isConnected) twin = inspectorBody.querySelector(`[data-key="${CSS.escape(mirror)}"]`);
       if (twin && twin !== document.activeElement && twin.value !== area.value) twin.value = area.value;
     });
     center.append(node);
@@ -8156,7 +8161,7 @@ export function mount(studio, container) {
     // kept -- with the placeholder it shows there.
     const text = (key, label, { rows = 1 } = {}) => {
       if (!allowed.has(key)) return null;
-      const onInput = (value) => editSlide((s) => setOption(s, key, value), { quiet: true, merge: `${state.slide}-${key}`, hold: true });
+      const onInput = (value) => editSlide((s) => setOption(s, key, value), { quiet: true, merge: `${state.slide}-${key}`, hold: true, within: ["slides", state.slide] });
       return ui.field(label, richField({ value: slide[key] ?? "", short: rows === 1, placeholder: fieldHint(key, slide), key: `slide.${key}`, onInput }));
     };
     const parts = [
