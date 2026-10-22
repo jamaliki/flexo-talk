@@ -495,14 +495,15 @@ rest in proportion -- catching at the slide's edges and middles, at the shapes a
 and where it is as far from its neighbours as they are apart, as a shape does (the magnet; ⌘ held
 the other way); the arrows nudge it (⇧: ten points), ⌘L locks it and ⌥⌘L unlocks it, and a
 duplicate stands a little below and right of it. An object in line is dragged between places as
-ever and its arrows go from one object to the next; ⌘ held as it starts to be dragged takes it out
-of line, to be placed where it is let go. Chosen with shapes, objects move with them: Align and
-its kin move both (one in line among them taken out of line as it moves); a drag of a placed
-object or of a chosen shape carries the shapes and the placed objects together, and the arrows
-nudge them together -- an object in line staying laid out. Placed objects are drawn in the slide's
-order over what it lays out, under every shape but those Behind Slide Content: there is no
-stacking them among the shapes, which Bring Forward and Send Backward still order among
-themselves.
+ever and its arrows go from one object to the next; ⌘ held as it starts to be dragged, or pressed
+while it is, takes it out of line, to be placed where it is let go -- catching as a placed one does
+all the way, that ⌘ held or not (let go and pressed again, ⌘ drags it free). Chosen with shapes,
+objects move with them: Align and its kin move both (one in line among them taken out of line as
+it moves); a drag of a placed object or of a chosen shape carries the shapes and the placed
+objects together, and the arrows nudge them together -- an object in line staying laid out. Placed
+objects are drawn in the slide's order over what it lays out, under every shape but those Behind
+Slide Content: there is no stacking them among the shapes, which Bring Forward and Send Backward
+still order among themselves.
 
 Slides that show one thing changing are lined up across them by overlaying them. Choose the slides
 in the list (⌘-click or ⇧-click them) and press **O** -- or right-click them and choose **Overlay
@@ -800,11 +801,13 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   proportion (a table's columns sharing its width; a plot no flatter than 3:2, its words
   keeping their size). The edge dragged follows the pointer
   and the other stays (an object standing centred stays centred); it catches at the
-  width of its place, the width it takes of itself and the width it was -- ⌘ drags it
-  free of them -- and is never narrower than its longest word, a column's, or a
-  picture's least. Esc puts it back; double-click a handle to give it no width of its
-  own again. The inspector's Width is the same setting, empty for none. Double-click a
-  picture (or choose it and press Return, or **Crop…**) to crop it, as Keynote masks
+  width of its place, the width it takes of itself and the width it was, and where an
+  edge it moves meets the slide's edges and middles or a shape's or another object's
+  edge or middle, the guide drawn, as a placed one's does -- ⌘ drags it free of them
+  -- and is never narrower than its longest word, a column's, or a picture's least.
+  Esc puts it back; double-click a handle to give it no width of its own again. The
+  inspector's Width is the same setting, empty for none. Double-click a picture (or
+  choose it and press Return, or **Crop…**) to crop it, as Keynote masks
   one: the whole of it shows faintly round the part kept; drag the frame's handles to
   crop a side (⇧ keeps its proportions), the frame to move it over the picture, the
   picture to move it under the frame, or the bar's slider to zoom it in the frame;
