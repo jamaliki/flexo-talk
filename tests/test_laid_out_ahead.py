@@ -86,3 +86,20 @@ def test_a_figure_laid_out_ahead_gives_way_to_a_drawing(tmp_path: Path, monkeypa
         kind._drawing -= 1
     assert compiled == []
     assert compose.wishes("slide2")  # (wished for still)
+
+
+def test_a_figure_edited_on_its_slide_has_its_words_read_ahead_of_the_next_edit(tmp_path: Path) -> None:
+    from flexo.studio.figure_edit import _READ_AHEAD, inline_words, read_ahead
+
+    document = _deck("edited")
+    kind = DeckKind()
+    at = {"slide": 1, "region": "body", "index": 1}
+    edit = {"do": "update", "targets": [{"type": "node", "id": "a"}], "values": {"label": "Read again"}}
+    answer = kind.act(document, {"do": "figure", "at": at, "edit": edit}, tmp_path)
+    figure = answer["document"]["slides"][1]["body"][1]["figure"]
+    assert [inline_words(figure)] == warming._WORDS
+    read_ahead(warming._WORDS.pop())
+    assert inline_words(figure) in _READ_AHEAD
+    again = {"do": "update", "targets": [{"type": "node", "id": "b"}], "values": {"label": "Write"}}
+    kind.act(answer["document"], {"do": "figure", "at": at, "edit": again}, tmp_path)
+    assert inline_words(figure) not in _READ_AHEAD  # (taken by the edit)

@@ -968,6 +968,12 @@ class DeckKind:
         if isinstance(value, dict):
             made = apply_to_data(value, edit, base=base)
             block["figure"] = made["data"]
+            # (Its words read ahead of the next edit to it, once the studio is quiet: warming.)
+            from flexo.studio.figure_edit import inline_words
+
+            from flexo_talk import warming
+
+            warming.read_soon(self, inline_words(made["data"]))
             if made["data"] != value:
                 # A sample figure changed is the person's own: presented and exported.
                 block.pop("placeholder", None)
