@@ -4923,8 +4923,32 @@ def _fit_in_box(*args, draft: bool = True, **options) -> object:
     from flexo.draft import drafting
     from flexo.svg_resources import fonts_linked
 
-    with fonts_linked(), drafting(EDITING.get() and draft):
+    with fonts_linked(), drafting(EDITING.get() and draft), _kept_compiled(args[0]):
         return flexo.fit_in_box(*args, **options)
+
+
+_COMPILED = flexo.boxfit.Kept()
+"""What laying out a slide's figures compiled and measured (``flexo.boxfit.kept``): a figure
+laid out again for another height of box -- a line of words added over it as they are typed --
+is compiled at the width it was, and is found compiled, not compiled again."""
+
+
+def _kept_compiled(spec: Any) -> contextlib.AbstractContextManager:
+    """What a figure is compiled and measured with kept (``_COMPILED``), by all else it is
+    drawn from: the files it names as they are now (``_drawn_from``), whether its photographs
+    are named by address, the folder, whether its Python may run, its fonts linked -- as its
+    layout is kept by (``_prepared``). Not a figure with plots, which reads what it reads only
+    once run."""
+
+    from flexo.confine import folder_root
+    from flexo.studio import code_allowed
+    from flexo.svg_resources import fonts_are_linked
+
+    if any(node.kind == "plot" for node in spec.nodes):
+        return contextlib.nullcontext()
+    also = (repr(_drawn_from(spec)), picture_link.get() is not None, str(folder_root.get()), code_allowed.get(),
+            fonts_are_linked())
+    return flexo.boxfit.kept(_COMPILED, also)
 
 
 def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
