@@ -45,6 +45,7 @@ import { showStates } from "/static/kinds/deck/showing.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 import { stageAhead } from "/static/kinds/deck/stageahead.js";
+import { intoView } from "/static/kinds/deck/railview.js";
 import { lineBox } from "/static/kinds/deck/drawnlines.js";
 
 const BLOCKS = {
@@ -1640,6 +1641,11 @@ export function mount(studio, container) {
   }
 
   function select(index, focus = null) {
+    // Its thumbnail whole in view, ring and all, before anything is drawn anew: measured and
+    // scrolled to as the window is laid out already, it costs no layout of its own (railview.js).
+    const to = Math.max(0, Math.min(index, slides().length - 1)), count = railList.childElementCount;
+    const early = railList.querySelector(`:scope > .thumb[data-index="${to}"]`);
+    if (early) intoView(railList, early);
     closeInline();
     leaveFigure(false);
     state.slide = Math.max(0, Math.min(index, slides().length - 1));
@@ -1653,22 +1659,24 @@ export function mount(studio, container) {
     renderStage();
     renderInspector();
     renderBar();
-    // Its thumbnail whole in view, ring and all (a new slide's, at the foot of the list), as the
-    // next frame is drawn: once the list is laid out, as a new thumbnail's size is known only
-    // then. (Measured here too, the window was laid out twice for each slide gone to.)
-    requestAnimationFrame(thumbInView);
+    // A new slide's thumbnail (at the foot of the list), or the list made anew about it, is
+    // brought into view as the next frame is drawn: once the list is laid out, as a new
+    // thumbnail's size is known only then. (Measured here, the window was laid out twice for
+    // each slide gone to.)
+    thumbLater = !early?.isConnected || railList.childElementCount !== count;
+    if (thumbLater) requestAnimationFrame(thumbInView);
     if (pages[state.slide]?.stale) studio.requestDraw(0);
     reportFocus();
     readSlideAhead();
   }
 
+  // (Not when the slide gone to since was brought into view as it was chosen.)
+  let thumbLater = false;
   function thumbInView() {
+    if (!thumbLater) return;
+    thumbLater = false;
     const thumb = railList.querySelector(".thumb.on");
-    if (!thumb) return;
-    // (WebKit's and Chromium's "nearest" take a thumbnail its ring short of the edge as shown.)
-    const box = thumb.getBoundingClientRect(), port = railList.getBoundingClientRect();
-    if (box.bottom + 8 > port.bottom) thumb.scrollIntoView({ block: "end" });
-    else if (box.top - 8 < port.top) thumb.scrollIntoView({ block: "start" });
+    if (thumb) intoView(railList, thumb);
   }
 
   // ↓ or ↑ held, repeating faster than a large slide is drawn: the slide each press goes to is
@@ -5668,8 +5676,11 @@ export function mount(studio, container) {
   const fieldHint = (key, slide) => ({
     title: layoutOf(slide) === "agenda" ? "Outline" : "Title", subtitle: "Subtitle", words: "Text", by: "Who said it", author: "Your name", footer: FOOTER_HINT,
     // An example, not a default: an empty date draws nothing.
-    date: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`,
+    date: key === "date" ? `e.g. ${dayFormat().format(new Date())}` : "",
   })[key] || (FOOT.test(key) ? "Footnote" : ROW.test(key) ? "Label" : "");
+  // (Made once, not anew for each slide gone to: making one is the costly part.)
+  let dayFormatter = null;
+  const dayFormat = () => (dayFormatter ||= new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric" }));
   // From a gallery's caption typed in on to the next picture's (`back`: the one before), and
   // past the last (or the first) on round the slide (tabOn).
   function nextPicture(target, back) {
