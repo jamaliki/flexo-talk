@@ -638,8 +638,13 @@ class DeckKind:
         """Draw what has changed, the slide in focus first and its neighbours next;
         slides not reached within ``BUDGET`` seconds are left pending for the next call."""
 
+        from flexo_talk import compose
+
         # (Each file the slides name asked of the disk once in a drawing: ``_Look``.)
         look = _LOOK.set(_Look())
+        # (Its figures' layouts written to their files on a thread of their own:
+        # compose.WRITTEN_LATER.)
+        later = compose.WRITTEN_LATER.set(True)
         with self._counting:
             self._drawing += 1
         try:
@@ -647,6 +652,7 @@ class DeckKind:
         finally:
             with self._counting:
                 self._drawing -= 1
+            compose.WRITTEN_LATER.reset(later)
             _LOOK.reset(look)
 
     def _draw(self, document: dict[str, Any], base: Path, hints: dict[str, Any] | None) -> Drawing:

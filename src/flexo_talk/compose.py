@@ -13,9 +13,11 @@ decides where it goes and how large.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import contextvars
 import functools
+import io
 import math
 import re
 import threading
@@ -5769,8 +5771,11 @@ def _kept_fit(key: tuple, earlier: bool = False) -> tuple[dict | None, bool]:
             _FITS.move_to_end(str(path))
             return found, False
     stale = earlier and allowed()
+    with _WRITING_LOCK:
+        writing = _WRITING.get(str(path))
     try:
-        with path.open("rb") as handle:
+        # (One on its way to its file is read as it will be there: ``_store_fit``.)
+        with path.open("rb") if writing is None else io.BytesIO(writing) as handle:
             # (The first line says which version laid it out: read alone, should it be another's.)
             line = handle.readline(64)
             ours = line == STAMP + _fingerprint().encode("ascii") + b"\n"
@@ -5804,9 +5809,6 @@ def _remember_fit(name: str, laid: dict) -> None:
 def _store_fit(key: tuple, laid: dict) -> None:
     """``laid`` kept for ``key``, said to be this version's (over what an earlier one kept)."""
 
-    import json
-    import os
-
     from flexo.kept_versions import stamped
 
     path = _cache_path(key)
@@ -5814,11 +5816,13 @@ def _store_fit(key: tuple, laid: dict) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(laid)
-        # (Written aside and put in its place: never read half written by another studio.)
-        partial = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.saving")
-        partial.write_bytes(stamped(text.encode("utf-8")))
-        partial.replace(path)
+        # (Written as JSON once, and read back once, however many keys it is kept by.)
+        text, back = _as_written(laid)
+        data = stamped(text.encode("utf-8"))
+        if WRITTEN_LATER.get():
+            _write_later(path, data)
+        else:
+            _write(path, data)
     except OSError:
         return
     _FITS_USED.add(str(path))
@@ -5827,7 +5831,87 @@ def _store_fit(key: tuple, laid: dict) -> None:
         threading.Thread(target=_prune_fits, args=(path.parent,), name="fits pruned", daemon=True).start()
     _FITS_KEPT_SINCE[0] += 1
     # (Kept as it reads back from its file: as the next drawing would have found it there.)
-    _remember_fit(str(path), json.loads(text))
+    _remember_fit(str(path), back)
+
+
+WRITTEN_LATER = contextvars.ContextVar("flexo_talk_fits_written_later", default=False)
+"""Whether laid-out figures are written to their files on a thread of their own (``_store_fit``):
+while the studio draws for its page, a slide drawn as a letter is typed does not wait on the
+disk -- each written in the order kept, and read, until it is, as it will be there."""
+
+_WRITING: dict[str, bytes] = {}
+"""Laid-out figures on their way to their files, by file: what each will hold."""
+_WRITING_LOCK = threading.Condition()
+_TO_WRITE: list[str] = []
+_WRITER: list[threading.Thread] = []
+
+_WRITTEN: list[tuple[dict, str, dict]] = []
+"""The last laid-out figure written as JSON, with its JSON and what that reads back as."""
+
+
+def _as_written(laid: dict) -> tuple[str, dict]:
+    """``laid`` as JSON, and that JSON read back -- once for the very ``laid`` kept by several
+    keys in turn (``_prepared``)."""
+
+    import json
+
+    last = _WRITTEN[0] if _WRITTEN else None
+    if last is not None and last[0] is laid:
+        return last[1], last[2]
+    text = json.dumps(laid)
+    back = json.loads(text)
+    _WRITTEN[:] = [(laid, text, back)]
+    return text, back
+
+
+def _write(path: Path, data: bytes) -> None:
+    import os
+
+    # (Written aside and put in its place: never read half written by another studio.)
+    partial = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.saving")
+    partial.write_bytes(data)
+    partial.replace(path)
+
+
+def _write_later(path: Path, data: bytes) -> None:
+    """``data`` written to ``path`` by the thread that writes laid-out figures, read from
+    ``_WRITING`` until it is."""
+
+    with _WRITING_LOCK:
+        _WRITING[str(path)] = data
+        _TO_WRITE.append(str(path))
+        if not _WRITER or not _WRITER[0].is_alive():
+            _WRITER[:] = [threading.Thread(target=_writing, name="fits written", daemon=True)]
+            _WRITER[0].start()
+        _WRITING_LOCK.notify()
+
+
+def _writing() -> None:
+    while True:
+        with _WRITING_LOCK:
+            while not _TO_WRITE:
+                _WRITING_LOCK.wait()
+            name = _TO_WRITE.pop(0)
+            data = _WRITING.get(name)
+        if data is not None:
+            with contextlib.suppress(OSError):
+                _write(Path(name), data)
+        with _WRITING_LOCK:
+            if _WRITING.get(name) is data and name not in _TO_WRITE:
+                del _WRITING[name]
+            _WRITING_LOCK.notify_all()
+
+
+def written() -> None:
+    """Wait for the laid-out figures on their way to their files to be written."""
+
+    with _WRITING_LOCK:
+        while _TO_WRITE or (_WRITING and _WRITER and _WRITER[0].is_alive()):
+            if not _WRITING_LOCK.wait(timeout=5.0):
+                return
+
+
+atexit.register(written)
 
 
 _PRUNING = threading.Lock()
