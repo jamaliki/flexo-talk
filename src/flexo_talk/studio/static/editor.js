@@ -45,6 +45,7 @@ import { showStates } from "/static/kinds/deck/showing.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 import { stageAhead } from "/static/kinds/deck/stageahead.js";
+import { lineBox } from "/static/kinds/deck/drawnlines.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -2615,7 +2616,7 @@ export function mount(studio, container) {
       inkPen.font = `${style.fontStyle} ${style.fontWeight} ${parseFloat(style.fontSize) * (text.getScreenCTM()?.a || 1)}px ${style.fontFamily}`;
       const lines = [...text.children].filter((span) => span.matches("tspan") && span.textContent.trim());
       for (const line of lines.length ? lines : [text]) {
-        const box = line.getBoundingClientRect(), metrics = inkPen.measureText(line.textContent);
+        const box = line === text ? line.getBoundingClientRect() : lineBox(line), metrics = inkPen.measureText(line.textContent);
         const face = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
         if (!box.width || !face) continue;
         const baseline = box.top + box.height * (metrics.fontBoundingBoxAscent / face);
@@ -6934,7 +6935,8 @@ export function mount(studio, container) {
   function textMetrics(element, size) {
     const texts = wordsIn(element);
     if (!texts.length) return null;
-    const first = (texts[0].querySelector("tspan") || texts[0]).getBoundingClientRect();
+    const firstSpan = texts[0].querySelector("tspan");
+    const first = firstSpan ? lineBox(firstSpan) : texts[0].getBoundingClientRect();
     let line = 0, wrapped = false;
     for (const text of texts) {
       const tops = lineTops(text, first.height || size);
@@ -6945,7 +6947,7 @@ export function mount(studio, container) {
   // The tops of a text's lines: its runs' tops, those within half a line of each other one
   // line (code, in its own face, or a bold word sits a hair higher or lower on the same line).
   function lineTops(text, height) {
-    const tops = [...text.querySelectorAll("tspan")].map((span) => span.getBoundingClientRect()).filter((box) => box.width).map((box) => box.top).sort((a, b) => a - b);
+    const tops = [...text.querySelectorAll("tspan")].map(lineBox).filter((box) => box.width).map((box) => box.top).sort((a, b) => a - b);
     return tops.filter((top, k) => !k || top - tops[k - 1] > height / 2);
   }
 
