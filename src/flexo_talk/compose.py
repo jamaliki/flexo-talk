@@ -13,9 +13,12 @@ decides where it goes and how large.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import contextvars
+import copy
 import functools
+import io
 import math
 import re
 import threading
@@ -36,6 +39,7 @@ from flexo.ir.semantic import TextRun
 from flexo.kept_versions import allowed, took
 from flexo.lint import lint_compilation
 from flexo.render_common import displayed_alone, render_runs
+from flexo.sealed import seal
 from flexo.structures import structure_problem
 from flexo.style import Palette, TypographyStyle
 from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, svg_tag, xml_document
@@ -4923,8 +4927,76 @@ def _fit_in_box(*args, draft: bool = True, **options) -> object:
     from flexo.draft import drafting
     from flexo.svg_resources import fonts_linked
 
-    with fonts_linked(), drafting(EDITING.get() and draft):
+    with fonts_linked(), drafting(EDITING.get() and draft), _kept_compiled(args[0]):
         return flexo.fit_in_box(*args, **options)
+
+
+_WISHES: OrderedDict[tuple[str, tuple], tuple[contextvars.Context, tuple, dict]] = OrderedDict()
+"""Figures found laid out as they are written while their slides are changed, by slide: each to
+be laid out ahead (``flexo_talk.warming``), in the drawing's own context, as the next drawing
+that gives it another height of room would lay it out."""
+WISHES = 256
+_WISHES_LOCK = threading.Lock()
+
+
+def _wish(slide: str, where: tuple, laid: dict, args: tuple, options: dict) -> None:
+    if laid.get("layout") != "as written":
+        return
+    with _WISHES_LOCK:
+        _WISHES[(slide, where)] = (contextvars.copy_context(), args, options)
+        _WISHES.move_to_end((slide, where))
+        while len(_WISHES) > WISHES:
+            _WISHES.popitem(last=False)
+
+
+def wishes(slide: str) -> list[tuple[tuple, tuple[contextvars.Context, tuple, dict]]]:
+    """The figures of ``slide`` to be laid out ahead (``_wish``), each by its key."""
+
+    with _WISHES_LOCK:
+        return [(key, wish) for key, wish in _WISHES.items() if key[0] == slide]
+
+
+def wished(key: tuple, wish: tuple) -> None:
+    """``wish`` laid out ahead: not wished for again, unless wished for anew since."""
+
+    with _WISHES_LOCK:
+        if _WISHES.get(key) is wish:
+            del _WISHES[key]
+
+
+def lay_out_ahead(args: tuple, options: dict) -> None:
+    """A figure laid out (``_fit_in_box``) ahead of the drawing that will ask for it -- within
+    the drawing's context it was wished in -- to be found compiled then (``_COMPILED``): what
+    its drawing remembers for its drafts remembered only then (``flexo.draft.ahead``)."""
+
+    from flexo.draft import ahead
+
+    with ahead():
+        _fit_in_box(*args, **options)
+
+
+_COMPILED = flexo.boxfit.Kept()
+"""What laying out a slide's figures compiled and measured (``flexo.boxfit.kept``): a figure
+laid out again for another height of box -- a line of words added over it as they are typed --
+is compiled at the width it was, and is found compiled, not compiled again."""
+
+
+def _kept_compiled(spec: Any) -> contextlib.AbstractContextManager:
+    """What a figure is compiled and measured with kept (``_COMPILED``), by all else it is
+    drawn from: the files it names as they are now (``_drawn_from``), whether its photographs
+    are named by address, the folder, whether its Python may run, its fonts linked -- as its
+    layout is kept by (``_prepared``). Not a figure with plots, which reads what it reads only
+    once run."""
+
+    from flexo.confine import folder_root
+    from flexo.studio import code_allowed
+    from flexo.svg_resources import fonts_are_linked
+
+    if any(node.kind == "plot" for node in spec.nodes):
+        return contextlib.nullcontext()
+    also = (repr(_drawn_from(spec)), picture_link.get() is not None, str(folder_root.get()), code_allowed.get(),
+            fonts_are_linked())
+    return flexo.boxfit.kept(_COMPILED, also)
 
 
 def _prepare(canvas: _Canvas, block: _Figure, box: Box, largest: float) -> _Prepared:
@@ -5111,6 +5183,13 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         _EARLIER_SEEN.add(where)
     if laid is not None and block.frame and "parts" not in laid:
         laid = None  # (kept before frames asked where its parts are)
+    if laid is not None and not earlier and not plotted and layout is None and EDITING.get():
+        # Found laid out, as written, while it is changed: laid out ahead, once the studio is
+        # quiet, for the room words typed over it will leave it (flexo_talk.warming).
+        _wish(canvas.slide.id, where, laid, (spec, box.width, box.height), {
+            "words": min(deck.style.figure_size, largest), "largest": largest, "turn": free, "fold": fold,
+            "keep": "as written", "whole": True,
+        })
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
@@ -5745,8 +5824,11 @@ def _kept_fit(key: tuple, earlier: bool = False) -> tuple[dict | None, bool]:
             _FITS.move_to_end(str(path))
             return found, False
     stale = earlier and allowed()
+    with _WRITING_LOCK:
+        writing = _WRITING.get(str(path))
     try:
-        with path.open("rb") as handle:
+        # (One on its way to its file is read as it will be there: ``_store_fit``.)
+        with path.open("rb") if writing is None else io.BytesIO(writing) as handle:
             # (The first line says which version laid it out: read alone, should it be another's.)
             line = handle.readline(64)
             ours = line == STAMP + _fingerprint().encode("ascii") + b"\n"
@@ -5780,9 +5862,6 @@ def _remember_fit(name: str, laid: dict) -> None:
 def _store_fit(key: tuple, laid: dict) -> None:
     """``laid`` kept for ``key``, said to be this version's (over what an earlier one kept)."""
 
-    import json
-    import os
-
     from flexo.kept_versions import stamped
 
     path = _cache_path(key)
@@ -5790,11 +5869,13 @@ def _store_fit(key: tuple, laid: dict) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(laid)
-        # (Written aside and put in its place: never read half written by another studio.)
-        partial = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.saving")
-        partial.write_bytes(stamped(text.encode("utf-8")))
-        partial.replace(path)
+        # (Written as JSON once, and read back once, however many keys it is kept by.)
+        text, back = _as_written(laid)
+        data = stamped(text.encode("utf-8"))
+        if WRITTEN_LATER.get():
+            _write_later(path, data)
+        else:
+            _write(path, data)
     except OSError:
         return
     _FITS_USED.add(str(path))
@@ -5803,7 +5884,87 @@ def _store_fit(key: tuple, laid: dict) -> None:
         threading.Thread(target=_prune_fits, args=(path.parent,), name="fits pruned", daemon=True).start()
     _FITS_KEPT_SINCE[0] += 1
     # (Kept as it reads back from its file: as the next drawing would have found it there.)
-    _remember_fit(str(path), json.loads(text))
+    _remember_fit(str(path), back)
+
+
+WRITTEN_LATER = contextvars.ContextVar("flexo_talk_fits_written_later", default=False)
+"""Whether laid-out figures are written to their files on a thread of their own (``_store_fit``):
+while the studio draws for its page, a slide drawn as a letter is typed does not wait on the
+disk -- each written in the order kept, and read, until it is, as it will be there."""
+
+_WRITING: dict[str, bytes] = {}
+"""Laid-out figures on their way to their files, by file: what each will hold."""
+_WRITING_LOCK = threading.Condition()
+_TO_WRITE: list[str] = []
+_WRITER: list[threading.Thread] = []
+
+_WRITTEN: list[tuple[dict, str, dict]] = []
+"""The last laid-out figure written as JSON, with its JSON and what that reads back as."""
+
+
+def _as_written(laid: dict) -> tuple[str, dict]:
+    """``laid`` as JSON, and that JSON read back -- once for the very ``laid`` kept by several
+    keys in turn (``_prepared``)."""
+
+    import json
+
+    last = _WRITTEN[0] if _WRITTEN else None
+    if last is not None and last[0] is laid:
+        return last[1], last[2]
+    text = json.dumps(laid)
+    back = json.loads(text)
+    _WRITTEN[:] = [(laid, text, back)]
+    return text, back
+
+
+def _write(path: Path, data: bytes) -> None:
+    import os
+
+    # (Written aside and put in its place: never read half written by another studio.)
+    partial = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.saving")
+    partial.write_bytes(data)
+    partial.replace(path)
+
+
+def _write_later(path: Path, data: bytes) -> None:
+    """``data`` written to ``path`` by the thread that writes laid-out figures, read from
+    ``_WRITING`` until it is."""
+
+    with _WRITING_LOCK:
+        _WRITING[str(path)] = data
+        _TO_WRITE.append(str(path))
+        if not _WRITER or not _WRITER[0].is_alive():
+            _WRITER[:] = [threading.Thread(target=_writing, name="fits written", daemon=True)]
+            _WRITER[0].start()
+        _WRITING_LOCK.notify()
+
+
+def _writing() -> None:
+    while True:
+        with _WRITING_LOCK:
+            while not _TO_WRITE:
+                _WRITING_LOCK.wait()
+            name = _TO_WRITE.pop(0)
+            data = _WRITING.get(name)
+        if data is not None:
+            with contextlib.suppress(OSError):
+                _write(Path(name), data)
+        with _WRITING_LOCK:
+            if _WRITING.get(name) is data and name not in _TO_WRITE:
+                del _WRITING[name]
+            _WRITING_LOCK.notify_all()
+
+
+def written() -> None:
+    """Wait for the laid-out figures on their way to their files to be written."""
+
+    with _WRITING_LOCK:
+        while _TO_WRITE or (_WRITING and _WRITER and _WRITER[0].is_alive()):
+            if not _WRITING_LOCK.wait(timeout=5.0):
+                return
+
+
+atexit.register(written)
 
 
 _PRUNING = threading.Lock()
@@ -6737,7 +6898,9 @@ def _place_svg(
             group.append(child)
 
 
-_PREFIXED: OrderedDict[tuple[str, str], tuple[ET.Element, dict[str, str]]] = OrderedDict()
+_PREFIXED: OrderedDict[tuple[str, str], tuple[ET.Element, dict[str, str], list[tuple[tuple[int, ...], ET.Element]]]] = (
+    OrderedDict()
+)
 """Drawings placed on slides (``_place_svg``), read and their ids given their place's prefix:
 a slide drawn again as its words are typed places the same figure -- a protein's surface is
 a megabyte and a half of SVG -- copied from here, not read again."""
@@ -6757,8 +6920,12 @@ def _prefixed(svg: str, identifier: str) -> tuple[ET.Element, dict[str, str]]:
         if found is not None:
             _PREFIXED.move_to_end(key)
     if found is None:
-        source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
+        words = re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1)
         prefix = f"{identifier}."
+        # (Its molecules' shapes -- most of its words -- read once and kept, apart from the rest,
+        # which is read for each drawing of the figure: _with_molecules.)
+        read = _with_molecules(words, prefix)
+        source = ET.fromstring(words) if read is None else read[0]
         universal: dict[str, str] = {}
         for item in source.iter():
             if local_name(item.tag) == "style" and item.text:
@@ -6768,29 +6935,127 @@ def _prefixed(svg: str, identifier: str) -> tuple[ET.Element, dict[str, str]]:
                         if name.strip() and value.strip():
                             universal[name.strip()] = value.strip()
         for item in source.iter():
-            if item.get("id"):
-                item.set("id", prefix + item.get("id"))  # type: ignore[operator]
-            for name, value in list(item.attrib.items()):
-                if "url(#" in value:
-                    item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
-                if name.endswith("href") and value.startswith("#"):
-                    item.set(name, "#" + prefix + value[1:])
-        found = (source, universal)
+            _prefix_ids(item, prefix)
+        sealed: list[tuple[tuple[int, ...], ET.Element]] = []
+        if read is not None:
+            # (Each molecule's shapes sealed where they are put, as copies of those kept: written
+            # out once however often the slide is, whatever else of the figure changes --
+            # flexo.sealed -- as are their copies placed on it, each by where it is in the
+            # figure, ``sealed``.)
+            places = _places(source, {id(holder) for holder, _ in read[1]})
+            for holder, shapes in read[1]:
+                for shape in shapes:
+                    sealed.append(((*places[id(holder)], len(holder)), shape))
+                    made = copy.deepcopy(shape)
+                    seal(made, shape)
+                    holder.append(made)
+        found = (source, universal, sealed)
         with _PREFIXED_LOCK:
             _PREFIXED[key] = found
             while len(_PREFIXED) > 1 and sum(len(svg) for _, svg in _PREFIXED) > PREFIXED_BYTES:
                 _PREFIXED.popitem(last=False)
-    return _copied(found[0]), dict(found[1])
+    made = _copied(found[0])
+    for place, kept in found[2]:
+        copy_of = made
+        for index in place:
+            copy_of = copy_of[index]
+        seal(copy_of, kept)
+    return made, dict(found[1])
+
+
+def _places(root: ET.Element, wanted: set[int]) -> dict[int, tuple[int, ...]]:
+    """Where each of the elements ``wanted`` (by identity) is in ``root``: the index of each
+    child on the way down to it."""
+
+    found: dict[int, tuple[int, ...]] = {}
+    stack: list[tuple[ET.Element, tuple[int, ...]]] = [(root, ())]
+    while stack and len(found) < len(wanted):
+        item, place = stack.pop()
+        if id(item) in wanted:
+            found[id(item)] = place
+        stack.extend((child, (*place, index)) for index, child in enumerate(item))
+    return found
 
 
 def _copied(item: ET.Element) -> ET.Element:
-    """A copy of a tree of elements of its own (as ``copy.deepcopy`` makes one, without its
-    asking the copy module about every attribute's words, which are strings and never change)."""
+    """A copy of a tree of elements of its own (``copy.deepcopy``: made by ElementTree itself,
+    nearly three times sooner than one made element by element here)."""
 
-    made = item.makeelement(item.tag, item.attrib.copy())
-    made.text, made.tail = item.text, item.tail
-    made.extend(_copied(child) for child in item)
-    return made
+    return copy.deepcopy(item)
+
+
+def _prefix_ids(item: ET.Element, prefix: str) -> None:
+    """``item``'s id given ``prefix``, and what it points at by id (``url(#...)``, ``#...``)."""
+
+    if item.get("id"):
+        item.set("id", prefix + item.get("id"))  # type: ignore[operator]
+    for name, value in list(item.attrib.items()):
+        if "url(#" in value:
+            item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
+        if name.endswith("href") and value.startswith("#"):
+            item.set(name, "#" + prefix + value[1:])
+
+
+_MOLECULES: OrderedDict[tuple[str, str, str], list[ET.Element]] = OrderedDict()
+"""Molecules' shapes as drawn in figures placed on slides (``_with_molecules``), read and their
+ids given their place's prefix, by their words: a figure drawn again with a part changed, or
+laid out for another place, has the same molecules -- its shapes, but for where they are put."""
+MOLECULES_BYTES = 32_000_000
+"""Characters of molecules' shapes kept so, at most."""
+
+
+def _with_molecules(words: str, prefix: str) -> tuple[ET.Element, list[tuple[ET.Element, list]]] | None:
+    """A figure's words (``_prefixed``) read without its molecules' shapes (flexo.drawn_spans),
+    with, for each molecule, the ``<svg>`` that holds it and its shapes -- read and prefixed
+    once, kept (``_MOLECULES``) -- to be put into it once the rest is prefixed: the figure as
+    reading it whole and prefixing it would make it. None where its molecules are not told
+    apart so (the words are read whole)."""
+
+    from flexo.drawn_spans import spans, without
+
+    every = spans(words)
+    found = [span for span in every or [] if span.inside < span.end]
+    if not every or not found:
+        return None
+    root = re.match(r"(?:<\?[^>]*\?>\s*)?<[^>]*>", words)
+    if root is None:
+        return None
+    declared = " ".join(re.findall(r'\sxmlns(?::[\w.-]+)?="[^"]*"', root.group(0)))
+    shapes = []
+    for span in found:
+        held = words[span.inside:span.end]
+        if "xmlns" in held or "<style" in held or "xmlns" in words[span.start:span.inside]:
+            return None
+        key = (held, prefix, declared)
+        with _PREFIXED_LOCK:
+            kept = _MOLECULES.get(key)
+            if kept is not None:
+                _MOLECULES.move_to_end(key)
+        if kept is None:
+            try:
+                made = ET.fromstring(f"<svg {declared}>{held}</svg>")
+            except ET.ParseError:
+                return None
+            kept = list(made)
+            for shape in kept:
+                for item in shape.iter():
+                    _prefix_ids(item, prefix)
+            with _PREFIXED_LOCK:
+                _MOLECULES[key] = kept
+                while len(_MOLECULES) > 1 and sum(len(held) for held, _, _ in _MOLECULES) > MOLECULES_BYTES:
+                    _MOLECULES.popitem(last=False)
+        shapes.append(kept)
+    source = ET.fromstring(without(words, found))
+    holders = [
+        child for item in source.iter() if item.get("data-flexo-drawn") == "mol-sketch"
+        for child in item if local_name(child.tag) == "svg"
+    ]
+    # (Each molecule's <svg> as the words have them, in the order they have them -- those holding
+    # no shapes among them.)
+    if len(holders) != len(every):
+        return None
+    order = {span.start: index for index, span in enumerate(every)}
+    return source, [(holders[order[span.start]], kept) for span, kept in zip(found, shapes, strict=True)]
 
 
 def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> float:

@@ -38,6 +38,7 @@ import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
+import { owing } from "/static/kinds/deck/afterpaint.js";
 import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
@@ -45,6 +46,9 @@ import { showStates } from "/static/kinds/deck/showing.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 import { stageAhead } from "/static/kinds/deck/stageahead.js";
+import { intoView } from "/static/kinds/deck/railview.js";
+import { lineBox } from "/static/kinds/deck/drawnlines.js";
+import { afterFrame } from "/static/kinds/deck/panelsoon.js";
 
 const BLOCKS = {
   text: { icon: "text", label: "Text", hint: "A paragraph of text" },
@@ -597,6 +601,16 @@ export function mount(studio, container) {
     tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
+  // What a click on the slide chooses is painted chosen -- its frame, a figure's part's frame,
+  // its + and the figure's bar -- and the inspector's panel for it drawn just after, once that
+  // is on the screen (afterpaint.js): built and laid out in the click's own task, the panel
+  // (a structure's is hundreds of elements) kept the choice from the screen for as long. A
+  // key pressed meanwhile finds it drawn; anything that draws it meanwhile, draws it once.
+  // (So is a part's + where placing it measures the drawing round it: placeFigure.)
+  let choosing = false;
+  const plusSoon = owing(() => placeFigure());
+  const panelSoon = owing(() => renderInspector());
+  document.addEventListener("keydown", () => { plusSoon.now(); panelSoon.now(); }, true);
   let mathNotes = null;
   let pending = false;
   let inline = null;
@@ -819,6 +833,8 @@ export function mount(studio, container) {
 
   // -- the frame --
   const railList = h("div.rail-list.scroll-thin", { tabindex: 0 });
+  // (The panel of a slide gone to by ↓ or ↑ or its thumbnail, drawn a frame after it: panelsoon.js.)
+  const panelAfterSlide = afterFrame(() => renderInspector());
   const rail = h("aside.panel.rail", {}, railList);
   // Notes said in toasts stand over its foot, above the speaker notes (ui.js placeToasts).
   const stage = h("div.stage.deck-stage.scroll-thin", { "data-toast-area": true });
@@ -1525,7 +1541,7 @@ export function mount(studio, container) {
       select(shown);
       state.picked = [...now];
       runFrom = shown;
-    } else { select(index); return; }
+    } else { select(index, null, { panel: "after" }); return; }
     railList.focus({ preventScroll: true });
     renderRail();
   }
@@ -1638,7 +1654,12 @@ export function mount(studio, container) {
     ]);
   }
 
-  function select(index, focus = null) {
+  function select(index, focus = null, { panel = "now" } = {}) {
+    // Its thumbnail whole in view, ring and all, before anything is drawn anew: measured and
+    // scrolled to as the window is laid out already, it costs no layout of its own (railview.js).
+    const to = Math.max(0, Math.min(index, slides().length - 1)), count = railList.childElementCount;
+    const early = railList.querySelector(`:scope > .thumb[data-index="${to}"]`);
+    if (early) intoView(railList, early);
     closeInline();
     leaveFigure(false);
     state.slide = Math.max(0, Math.min(index, slides().length - 1));
@@ -1650,24 +1671,29 @@ export function mount(studio, container) {
     freeShapes.disarm();
     renderRail();
     renderStage();
-    renderInspector();
+    // (Gone to by ↓ or ↑ or its thumbnail, "after" the frame that shows it; "held", once the keys
+    // stop a moment.)
+    if (panel === "now") renderInspector();
+    else panelAfterSlide.soon(panel === "held" ? 150 : 0);
     renderBar();
-    // Its thumbnail whole in view, ring and all (a new slide's, at the foot of the list), as the
-    // next frame is drawn: once the list is laid out, as a new thumbnail's size is known only
-    // then. (Measured here too, the window was laid out twice for each slide gone to.)
-    requestAnimationFrame(thumbInView);
+    // A new slide's thumbnail (at the foot of the list), or the list made anew about it, is
+    // brought into view as the next frame is drawn: once the list is laid out, as a new
+    // thumbnail's size is known only then. (Measured here, the window was laid out twice for
+    // each slide gone to.)
+    thumbLater = !early?.isConnected || railList.childElementCount !== count;
+    if (thumbLater) requestAnimationFrame(thumbInView);
     if (pages[state.slide]?.stale) studio.requestDraw(0);
     reportFocus();
     readSlideAhead();
   }
 
+  // (Not when the slide gone to since was brought into view as it was chosen.)
+  let thumbLater = false;
   function thumbInView() {
+    if (!thumbLater) return;
+    thumbLater = false;
     const thumb = railList.querySelector(".thumb.on");
-    if (!thumb) return;
-    // (WebKit's and Chromium's "nearest" take a thumbnail its ring short of the edge as shown.)
-    const box = thumb.getBoundingClientRect(), port = railList.getBoundingClientRect();
-    if (box.bottom + 8 > port.bottom) thumb.scrollIntoView({ block: "end" });
-    else if (box.top - 8 < port.top) thumb.scrollIntoView({ block: "start" });
+    if (thumb) intoView(railList, thumb);
   }
 
   // ↓ or ↑ held, repeating faster than a large slide is drawn: the slide each press goes to is
@@ -1676,21 +1702,26 @@ export function mount(studio, container) {
   // stop. (Anything else pressed, or a click, finds that slide chosen.)
   let goingTo = null;
   const slideGoing = () => goingTo ?? state.slide;
+  // (Pressed again within a moment of the last, as a key held is, the panel waits as it does
+  // for a key held: drawn once the keys stop, not between every two.)
+  let wentAt = -Infinity;
   function goTo(index, event) {
-    if (!event?.repeat) { settleGoing(); select(index); return; }
-    if (goingTo === null) requestAnimationFrame(settleGoing);
+    const quick = performance.now() - wentAt < 100;
+    wentAt = performance.now();
+    if (!event?.repeat) { settleGoing(); select(index, null, { panel: quick ? "held" : "after" }); return; }
+    if (goingTo === null) requestAnimationFrame(() => settleGoing(true));
     goingTo = index;
   }
-  function settleGoing() {
+  function settleGoing(held = false) {
     if (goingTo === null) return;
     const to = goingTo;
     goingTo = null;
-    select(to);
+    select(to, null, held ? { panel: "held" } : {});
     // (Gone to as a frame is drawn: its thumbnail in view in that frame, not the next.)
     thumbInView();
   }
-  document.addEventListener("keydown", (event) => { if (goingTo !== null && !event.repeat) settleGoing(); }, true);
-  document.addEventListener("pointerdown", () => settleGoing(), true);
+  document.addEventListener("keydown", (event) => { if (event.repeat) return; panelAfterSlide.flush(); if (goingTo !== null) settleGoing(); }, true);
+  document.addEventListener("pointerdown", () => { panelAfterSlide.flush(); settleGoing(); }, true);
 
   // Where this person is, as last told the others (see reportFocus).
   let reported = "";
@@ -2054,7 +2085,7 @@ export function mount(studio, container) {
       pageNode.append(hover, chosen, target);
       pageNode.addEventListener("mousemove", onHover);
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; freeShapes.leave(); });
-      pageNode.addEventListener("click", onPick);
+      pageNode.addEventListener("click", (event) => { choosing = true; try { onPick(event); } finally { choosing = false; } });
       pageNode.addEventListener("dblclick", onEdit);
       // A link's words are chosen and edited as any words: a click never goes to its page.
       pageNode.addEventListener("click", (event) => { if (event.target.closest?.("a")) event.preventDefault(); });
@@ -2615,7 +2646,7 @@ export function mount(studio, container) {
       inkPen.font = `${style.fontStyle} ${style.fontWeight} ${parseFloat(style.fontSize) * (text.getScreenCTM()?.a || 1)}px ${style.fontFamily}`;
       const lines = [...text.children].filter((span) => span.matches("tspan") && span.textContent.trim());
       for (const line of lines.length ? lines : [text]) {
-        const box = line.getBoundingClientRect(), metrics = inkPen.measureText(line.textContent);
+        const box = line === text ? line.getBoundingClientRect() : lineBox(line), metrics = inkPen.measureText(line.textContent);
         const face = metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent;
         if (!box.width || !face) continue;
         const baseline = box.top + box.height * (metrics.fontBoundingBoxAscent / face);
@@ -4711,7 +4742,9 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt(), region)[index];
     if (block && kindOf(block) === "figure") enterFigure(region, index);
     else leaveFigure(false);
-    renderInspector();
+    // (Chosen by a click: its frame painted first, the panel once it is seen -- panelSoon.)
+    if (choosing) panelSoon.soon();
+    else renderInspector();
     placeChosen();
     reportFocus();
     if (then && figureBlock()) whenFigure(then);
@@ -4884,7 +4917,7 @@ export function mount(studio, container) {
       // drag's first move is not kept waiting on either.)
       // (Its marks first, measured from the drawing as it stands, then its panel: the page laid
       // out once for the two, not again for the marks after the panel is drawn.)
-      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } placeFigure(); renderInspector(); },
+      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } placeFigure({ quick: choosing }); if (choosing) panelSoon.soon(); else renderInspector(); },
       // Landed, the figure's frame is drawn round it as it now is (grown by a part, say).
       settled: () => { placeChosen(); placeFigure(); },
       // A part let go: the drawing held back while it was carried is put in, unless the one
@@ -5247,12 +5280,15 @@ export function mount(studio, container) {
     }, { merge, hold });
   }
 
-  function placeFigure() {
+  function placeFigure({ quick = false } = {}) {
+    plusSoon.drop();
     holding();
     const block = figureBlock();
     if (!block || !figure.parts.model || !pageNode) { clear(figureMarks); figureBar.hidden = true; return; }
     // (The figure's box read with its parts', before any is marked: the page laid out once.)
-    const views = figure.parts.markViews();
+    // (A click's choice marked at once, its + a moment later should placing it take a while.)
+    const views = figure.parts.markViews({ quick });
+    if (views.later) plusSoon.soon();
     const region = regionsOf(slideAt()).find((r) => r.key === figure.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${figure.index}`);
     clear(figureMarks, views);
@@ -5667,8 +5703,11 @@ export function mount(studio, container) {
   const fieldHint = (key, slide) => ({
     title: layoutOf(slide) === "agenda" ? "Outline" : "Title", subtitle: "Subtitle", words: "Text", by: "Who said it", author: "Your name", footer: FOOTER_HINT,
     // An example, not a default: an empty date draws nothing.
-    date: `e.g. ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`,
+    date: key === "date" ? `e.g. ${dayFormat().format(new Date())}` : "",
   })[key] || (FOOT.test(key) ? "Footnote" : ROW.test(key) ? "Label" : "");
+  // (Made once, not anew for each slide gone to: making one is the costly part.)
+  let dayFormatter = null;
+  const dayFormat = () => (dayFormatter ||= new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric" }));
   // From a gallery's caption typed in on to the next picture's (`back`: the one before), and
   // past the last (or the first) on round the slide (tabOn).
   function nextPicture(target, back) {
@@ -6934,7 +6973,8 @@ export function mount(studio, container) {
   function textMetrics(element, size) {
     const texts = wordsIn(element);
     if (!texts.length) return null;
-    const first = (texts[0].querySelector("tspan") || texts[0]).getBoundingClientRect();
+    const firstSpan = texts[0].querySelector("tspan");
+    const first = firstSpan ? lineBox(firstSpan) : texts[0].getBoundingClientRect();
     let line = 0, wrapped = false;
     for (const text of texts) {
       const tops = lineTops(text, first.height || size);
@@ -6945,7 +6985,7 @@ export function mount(studio, container) {
   // The tops of a text's lines: its runs' tops, those within half a line of each other one
   // line (code, in its own face, or a bold word sits a hair higher or lower on the same line).
   function lineTops(text, height) {
-    const tops = [...text.querySelectorAll("tspan")].map((span) => span.getBoundingClientRect()).filter((box) => box.width).map((box) => box.top).sort((a, b) => a - b);
+    const tops = [...text.querySelectorAll("tspan")].map(lineBox).filter((box) => box.width).map((box) => box.top).sort((a, b) => a - b);
     return tops.filter((top, k) => !k || top - tops[k - 1] > height / 2);
   }
 
@@ -7870,6 +7910,8 @@ export function mount(studio, container) {
   // Who made the last change from elsewhere: who deleted what was being edited here.
   let lastWho = null;
   function renderInspector() {
+    panelSoon.drop();
+    panelAfterSlide.cancel();
     remember(placeKey, JSON.stringify({ slide: state.slide, tab: tabShown() }));
     pickedShown = pickedKey();
     // A figure is edited while it is the part chosen on the slide shown.
@@ -11373,7 +11415,10 @@ export function mount(studio, container) {
   }
   studio.on("change", ({ quiet, source, who, before, entry, base, incoming, merged, answer }) => {
     answering = Boolean(answer);
-    try { changed({ quiet, source, who, before, entry, base, incoming, merged }); } finally { answering = false; }
+    // (Undone or redone, what it brings back is painted first, the panel for it just after:
+    // panelSoon.)
+    choosing = source === "history";
+    try { changed({ quiet, source, who, before, entry, base, incoming, merged }); } finally { answering = false; choosing = false; }
   });
   function changed({ quiet, source, who, before, entry, base, incoming, merged }) {
     // (A deck edit made: a figure's edits taken back while the studio is away are not made
@@ -11404,7 +11449,7 @@ export function mount(studio, container) {
     if (source === "history" && !inline && studio.state === "offline") standInChanged(was);
     pending = true;
     if (source === "remote" && before) flash(before, who);
-    if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
+    if (!quiet) { renderRail(); if (choosing) panelSoon.soon(); else renderInspector(); renderStage(); renderBar(); }
     // What is chosen moved by the change (moved up with ⌥↑, or by another's change before it,
     // its slide moved): the others are told where it now is, their frame for it with it.
     if (whereNow() !== reported) reportFocus();

@@ -1,9 +1,13 @@
 /* The deck editor: slides on the left, the slide in the middle, what is chosen on the right. */
 
-.deck { position: absolute; inset: 0; display: grid; grid-template-columns: 184px 1fr var(--inspector, 340px); }
-.deck.wide { grid-template-columns: 184px 1fr 468px; }
+/* Its columns and its one row the room there is, never sized to what is in them (minmax(0, 1fr),
+   not 1fr, here and in the rest of the editor's frame): an auto row, or a 1fr track's least
+   size, has WebKit lay out the slide, the list and the panel once more, to measure them, at
+   every slide gone to. */
+.deck { position: absolute; inset: 0; display: grid; grid-template-columns: 184px minmax(0, 1fr) var(--inspector, 340px); grid-template-rows: minmax(0, 1fr); }
+.deck.wide { grid-template-columns: 184px minmax(0, 1fr) 468px; }
 /* Format and Design both off in the toolbar: the slide has the inspector's room. */
-.deck.no-inspector, .deck.wide.no-inspector { grid-template-columns: 184px 1fr 0; }
+.deck.no-inspector, .deck.wide.no-inspector { grid-template-columns: 184px minmax(0, 1fr) 0; }
 .deck.no-inspector > .inspector { display: none; }
 
 /* -- the bar -- */
@@ -12,8 +16,11 @@
 
 /* -- the rail -- */
 .rail { border-right: 1px solid var(--line); overflow: hidden; }
-.rail-list { height: 100%; overflow: auto; padding: 12px 10px 60px 4px; display: grid; gap: 10px; align-content: start; outline: none; }
-.thumb { display: grid; grid-template-columns: 20px 1fr; gap: 4px; align-items: start; cursor: pointer; position: relative; scroll-margin-block: 10px; }
+/* The thumbnails one under another, 10 px apart, as a block's lines are: not a grid's rows, which
+   WebKit sizes anew from every thumbnail in them at each slide gone to. */
+.rail-list { height: 100%; overflow: auto; padding: 12px 10px 60px 4px; display: block; outline: none; }
+.rail-list > .thumb + .thumb { margin-top: 10px; }
+.thumb { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 4px; align-items: start; cursor: pointer; position: relative; scroll-margin-block: 10px; }
 .thumb .num { font-size: 11px; color: var(--ink-3); text-align: right; padding-top: 1px; font-variant-numeric: tabular-nums; font-weight: 560; }
 .thumb .frame { position: relative; aspect-ratio: 16 / 9; border-radius: 5px; overflow: hidden; background: #fff; box-shadow: 0 0 0 1px var(--line-strong); transition: box-shadow 0.12s, transform 0.12s; }
 .thumb:hover .frame { box-shadow: 0 0 0 1px var(--ink-3); }
@@ -69,12 +76,14 @@
 
 /* -- the stage -- */
 /* Its one column is the room it is given: nothing in it (a long note's preview) widens it. */
-.deck-center { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr auto; }
+.deck-center { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
 .deck-stage { position: relative; overflow: auto; display: grid; place-items: center; padding: 28px 40px 32px; }
 .slide-wrap { position: relative; width: 100%; max-width: var(--slide-max, 1400px); }
 /* Zoomed (View › Zoom): the slide at a size of its own, scrolled about when larger than the
    stage -- its start always in reach, centred while it fits. */
 .deck-stage.zoomed { place-items: safe center; }
+/* Fitted (not zoomed), the slide's column is the stage's width, not sized to what is in it. */
+.deck-stage:not(.zoomed) { grid-template-columns: minmax(0, 1fr); }
 .deck-stage.zoomed .slide-wrap { width: var(--slide-width); max-width: none; }
 /* The size shown and the buttons that change it, in the stage's lower corner (its bottom
    set over the notes, showZoom), as a figure file's are: faint until wanted, unless zoomed. */
@@ -565,20 +574,20 @@ div.glyph i.a { background: var(--accent); opacity: 1; }
 .present-hint { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,0.1); color: #ddd; padding: 6px 12px; border-radius: 8px; font-size: 12px; transition: opacity 0.6s; pointer-events: none; }
 
 @media (max-width: 1250px) {
-  .deck { grid-template-columns: 150px 1fr var(--inspector, 300px); }
+  .deck { grid-template-columns: 150px minmax(0, 1fr) var(--inspector, 300px); }
   .stage-hint { display: none; }
 }
 
 /* With Claude's panel open, the slide keeps the room. */
-body.side-open .deck { grid-template-columns: 148px 1fr 300px; }
+body.side-open .deck { grid-template-columns: 148px minmax(0, 1fr) 300px; }
 /* A narrow stage says nothing under the slide. (Told by the stage's width, fitStage: never a
    container query, as WebKit -- the Mac app's -- scrolls a size container back to its top each
    time what is in it is drawn again: every edit, with the slide zoomed in.) */
 .deck-stage.narrow .stage-hint { display: none; }
-@media (max-width: 1500px) { body.side-open .deck { grid-template-columns: 120px 1fr 280px; } }
+@media (max-width: 1500px) { body.side-open .deck { grid-template-columns: 120px minmax(0, 1fr) 280px; } }
 /* Narrower, the panel lies over the inspector (studio.css), as wide as it: the notes and
    the slide end where it starts, nothing of theirs under it. */
-@media (max-width: 1239px) { body.side-open .deck { grid-template-columns: 120px 1fr 300px; } }
+@media (max-width: 1239px) { body.side-open .deck { grid-template-columns: 120px minmax(0, 1fr) 300px; } }
 
 /* -- a figure edited on its slide -- */
 .figure-bar { position: absolute; z-index: 12; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 9px; background: var(--raised); border: 1px solid var(--line-strong); box-shadow: var(--shadow-2); line-height: normal; white-space: nowrap; }

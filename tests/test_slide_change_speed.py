@@ -66,7 +66,7 @@ def test_the_slides_beside_the_one_shown_are_read_once_the_window_is_left_alone(
 def test_a_slide_gone_to_is_laid_out_once_and_put_in_as_read_ahead() -> None:
     editor = (STATIC / "editor.js").read_text("utf-8")
     css = (STATIC / "editor.css").read_text("utf-8")
-    select = editor[editor.index("  function select(index, focus = null) {") :]
+    select = editor[editor.index("  function select(index, focus = null") :]
     select = select[: select.index("\n  }\n")]
     # Its thumbnail brought into view as the frame is drawn, not measured there and then too.
     assert "requestAnimationFrame(thumbInView);" in select and "inView();" not in select
