@@ -1,6 +1,7 @@
-"""Going from slide to slide draws only what changed: run in Node with a stand-in for the page,
-the slide list's thumbnail brought into view (railview.js) -- and the editor's use of it, and
-its frame's grid never sized to what is in it."""
+"""Going from slide to slide draws only what changed, as soon as it can: run in Node with
+stand-ins for the page -- the slide list's thumbnail brought into view (railview.js), the panel
+drawn a frame after a slide gone to by ↓, ↑ or its thumbnail (panelsoon.js) -- and the editor's
+use of them, and its frame's grid never sized to what is in it."""
 
 from __future__ import annotations
 
@@ -68,6 +69,57 @@ def test_the_editor_brings_the_thumbnail_into_view_before_the_slide_is_drawn_ane
     # The empty date's example made with one formatter, not a new one for each slide gone to.
     assert "toLocaleDateString" not in editor
     assert "dayFormatter ||= new Intl.DateTimeFormat(" in editor
+
+
+def test_the_panel_is_drawn_once_after_the_frame_and_at_once_when_flushed() -> None:
+    found = run(
+        "panelsoon.js",
+        """
+      let drawn = 0;
+      const panel = M.afterFrame(() => { drawn += 1; });
+      panel.soon(0);
+      const before = drawn;
+      frame(); pass(0);
+      const after = drawn;
+      // Held: asked again and again, it waits for the keys to stop, and is drawn once.
+      panel.soon(150); frame(); pass(30); panel.soon(150); frame(); pass(30); panel.soon(150); frame(); pass(100);
+      const waiting = [drawn, panel.pending()];
+      pass(60);
+      const held = drawn;
+      // Something else pressed meanwhile: drawn at once, and not again.
+      panel.soon(0); panel.flush(); frame(); pass(0);
+      const flushed = drawn;
+      // Drawn by other means meanwhile: not again.
+      panel.soon(0); panel.cancel(); frame(); pass(0);
+      return { before, after, waiting, held, flushed, cancelled: drawn, idle: panel.pending() };
+    """,
+    )
+    assert found == {
+        "before": 0,
+        "after": 1,
+        "waiting": [1, True],
+        "held": 2,
+        "flushed": 3,
+        "cancelled": 3,
+        "idle": False,
+    }
+
+
+def test_a_slide_gone_to_by_an_arrow_key_has_its_panel_drawn_after_it() -> None:
+    editor = (STATIC / "editor.js").read_text("utf-8")
+    select = editor[editor.index("  function select(index, focus = null") :]
+    select = select[: select.index("\n  }\n")]
+    # ↓ or ↑: the panel a frame after the slide; held (or pressed again at once), once the keys stop.
+    assert 'if (panel === "now") renderInspector();' in select
+    assert 'panelSoon.soon(panel === "held" ? 150 : 0);' in select
+    assert 'select(index, null, { panel: quick ? "held" : "after" });' in editor
+    assert 'select(to, null, held ? { panel: "held" } : {});' in editor
+    # A click on a thumbnail (not ⇧ or ⌘ with it): the panel a frame after the slide too.
+    assert '} else { select(index, null, { panel: "after" }); return; }' in editor
+    # Anything else pressed or clicked finds the panel drawn; drawn by other means, not again.
+    assert "panelSoon.flush();" in editor
+    render = editor[editor.index("  function renderInspector() {") :]
+    assert render.startswith("  function renderInspector() {\n    panelSoon.cancel();")
 
 
 def test_the_deck_editor_s_frame_is_never_sized_to_what_is_in_it() -> None:
