@@ -16,6 +16,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import contextvars
+import copy
 import functools
 import io
 import math
@@ -38,6 +39,7 @@ from flexo.ir.semantic import TextRun
 from flexo.kept_versions import allowed, took
 from flexo.lint import lint_compilation
 from flexo.render_common import displayed_alone, render_runs
+from flexo.sealed import seal
 from flexo.structures import structure_problem
 from flexo.style import Palette, TypographyStyle
 from flexo.svg import SVG_NS, element, inkscape_attr, layer, local_name, number, svg_tag, xml_document
@@ -6845,7 +6847,9 @@ def _place_svg(
             group.append(child)
 
 
-_PREFIXED: OrderedDict[tuple[str, str], tuple[ET.Element, dict[str, str]]] = OrderedDict()
+_PREFIXED: OrderedDict[tuple[str, str], tuple[ET.Element, dict[str, str], list[tuple[tuple[int, ...], ET.Element]]]] = (
+    OrderedDict()
+)
 """Drawings placed on slides (``_place_svg``), read and their ids given their place's prefix:
 a slide drawn again as its words are typed places the same figure -- a protein's surface is
 a megabyte and a half of SVG -- copied from here, not read again."""
@@ -6865,8 +6869,12 @@ def _prefixed(svg: str, identifier: str) -> tuple[ET.Element, dict[str, str]]:
         if found is not None:
             _PREFIXED.move_to_end(key)
     if found is None:
-        source = ET.fromstring(re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1))
+        words = re.sub(r"<!DOCTYPE[^>]*>", "", svg, count=1)
         prefix = f"{identifier}."
+        # (Its molecules' shapes -- most of its words -- read once and kept, apart from the rest,
+        # which is read for each drawing of the figure: _with_molecules.)
+        read = _with_molecules(words, prefix)
+        source = ET.fromstring(words) if read is None else read[0]
         universal: dict[str, str] = {}
         for item in source.iter():
             if local_name(item.tag) == "style" and item.text:
@@ -6876,29 +6884,127 @@ def _prefixed(svg: str, identifier: str) -> tuple[ET.Element, dict[str, str]]:
                         if name.strip() and value.strip():
                             universal[name.strip()] = value.strip()
         for item in source.iter():
-            if item.get("id"):
-                item.set("id", prefix + item.get("id"))  # type: ignore[operator]
-            for name, value in list(item.attrib.items()):
-                if "url(#" in value:
-                    item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
-                if name.endswith("href") and value.startswith("#"):
-                    item.set(name, "#" + prefix + value[1:])
-        found = (source, universal)
+            _prefix_ids(item, prefix)
+        sealed: list[tuple[tuple[int, ...], ET.Element]] = []
+        if read is not None:
+            # (Each molecule's shapes sealed where they are put, as copies of those kept: written
+            # out once however often the slide is, whatever else of the figure changes --
+            # flexo.sealed -- as are their copies placed on it, each by where it is in the
+            # figure, ``sealed``.)
+            places = _places(source, {id(holder) for holder, _ in read[1]})
+            for holder, shapes in read[1]:
+                for shape in shapes:
+                    sealed.append(((*places[id(holder)], len(holder)), shape))
+                    made = copy.deepcopy(shape)
+                    seal(made, shape)
+                    holder.append(made)
+        found = (source, universal, sealed)
         with _PREFIXED_LOCK:
             _PREFIXED[key] = found
             while len(_PREFIXED) > 1 and sum(len(svg) for _, svg in _PREFIXED) > PREFIXED_BYTES:
                 _PREFIXED.popitem(last=False)
-    return _copied(found[0]), dict(found[1])
+    made = _copied(found[0])
+    for place, kept in found[2]:
+        copy_of = made
+        for index in place:
+            copy_of = copy_of[index]
+        seal(copy_of, kept)
+    return made, dict(found[1])
+
+
+def _places(root: ET.Element, wanted: set[int]) -> dict[int, tuple[int, ...]]:
+    """Where each of the elements ``wanted`` (by identity) is in ``root``: the index of each
+    child on the way down to it."""
+
+    found: dict[int, tuple[int, ...]] = {}
+    stack: list[tuple[ET.Element, tuple[int, ...]]] = [(root, ())]
+    while stack and len(found) < len(wanted):
+        item, place = stack.pop()
+        if id(item) in wanted:
+            found[id(item)] = place
+        stack.extend((child, (*place, index)) for index, child in enumerate(item))
+    return found
 
 
 def _copied(item: ET.Element) -> ET.Element:
-    """A copy of a tree of elements of its own (as ``copy.deepcopy`` makes one, without its
-    asking the copy module about every attribute's words, which are strings and never change)."""
+    """A copy of a tree of elements of its own (``copy.deepcopy``: made by ElementTree itself,
+    nearly three times sooner than one made element by element here)."""
 
-    made = item.makeelement(item.tag, item.attrib.copy())
-    made.text, made.tail = item.text, item.tail
-    made.extend(_copied(child) for child in item)
-    return made
+    return copy.deepcopy(item)
+
+
+def _prefix_ids(item: ET.Element, prefix: str) -> None:
+    """``item``'s id given ``prefix``, and what it points at by id (``url(#...)``, ``#...``)."""
+
+    if item.get("id"):
+        item.set("id", prefix + item.get("id"))  # type: ignore[operator]
+    for name, value in list(item.attrib.items()):
+        if "url(#" in value:
+            item.set(name, re.sub(r"url\(#([^)]+)\)", lambda m: f"url(#{prefix}{m.group(1)})", value))
+        if name.endswith("href") and value.startswith("#"):
+            item.set(name, "#" + prefix + value[1:])
+
+
+_MOLECULES: OrderedDict[tuple[str, str, str], list[ET.Element]] = OrderedDict()
+"""Molecules' shapes as drawn in figures placed on slides (``_with_molecules``), read and their
+ids given their place's prefix, by their words: a figure drawn again with a part changed, or
+laid out for another place, has the same molecules -- its shapes, but for where they are put."""
+MOLECULES_BYTES = 32_000_000
+"""Characters of molecules' shapes kept so, at most."""
+
+
+def _with_molecules(words: str, prefix: str) -> tuple[ET.Element, list[tuple[ET.Element, list]]] | None:
+    """A figure's words (``_prefixed``) read without its molecules' shapes (flexo.drawn_spans),
+    with, for each molecule, the ``<svg>`` that holds it and its shapes -- read and prefixed
+    once, kept (``_MOLECULES``) -- to be put into it once the rest is prefixed: the figure as
+    reading it whole and prefixing it would make it. None where its molecules are not told
+    apart so (the words are read whole)."""
+
+    from flexo.drawn_spans import spans, without
+
+    every = spans(words)
+    found = [span for span in every or [] if span.inside < span.end]
+    if not every or not found:
+        return None
+    root = re.match(r"(?:<\?[^>]*\?>\s*)?<[^>]*>", words)
+    if root is None:
+        return None
+    declared = " ".join(re.findall(r'\sxmlns(?::[\w.-]+)?="[^"]*"', root.group(0)))
+    shapes = []
+    for span in found:
+        held = words[span.inside:span.end]
+        if "xmlns" in held or "<style" in held or "xmlns" in words[span.start:span.inside]:
+            return None
+        key = (held, prefix, declared)
+        with _PREFIXED_LOCK:
+            kept = _MOLECULES.get(key)
+            if kept is not None:
+                _MOLECULES.move_to_end(key)
+        if kept is None:
+            try:
+                made = ET.fromstring(f"<svg {declared}>{held}</svg>")
+            except ET.ParseError:
+                return None
+            kept = list(made)
+            for shape in kept:
+                for item in shape.iter():
+                    _prefix_ids(item, prefix)
+            with _PREFIXED_LOCK:
+                _MOLECULES[key] = kept
+                while len(_MOLECULES) > 1 and sum(len(held) for held, _, _ in _MOLECULES) > MOLECULES_BYTES:
+                    _MOLECULES.popitem(last=False)
+        shapes.append(kept)
+    source = ET.fromstring(without(words, found))
+    holders = [
+        child for item in source.iter() if item.get("data-flexo-drawn") == "mol-sketch"
+        for child in item if local_name(child.tag) == "svg"
+    ]
+    # (Each molecule's <svg> as the words have them, in the order they have them -- those holding
+    # no shapes among them.)
+    if len(holders) != len(every):
+        return None
+    order = {span.start: index for index, span in enumerate(every)}
+    return source, [(holders[order[span.start]], kept) for span, kept in zip(found, shapes, strict=True)]
 
 
 def _missing(canvas: _Canvas, identifier: str, block: _Missing, box: Box) -> float:
