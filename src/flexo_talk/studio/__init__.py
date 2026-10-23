@@ -216,6 +216,9 @@ class DeckKind:
         """The pages (their ``client``) drawn for, the latest last."""
         self._exports: OrderedDict[str, Any] = OrderedDict()
         """Slides as the last exports drew them (``_exported``), by what each was drawn from."""
+        self._focused: str | None = None
+        """The slide the last drawing had in focus: its figures are laid out ahead of words
+        typed over them (``flexo_talk.warming``)."""
 
     def claims(self, document: object) -> bool:
         return is_deck_document(document)
@@ -654,6 +657,11 @@ class DeckKind:
                 self._drawing -= 1
             compose.WRITTEN_LATER.reset(later)
             _LOOK.reset(look)
+            if self._focused is not None and "focus" in (hints or {}):
+                # (Its figures laid out ahead of words typed over them, once it is quiet.)
+                from flexo_talk import warming
+
+                warming.soon(self, self._focused)
 
     def _draw(self, document: dict[str, Any], base: Path, hints: dict[str, Any] | None) -> Drawing:
         from flexo.draft import give_up_if_newer
@@ -698,6 +706,7 @@ class DeckKind:
             key = _slide_keys(document, base, watched, self._files_of)
             keys = [key(index) for index in range(len(slides))]
         focus = int((hints or {}).get("focus") or 0)
+        self._focused = deck.slides[focus].id if 0 <= focus < len(deck.slides) else None
         # While the deck is changed its figures keep their layouts (compose.EDITING); once
         # the changes stop the page asks to settle, and the slides that kept one are
         # drawn again with the best.

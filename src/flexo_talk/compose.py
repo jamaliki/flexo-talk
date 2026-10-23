@@ -4931,6 +4931,50 @@ def _fit_in_box(*args, draft: bool = True, **options) -> object:
         return flexo.fit_in_box(*args, **options)
 
 
+_WISHES: OrderedDict[tuple[str, tuple], tuple[contextvars.Context, tuple, dict]] = OrderedDict()
+"""Figures found laid out as they are written while their slides are changed, by slide: each to
+be laid out ahead (``flexo_talk.warming``), in the drawing's own context, as the next drawing
+that gives it another height of room would lay it out."""
+WISHES = 256
+_WISHES_LOCK = threading.Lock()
+
+
+def _wish(slide: str, where: tuple, laid: dict, args: tuple, options: dict) -> None:
+    if laid.get("layout") != "as written":
+        return
+    with _WISHES_LOCK:
+        _WISHES[(slide, where)] = (contextvars.copy_context(), args, options)
+        _WISHES.move_to_end((slide, where))
+        while len(_WISHES) > WISHES:
+            _WISHES.popitem(last=False)
+
+
+def wishes(slide: str) -> list[tuple[tuple, tuple[contextvars.Context, tuple, dict]]]:
+    """The figures of ``slide`` to be laid out ahead (``_wish``), each by its key."""
+
+    with _WISHES_LOCK:
+        return [(key, wish) for key, wish in _WISHES.items() if key[0] == slide]
+
+
+def wished(key: tuple, wish: tuple) -> None:
+    """``wish`` laid out ahead: not wished for again, unless wished for anew since."""
+
+    with _WISHES_LOCK:
+        if _WISHES.get(key) is wish:
+            del _WISHES[key]
+
+
+def lay_out_ahead(args: tuple, options: dict) -> None:
+    """A figure laid out (``_fit_in_box``) ahead of the drawing that will ask for it -- within
+    the drawing's context it was wished in -- to be found compiled then (``_COMPILED``): what
+    its drawing remembers for its drafts remembered only then (``flexo.draft.ahead``)."""
+
+    from flexo.draft import ahead
+
+    with ahead():
+        _fit_in_box(*args, **options)
+
+
 _COMPILED = flexo.boxfit.Kept()
 """What laying out a slide's figures compiled and measured (``flexo.boxfit.kept``): a figure
 laid out again for another height of box -- a line of words added over it as they are typed --
@@ -5139,6 +5183,13 @@ def _prepared(canvas: _Canvas, block: _Figure, box: Box, largest: float, layout:
         _EARLIER_SEEN.add(where)
     if laid is not None and block.frame and "parts" not in laid:
         laid = None  # (kept before frames asked where its parts are)
+    if laid is not None and not earlier and not plotted and layout is None and EDITING.get():
+        # Found laid out, as written, while it is changed: laid out ahead, once the studio is
+        # quiet, for the room words typed over it will leave it (flexo_talk.warming).
+        _wish(canvas.slide.id, where, laid, (spec, box.width, box.height), {
+            "words": min(deck.style.figure_size, largest), "largest": largest, "turn": free, "fold": fold,
+            "keep": "as written", "whole": True,
+        })
     if laid is None:
         # Drawn for an editor while it is changed, a figure keeps the layout it had, in
         # one compile; the best of every layout is found once the changes stop.
