@@ -38,6 +38,7 @@ import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
+import { owing } from "/static/kinds/deck/afterpaint.js";
 import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
@@ -597,6 +598,16 @@ export function mount(studio, container) {
     tab: "slide", notes: remembered("notes", "0") === "1" };
   let pages = [];
   let messages = [];
+  // What a click on the slide chooses is painted chosen -- its frame, a figure's part's frame,
+  // its + and the figure's bar -- and the inspector's panel for it drawn just after, once that
+  // is on the screen (afterpaint.js): built and laid out in the click's own task, the panel
+  // (a structure's is hundreds of elements) kept the choice from the screen for as long. A
+  // key pressed meanwhile finds it drawn; anything that draws it meanwhile, draws it once.
+  // (So is a part's + where placing it measures the drawing round it: placeFigure.)
+  let choosing = false;
+  const plusSoon = owing(() => placeFigure());
+  const panelSoon = owing(() => renderInspector());
+  document.addEventListener("keydown", () => { plusSoon.now(); panelSoon.now(); }, true);
   let mathNotes = null;
   let pending = false;
   let inline = null;
@@ -2054,7 +2065,7 @@ export function mount(studio, container) {
       pageNode.append(hover, chosen, target);
       pageNode.addEventListener("mousemove", onHover);
       pageNode.addEventListener("mouseleave", () => { hover.hidden = true; freeShapes.leave(); });
-      pageNode.addEventListener("click", onPick);
+      pageNode.addEventListener("click", (event) => { choosing = true; try { onPick(event); } finally { choosing = false; } });
       pageNode.addEventListener("dblclick", onEdit);
       // A link's words are chosen and edited as any words: a click never goes to its page.
       pageNode.addEventListener("click", (event) => { if (event.target.closest?.("a")) event.preventDefault(); });
@@ -4711,7 +4722,9 @@ export function mount(studio, container) {
     const block = blocksAt(slideAt(), region)[index];
     if (block && kindOf(block) === "figure") enterFigure(region, index);
     else leaveFigure(false);
-    renderInspector();
+    // (Chosen by a click: its frame painted first, the panel once it is seen -- panelSoon.)
+    if (choosing) panelSoon.soon();
+    else renderInspector();
     placeChosen();
     reportFocus();
     if (then && figureBlock()) whenFigure(then);
@@ -4884,7 +4897,7 @@ export function mount(studio, container) {
       // drag's first move is not kept waiting on either.)
       // (Its marks first, measured from the drawing as it stands, then its panel: the page laid
       // out once for the two, not again for the marks after the panel is drawn.)
-      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } placeFigure(); renderInspector(); },
+      changed: () => { hover.hidden = true; if (own.parts?.dragging) { own.carried = true; return; } placeFigure({ quick: choosing }); if (choosing) panelSoon.soon(); else renderInspector(); },
       // Landed, the figure's frame is drawn round it as it now is (grown by a part, say).
       settled: () => { placeChosen(); placeFigure(); },
       // A part let go: the drawing held back while it was carried is put in, unless the one
@@ -5247,12 +5260,15 @@ export function mount(studio, container) {
     }, { merge, hold });
   }
 
-  function placeFigure() {
+  function placeFigure({ quick = false } = {}) {
+    plusSoon.drop();
     holding();
     const block = figureBlock();
     if (!block || !figure.parts.model || !pageNode) { clear(figureMarks); figureBar.hidden = true; return; }
     // (The figure's box read with its parts', before any is marked: the page laid out once.)
-    const views = figure.parts.markViews();
+    // (A click's choice marked at once, its + a moment later should placing it take a while.)
+    const views = figure.parts.markViews({ quick });
+    if (views.later) plusSoon.soon();
     const region = regionsOf(slideAt()).find((r) => r.key === figure.region);
     const box = region && boxOf(`slide${state.slide + 1}.${region.svg}.${figure.index}`);
     clear(figureMarks, views);
@@ -7870,6 +7886,7 @@ export function mount(studio, container) {
   // Who made the last change from elsewhere: who deleted what was being edited here.
   let lastWho = null;
   function renderInspector() {
+    panelSoon.drop();
     remember(placeKey, JSON.stringify({ slide: state.slide, tab: tabShown() }));
     pickedShown = pickedKey();
     // A figure is edited while it is the part chosen on the slide shown.
@@ -11373,7 +11390,10 @@ export function mount(studio, container) {
   }
   studio.on("change", ({ quiet, source, who, before, entry, base, incoming, merged, answer }) => {
     answering = Boolean(answer);
-    try { changed({ quiet, source, who, before, entry, base, incoming, merged }); } finally { answering = false; }
+    // (Undone or redone, what it brings back is painted first, the panel for it just after:
+    // panelSoon.)
+    choosing = source === "history";
+    try { changed({ quiet, source, who, before, entry, base, incoming, merged }); } finally { answering = false; choosing = false; }
   });
   function changed({ quiet, source, who, before, entry, base, incoming, merged }) {
     // (A deck edit made: a figure's edits taken back while the studio is away are not made
@@ -11404,7 +11424,7 @@ export function mount(studio, container) {
     if (source === "history" && !inline && studio.state === "offline") standInChanged(was);
     pending = true;
     if (source === "remote" && before) flash(before, who);
-    if (!quiet) { renderRail(); renderInspector(); renderStage(); renderBar(); }
+    if (!quiet) { renderRail(); if (choosing) panelSoon.soon(); else renderInspector(); renderStage(); renderBar(); }
     // What is chosen moved by the change (moved up with ⌥↑, or by another's change before it,
     // its slide moved): the others are told where it now is, their frame for it with it.
     if (whereNow() !== reported) reportFocus();
