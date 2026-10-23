@@ -118,6 +118,7 @@ def test_a_figure_drawn_again_takes_its_layout_from_memory_not_its_file(tmp_path
     document = _deck(tmp_path)
     document["deck"]["id"] = "remembered"  # (a figure no drawing in this program has seen)
     _drawn(kind, document, tmp_path, focus=4)
+    compose.written()  # (written by a thread of its own as the studio draws)
     fits = Path(os.environ["FLEXO_TALK_CACHE"])
     assert list(fits.rglob("*.json"))  # (laid out, and kept there)
     read: list[Path] = []
