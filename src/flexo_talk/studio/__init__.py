@@ -2815,7 +2815,13 @@ def _tones(deck) -> dict[str, Any]:
         neutral = paints(fill="block-fill", stroke="block-stroke", motif="block-motif", ink="ink")
     except (KeyError, ValueError):
         neutral = None
-    return {"colours": colours, "used": {}, **({"neutral": neutral} if neutral else {})}
+    # And a frame's, of no colour: the container's fill and outline (flexo.frames).
+    try:
+        container = paints(fill="container-fill", stroke="container-stroke")
+    except (KeyError, ValueError):
+        container = None
+    return {"colours": colours, "used": {}, **({"neutral": neutral} if neutral else {}),
+            **({"container": container} if container else {})}
 
 
 def _palette_order(deck, *, own: bool = False) -> list[str]:

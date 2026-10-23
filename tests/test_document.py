@@ -931,6 +931,8 @@ def test_one_theme_file_is_put_to_use_in_a_deck_and_a_figure_at_once(
     # is painted with them on the slide at once.
     assert all({"fill", "stroke", "ink", "motif"} <= set(colour) for colour in drawn.info["tones"]["colours"])
     assert {"fill", "stroke", "ink", "motif"} <= set(drawn.info["tones"]["neutral"])
+    # And a frame's of no colour, the container's fill and outline.
+    assert set(drawn.info["tones"]["container"]) == {"fill", "stroke"}
 
 
 def test_a_deck_s_python_is_kept_to_itself(tmp_path: Path) -> None:
