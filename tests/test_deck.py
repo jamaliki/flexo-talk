@@ -678,7 +678,8 @@ def test_a_code_listing_is_set_in_monospace(tmp_path: Path) -> None:
                 return x + 1
         """)
     svg = deck.build(tmp_path, formats=("svg",)).svgs[0].read_text()
-    assert "def f(x):" in svg and 'xml:space="preserve"' in svg
+    # (Its words in runs, each kind of word in its colour: flexo_talk.codecolours.)
+    assert "def f(x):" in re.sub(r"<[^>]+>", "", svg) and 'xml:space="preserve"' in svg
     assert 'data-flexo-fill="muted-ink"' in svg
 
 
@@ -2077,3 +2078,4 @@ def test_an_empty_figure_says_so_while_edited_and_is_nothing_exported(tmp_path: 
     assert "slide1.body.1" not in exported and "slide1.body.0" in exported
     # (The deck itself is as it was: the figure still has no shapes.)
     assert deck.slides[0].regions["body"].blocks[1].figure.nodes == ()
+

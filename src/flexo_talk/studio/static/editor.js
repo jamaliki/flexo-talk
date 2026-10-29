@@ -13,6 +13,7 @@ import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcr
 import { canRow, rowed, rowCount, labelsOf, setRows, setLabel, keepRows } from "/static/kinds/deck/rows.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
+import { languageField } from "/static/kinds/deck/codelanguage.js";
 import { follows, merge3 } from "/static/studio/merge.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import { shapeEditor } from "/static/studio/shapes.js";
@@ -8795,7 +8796,7 @@ export function mount(studio, container) {
         code.setAttribute("wrap", "off");
         // In a box with room at its right: a textarea's own padding is not kept at the end
         // of a line scrolled to, which would run into its edge.
-        return [h("div.markup.code-box", {}, code), size()];
+        return [h("div.markup.code-box", {}, code), languageField({ ui, catalog, value: block.language, key: key("language"), onChange: set("language") }), size()];
       }
       case "stats": return statsForm(block, at, edit, toneSwatches, size);
       case "table": return tableForm(block, at, edit, size);

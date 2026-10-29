@@ -31,6 +31,7 @@ from flexo.studio import Drawing, Message, Page
 from flexo.studio.plain import explain
 
 from flexo_talk import worker
+from flexo_talk.codecolours import LANGUAGES as CODE_LANGUAGES
 from flexo_talk.deck import (
     FOOTER_LOGOS,
     LAYOUTS,
@@ -621,6 +622,8 @@ class DeckKind:
                         for name in LAYOUTS],
             "slide_keys": {layout: [*COMMON_KEYS, *keys] for layout, keys in SLIDE_KEYS.items()},
             "blocks": {kind: list(options) for kind, options in BLOCKS.items()},
+            # The languages a listing's words are coloured as (flexo_talk.codecolours).
+            "languages": [{"value": name, "label": label} for name, label in CODE_LANGUAGES.items()],
             # A deck's logos: how tall they stand on a title slide, unless it says (and the
             # least and most), how tall in a footer as a share of that, and the files they may be.
             "logos": {"height": LOGO_HEIGHT, "heights": list(LOGO_HEIGHTS), "footer": FOOTER_LOGOS,

@@ -363,6 +363,20 @@ def _mask(value: object) -> str | dict | None:
         raise SettingError(error.key, error.message) from None
 
 
+def _language(value: object) -> str | None:
+    """The language a listing is coloured as: one Pygments reads (``python``, ``rust``), or
+    ``text`` for none; None, the one it looks like."""
+
+    if value is None:
+        return None
+    from flexo_talk.codecolours import LANGUAGES, known
+
+    if not isinstance(value, str) or not value.strip() or not known(value):
+        raise SettingError("language", f"language must name a programming language ({', '.join(LANGUAGES)}), "
+                                       f"not {value!r}.")
+    return value.strip().lower()
+
+
 def _flag(value: object, what: str) -> bool:
     if not isinstance(value, bool):
         raise SettingError(what, f"{what} must be true or false, not {value!r}.")
@@ -651,6 +665,8 @@ class _Code:
     size: float | None = None
     width: float | None = None
     """Its panel's width (points), as its place allows; ``None`` as wide as its lines."""
+    language: str | None = None
+    """The language its words are coloured as (flexo_talk.codecolours); ``None`` the one they look like."""
 
 
 @dataclass(slots=True)
@@ -1663,18 +1679,24 @@ class Region:
         )
         return self
 
-    def code(self, source: str, *, size: float | None = None, width: float | None = None) -> Region:
+    def code(
+        self, source: str, *, size: float | None = None, width: float | None = None, language: str | None = None
+    ) -> Region:
         """A code listing in the monospace family, on a tinted panel; lines are kept as
-        written (tabs become four spaces) and whole-line comments are set muted. ``width``
-        (points) is its panel's, as its place allows: lines longer than it are set smaller,
-        then wrapped, as in a place too narrow for them."""
+        written (tabs become four spaces), each word coloured by its kind in the theme's
+        colours -- comments muted, keywords in the accent -- as the ``language`` it is in
+        (``python``, ``rust``, ``bash``..., or ``text`` for none), else as the one it looks
+        like (flexo_talk.codecolours). ``width`` (points) is its panel's, as its place
+        allows: lines longer than it are set smaller, then wrapped, as in a place too narrow
+        for them."""
 
         import textwrap
 
         source, size, width = _words(source, "code"), _size(size), _width(width)
+        language = _language(language)
         text = textwrap.dedent(source.expandtabs(4)).strip("\n")
-        self.blocks.append(_Code(text.splitlines() or [""], size, width))
-        self._record("code", text, size=size, width=width)
+        self.blocks.append(_Code(text.splitlines() or [""], size, width, language))
+        self._record("code", text, size=size, width=width, language=language)
         return self
 
     def plot(self, figure: object, *, aspect: float | None = None, width: float | None = None) -> Region:
@@ -1945,8 +1967,10 @@ class Slide:
         next(iter(self.regions.values())).gallery(items, **options)  # type: ignore[arg-type]
         return self
 
-    def code(self, source: str, *, size: float | None = None, width: float | None = None) -> Slide:
-        next(iter(self.regions.values())).code(source, size=size, width=width)
+    def code(
+        self, source: str, *, size: float | None = None, width: float | None = None, language: str | None = None
+    ) -> Slide:
+        next(iter(self.regions.values())).code(source, size=size, width=width, language=language)
         return self
 
     def table(self, rows: Sequence[Sequence[object]], **options: object) -> Slide:

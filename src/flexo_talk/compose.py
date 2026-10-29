@@ -48,6 +48,7 @@ from flexo.text import TextMeasurer
 from flexo.themes import figure_palette, figure_style
 from flexo.units import MILLIMETRES_PER_INCH, POINTS_PER_INCH
 
+from flexo_talk.codecolours import coloured as coloured_code
 from flexo_talk.deck import (
     FOOTER_LOGOS,
     PLACED,
@@ -3880,11 +3881,15 @@ def _code(canvas: _Canvas, identifier: str, block: _Code, box: Box, *, draw: boo
     )
     # (Each as the line it is of, for one shown apart: flexo_talk.showing.)
     canvas.code_lines[identifier] = [source for _, _, source in lines]
+    # Its words coloured by their kinds, in the theme's colours (flexo_talk.codecolours).
+    painted = coloured_code(block.lines, block.language, lines, canvas.palette, panel, muted)
     for index, (text, comment, source) in enumerate(lines):
         if not text.strip():
             continue
+        # (A line that is a comment alone is muted as one, as ever.)
+        comment = comment if painted is None else painted[index] is None
         canvas.words(
-            f"{identifier}.{index}", (TextRun(text, code=True),),
+            f"{identifier}.{index}", (painted and painted[index]) or (TextRun(text, code=True),),
             Box(box.x + pad, box.y + pad + line * index + (line - size * 1.2) / 2.0, width, 0.0),
             size=size, role="muted-ink" if comment else "ink", fill=muted if comment else ink,
             parent=group, wrap=False,

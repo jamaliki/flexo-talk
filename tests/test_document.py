@@ -483,7 +483,8 @@ def test_the_theme_editor_leads_with_a_slide_of_every_kind_of_words(tmp_path: Pa
     assert family("Titles, text, code and maths") == "Latin Modern Roman"
     assert family("Text is set in") == "IBM Plex Sans"
     assert family("inline_code()") == "IBM Plex Mono"
-    assert family("def reply(request):") == "IBM Plex Mono"
+    # (A listing's words in runs, by their kinds: flexo_talk.codecolours.)
+    assert family("reply") == "IBM Plex Mono"
     # Maths in line (its Greek in the maths family) and displayed.
     assert family("\U0001d70b") == "Latin Modern Math" and 'id="slide1.body.2' in svg
     # It is one of the sample slides too, and the first thing the theme editor shows.

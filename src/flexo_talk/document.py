@@ -53,7 +53,10 @@ one. ``texts`` changes its texts, each named by its id in the file -- or, with n
 place among the file's texts (``text: 3``): ``[{id: text1, words: "Encoder\nblock", size:
 20, bold: true, italic: false, colour: "#c0392b"}]``, its size in points at the drawing's own
 size. ``colours`` draws a colour in another wherever it is used: ``{"#4a90d9": "#2e7d32"}``.
-The file is never changed: a text it no longer has is passed over.
+The file is never changed: a text it no longer has is passed over. A listing (``code``) has
+its words coloured by their kinds in the theme's colours, read as the ``language`` it names
+(``python``, ``rust``, ``bash``..., ``text`` for none) or else the one it looks like
+(``flexo_talk.codecolours``).
 
 A figure lives in the deck: written in its block, as the studio writes every figure it makes
 (``figure: {figure: {id: pipeline}, nodes: [...], edges: [...], groups: [...]}``) -- or, where one
@@ -263,7 +266,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),
     "gallery": ("columns", "height", "crop", "size", "align", "width"),
-    "code": ("size", "width"),
+    "code": ("size", "width", "language"),
     "quote": ("by", "size", "width"),
     "stats": ("colour", "size", "width"),
     "callout": ("title", "colour", "size", "width"),
