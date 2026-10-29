@@ -66,6 +66,9 @@ from flexo_talk.document import (
     parse_document,
     save_document,
 )
+from flexo_talk.studio.comments import holder as comment_holder
+from flexo_talk.studio.comments import note as comment_note
+from flexo_talk.studio.comments import place as comment_place
 
 LOOK_LABELS = {"classic": "Rule", "keynote": "Centred"}
 """A look's name as the studio shows it, where its id is not that name (the classic look, a
@@ -445,12 +448,24 @@ class DeckKind:
         return None
 
     def check(self, document: Any, base: Path) -> list[str]:
+        from flexo.studio.commenting import problems as comment_problems
+
         errors: list[DeckDocumentError] = []
         try:
             deck_from_document(document, base, errors=errors)
         except DeckDocumentError as error:
             return [str(error)]
-        return [str(error) for error in errors]
+        return [str(error) for error in errors] + comment_problems(document)
+
+    def comment_place(self, document: Any, path: list[Any]) -> dict[str, Any]:
+        """Where a mapping holding comments is, in words and as a place to go (comments)."""
+
+        return comment_place(document, path)
+
+    def comment_holder(self, document: Any, where: dict[str, Any]) -> list[Any]:
+        """The mapping a new comment on ``where`` (its slide, object, part) goes in (comments)."""
+
+        return comment_holder(document, where)
 
     def describe(self, before: Any, after: Any) -> list[dict[str, Any]]:
         """What a change did, slide by slide, for the activity list and for following."""
@@ -486,6 +501,10 @@ class DeckKind:
                 # A placeholder put there and taken away again (a Code left empty) is nothing
                 # done: said neither as added nor as deleted.
                 if _without_placeholders(old[a]) == _without_placeholders(new[b]):
+                    continue
+                # Its comments alone changed: "commented on the figure on slide 3" (comments).
+                if (said := comment_note(old[a], new[b], b)) is not None:
+                    notes.append(said)
                     continue
                 verb, what = _what_changed(old[a], new[b])
                 note = _slide_note(verb, new, b, what)
@@ -2366,6 +2385,8 @@ def _slide_keys(
 
     slides = document.get("slides") or []
     texts = [json.dumps(slide, sort_keys=True, ensure_ascii=False, default=str) for slide in slides]
+    # (A slide is drawn without its comments: one added, answered or resolved draws nothing again.)
+    texts = [_drawn_words(slide, text) for slide, text in zip(slides, texts, strict=True)]
     # (How many sections are shown before each slide, and how many slides: counted once.)
     befores, showns, before, shown = [], [], 0, 0
     for item in slides:
@@ -2422,6 +2443,32 @@ def _slide_keys(
 
     key.texts = texts  # type: ignore[attr-defined]
     return key
+
+
+_DRAWN: OrderedDict[str, str] = OrderedDict()
+"""Slides' words with comments, and the same without them, the last few hundred: each slide's
+taken out once, not at every drawing of the deck (a deck of 80 slides, each commented, took
+three times as long to key without it)."""
+_DRAWN_KEPT = 400
+
+
+def _drawn_words(slide: object, text: str) -> str:
+    """A slide's words (as JSON) as they are drawn: without its comments, or its objects'
+    (``comments.uncommented``) -- looked for only in a slide that has any."""
+
+    if '"comments":' not in text:
+        return text
+    found = _DRAWN.get(text)
+    if found is not None:
+        _DRAWN.move_to_end(text)
+        return found
+    from flexo_talk.studio.comments import uncommented
+
+    found = json.dumps(uncommented(slide), sort_keys=True, ensure_ascii=False, default=str)
+    _DRAWN[text] = found
+    while len(_DRAWN) > _DRAWN_KEPT:
+        _DRAWN.popitem(last=False)
+    return found
 
 
 def _literal(annotation: object) -> object:

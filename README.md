@@ -950,6 +950,36 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   As a show starts or the deck is exported, a quiet word says "2 slides have TODOs".
   Nothing of it is presented or exported, and "todo" or "Todo" is just a word
   (`static/todos.js`, flexo's `todos.js`).
+- **Comments**: a review note left on a slide, on an object on it, or on a part of a
+  figure there -- **Add Comment** (⇧⌘K, Insert › Comment in the Mac app, or the object's,
+  the part's or the slide's menu) on what is chosen. Each is a thread: a small yellow
+  marker beside the corner of what it is about (the slide's own at its top right), how many
+  at the thumbnail's corner, and, clicked, the comments and their replies, by whom and when,
+  a field to reply in (Return sends), **Resolve** and **Delete**. The side panel's
+  **Comments** lists every thread in the deck, open or resolved, to work through. Each
+  comment, reply and resolve is a step of yours to undo. They are written in the deck,
+  where they are about, so they travel and merge with it --
+
+  ```yaml
+  - title: The model
+    comments:
+    - id: c3f9a2b
+      author: Ana Ruiz
+      time: '2026-10-29T14:03:00Z'
+      text: A takeaway in the title, please.
+      replies:
+      - {author: Claude Code, time: '2026-10-29T14:05:00Z', text: Retitled it.}
+      resolved: true
+    body:
+    - figure: {...}
+      comments:
+      - {id: c71d0e4, author: Ana Ruiz, time: '2026-10-29T14:07:00Z', text: What does it take in?, part: encoder}
+  ```
+
+  -- and never drawn: not presented, not in a PDF or a picture. A PowerPoint carries the
+  open ones as its own comments, replies threaded, each beside what it is about. An agent
+  lists, answers and resolves them with its tools (`list_comments`, `reply_to_comment`,
+  `resolve_comment`, `add_comment`), so "work through my comments" is a task to give it.
 - **Others, live**: slides an agent or another person changes flash in their
   colour, and their avatars show which slide they are on.
 - **Present** (⌘↩, or ⌥⌘↩ from the first slide) plays the deck full screen, as

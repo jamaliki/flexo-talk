@@ -34,6 +34,7 @@ from flexo_talk.pptx import (
     slide_pictures,
 )
 from flexo_talk.pptx import editable_maths as editable_maths_of
+from flexo_talk.pptx_comments import add_comments
 from flexo_talk.pptx_insets import inset_views
 from flexo_talk.pptx_shapes import ShapeWriter
 from flexo_talk.showing import HIDDEN, natively
@@ -165,6 +166,10 @@ def build_deck(
     if "pptx" in formats:
         pptx = directory / f"{name}.pptx"
         write_pptx(deck, rendered, pptx, editable_maths=editable_maths)
+        # The open comments on its slides, as PowerPoint's own (pptx_comments): as the deck has
+        # them now -- a slide drawn as an export drew it before may have had others then.
+        fresh = {slide.id: slide for slide in deck.slides}
+        add_comments(pptx, [fresh.get(item.slide.id, item.slide) for item in rendered], rendered, deck.style.width)
     notes = tuple(note for item in rendered for note in item.notes)
     return DeckBuild(pptx, pdf, tuple(svgs), tuple(pngs), tuple(diagnostics), notes)
 
