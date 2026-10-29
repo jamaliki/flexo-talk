@@ -2079,3 +2079,16 @@ def test_an_empty_figure_says_so_while_edited_and_is_nothing_exported(tmp_path: 
     # (The deck itself is as it was: the figure still has no shapes.)
     assert deck.slides[0].regions["body"].blocks[1].figure.nodes == ()
 
+
+def test_a_deck_is_set_in_the_dark_version_of_its_theme(tmp_path: Path) -> None:
+    from flexo.colour import contrast, is_dark
+
+    deck = Deck("turned", theme="swiss-dark")
+    with deck.slide("Results") as slide:
+        slide.bullets("Binding is [cooperative]{accent}", "Two sites")
+    result = deck.build(tmp_path, formats=("pptx", "svg"))
+    page, ink = deck.palette.get("canvas"), deck.palette.get("ink")
+    assert is_dark(page) and contrast(ink, page) >= 7.0
+    assert f'fill="{page}"' in result.svgs[0].read_text()
+    # The slide program's page is the dark one too.
+    assert page.lstrip("#").upper() in _slides(result.pptx)[0]  # type: ignore[arg-type]
