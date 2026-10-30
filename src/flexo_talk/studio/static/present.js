@@ -15,6 +15,7 @@
 // BroadcastChannel, or, in the Mac app, through the app.
 
 import { ownResources } from "/static/studio/drawings.js";
+import { arriving } from "/static/kinds/deck/morph.js";
 
 const NEXT = new Set(["ArrowRight", "ArrowDown", "PageDown", " ", "Enter", "click"]);
 const BACK = new Set(["ArrowLeft", "ArrowUp", "PageUp", "Backspace"]);
@@ -53,7 +54,8 @@ export function present({ pages, slides = () => [], start = 0, done = () => {}, 
     const was = deck?.slides[state.index]?.at;
     drawnFrom = now;
     deck = { seq: (deck?.seq || 0) + 1, note, noteUntil, slides: now[0].map((page, index) => ({ at: index,
-      svg: page?.svg || "", steps: Math.max(1, page?.steps || 1), notes: String(now[1][index]?.notes || "") }))
+      svg: page?.svg || "", steps: Math.max(1, page?.steps || 1), notes: String(now[1][index]?.notes || ""),
+      transition: now[1][index]?.transition ?? null }))
       .filter((slide) => now[1][slide.at]?.skip !== true) };
     // A slide added, skipped or taken away before the one shown: it is shown still.
     if (was !== undefined) state.index = shownAt(was);
@@ -298,12 +300,14 @@ function viaApp(receive) {
 
 function draw(root, role, deck, state, { paired, press, hint = "", note = "" }) {
   const slide = deck.slides[state.index];
+  // (Arriving by a morph from the slide before: morph.js.)
+  const arrive = role === "audience" ? arriving(root, deck, state) : (shown) => shown;
   root.className = `present ss-root ss-${role}${state.blank ? ` ss-${state.blank}` : ""}${root.classList.contains("ss-pointer") ? " ss-pointer" : ""}`;
   root.textContent = "";
   const goto = state.typed ? el("div", "ss-goto", `Go to Slide ${state.typed}`, el("small", "", "Return to go · Esc to cancel")) : null;
   if (role === "audience") {
     root.onclick = () => press("click");
-    root.append(state.ended ? el("div", "ss-end", "End of slide show — click to exit") : frame(slide, state.step));
+    root.append(state.ended ? el("div", "ss-end", "End of slide show — click to exit") : arrive(frame(slide, state.step)));
     if (!paired && goto) root.append(goto);
     // (The note before the hint, on one screen: with a presenter's view, it is said there.)
     const noted = note && !paired ? el("span", "ss-noted", note) : null;
