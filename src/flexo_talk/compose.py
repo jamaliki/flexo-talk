@@ -85,6 +85,7 @@ from flexo_talk.deck import (
     object_named,
     paint_role,
 )
+from flexo_talk.morphing import mark as mark_morphs
 from flexo_talk.onclick import clicks_said, figure_parts, last_click, mark_steps
 from flexo_talk.showing import HIDDEN, dim_words, hidden_items, mark_slide, shape_state, slide_states
 
@@ -739,6 +740,8 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         canvas.layer.remove(canvas.free)
         canvas.layer.append(canvas.free)
     shapes = _draw_shapes(canvas, slide, behind)
+    # What each object and shape is, for a morph to the slide after, or from the one before.
+    mark_morphs(canvas.root, slide)
     # What is hidden, dimmed or highlighted drawn so, where it stands (flexo_talk.showing): and
     # what is hidden whole written natively (a PowerPoint's own lists and tables) not at all.
     # Shown anew on a click, it is drawn as it is before the first, marked with how it is at

@@ -45,6 +45,7 @@ import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
+import { slideTransitions } from "/static/kinds/deck/transitions.js";
 import { showSteps, shownSaid } from "/static/kinds/deck/showsteps.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
@@ -1068,6 +1069,11 @@ export function mount(studio, container) {
     slideAt: () => slideAt(), slideIndex: () => state.slide, page: () => pages[state.slide], editSlide: (mutate, options) => editSlide(mutate, options),
     blockAt: (slide, at) => blocksAt(slide, at.region)[at.index], renderStage: () => renderStage(), render: () => { placeChosen(); renderInspector(); },
   });
+  // How a slide arrives from the one shown before it: Morph (transitions.js, morph.js).
+  const transitions = slideTransitions({
+    slides: () => slides(), pages: () => pages, current: () => state.slide, chosen: () => chosenSlides(), select: (index) => select(index),
+    editChosen: (mutate, options, name) => editChosen(mutate, options, name), pageNode: () => pageNode, toast: (text) => toast(text, { icon: "play" }),
+  });
   // What the inspector's Show, its menu and the palette's act on: the objects chosen, the shapes
   // chosen, or both (a figure's shapes chosen are its own: parts.js).
   const showTargets = () => {
@@ -1806,7 +1812,7 @@ export function mount(studio, container) {
       const own = said.get(`slide${index + 1}`) || [];
       const worst = own.some((m) => m.severity === "error") ? "error" : own.length ? "warning" : null;
       const here = onIt.get(index + 1) || [];
-      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true,
+      const key = JSON.stringify([index, page?.svg ? page.hash : slideTitle(slide), Boolean(page?.stale), slide?.skip === true, transitions.key(slide),
         worst, own.map((m) => m.text), page?.steps, here.map((entry) => [entry.who.id, entry.who.name, colourOf(entry.who)])]);
       keys.push(key);
       // Kept as it is, unless it has lost its picture (one taken for a drawing elsewhere) --
@@ -1900,6 +1906,7 @@ export function mount(studio, container) {
       },
     },
     h("div.num", {}, index + 1),
+    transitions.badge(slide, index),
     h("div.frame", {},
       slot || h("div.placeholder", {}, slideTitle(slide)),
       // Another's ring inside the frame, never in place of this person's own (the chosen
@@ -8281,6 +8288,7 @@ export function mount(studio, container) {
       h("div.section", {}, h("div.section-title", {}, "Layout"), layoutGrid(layoutsNow.size === 1 ? [...layoutsNow][0] : null, (name) => changeLayout(name), layouts, studio.info?.palette),
         allowed.has("align") ? alignControl(slide, chosenNow) : null),
       h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)),
+      transitions.section(picked),
     ];
   }
 
@@ -8319,6 +8327,7 @@ export function mount(studio, container) {
       canRow(slide) ? rowsControls(slide) : null,
       allowed.has("align") ? alignControl(slide, [slide]) : null));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Background"), backgroundControls(slide, allowed)));
+    parts.push(transitions.section([state.slide]));
     parts.push(h("div.section", {}, h("div.section-title", {}, "Footnotes"), footnotesControls(slide)));
     return parts;
   }
@@ -10899,6 +10908,7 @@ export function mount(studio, container) {
       ...(own && !mixed.on() ? [{ icon: "duplicate", label: `Duplicate ${shapes ? (shapes > 1 ? `${shapes} Shapes` : "Shape") : blockLabel(block)}`, also: ["Duplicate"], keys: "⌘D", run: () => duplicateChosen() }] : []),
       { icon: "duplicate", label: `Duplicate ${many}`, also: [...(own || typing ? [] : ["Duplicate"]), "Duplicate Slide"], keys: own || typing ? undefined : "⌘D", run: () => duplicateSlide(state.slide) },
       { icon: "eye", label: `${slides()[picked[0]]?.skip === true ? "Don’t Skip" : "Skip"} ${many}`, also: ["Skip Slide", "Don’t Skip Slide"], run: () => skipSlides(picked) },
+      ...transitions.commands(),
       // A slide of columns: its rows lined up and labelled, or each column on its own again.
       ...(canRow(slideAt()) ? [{ icon: "layout", label: rowed(slideAt()) ? "Hide Row Labels" : "Show Row Labels", also: ["Row Labels"],
         hint: rowed(slideAt()) ? "Each column stacks its objects on its own" : "The columns’ objects in rows, a label beside each", run: () => toggleRows() }] : []),

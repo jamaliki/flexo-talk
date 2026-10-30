@@ -109,6 +109,37 @@ Python: `region.add(figure, frame="smc")`. In the studio, a figure's panel has *
 one of the deck's frames (with the slides it is on), or New Frame. Every output -- the studio,
 presenting, the PDF, the PowerPoint, an image, a bundle -- draws it so.
 
+A slide that says `transition: morph` **morphs** from the slide shown before it, as Keynote's
+Magic Move and PowerPoint's Morph do: what the two share slides and grows into its new place,
+what only the slide before had fades out in the first quarter of the time, and what only this
+one has fades in over the last quarter. Words move from where their ink starts and grow only
+with their type; two equations that differ move symbol by symbol; a frame's figures move part
+by part (so a pipeline gains a stage, a molecule slides into its pocket):
+
+```yaml
+- title: Weight the samples
+  transition: morph                        # 1 s
+  right:
+  - {figure: figures/smc-2.yaml, frame: smc}
+- title: Resample
+  transition: {kind: morph, duration: 2}   # seconds
+```
+
+What is shared is found in this order: the same `morph:` name on both (`{text: Encoder, morph:
+enc}`, a shape's `morph: ring`), for when nothing else says it; the same frame; the same picture,
+GIF, figure (`'#name'`, a file, or one written in the deck -- a duplicated slide's too) or shape
+(by its `id`), the same words, list, table or equation, the title, number and logos; then an
+object of the same kind in the same column whose box is where the other's was. Nothing is paired
+for looking alike. A slide walked through on clicks (`click 1:`) is left as its last click shows
+it, and the slide after arrives as it is before its first click: what a click there shows later
+is not paired, and a click as it arrives ends the morph. It plays only going forward to the next
+slide shown -- going back or jumping cuts -- and not where the system asks for less motion. In the studio, a slide's **Transition**
+(Format) sets it and its duration and plays it on the stage (**Preview**); a slide that morphs is
+marked under its number in the slide list (a click plays it). The PowerPoint has PowerPoint's own
+Morph on that slide (a fade where PowerPoint is too old for it), each object either side named
+`!!` and a name, the same on both slides for a pair, so it pairs them as Flexo does (a figure
+moves whole there); the PDF fades to it when presented full screen.
+
 A figure can also be built up on one slide, a click at a time: `{figure: ..., stages:
 [[api], [queue, worker], [store]]}` names the shapes and groups that appear on each
 click. The rest is there from the start, a line comes with the later of its ends, and

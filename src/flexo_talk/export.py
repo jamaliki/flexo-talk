@@ -22,6 +22,9 @@ from pptx.util import Pt
 
 from flexo_talk.compose import _slide_palette
 from flexo_talk.deck import Deck, DeckBuild, RenderedSlide, Slide, _Figure, _Image
+from flexo_talk.morphing import page_fades
+from flexo_talk.morphing import plan as morph_plan
+from flexo_talk.morphing import rename as rename_morphed
 from flexo_talk.pptx import (
     Placement,
     add_drawing,
@@ -162,7 +165,7 @@ def build_deck(
         ]
         title, author = _named(deck)
         pdf = write_pdf(pages, directory / f"{name}.pdf", title=title or name, author=author,
-                        tags=_tagger(rendered))
+                        tags=_tagger(rendered), fades=page_fades(rendered, handout=handout))
     pptx = None
     if "pptx" in formats:
         pptx = directory / f"{name}.pptx"
@@ -231,10 +234,12 @@ def write_pptx(
     layouts = {layout.name: layout for layout in presentation.slide_layouts}
     from flexo.drawings_kept import drawing_of
 
-    for item in rendered:
+    # The slides that morph from the one before, and the names that pair what is on them.
+    morphs = morph_plan(rendered)
+    for index, item in enumerate(rendered):
         # A slide written as it was for an export before, where nothing it is drawn from has
         # changed since (``RenderedSlide.key``, the studio's): written again as it was then.
-        known = (item.key, groups, editable_maths) if item.key else None
+        known = (item.key, groups, editable_maths, morphs.key(index)) if item.key else None
         written = _WRITTEN.get(known) if known is not None else None
         if written is not None:
             _write_again(presentation, layouts, written, item.slide.notes_text)
@@ -341,11 +346,14 @@ def write_pptx(
                 add_reveals(slide._element, [[(shape_id, one) for at, shape_id, one in clicks if at == step]
                                              for step in steps])
             _read_in_order(tree, item.slide, over)
+            morphed = morphs.write(slide._element, tree, index, drawn_svg, out_of)
             # Last, as nothing more finds a shape by its id: each named as a person would.
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
                                for region in item.slide.regions.values() for index, block in enumerate(region.blocks)},
                         shapes={**drawn_over, **_shape_names(item.shapes)})
             name_added(tree, called)
+            # (Those a morph pairs named as PowerPoint pairs them: !!name.)
+            rename_morphed(morphed)
         if known is not None:
             _keep_written(known, slide, chosen)
     buffer = BytesIO()
