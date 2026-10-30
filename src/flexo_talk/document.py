@@ -126,6 +126,12 @@ be a placeholder, drawn as written, for a reaction in general: ``{smiles: "[X:1]
 arrows: ["1 -> 2", "2-3 -> 3"]}``, ``[Nu-]``, ``[E]``, ``[LG]``, ``[R1]`` (``[*Ar]``,
 ``[*B]`` where the letters are an element's). ``math`` is LaTeX set as an equation.
 
+Any slide, and any object on one, may carry ``comments``: the review notes people left on it,
+each a thread -- ``{id, author, time, text, replies: [{author, time, text}], resolved: true}``,
+one on a part of a figure naming it (``part: encoder``) -- never drawn, presented or exported
+on a slide (a PowerPoint carries the open ones as its own comments). An agent reads and answers
+them with its comment tools rather than writing them by hand.
+
 Any slide may have ``shapes``, drawn where they are put, over its words and objects: an
 arrow at part of a figure, a ring round a structure's pocket, a brace and its words beside a
 list, a highlight, a box of words anywhere. Places are points from the slide's top left (a
@@ -291,22 +297,27 @@ BLOCKS: dict[str, tuple[str, ...]] = {
 """Each block kind and the options it takes beside its value. Every kind takes ``width``
 (points): the most it takes across its place, set there as its place sets it."""
 
-BLOCK_KEYS = ("placeholder", "build", "horizontal", "vertical", "at", "locked", "hide", "dim", "highlight")
+BLOCK_KEYS = (
+    "placeholder", "build", "horizontal", "vertical", "at", "locked", "hide", "dim", "highlight", "comments",
+)
 """What every block takes besides its kind's options: whether it is a placeholder, whether it
 builds in on a click, where it stands across and down its place -- or, ``at: [x, y]``, where
 it is placed on the slide, out of its place's flow (its ``width`` its width there, both in
 the units the slide's shapes are placed in) -- whether it is locked where it is, and how it
 is shown: ``hide``, ``dim`` and ``highlight``, each ``true`` (the whole object) or a list of
-its parts (``flexo_talk.showing``)."""
+its parts (``flexo_talk.showing``) -- and ``comments``, the threads people left on it, never
+drawn (``flexo.studio.commenting``)."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
     "conventions", "sketch", "style", "logos", "logos_on", "logo_height", "spelling",
 )
-COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes")
+COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes", "comments")
 """The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
 and edited, but the studio neither presents nor exports it. ``shapes`` are drawn where they
-are put, over its words and objects (see the module's docs)."""
+are put, over its words and objects (see the module's docs). ``comments`` are the threads
+people left on the slide, never drawn: ``[{id, author, time, text, part, replies, resolved}]``
+(``flexo.studio.commenting``), as an object's are."""
 SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "title": ("title", "subtitle", "author", "date"),
     "section": ("title", "subtitle"),
