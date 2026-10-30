@@ -1723,15 +1723,17 @@ export function richText({ value = "", list = false, single = false, breakWith =
     const cells = onCells ? cellsOf(html, text) : null;
     if (cells) { event.stopPropagation(); onCells(cells, list || single ? null : splitAtCaret()); return; }
     changed(true);
-    // One address pasted is a link (unless it came as formatted words of their own).
+    // One address pasted is a link (unless it came as formatted words of their own) -- and,
+    // over words chosen, links them, however it came (a page's Copy Link brings its title too).
     const linked = linkOfWords(text);
-    if (linked && (!html || itemsOfHtml(html).map((item) => item.markup).join("").trim() === String(text).trim())) {
+    const chosen = selection();
+    const over = Boolean(linked) && !chosen.isCollapsed && Boolean(chosen.toString().trim()) && area.contains(chosen.anchorNode);
+    if (linked && (over || !html || itemsOfHtml(html).map((item) => item.markup).join("").trim() === String(text).trim())) {
       // Over words chosen, it links them, as in Pages, the caret after them.
-      const s = selection();
-      if (!s.isCollapsed && s.toString().trim() && area.contains(s.anchorNode)) {
+      if (over) {
         const words = String(text).trim();
         const href = /\]\(([^)]*)\)$/.exec(linked)?.[1] || words;
-        const made = wrapChosen((chosen) => { const a = linkNode(href); a.append(chosen); return a; }, { strip: isLink, choose: false });
+        const made = wrapChosen((inner) => { const a = linkNode(href); a.append(inner); return a; }, { strip: isLink, choose: false });
         if (made) {
           const caret = document.createRange();
           caret.setStartAfter(outerLink(made.endContainer) || made.endContainer);
