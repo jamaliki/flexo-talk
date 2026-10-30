@@ -120,6 +120,13 @@ def test_the_slide_has_a_step_for_each_click_it_names_after_its_builds() -> None
     assert made.steps == 3 and made.shows == {"slide1.body.2": ("shown", "dimmed", "dimmed")}
 
 
+def test_a_click_that_shows_nothing_new_is_said() -> None:
+    body = [{"text": "a", "build": True}, {"text": "b", "click 3": {"dim": True}}]
+    made = rendered(deck_of({"title": "S", "body": body}))
+    assert made.steps == 4 and made.notes == ["slide1: Click 2 shows nothing new. Say what it shows, or take it out."]
+    assert rendered(WALK).notes == []
+
+
 def test_its_drawing_is_the_slide_before_its_first_click() -> None:
     made = rendered(WALK)
     first = {**WALK, "slides": [{**WALK["slides"][0],
@@ -168,6 +175,13 @@ def test_an_object_highlighted_on_a_click_draws_the_rest_of_the_slide_faint_then
     made = rendered(deck_of({"title": "S", "body": [{"text": "a"}, {"text": "b", "click 1": {"highlight": True}}],
                              "shapes": [{"kind": "ring", "at": [0, 0], "size": [9, 9]}]}))
     assert made.shows == {"slide1.body.0": ("shown", "dimmed"), "slide1.shapes.0": ("shown", "dimmed")}
+
+
+def test_words_dimmed_by_their_markup_are_as_faint_at_every_step() -> None:
+    made = rendered(deck_of({"title": "S", "body": [{"text": "Plain and [faint]{dim}", "click 1": {"dim": True}}]}))
+    faint_words = [{item.get("fill") for item in ET.fromstring(made.at_step(step)).iter()
+                    if item.get("data-flexo-show") == "dimmed" and item.tag.endswith("tspan")} for step in (1, 2)]
+    assert faint_words[0] == faint_words[1] and len(faint_words[0]) == 1
 
 
 def test_the_pdf_has_a_page_for_each_step(tmp_path: Path) -> None:

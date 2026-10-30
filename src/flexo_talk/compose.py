@@ -748,14 +748,22 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         canvas.steps = max(canvas.steps, clicks + 1)
         lines = canvas.code_lines
         steps = [slide_states(slide, lines, click, _parts_at(slide, click)) for click in range(canvas.steps)]
+        # (Words dimmed by their markup first, faint in their own colour as it is plainly: what
+        # they are in faint at one step and not at another, they are as faint at each.)
+        dim_words(canvas.root, canvas.palette.get("canvas"))
         shows = mark_steps(canvas.root, steps, canvas.palette.get("canvas"))
+        # A click on which nothing appears or changes is said: the show would seem to stall there.
+        appearing = {int(item.get("data-flexo-step")) for item in canvas.root.iter() if item.get("data-flexo-step")}
+        for click in range(1, canvas.steps):
+            if click + 1 not in appearing and all(seq[click] == seq[click - 1] for seq in shows.values()):
+                canvas.notes.append(f"{slide.id}: Click {click} shows nothing new. Say what it shows, or take it out.")
         shown = steps[0]
         gone = {key for key, how in shown.items() if how == HIDDEN and all(step.get(key) == HIDDEN for step in steps)}
     else:
         shown = slide_states(slide, canvas.code_lines)
         mark_slide(canvas.root, shown, canvas.palette.get("canvas"))
+        dim_words(canvas.root, canvas.palette.get("canvas"))
         gone = {key for key, how in shown.items() if how == HIDDEN}
-    dim_words(canvas.root, canvas.palette.get("canvas"))
     if gone and not PLACEHOLDERS.get():
         canvas.lists = [layout for layout in canvas.lists if layout.id not in gone]
         canvas.tables = [layout for layout in canvas.tables if layout.id not in gone]
