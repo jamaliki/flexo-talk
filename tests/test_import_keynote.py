@@ -97,6 +97,7 @@ def test_a_skipped_slide_stays_skipped_and_a_table_is_kept_as_its_place(imported
     placeholder = _slide(document, 8)["shapes"][0]
     assert placeholder["hide"] is True and placeholder["text"].startswith("TODO Table")
     assert [place.kind for place in report.placeholders] == ["Table"]
+    assert "1 object became a placeholder:" in report.summary()
 
 
 def test_the_deck_reads_and_draws(imported) -> None:

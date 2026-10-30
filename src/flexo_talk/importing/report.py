@@ -72,7 +72,7 @@ class Report:
         for place in self.placeholders:
             kinds.setdefault(place.kind, []).append(place)
         total = len(self.placeholders)
-        lines.append(f"{total} object{'s' if total != 1 else ''} became placeholder{'s' if total != 1 else ''}:")
+        lines.append(f"{total} objects became placeholders:" if total != 1 else "1 object became a placeholder:")
         for kind, places in kinds.items():
             slides = sorted({place.slide for place in places})
             shown = ", ".join(str(number) for number in slides[:12]) + (", …" if len(slides) > 12 else "")
