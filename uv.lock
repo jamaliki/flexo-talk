@@ -169,6 +169,7 @@ source = { editable = "." }
 dependencies = [
     { name = "flexo" },
     { name = "lxml" },
+    { name = "pygments" },
     { name = "python-pptx" },
     { name = "pyyaml" },
 ]
@@ -192,6 +193,7 @@ requires-dist = [
     { name = "flexo", editable = "../flexo" },
     { name = "lxml", specifier = ">=5.0" },
     { name = "matplotlib", marker = "extra == 'plots'", specifier = ">=3.8" },
+    { name = "pygments", specifier = ">=2.17" },
     { name = "python-pptx", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]

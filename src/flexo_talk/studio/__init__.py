@@ -31,6 +31,7 @@ from flexo.studio import Drawing, Message, Page
 from flexo.studio.plain import explain
 
 from flexo_talk import worker
+from flexo_talk.codecolours import LANGUAGES as CODE_LANGUAGES
 from flexo_talk.deck import (
     FOOTER_LOGOS,
     LAYOUTS,
@@ -66,6 +67,9 @@ from flexo_talk.document import (
     parse_document,
     save_document,
 )
+from flexo_talk.studio.comments import holder as comment_holder
+from flexo_talk.studio.comments import note as comment_note
+from flexo_talk.studio.comments import place as comment_place
 
 LOOK_LABELS = {"classic": "Rule", "keynote": "Centred"}
 """A look's name as the studio shows it, where its id is not that name (the classic look, a
@@ -371,7 +375,8 @@ class DeckKind:
             "none, nearly two lines of the title); people_at: [x, y], the row's top left on the slide, placed "
             "freely as a block's at is (none, beside the title, which wraps short of them)."
             + f"\nBlocks:\n{blocks}\nEvery block also takes: {', '.join(BLOCK_KEYS)} (at: [x, y], placed on the slide "
-            "out of its place's flow, its width its width there, in shape units).\n"
+            "out of its place's flow, its width its width there, in shape units), and click N: {hide, dim, highlight} "
+            "-- all of how it is shown from the slide's click N on, until a later click of its own ({} plainly).\n"
             + f"Deck settings: {', '.join(DECK_KEYS)}. logos: picture files (an institution's, its funders'), "
             "in their order, in a row along the title slide's foot; logos_on: title, or every (small in every "
             "slide's footer too); logo_height: how tall on the title slide, in points (40).\n"
@@ -380,7 +385,8 @@ class DeckKind:
             "[words]{dim} (drawn faint).\n"
             + "Shapes (a slide's shapes: list, drawn where they are put, points from its top left on a 960 by 540 "
             "slide): " + "; ".join(f"{name}: {', '.join(kinds)}" for name, kinds in SECTIONS)
-            + f". Every shape takes {', '.join(COMMON_SHAPE_KEYS)} and on a slide {', '.join(SHAPE_KEYS)}; "
+            + f". Every shape takes {', '.join(COMMON_SHAPE_KEYS)} and on a slide {', '.join(SHAPE_KEYS)} and click N "
+            "(as a block's, each key true); "
             "lines from, to; polyline and pen points, closed; boxes at, size, rotate, flip; text at, width, rotate; "
             "path d (SVG path data, every command, holes as further pieces; no at or size: its box is what it "
             "draws), fill_rule (nonzero, evenodd), rotate, flip; picture at, size, source (a drawing's part kept "
@@ -409,6 +415,49 @@ class DeckKind:
             "Good slides say one thing: a title that is a claim, few words, a figure where a picture helps. "
             "Look at each slide after changing it."
         )
+
+    # -- for agents (flexo.studio.agent): a brief, topics, an outline, excerpts, marks, steps,
+    # and what an edit did (flexo_talk.studio.deck_guides, deck_agent) --
+
+    def brief(self) -> str:
+        from flexo_talk.studio.deck_guides import brief
+
+        return brief()
+
+    def topics(self) -> dict[str, Any]:
+        from flexo_talk.studio.deck_guides import topics
+
+        return topics()
+
+    def outline(self, document: Any, drawing: Drawing) -> list[str]:
+        from flexo_talk.studio.deck_agent import outline
+
+        return outline(document, drawing)
+
+    def excerpt(self, text: str, numbers: list[int]) -> str:
+        from flexo_talk.studio.deck_agent import excerpt
+
+        return excerpt(text, numbers)
+
+    def marks(self, document: Any, number: int, page: Page) -> list[Any]:
+        from flexo_talk.studio.deck_agent import marks
+
+        return marks(document, number, page)
+
+    def selected(self, document: Any, where: dict[str, Any]) -> str | None:
+        from flexo_talk.studio.deck_agent import selected
+
+        return selected(document, where)
+
+    def at_step(self, page: Page, step: int) -> str:
+        from flexo_talk.studio.deck_agent import at_step
+
+        return at_step(page, step)
+
+    def report(self, before: Any, after: Any) -> dict[str, Any]:
+        from flexo_talk.studio.deck_agent import report
+
+        return report(self, before, after)
 
     def malformed(self, document: Any) -> str | None:
         """What makes a document no deck the editor can show, if anything: slides that
@@ -445,12 +494,24 @@ class DeckKind:
         return None
 
     def check(self, document: Any, base: Path) -> list[str]:
+        from flexo.studio.commenting import problems as comment_problems
+
         errors: list[DeckDocumentError] = []
         try:
             deck_from_document(document, base, errors=errors)
         except DeckDocumentError as error:
             return [str(error)]
-        return [str(error) for error in errors]
+        return [str(error) for error in errors] + comment_problems(document)
+
+    def comment_place(self, document: Any, path: list[Any]) -> dict[str, Any]:
+        """Where a mapping holding comments is, in words and as a place to go (comments)."""
+
+        return comment_place(document, path)
+
+    def comment_holder(self, document: Any, where: dict[str, Any]) -> list[Any]:
+        """The mapping a new comment on ``where`` (its slide, object, part) goes in (comments)."""
+
+        return comment_holder(document, where)
 
     def describe(self, before: Any, after: Any) -> list[dict[str, Any]]:
         """What a change did, slide by slide, for the activity list and for following."""
@@ -486,6 +547,10 @@ class DeckKind:
                 # A placeholder put there and taken away again (a Code left empty) is nothing
                 # done: said neither as added nor as deleted.
                 if _without_placeholders(old[a]) == _without_placeholders(new[b]):
+                    continue
+                # Its comments alone changed: "commented on the figure on slide 3" (comments).
+                if (said := comment_note(old[a], new[b], b)) is not None:
+                    notes.append(said)
                     continue
                 verb, what = _what_changed(old[a], new[b])
                 note = _slide_note(verb, new, b, what)
@@ -621,6 +686,8 @@ class DeckKind:
                         for name in LAYOUTS],
             "slide_keys": {layout: [*COMMON_KEYS, *keys] for layout, keys in SLIDE_KEYS.items()},
             "blocks": {kind: list(options) for kind, options in BLOCKS.items()},
+            # The languages a listing's words are coloured as (flexo_talk.codecolours).
+            "languages": [{"value": name, "label": label} for name, label in CODE_LANGUAGES.items()],
             # A deck's logos: how tall they stand on a title slide, unless it says (and the
             # least and most), how tall in a footer as a share of that, and the files they may be.
             "logos": {"height": LOGO_HEIGHT, "heights": list(LOGO_HEIGHTS), "footer": FOOTER_LOGOS,
@@ -2366,6 +2433,8 @@ def _slide_keys(
 
     slides = document.get("slides") or []
     texts = [json.dumps(slide, sort_keys=True, ensure_ascii=False, default=str) for slide in slides]
+    # (A slide is drawn without its comments: one added, answered or resolved draws nothing again.)
+    texts = [_drawn_words(slide, text) for slide, text in zip(slides, texts, strict=True)]
     # (How many sections are shown before each slide, and how many slides: counted once.)
     befores, showns, before, shown = [], [], 0, 0
     for item in slides:
@@ -2422,6 +2491,32 @@ def _slide_keys(
 
     key.texts = texts  # type: ignore[attr-defined]
     return key
+
+
+_DRAWN: OrderedDict[str, str] = OrderedDict()
+"""Slides' words with comments, and the same without them, the last few hundred: each slide's
+taken out once, not at every drawing of the deck (a deck of 80 slides, each commented, took
+three times as long to key without it)."""
+_DRAWN_KEPT = 400
+
+
+def _drawn_words(slide: object, text: str) -> str:
+    """A slide's words (as JSON) as they are drawn: without its comments, or its objects'
+    (``comments.uncommented``) -- looked for only in a slide that has any."""
+
+    if '"comments":' not in text:
+        return text
+    found = _DRAWN.get(text)
+    if found is not None:
+        _DRAWN.move_to_end(text)
+        return found
+    from flexo_talk.studio.comments import uncommented
+
+    found = json.dumps(uncommented(slide), sort_keys=True, ensure_ascii=False, default=str)
+    _DRAWN[text] = found
+    while len(_DRAWN) > _DRAWN_KEPT:
+        _DRAWN.popitem(last=False)
+    return found
 
 
 def _literal(annotation: object) -> object:

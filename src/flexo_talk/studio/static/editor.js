@@ -13,6 +13,7 @@ import { blockDrop, blockPlan, rearrange, groupDrop, gather, gatherPlan, roomAcr
 import { canRow, rowed, rowCount, labelsOf, setRows, setLabel, keepRows } from "/static/kinds/deck/rows.js";
 import { present as presentSlides } from "/static/kinds/deck/present.js";
 import { richText, markupOfWords, itemsOfHtml, cellsOf, linkOfWords, emphasised, overlap, ITEM_BREAK } from "/static/kinds/deck/richtext.js";
+import { languageField } from "/static/kinds/deck/codelanguage.js";
 import { follows, merge3 } from "/static/studio/merge.js";
 import { sizer } from "/static/kinds/deck/resize.js";
 import { shapeEditor } from "/static/studio/shapes.js";
@@ -38,12 +39,14 @@ import { designBar } from "/static/kinds/deck/designbar.js";
 import { deckFinder } from "/static/kinds/deck/finddeck.js";
 import { deckSpeller } from "/static/kinds/deck/spelling.js";
 import { deckTodos } from "/static/kinds/deck/todos.js";
+import { deckComments } from "/static/kinds/deck/comments.js";
 import { owing } from "/static/kinds/deck/afterpaint.js";
 import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
 import { slideTransitions } from "/static/kinds/deck/transitions.js";
+import { showSteps, shownSaid } from "/static/kinds/deck/showsteps.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 import { stageAhead } from "/static/kinds/deck/stageahead.js";
@@ -284,7 +287,9 @@ function buildsSaid(slide) {
       else if (block.build) said.push(name);
     }
   }
-  return said.length ? `Builds on clicks: ${said.join(", then ")}` : "Builds on clicks";
+  // (And what its clicks show anew: showsteps.js.)
+  const shown = shownSaid(slide, regionsOf(slide || {}).flatMap(({ key }) => blocksAt(slide, key).map((block) => [block, `the ${blockName(block).toLowerCase()}`])));
+  return [said.length ? `Builds on clicks: ${said.join(", then ")}` : shown ? "" : "Builds on clicks", shown].filter(Boolean).join("\n");
 }
 
 function setOption(target, key, value, fallback = undefined) {
@@ -621,6 +626,8 @@ export function mount(studio, container) {
   // Check Spelling…: the deck's misspelt words, gone through one by one (spelling.js).
   let speller = null;
   let todos = null;
+  // Comments on its slides, objects and figures' parts (comments.js).
+  let comments = null;
   // A part of the slide being dragged on it, and parts just moved, landing.
   let carry = null;
   let moving = null;
@@ -1054,6 +1061,13 @@ export function mount(studio, container) {
     studio, slideAt: () => slideAt(), blocksAt: (slide, region) => blocksAt(slide, region), editSlide: (mutate, options) => editSlide(mutate, options),
     objectName: (block) => objectName(block), shapeName: (index) => freeShapes.nameOf?.(index) || "Shape", blockId: (at) => blockId(at), pageNode: () => pageNode,
     render: () => { placeChosen(); renderInspector(); reportFocus(); },
+    click: () => steps.click(), from: () => steps.from(),
+  });
+  // The slide shown at one of its clicks while it is edited, and what a click shows anew said
+  // there (showsteps.js).
+  const steps = showSteps({
+    slideAt: () => slideAt(), slideIndex: () => state.slide, page: () => pages[state.slide], editSlide: (mutate, options) => editSlide(mutate, options),
+    blockAt: (slide, at) => blocksAt(slide, at.region)[at.index], renderStage: () => renderStage(), render: () => { placeChosen(); renderInspector(); },
   });
   // How a slide arrives from the one shown before it: Morph (transitions.js, morph.js).
   const transitions = slideTransitions({
@@ -1821,6 +1835,7 @@ export function mount(studio, container) {
     // Slides chosen together, or no longer: the panel says so, with what applies to them all.
     if (pickedKey() !== pickedShown && !state.focus) renderInspector();
     todos?.rail();
+    comments?.rail();
     // (Each slide overlaid marked down its edge in its tint: across.js.)
     across.rail();
   }
@@ -2065,6 +2080,8 @@ export function mount(studio, container) {
     // where it changed, the rest of its drawing left as it is (slidepatch.js) -- else put in
     // whole.
     const kept = renewed && page?.svg && pageNode?.dataset.shows.startsWith(`${state.slide}:`) ? pageNode.querySelector(":scope > svg") : null;
+    // (As it was drawn again, a click it was shown at undone, for what came to be read against it.)
+    if (kept) steps.reset(kept);
     if (kept && patchDrawing(kept, page.svg, (holder) => { holdPaused(holder); widenLines(holder); unlinked(holder); })) {
       pageNode.dataset.shows = shows;
       const paper = kept.querySelector('[id="canvas.background"]')?.getAttribute("fill");
@@ -2099,6 +2116,8 @@ export function mount(studio, container) {
       pageNode.addEventListener("contextmenu", onContext);
       pageNode.addEventListener("pointerdown", onPress);
     }
+    // (At the click it is shown at, if one is: showsteps.js.)
+    steps.apply(pageNode.querySelector(":scope > svg"));
     pageNode.querySelector(".away-title")?.replaceChildren(slideTitle(slide));
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
@@ -2118,7 +2137,7 @@ export function mount(studio, container) {
     // Under the slide only what isn't shown elsewhere: its builds, who else is on it, and that
     // it is being drawn (which slide it is, the slide list says).
     clear(stageMeta,
-      page?.steps > 1 ? h("span.chip", { title: buildsSaid(slideAt()) }, icon("reveal"), `${page.steps} builds`) : null,
+      steps.bar(buildsSaid(slideAt())),
       here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), nameOf(entry.who),
         entry.doing || entry.where?.editing ? h("span.muted", {}, ` · ${entry.doing || "editing"}`) : null)),
       h("span.spacer", { style: { flex: 1 } }),
@@ -2137,6 +2156,7 @@ export function mount(studio, container) {
     if (renewed) across.drawn();
     placeChosen();
     placeOthers(here);
+    comments?.place();
     if (inline) positionInline();
     if (figureMarks.parentNode !== pageNode) pageNode.append(figureMarks, figureBar);
     placeFigure();
@@ -4353,7 +4373,8 @@ export function mount(studio, container) {
           const first = own.filter((item) => !["Duplicate", "Delete"].includes(item?.label));
           // (A line's menu offers no Cut or Copy: a line goes with the shapes it joins.)
           const clips = clipItems().filter((item) => item.label === "Paste" || !item.disabled);
-          menu(point, [...first, "-", ...clips, ...last("Duplicate"), "-", ...last("Delete")]);
+          const noted = comments ? [comments.menuItem({ region: part.region, index: part.index, part: id })] : [];
+          menu(point, [...first, ...noted, "-", ...clips, ...last("Duplicate"), "-", ...last("Delete")]);
           return;
         }
         figure?.parts.select([]);
@@ -4412,6 +4433,7 @@ export function mount(studio, container) {
     if (MAGNIFIED.has(kind) && pictureTools.canInset(at)) items.push({ icon: "plus", label: "Add Zoom Inset", run: () => pictureTools.addInset(at) });
     // Put where it is on other slides (across.js).
     if (across.menuItem()) items.push(across.menuItem());
+    if (comments) items.push(comments.menuItem({ region: at.region, index: at.index }));
     if (items.length) items.push("-");
     // Show ▸: it, and the part of it under the pointer -- a list's item, a table's row (showing.js).
     items.push(...[showing.menuItem({ blocks: [at], shapes: [] }, point), event ? showing.partItem(at, event, point) : null].filter(Boolean), "-");
@@ -4486,6 +4508,7 @@ export function mount(studio, container) {
       "-",
       ...(field ? [{ icon: "paste", label: "Paste", keys: "⌘V", disabled: !clipboard, run: () => clipboard && pasteClip(clipboard) }] : clipItems()),
       { icon: "duplicate", label: "Duplicate Slide", keys: "⌘D", run: () => duplicateSlide(index) },
+      comments ? comments.menuItem({ region: null, index: null }) : null,
       "-",
       { icon: "trash", label: "Delete Slide", keys: field ? undefined : "⌫", danger: true, run: () => deleteSlide(index) },
     ].filter(Boolean);
@@ -4986,12 +5009,23 @@ export function mount(studio, container) {
       // Edited -- its first shape's words typed, sent or still on their way -- a new figure is
       // no longer one just added and left empty: Esc does not take it back (dropFresh).
       edited: () => { if (fresh && fresh.slide === own.slide && fresh.region === own.region && fresh.index === own.index) fresh = null; },
+      // Its parts shown, and said to be, from the click the stage shows the slide at (showsteps.js).
+      shownAt: (id) => steps.figureShownAt(figureAt(own), id),
+      showAt: (how, ids) => steps.figureShowAt(figureAt(own), how, ids),
+      showTitle: () => (steps.click() ? `Show from Click ${steps.click()}` : null),
     });
     // Its parts as read ahead are good to choose from at once; the read brings them up to date.
     if (ahead) figure.parts.setModel(ahead);
     const mine = figure;
     const ready = () => { if (figure === mine && mine.waiting && mine.parts.model) { const then = mine.waiting; mine.waiting = null; then(); } };
     figure.parts.act({ do: "read" }, { select: false, then: ready, failed: () => { if (figure === mine) mine.waiting = null; } });
+  }
+
+  // A figure edited on the slide, for what its clicks show of its parts (showsteps.js).
+  function figureAt(own) {
+    const parts = own.parts;
+    return { at: { region: own.region, index: own.index }, block: blocksAt(slideAt(), own.region)[own.index], own: parts?.model?.figure || {},
+      name: (ids) => (ids.length === 1 ? parts?.nameOf?.(ids[0]) || "Shape" : `${ids.length} Shapes`) };
   }
 
   function leaveFigure(render = true) {
@@ -7291,6 +7325,14 @@ export function mount(studio, container) {
   // Files added to the slide, dropped or pasted: figure files, pictures, and structures into
   // the figure `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
   async function addFiles(all, part, at = null, { pictures: asPictures = false } = {}) {
+    // A PowerPoint or Keynote deck becomes a deck of its own (the Mac app imports it).
+    const decks = all.filter((file) => /\.(pptx|key)$/i.test(file.name));
+    if (decks.length) {
+      all = all.filter((file) => !decks.includes(file));
+      if (window.pywebview?.api?.dropped_presentations) window.pywebview.api.dropped_presentations(decks.map((file) => file.name));
+      else toast("A PowerPoint or Keynote deck is imported with File › Import Presentation… in Flexo Studio, or flexo-talk import.", { icon: "info", seconds: 6 });
+      if (!all.length) return true;
+    }
     const scenes = new Set();
     for (const file of all) if (await sceneFile(file)) scenes.add(file);
     // Figure files first: the files they name, dropped with them, are theirs.
@@ -8804,7 +8846,7 @@ export function mount(studio, container) {
         code.setAttribute("wrap", "off");
         // In a box with room at its right: a textarea's own padding is not kept at the end
         // of a line scrolled to, which would run into its edge.
-        return [h("div.markup.code-box", {}, code), size()];
+        return [h("div.markup.code-box", {}, code), languageField({ ui, catalog, value: block.language, key: key("language"), onChange: set("language") }), size()];
       }
       case "stats": return statsForm(block, at, edit, toneSwatches, size);
       case "table": return tableForm(block, at, edit, size);
@@ -10958,6 +11000,10 @@ export function mount(studio, container) {
   speller = deckSpeller(studio, { find: finding.parts, closeFind: () => { if (finding.finder.isOpen) finding.finder.close({ leave: false }); } });
   // TODOs: glowing in the slide list, marked on the slide, gone to by Next TODO (todos.js).
   todos = deckTodos(studio, { finding, rail, railList, stage, center, notes, notesArea, showNotes, pageNode: () => pageNode, slide: () => state.slide, select: (index) => select(index) });
+  // Comments: a marker where each open thread is, a count in the slide list, Add Comment (⇧⌘K).
+  comments = deckComments(studio, { railList, pageNode: () => pageNode, slide: () => state.slide, select: (index) => select(index),
+    choose: (at, part = null) => { if (blocksAt(slideAt(), at.region)[at.index]) focusBlock(at.region, at.index, part ? () => figure?.parts.select([part]) : null); },
+    blockId: (at) => blockId(at), frameOf: (part) => frameOf(part), boxOf: (id) => boxOf(id) });
   studio.reveal = (where, { quiet = false } = {}) => {
     if (where?.label === "Design") { design.toggle(true); return; }
     if (where?.page && where.page - 1 !== state.slide) select(where.page - 1);

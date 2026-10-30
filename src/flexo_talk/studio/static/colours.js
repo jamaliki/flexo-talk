@@ -18,6 +18,8 @@ import { partColours, partsBox } from "/static/kinds/figure/partcolours.js";
 
 // The objects whose words take a colour, by the key it is written as.
 export const COLOURED = { text: "colour", bullets: "colour", stats: "colour", callout: "colour", math: "colour", mechanism: "arrow_colour" };
+// The theme's colours words take by name.
+const NAMED = ["accent", "accent2", "accent3", "accent4", "accent5", "accent6", "muted"];
 
 export function deckColours(ctx) {
   // The objects chosen that take a colour, as a kind of colourKey's.
@@ -33,10 +35,13 @@ export function deckColours(ctx) {
     const keys = blocks.map((block) => COLOURED[ctx.kindOf(block)]);
     const values = blocks.map((block, n) => block[keys[n]] ?? null);
     const arrows = keys.every((key) => key === "arrow_colour");
+    // (Words take the theme's accents and its muted ink by name, as their panel offers them.)
+    const palette = ctx.studio.info?.palette || {};
+    const offered = keys.some((key) => key === "arrow_colour") ? [] : NAMED.filter((name) => palette[name]).map((value) => ({ value, colour: palette[value] }));
     return {
       noun: picks.length === 1 ? ctx.blockName(blocks[0]) : `${picks.length} Objects`,
       main: 0,
-      colours: [{ name: arrows ? "Arrows" : "Text", value: values.every((value) => value === values[0]) ? values[0] : undefined,
+      colours: [{ name: arrows ? "Arrows" : "Text", value: values.every((value) => value === values[0]) ? values[0] : undefined, offered,
         set: (hex) => ctx.editSlide((each) => {
           for (const pick of picks) {
             const block = ctx.blockAt(each, pick);
@@ -74,5 +79,12 @@ export function deckColours(ctx) {
     if (!boxes.length) return null;
     return boxAround(boxes.map((box) => ({ getBoundingClientRect: () => box })));
   }
-  return colourKey({ kinds, anchor, fallback: () => ctx.inspector, studio: ctx.studio, settled: () => ctx.figure()?.parts.idle?.() });
+  // What the slide draws, for the colour pickers' "On This Slide" (colourpicker.js): its own
+  // drawing, not the handles over it.
+  const source = () => {
+    const roles = ctx.studio.info?.roles || {};
+    return { title: "On This Slide", root: ctx.pageNode()?.querySelector(":scope > svg:not(.shape-layer)") || null, skip: [roles.canvas, roles.ink],
+      theme: [...Object.values(roles), ...Object.values(ctx.studio.info?.palette || {})] };
+  };
+  return colourKey({ kinds, anchor, fallback: () => ctx.inspector, studio: ctx.studio, settled: () => ctx.figure()?.parts.idle?.(), source });
 }

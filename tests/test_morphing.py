@@ -13,9 +13,11 @@ import json
 import re
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 import zipfile
 from itertools import pairwise
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,6 +29,7 @@ from flexo_talk.morphing import (
     Transition,
     Unit,
     add_transition,
+    page_fades,
     paired,
     plan,
     transition_of,
@@ -456,3 +459,151 @@ def _png() -> bytes:
     return base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAAMBgEB6X0K0gAAAABJRU5ErkJggg=="
     )
+
+
+# -- with clicks (flexo_talk.onclick) --
+
+
+def clicking() -> dict:
+    """Three slides that morph, each walked through on clicks: on the first, words that appear on
+    its first click and a stage hidden from its second; the second shows those words from the
+    start, hides the same stage on its first click, and has a ring that appears on a click."""
+
+    return deck(
+        {
+            "title": "Sampling",
+            "layout": "two-columns",
+            "left": [
+                {"bullets": ["Prior", "Weight"], "click 1": {"highlight": [1]}, "click 2": {}},
+                {"text": "Shown on a click", "hide": True, "click 1": {}},
+            ],
+            "right": [{"figure": figure(3), "frame": "smc", "click 2": {"hide": ["prior"]}}],
+            "shapes": [{"kind": "ellipse", "id": "ring", "at": [700, 400], "size": [80, 60]}],
+        },
+        {
+            "title": "Sampling",
+            "layout": "two-columns",
+            "transition": "morph",
+            "left": [{"bullets": ["Prior", "Weight"]}, {"text": "Shown on a click"}],
+            "right": [{"figure": figure(3), "frame": "smc", "click 1": {"hide": ["prior"]}}],
+            "shapes": [
+                {"kind": "ellipse", "id": "ring", "at": [700, 400], "size": [80, 60], "hide": True, "click 1": {}}
+            ],
+        },
+        {
+            "title": "Sampling",
+            "layout": "two-columns",
+            "transition": {"kind": "morph", "duration": 2},
+            "left": [{"bullets": ["Prior", "Weight"]}],
+            "right": [{"figure": figure(3), "frame": "smc"}],
+        },
+    )
+
+
+def _top_names(xml: str) -> list[tuple[str, int]]:
+    tree = next(ET.fromstring(xml).iter(f"{P}spTree"))
+    found = []
+    for child in tree:
+        properties = next(child.iter(f"{P}cNvPr"), None)
+        if properties is not None and child.tag != f"{P}nvGrpSpPr":
+            found.append((properties.get("name"), int(properties.get("id"))))
+    return found
+
+
+def _named_with(xml: str, words: str) -> str | None:
+    """The name of the slide's shape whose words are ``words``."""
+
+    tree = next(ET.fromstring(xml).iter(f"{P}spTree"))
+    for child in tree:
+        if (
+            "".join(t.text or "" for t in child.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}t"))
+            == words
+        ):
+            return next(child.iter(f"{P}cNvPr")).get("name")
+    return None
+
+
+def test_a_morph_goes_from_the_slide_before_after_its_last_click_to_this_one_before_its_first() -> None:
+    """The slide before is left as its last click shows it -- words that appeared on a click
+    there, and are on this slide from the start, are paired -- and this one is arrived at as it is
+    before its first click: what appears on a click here is not paired with what was there."""
+
+    made = deck_from_document(clicking(), Path("."))
+    rendered = made.render()
+    morphs = plan(rendered)
+    assert morphs.transitions == {1: Transition(), 2: Transition("morph", 2.0)}
+    words = {
+        index: next(ident for ident in names if ident.endswith("left.1"))
+        for index, names in morphs.names.items()
+        if any(ident.endswith("left.1") for ident in names)
+    }
+    assert morphs.names[0][words[0]] == morphs.names[1][words[1]]
+    # The ring is on the first slide; on the second it appears on a click: not paired, not named so.
+    assert morphs.names[0]["slide1.shapes.0"] == "!!ring"
+    assert "slide2.shapes.0" not in morphs.names[1] or morphs.names[1]["slide2.shapes.0"] != "!!ring"
+    # The figure, the same frame, goes on from slide to slide under one name.
+    assert morphs.names[0]["slide1.right.0"] == morphs.names[1]["slide2.right.0"] == morphs.names[2]["slide3.right.0"]
+
+
+def test_a_powerpoint_with_clicks_and_morphs_keeps_its_transition_before_its_timing_and_pairs_lifted_parts(
+    tmp_path: Path,
+) -> None:
+    made = deck_from_document(clicking(), Path("."))
+    pptx = build_deck(made, tmp_path, ("pptx",)).pptx
+    with zipfile.ZipFile(pptx) as archive:
+        slides = [archive.read(f"ppt/slides/slide{n}.xml").decode() for n in range(1, 4)]
+    for xml in slides[1:]:
+        assert xml.index("<p159:morph") < xml.index("<p:timing") if "<p:timing" in xml else "<p159:morph" in xml
+    assert "<p:timing" in slides[0] and "<p:timing" in slides[1]
+    for xml in slides:
+        names = _top_names(xml)
+        # Every shape on a slide either side of a morph named for PowerPoint to pair as the morph does.
+        assert all(name.startswith("!!") for name, _ in names), names
+        assert len({name for name, _ in names}) == len(names)
+        # What the clicks' animations act on is still there, by its id.
+        ids = {int(properties.get("id")) for properties in ET.fromstring(xml).iter(f"{P}cNvPr")}
+        assert {int(spid) for spid in re.findall(r'spTgt spid="(\d+)"', xml)} <= ids
+    first, second, third = (dict(_top_names(xml)) for xml in slides)
+    # The figure's part hidden on a click, lifted out of it on both slides: named alike.
+    lifted = [name for name in first if name.startswith("!!smc ") and "prior" in name]
+    assert lifted and lifted[0] in second
+    # Words that appear on a click on the first slide are paired with those on the second.
+    assert _named_with(slides[0], "Shown on a click") == _named_with(slides[1], "Shown on a click")
+    # The ring that appears on a click on the second is not the first's.
+    assert "!!ring" in first and "!!ring" not in second
+    assert "!!smc" in first and "!!smc" in second and "!!smc" in third
+
+
+def test_a_pdf_of_a_deck_walked_through_on_clicks_fades_only_into_the_first_page_of_a_morph(tmp_path: Path) -> None:
+    made = deck_from_document(clicking(), Path("."))
+    rendered = made.render()
+    assert [item.steps for item in rendered] == [3, 2, 1]
+    assert page_fades(rendered) == [None, None, None, 1.0, None, 2.0]
+    assert page_fades(rendered, handout=True) == [None, 1.0, 2.0]
+    data = build_deck(made, tmp_path, ("pdf",)).pdf.read_bytes()
+    pages = re.findall(rb"/Type /Page /Parent[^\n]*", data)
+    fades = [re.search(rb"/Trans << /Type /Trans /S /Fade /D ([\d.]+) >>", page) for page in pages]
+    assert [fade.group(1) if fade else None for fade in fades] == [None, None, None, b"1", None, b"2"]
+    handout = build_deck(made, tmp_path / "handout", ("pdf",), handout=True).pdf.read_bytes()
+    pages = re.findall(rb"/Type /Page /Parent[^\n]*", handout)
+    fades = [re.search(rb"/Trans << /Type /Trans /S /Fade /D ([\d.]+) >>", page) for page in pages]
+    assert [fade.group(1) if fade else None for fade in fades] == [None, b"1", b"2"]
+
+
+def test_a_slide_that_morphs_is_drawn_at_each_step_as_it_would_be_without(tmp_path: Path) -> None:
+    """A morph is how a slide arrives: its drawing, at each of its clicks (as an agent looks at it,
+    and the PDF draws it), is the slide's own."""
+
+    from flexo_talk.studio.deck_agent import at_step
+
+    document = clicking()
+    still = copy.deepcopy(document)
+    for slide in still["slides"]:
+        slide.pop("transition", None)
+    moving, plain = deck_from_document(document, Path(".")).render(), deck_from_document(still, Path(".")).render()
+    for one, other in zip(moving, plain, strict=True):
+        assert one.svg == other.svg
+        for step in range(1, one.steps + 1):
+            assert one.at_step(step) == other.at_step(step)
+            looked = at_step(SimpleNamespace(svg=one.svg, steps=one.steps), step)
+            assert looked == at_step(SimpleNamespace(svg=other.svg, steps=other.steps), step)

@@ -31,7 +31,7 @@ export function slideTransitions(ctx) {
     if (!pages[from]?.svg || !pages[index]?.svg) return;
     const host = ctx.pageNode();
     if (!host) return;
-    playing = preview(host, pages[from].svg, pages[index].svg, of(index) || { kind: "morph", duration: DURATION },
+    playing = preview(host, pages[from], pages[index], of(index) || { kind: "morph", duration: DURATION },
       { onEnd: () => { playing = null; } });
   }
 

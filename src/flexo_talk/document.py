@@ -53,7 +53,10 @@ one. ``texts`` changes its texts, each named by its id in the file -- or, with n
 place among the file's texts (``text: 3``): ``[{id: text1, words: "Encoder\nblock", size:
 20, bold: true, italic: false, colour: "#c0392b"}]``, its size in points at the drawing's own
 size. ``colours`` draws a colour in another wherever it is used: ``{"#4a90d9": "#2e7d32"}``.
-The file is never changed: a text it no longer has is passed over.
+The file is never changed: a text it no longer has is passed over. A listing (``code``) has
+its words coloured by their kinds in the theme's colours, read as the ``language`` it names
+(``python``, ``rust``, ``bash``..., ``text`` for none) or else the one it looks like
+(``flexo_talk.codecolours``).
 
 A figure lives in the deck: written in its block, as the studio writes every figure it makes
 (``figure: {figure: {id: pipeline}, nodes: [...], edges: [...], groups: [...]}``) -- or, where one
@@ -93,6 +96,19 @@ pictures, numbers' figures and code's lines by theirs. ``{bullets: [...], highli
 the list's other items faint. A shape takes ``hide: true``, ``dim: true`` and ``highlight: true``
 (``hidden: true`` is ``hide: true``, as decks said it before); words, ``[words]{dim}``
 (``flexo_talk.showing``).
+How any object or shape is shown may change on a click, held until a later click changes it
+again: ``click N`` beside its ``hide``, ``dim`` and ``highlight`` is a mapping of those same
+keys -- all of how it is shown from click N on (``{}``: plainly) -- a figure or a list walked
+through on one slide (``flexo_talk.onclick``)::
+
+  - {figure: '#sn2', click 1: {highlight: [nucleophile]}, click 2: {highlight: [leaving]}, click 3: {}}
+  - {bullets: [Attack, Departure, Inversion], click 1: {highlight: [1]}, click 2: {highlight: [2]}}
+  - {text: Why it inverts, hide: true, click 3: {}}                # comes on click 3
+
+The clicks are the slide's, counted as its builds are (``click 2`` comes with its second build);
+the slide has as many as its builds take or its last ``click`` names. What a figure's click does
+not say of its parts is as the figure says it. Each step is a page of the PDF and a click of the
+PowerPoint.
 A visualisation that changes a little from slide to slide -- a part added, a label changed,
 each slide's its own figure -- is drawn as one by giving its blocks one ``frame``: figures
 naming the same frame are laid out with each other's parts (those a slide's lacks kept room
@@ -114,6 +130,12 @@ mapped (``[O-:5]`` is 5); an arrow from a lone pair is ``"5 -> 2"``, from a bond
 be a placeholder, drawn as written, for a reaction in general: ``{smiles: "[X:1].[Y:2][Z:3]",
 arrows: ["1 -> 2", "2-3 -> 3"]}``, ``[Nu-]``, ``[E]``, ``[LG]``, ``[R1]`` (``[*Ar]``,
 ``[*B]`` where the letters are an element's). ``math`` is LaTeX set as an equation.
+
+Any slide, and any object on one, may carry ``comments``: the review notes people left on it,
+each a thread -- ``{id, author, time, text, replies: [{author, time, text}], resolved: true}``,
+one on a part of a figure naming it (``part: encoder``) -- never drawn, presented or exported
+on a slide (a PowerPoint carries the open ones as its own comments). An agent reads and answers
+them with its comment tools rather than writing them by hand.
 
 Any slide may have ``shapes``, drawn where they are put, over its words and objects: an
 arrow at part of a figure, a ring round a structure's pocket, a brace and its words beside a
@@ -231,6 +253,7 @@ from typing import Any
 
 import yaml
 from flexo.diagnostics import described
+from flexo.ir.semantic import FigureSpec
 from flexo.roundtrip import rewrite
 
 from flexo_talk.deck import (
@@ -254,6 +277,7 @@ from flexo_talk.deck import (
     share_of,
 )
 from flexo_talk.morphing import morph_name, transition_of
+from flexo_talk.onclick import clicks_said, entry_problem, key_of, nearly_click
 
 SCHEMA_VERSION = 1
 
@@ -269,7 +293,7 @@ BLOCKS: dict[str, tuple[str, ...]] = {
     "plot": ("aspect", "width"),
     "table": ("header", "align", "size", "caption", "outline", "width"),
     "gallery": ("columns", "height", "crop", "size", "align", "width"),
-    "code": ("size", "width"),
+    "code": ("size", "width", "language"),
     "quote": ("by", "size", "width"),
     "stats": ("colour", "size", "width"),
     "callout": ("title", "colour", "size", "width"),
@@ -279,25 +303,30 @@ BLOCKS: dict[str, tuple[str, ...]] = {
 """Each block kind and the options it takes beside its value. Every kind takes ``width``
 (points): the most it takes across its place, set there as its place sets it."""
 
-BLOCK_KEYS = ("placeholder", "build", "horizontal", "vertical", "at", "locked", "hide", "dim", "highlight", "morph")
+BLOCK_KEYS = (
+    "placeholder", "build", "horizontal", "vertical", "at", "locked", "hide", "dim", "highlight", "comments", "morph",
+)
 """What every block takes besides its kind's options: whether it is a placeholder, whether it
 builds in on a click, where it stands across and down its place -- or, ``at: [x, y]``, where
 it is placed on the slide, out of its place's flow (its ``width`` its width there, both in
 the units the slide's shapes are placed in) -- whether it is locked where it is, and how it
 is shown: ``hide``, ``dim`` and ``highlight``, each ``true`` (the whole object) or a list of
-its parts (``flexo_talk.showing``) -- and ``morph``, the name it shares with the object it goes
+its parts (``flexo_talk.showing``) -- ``comments``, the threads people left on it, never
+drawn (``flexo.studio.commenting``) -- and ``morph``, the name it shares with the object it goes
 with on the slide before or after, for a slide that morphs (``flexo_talk.morphing``)."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
     "conventions", "sketch", "style", "logos", "logos_on", "logo_height", "spelling",
 )
-COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes", "transition")
+COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes", "comments", "transition")
 """The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
 and edited, but the studio neither presents nor exports it. ``shapes`` are drawn where they
-are put, over its words and objects (see the module's docs). ``transition: morph`` moves what
-the slide shares with the one shown before it into place (``{kind: morph, duration: 2}``, in 2
-seconds; ``flexo_talk.morphing``)."""
+are put, over its words and objects (see the module's docs). ``comments`` are the threads
+people left on the slide, never drawn: ``[{id, author, time, text, part, replies, resolved}]``
+(``flexo.studio.commenting``), as an object's are. ``transition: morph`` moves what the slide
+shares with the one shown before it into place (``{kind: morph, duration: 2}``, in 2 seconds;
+``flexo_talk.morphing``)."""
 SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "title": ("title", "subtitle", "author", "date"),
     "section": ("title", "subtitle"),
@@ -1101,7 +1130,13 @@ def add_block(
     # middle``, ``vertical: 0.25``), or anywhere on the slide, out of its place's flow (``at:
     # [x, y]``, its ``width`` its width there): see ``Region.place``. And any may be locked
     # where it is in the studio (``locked: true``).
-    _only(block, (kind, *BLOCKS[kind], *BLOCK_KEYS), f"{where} ({kind})")
+    # And how any is shown may change on a click (``click 2: {dim: true}``): flexo_talk.onclick.
+    for key in block:
+        if nearly_click(key):
+            raise DeckDocumentError(f"{where} ({kind})", f"{key} names no click: say click 2 (a space, then a number "
+                                                         f"from 1).")
+    later = clicks_said(block)
+    _only(block, (kind, *BLOCKS[kind], *BLOCK_KEYS, *map(key_of, later)), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
@@ -1182,7 +1217,11 @@ def add_block(
             # ways. (Said true, it is the whole figure: as any object's, below.)
             apart = {key: block[key] for key in ("hide", "dim", "highlight") if key in block and block[key] is not True
                      and block[key] is not False and block[key] is not None}
-            region.add(_shown(_figure(base, shown, here, region), apart, here), **options)
+            made = _figure(base, shown, here, region)
+            region.add(_shown(made, apart, here), **options)
+            if later and isinstance(made, FigureSpec):
+                # (What a click does not say of its parts is as the figure says it itself.)
+                region.own[len(region.blocks) - 1] = (made.hidden, made.dimmed, made.highlighted)
             if strays and isinstance(region.blocks[-1], _Figure):
                 region.blocks[-1].said = (*region.blocks[-1].said, *strays[0])
         elif kind == "plot":
@@ -1218,6 +1257,20 @@ def add_block(
                            if not (kind == "figure" and isinstance(value, list))})
         except SettingError as error:
             raise DeckDocumentError(here, str(error)) from error
+        region.sources[-1] = dict(block)
+    for number, entry in later.items():
+        problem = entry_problem(entry)
+        if problem:
+            raise DeckDocumentError(here, f"{key_of(number)} {problem}")
+        entry = dict(entry or {})
+        if kind == "figure" and not isinstance(region.blocks[-1], _Figure):
+            # (A figure not drawn -- its file not there -- has no parts to show apart.)
+            entry = {key: value for key, value in entry.items() if not isinstance(value, list)}
+        try:
+            region.show(click=number, **entry)
+        except SettingError as error:
+            raise DeckDocumentError(f"{here} {key_of(number)}", str(error)) from error
+    if later:
         region.sources[-1] = dict(block)
     if block.get("placeholder") or (kind == "figure" and _lone_shape(value)):
         region.placeholders.add(len(region.blocks) - 1)

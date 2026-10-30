@@ -1,0 +1,13 @@
+/* A slide's clicks under it while it is edited (showsteps.js). */
+.steps-chip { cursor: pointer; font-family: inherit; }
+.steps-chip:hover { color: var(--ink); }
+.steps-bar { display: inline-flex; align-items: center; gap: 1px; height: 22px; padding: 0 2px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--sunken); color: var(--ink-2); font-size: 11px; font-weight: 550; white-space: nowrap; }
+.steps-at { padding: 0 6px; font-variant-numeric: tabular-nums; }
+.steps-button { display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: inherit; cursor: pointer; }
+.steps-button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.steps-button:disabled { opacity: 0.35; cursor: default; }
+.steps-button svg { width: 11px; height: 11px; }
+/* Shown at a click: what builds in later a ghost, as what is hidden is. */
+.deck-stage svg [data-flexo-later] { opacity: 0.2; }

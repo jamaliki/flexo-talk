@@ -1,0 +1,55 @@
+/* A deck's comments (comments.js), in the studio only: a small speech-bubble marker at the corner
+   of what an open thread is about, how many at a thumbnail's corner, and the thread in a popover.
+   Yellow, as a Mac's notes and Keynote's comments are: never the blue of what is chosen, nor the
+   amber of a TODO. */
+
+:root {
+  --comment: #ffd23f;
+  --comment-ink: #4a3b00;
+  --comment-ring: rgba(150, 110, 0, 0.45);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --comment: #f2c230; --comment-ink: #2b2200; --comment-ring: rgba(0, 0, 0, 0.5); }
+}
+:root[data-theme="dark"] { --comment: #f2c230; --comment-ink: #2b2200; --comment-ring: rgba(0, 0, 0, 0.5); }
+
+/* On the slide: over its drawing, under nothing of the editor's own. */
+.comment-markers { position: absolute; inset: 0; pointer-events: none; z-index: 7; }
+.comment-marker { position: absolute; display: grid; place-items: center; width: 22px; height: 21px; padding: 0; border: 0; pointer-events: auto;
+  border-radius: 11px 11px 11px 3px; background: var(--comment); color: var(--comment-ink); cursor: pointer;
+  box-shadow: 0 0 0 1px var(--comment-ring), 0 1px 3px rgba(0, 0, 0, 0.22); transition: transform 0.12s, box-shadow 0.12s; }
+.comment-marker svg { width: 13px; height: 13px; }
+.comment-marker:hover { transform: scale(1.08); }
+.comment-marker.open, .comment-marker:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0, 0, 0, 0.22); }
+.comment-marker.pending { opacity: 0.85; }
+.comment-marker.fresh { animation: comment-in 0.3s ease-out; }
+@keyframes comment-in { from { transform: scale(0.4); opacity: 0; } }
+.comment-count { font: 700 11px/1 var(--font); font-variant-numeric: tabular-nums; }
+
+/* In the slide list: at the thumbnail's top right corner. */
+.thumb > .comment-badge { position: absolute; top: -5px; right: -5px; z-index: 1; display: inline-flex; align-items: center; gap: 2px; height: 16px; min-width: 16px;
+  padding: 0 3px; box-sizing: border-box; justify-content: center; border-radius: 8px 8px 8px 2px; background: var(--comment); color: var(--comment-ink);
+  font: 700 9.5px/1 var(--font); font-variant-numeric: tabular-nums; box-shadow: 0 0 0 1px var(--comment-ring); pointer-events: none; }
+.thumb > .comment-badge svg { width: 10px; height: 10px; }
+
+/* A thread. */
+.menu.comment-pop { width: 300px; max-width: 300px; padding: 10px 10px 8px; }
+.comment-thread + .comment-thread { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.comment-head { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+.comment-head .avatar { flex: none; font-size: 9px; }
+.comment-author { font-weight: 600; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comment-time { flex: none; color: var(--ink-3); font-size: 11px; white-space: nowrap; }
+.comment-actions { margin-left: auto; display: inline-flex; gap: 0; opacity: 0.6; transition: opacity 0.12s; }
+.comment-thread:hover .comment-actions, .comment-actions:focus-within { opacity: 1; }
+.comment-actions .btn.small { width: 24px; height: 22px; padding: 0; }
+.comment-text { margin: 2px 0 0 26px; font-size: 13px; line-height: 1.42; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.comment.reply { margin-top: 8px; }
+.comment-compose { margin: 8px 0 0 26px; display: grid; gap: 6px; }
+.comment-thread.new .comment-compose { margin-top: 6px; }
+.comment-row { display: flex; align-items: flex-end; gap: 4px; }
+.comment-field, .comment-name { flex: 1; min-width: 0; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: var(--radius-s, 6px);
+  background: var(--raised); padding: 5px 8px; font-size: 13px; line-height: 1.4; outline: none; transition: border-color 0.12s, box-shadow 0.12s; }
+.comment-field { resize: none; overflow-y: auto; max-height: 120px; }
+.comment-field:focus, .comment-name:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-halo); }
+.comment-field::placeholder, .comment-name::placeholder { color: var(--ink-3); }
+.comment-row .btn.small { width: 28px; height: 28px; padding: 0; }

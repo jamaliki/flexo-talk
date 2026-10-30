@@ -130,8 +130,10 @@ enc}`, a shape's `morph: ring`), for when nothing else says it; the same frame; 
 GIF, figure (`'#name'`, a file, or one written in the deck -- a duplicated slide's too) or shape
 (by its `id`), the same words, list, table or equation, the title, number and logos; then an
 object of the same kind in the same column whose box is where the other's was. Nothing is paired
-for looking alike. It plays only going forward to the next slide shown -- going back or jumping
-cuts -- and not where the system asks for less motion. In the studio, a slide's **Transition**
+for looking alike. A slide walked through on clicks (`click 1:`) is left as its last click shows
+it, and the slide after arrives as it is before its first click: what a click there shows later
+is not paired, and a click as it arrives ends the morph. It plays only going forward to the next
+slide shown -- going back or jumping cuts -- and not where the system asks for less motion. In the studio, a slide's **Transition**
 (Format) sets it and its duration and plays it on the stage (**Preview**); a slide that morphs is
 marked under its number in the slide list (a click plays it). The PowerPoint has PowerPoint's own
 Morph on that slide (a fade where PowerPoint is too old for it), each object either side named
@@ -144,6 +146,36 @@ click. The rest is there from the start, a line comes with the later of its ends
 nothing moves. It is a state each in the slideshow, a page each in the PDF and a click
 each in the PowerPoint. In the studio: choose shapes in the figure, **Build ›
 Appears › On Click 1**.
+
+How anything is shown can change on a click, and holds until a later click changes it again:
+a figure or a mechanism walked through part by part, a list item by item, on one slide. Beside
+its `hide`, `dim` and `highlight`, an object (or a shape) says how it is shown from a click on
+with `click N` -- the same keys, all of how it is shown from that click on (`{}`: plainly):
+
+```yaml
+body:
+- figure: '#sn2'
+  click 1: {highlight: [nucleophile, attack]}   # the rest of the figure faint
+  click 2: {highlight: [leaving, departure]}
+  click 3: {}                                   # all of it again
+- bullets: [Attack, Departure, Inversion]
+  click 1: {highlight: [1]}
+  click 2: {highlight: [2]}
+shapes:
+- {kind: ring, at: [300, 220], size: [120, 80], hide: true, click 2: {}}   # comes on click 2
+```
+
+The clicks are the slide's, counted as its builds are: `click 2` comes with its second build,
+and the slide has as many clicks as its builds take or its last `click` names. What a figure's
+click does not say of its parts is as the figure says it. Presenting, each click changes the
+slide drawn in place, forward, back or on a jump; the PDF has a page for each step (one, as a
+handout); the PowerPoint has a click for each, Transparency for what is faint (flexo's faint, on
+the page), Appear and Disappear for what is hidden and shown again, and a figure's parts lifted
+out of it to be animated, each where it is (a table's rows and cells are veiled, as PowerPoint
+animates a table whole). In Python: `slide.bullets(...).show(highlight=[1], click=1)`. In the
+studio, the builds under the slide show it at each of its clicks (‹ ›, **+** a new click, the bin
+to remove one); at a click, every **Show** -- an object's, its parts', a figure's parts' --
+shows and says how it is shown from that click on, and its **From** chooses the click.
 
 Type can be set by role: `Deck(font="IBM Plex Sans", title_font="Latin Modern
 Roman", figure_font="Figtree")` sets the words, the titles and section headings,
@@ -855,7 +887,11 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   takes `#1f77b4`, `1f77b4`, `#17b`, `rgb(31, 119, 180)`, `hsl(…)`, `(0.12, 0.47, 0.71)`,
   `steelblue` or `tab:blue`, typed (Return) or pasted (at once), each one step, an alpha
   after it (`#1f77b4cc`) the fill's or line's opacity; the colours applied last sit beside
-  it. **Set Colour…** (⇧⌘C, Format) opens a small popover by what is chosen -- shapes, a
+  it. A colour's well opens the studio's picker, with the colours **On This Slide** and an
+  eyedropper for any colour on the screen -- another object's own colour, exactly and by the
+  theme's name where it has one, when it is one of the slide's (see flexo's README); **Pick
+  Colour…** (⌃⌘C, Format) is the eyedropper at once, for what is chosen. **Set Colour…**
+  (⇧⌘C, Format) opens a small popover by what is chosen -- shapes, a
   group, a text, both, a figure's shapes, or with nothing chosen the slide's background --
   naming what it will colour ("Fill of 3 Shapes", a switch for its Outline and Text): paste
   a code and it is applied, or type one and Return; a colour copied already is shown, ready
@@ -979,6 +1015,36 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   As a show starts or the deck is exported, a quiet word says "2 slides have TODOs".
   Nothing of it is presented or exported, and "todo" or "Todo" is just a word
   (`static/todos.js`, flexo's `todos.js`).
+- **Comments**: a review note left on a slide, on an object on it, or on a part of a
+  figure there -- **Add Comment** (⇧⌘K, Insert › Comment in the Mac app, or the object's,
+  the part's or the slide's menu) on what is chosen. Each is a thread: a small yellow
+  marker beside the corner of what it is about (the slide's own at its top right), how many
+  at the thumbnail's corner, and, clicked, the comments and their replies, by whom and when,
+  a field to reply in (Return sends), **Resolve** and **Delete**. The side panel's
+  **Comments** lists every thread in the deck, open or resolved, to work through. Each
+  comment, reply and resolve is a step of yours to undo. They are written in the deck,
+  where they are about, so they travel and merge with it --
+
+  ```yaml
+  - title: The model
+    comments:
+    - id: c3f9a2b
+      author: Ana Ruiz
+      time: '2026-10-29T14:03:00Z'
+      text: A takeaway in the title, please.
+      replies:
+      - {author: Claude Code, time: '2026-10-29T14:05:00Z', text: Retitled it.}
+      resolved: true
+    body:
+    - figure: {...}
+      comments:
+      - {id: c71d0e4, author: Ana Ruiz, time: '2026-10-29T14:07:00Z', text: What does it take in?, part: encoder}
+  ```
+
+  -- and never drawn: not presented, not in a PDF or a picture. A PowerPoint carries the
+  open ones as its own comments, replies threaded, each beside what it is about. An agent
+  lists, answers and resolves them with its tools (`list_comments`, `reply_to_comment`,
+  `resolve_comment`, `add_comment`), so "work through my comments" is a task to give it.
 - **Others, live**: slides an agent or another person changes flash in their
   colour, and their avatars show which slide they are on.
 - **Present** (⌘↩, or ⌥⌘↩ from the first slide) plays the deck full screen, as
@@ -1005,6 +1071,7 @@ flexo-talk studio talk.flexo          # edit it in the browser: a bundle, made i
 flexo-talk studio talk.yaml           # a deck in a folder instead, its files beside it
 flexo bundle talk.yaml -o talk.flexo  # the deck and every file it names, as one file to send
 flexo-talk build talk.flexo --trust   # built straight from a bundle, its plots' Python run
+flexo-talk import talk.pptx           # a PowerPoint or Keynote deck made a new deck: talk.flexo, here
 ```
 
 A bundle (`.flexo`, see flexo's README) holds the deck and every file it names: its theme
@@ -1033,6 +1100,45 @@ deck, and the files it names (structures, pictures, data) are copied into the de
 under `assets/<its name>/`, so the deck -- and its bundle -- holds them. In a browser, which is
 given a dropped file but not where it was, drop the figure file together with the files it
 names (see `flexo_talk.embedding`).
+
+## PowerPoint and Keynote decks, imported
+
+A talk given before, or slides a co-author sends, comes into Flexo as a deck of its own:
+`flexo-talk import talk.pptx` (or `talk.key`; `-o` names the bundle, `--folder` makes a folder),
+or in Flexo Studio File › Import Presentation…, a `.pptx` or `.key` opened with it or dropped on
+it -- which asks where the new deck goes and opens it. The source is only read. Each slide looks
+as it did:
+
+- its words, lists (their levels, bullets or numbers), equations, pictures and tables are the
+  slide's objects placed where they stood (`at`, `width`), their words with their bold, italic,
+  scripts, links and colours where these differ from the deck's ink; a text box whose
+  paragraphs differ (a heading over a list) is set as objects one under another, as its program
+  set them, a box's words in its middle or at its foot where they stood there;
+- a slide's title is its title, drawn where the deck's titles are -- the deck's look set from
+  the source's (its titles' size, weight and side, how far in they stand, no rule under them) --
+  unless it stands elsewhere, when it is placed words as any others; a title slide is set as it
+  was, its words placed;
+- shapes are Flexo's own kinds where it has them (rectangles, rounded ones, ellipses, triangles,
+  diamonds, block arrows, stars, chevrons, clouds, speech bubbles...), any other outline a path,
+  with their fills (gradients too), outlines, dashes, arrowheads, words, turns and flips; lines
+  and connectors are lines and elbows glued to the shapes and objects they join; a group is a
+  group, and one of very many shapes (a figure drawn in thousands of outlines) a picture of
+  them, made shapes again by a double-click;
+- Office Math (PowerPoint's equations) and Keynote's equations, LaTeX or MathML, are Flexo's
+  TeX, displayed or in words; a PDF embedded as an object is its picture, read as Flexo reads
+  PDFs; SmartArt the shapes PowerPoint drew it in;
+- the slide's size, its background, notes and skipped slides come too, and the source's faces
+  and colours become a theme of the deck's own (`theme.yaml`: its face, its title face, its
+  colours as a palette, its words' ink and page), a face this Mac lacks set in the nearest it
+  has (said).
+
+Nothing makes an import fail but a file that is no deck. What cannot come across -- a chart, a
+Keynote table, a movie, sound, a Windows metafile picture -- is kept as its place: a picture of
+it where the source has one (a movie's first frame), else a dashed box hidden from the show and
+every export, marked TODO (so the slide list glows where work is left, and Next TODO goes to
+each); the import's report says what became placeholders, and where. Keynote's files are read
+with no library but Python's (`flexo_talk.importing.iwa`). The PowerPoint and Keynote readers
+adapt DeckWerk's (MIT; see each file's header).
 
 ## Development
 

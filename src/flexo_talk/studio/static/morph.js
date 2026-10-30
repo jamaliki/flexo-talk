@@ -24,6 +24,7 @@
 // src/shared/glyphMatch.ts), MIT licence, Copyright (c) 2026 Vincent Sitzmann.
 
 import { ownResources } from "/static/studio/drawings.js";
+import { showStep } from "/static/kinds/deck/stepping.js";
 import { DURATION, centre, matchGlyphs, owned, paired, transitionOf } from "/static/kinds/deck/morphpairs.js";
 
 export { DURATION, LONGEST, SHORTEST, matchGlyphs, paired, transitionOf, transitionWritten } from "/static/kinds/deck/morphpairs.js";
@@ -495,9 +496,13 @@ const reduced = () => Boolean(globalThis.matchMedia?.("(prefers-reduced-motion: 
 // -- presenting (present.js) --
 
 // Called as a show draws a slide (`state`: index, step, ended, blank) over the one it showed in
-// `root`, before that one goes: what to put in its place -- the frame given (`frame(shown)`), the
-// slide morphing into it from the one before where it says so and the show went forward to it,
-// or the frame already there where the same slide is drawn again as it arrives.
+// `root`, before that one goes: what to put in its place -- the frame given (`arrive(shown)`), the
+// slide morphing into it from the one before where it says so and the show went forward to it.
+// The show keeps a slide's drawing and shows each of its clicks by changing it (stepping.js): the
+// slide before is measured as it stands after its last click, and the slide arrived at morphs into
+// it as it stands before its first. The same slide drawn again as it arrives (the hint going) is
+// the same drawing, moved into the new frame: it goes on arriving. A click as it arrives ends the
+// morph -- the slide as it is, then the click -- as going back or jumping does.
 export function arriving(root, deck, state) {
   const was = root.ssMorph || null;
   const slide = deck.slides[state.index];
@@ -506,9 +511,9 @@ export function arriving(root, deck, state) {
   const old = root.querySelector(":scope > .ss-frame");
   const same = (shown) => shown;
   if (was?.job && !was.job.done) {
-    if (old && now.shown && was.shown && was.index === now.index && was.step === now.step && was.svg === now.svg) {
+    if (now.shown && was.shown && was.index === now.index && was.step === now.step && was.svg === now.svg) {
       now.job = was.job;
-      return () => old;
+      return same;
     }
     was.job.cancel();
   }
@@ -529,22 +534,24 @@ export function arriving(root, deck, state) {
 // -- previewing (the editor) --
 
 // The morph into a slide played over `host` (the stage's page), from `from` to `to` (each a
-// slide's drawing, as text): the slide before shown a moment, morphing into this one, which is
+// slide's page: { svg, steps }), as presenting plays it: the slide before shown a moment as it
+// stands after its last click, morphing into this one as it stands before its first, which is
 // held a moment, then gone. A click or a key ends it. { finish }, or null.
 export function preview(host, from, to, transition, { onEnd } = {}) {
-  if (!host || !from || !to) return null;
+  if (!host || !from?.svg || !to?.svg) return null;
   dress();
   const layer = document.createElement("div");
   layer.className = "morph-preview";
-  const drawn = (text) => {
+  const drawn = (page, step) => {
     const box = document.createElement("div");
     box.className = "morph-preview-slide";
-    box.innerHTML = String(text).replace(/^<\?xml[^>]*>\s*/, "");
+    box.innerHTML = String(page.svg).replace(/^<\?xml[^>]*>\s*/, "");
     const svg = ownResources(box.querySelector("svg"));
     if (svg) { svg.removeAttribute("width"); svg.removeAttribute("height"); }
+    showStep(svg, step);
     return box;
   };
-  const first = drawn(from);
+  const first = drawn(from, Math.max(1, Number(from.steps) || 1));
   layer.append(first);
   host.append(layer);
   let job = null, timer = 0, gone = false;
@@ -563,9 +570,7 @@ export function preview(host, from, to, transition, { onEnd } = {}) {
   const seconds = transition?.duration ?? DURATION;
   timer = setTimeout(() => {
     const before = measure(first.querySelector("svg"));
-    const second = drawn(to);
-    // Arrived at, it shows what it shows before its first click.
-    second.querySelectorAll("[data-flexo-step]").forEach((item) => { if (Number(item.getAttribute("data-flexo-step")) > 1) item.remove(); });
+    const second = drawn(to, 1);
     first.replaceWith(second);
     // (Held a moment once it has arrived, then gone.)
     const settle = () => { if (!gone) timer = setTimeout(done, 450); };
@@ -583,7 +588,7 @@ function dress() {
 .morph-preview { position: absolute; inset: 0; z-index: 30; background: #fff; line-height: 0; overflow: hidden; cursor: default; border-radius: inherit; }
 .morph-preview-slide, .morph-preview-slide > svg { display: block; width: 100%; height: 100%; }
 .morph-preview svg { text-rendering: geometricPrecision; }
-.morph-preview [data-flexo-placeholder], .morph-preview [data-flexo-editing] { display: none; }
+.morph-preview [data-flexo-placeholder], .morph-preview [data-flexo-editing], .morph-preview [data-flexo-later] { display: none; }
 .morph-preview [data-flexo-presented] { display: inline; }
 .morph-preview svg [data-flexo-show="hidden"] { visibility: hidden !important; opacity: 1 !important; }
 `;

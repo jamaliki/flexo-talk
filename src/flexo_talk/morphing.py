@@ -13,7 +13,9 @@ motion, and so does a slide that says::
 What the two slides share moves from where it was to where it is, growing or shrinking as it
 goes; what only the slide before has fades out in the first quarter of the time, and what only
 this one has fades in over the last quarter. A slide morphs only from the one shown before it,
-going forward: a slide gone back to, or jumped to, is simply shown.
+going forward: a slide gone back to, or jumped to, is simply shown. A slide walked through on
+clicks (``flexo_talk.onclick``) is left as its last click shows it, and the slide after arrives as
+it is before its first: what appears there on a click comes after the morph.
 
 **What is shared** is found in this order, each step among what the steps before left
 unpaired, the nearest first where several could be:
@@ -529,16 +531,26 @@ class Plan:
         transition = self.transitions.get(index)
         return (transition, tuple(sorted(self.names.get(index, {}).items())))
 
-    def write(self, slide_element: Any, tree: Any, index: int) -> list[tuple[Any, str]]:
-        """Slide ``index``'s transition written into it; and each of its objects that has a
-        name found (``tree``: its shapes, before they are named as a person would name them),
-        with the name it will have -- given it by ``rename`` once they are."""
+    def write(
+        self, slide_element: Any, tree: Any, index: int, drawn: str | None = None, out_of: dict[str, str] | None = None
+    ) -> Named | None:
+        """Slide ``index``'s transition written into it -- before its timing, which its clicks'
+        animations are -- and each of its objects that has a name found (``tree``: its shapes,
+        before they are named as a person would name them), with the name it will have, given it
+        by ``rename`` once they are. What its clicks show anew is lifted out of the object it is
+        in, a group of its own (``pptx_steps.lifted``: ``drawn``, the drawing it is lifted in, and
+        ``out_of``, each group's object, by name): each is named for its object and its parts, so
+        the same parts lifted on a slide either side are paired, as the morph pairs them."""
 
         if index in self.transitions:
             add_transition(slide_element, self.transitions[index])
-        names = self.names.get(index)
+        names = dict(self.names.get(index) or {})
         if not names:
-            return []
+            return None
+        for group, holder in (out_of or {}).items():
+            if holder in names and (parts := _lifted_parts(drawn, group, holder)):
+                said = " ".join(parts)
+                names[group] = f"{names[holder]} {said if len(said) <= 48 else _hashed('parts', said)}"
         found: list[tuple[Any, str]] = []
         for child in tree:
             properties = list(child.iter(f"{{{_P}}}cNvPr"))
@@ -549,14 +561,56 @@ class Plan:
                 continue
             # (An equation is its PowerPoint's own and flexo's drawing for others, one each.)
             found += [(each, name) for each in properties if each.get("name") == properties[0].get("name")]
-        return found
+        return Named(tree, index, found)
 
 
-def rename(found: list[tuple[Any, str]]) -> None:
-    """What ``Plan.write`` found named as it said, now that nothing finds it by its id."""
+@dataclass(slots=True)
+class Named:
+    """What ``Plan.write`` found on a slide to name, to be named so by ``rename``."""
 
-    for properties, name in found:
+    tree: Any
+    index: int
+    found: list[tuple[Any, str]]
+
+
+def rename(named: Named | None) -> None:
+    """What ``Plan.write`` found named as it said, now that nothing finds it by its id; and any
+    other shape on the slide (a veil a click lifts off a table's row) a name no other slide has,
+    for PowerPoint to pair nothing the morph does not."""
+
+    if named is None:
+        return
+    for properties, name in named.found:
         properties.set("name", name)
+    done = {id(properties) for properties, _ in named.found}
+    count = 0
+    for child in named.tree:
+        properties = next(child.iter(f"{{{_P}}}cNvPr"), None)
+        if properties is None or id(properties) in done or (properties.get("name") or "").startswith("!!"):
+            continue
+        count += 1
+        properties.set("name", f"!!{properties.get('name') or 'Shape'} {named.index + 1}.{count}")
+
+
+def _lifted_parts(drawn: str | None, group: str, holder: str) -> list[str]:
+    """The parts of ``holder`` (an object's id) lifted into ``group`` in the drawing ``drawn``, by
+    their ids within it, outermost only, in order."""
+
+    if not drawn:
+        return []
+    try:
+        root = ET.fromstring(drawn)
+    except ET.ParseError:
+        return []
+    element = next((item for item in root.iter() if item.get("id") == group), None)
+    if element is None:
+        return []
+    found = [
+        ident.removeprefix(f"{holder}.")
+        for item in element.iter()
+        if (ident := item.get("id") or "").startswith(f"{holder}.") and ident != group
+    ]
+    return [part for part in found if not any(part.startswith(f"{other}.") for other in found if other != part)]
 
 
 _NOUNS = {
@@ -594,15 +648,22 @@ def plan(rendered: Sequence[Any]) -> Plan:
     if not made.transitions:
         return made
     involved = sorted({at for index in made.transitions for at in (index - 1, index)})
-    units: dict[int, list[Unit]] = {}
+    # Each slide as it is arrived at (before its first click: what builds in later, and what a
+    # click shows first, not there yet) and as it is left (after its last click): a morph goes
+    # from the one to the other.
+    entered: dict[int, list[Unit]] = {}
+    left: dict[int, list[Unit]] = {}
 
-    def of(index: int) -> list[Unit]:
-        if index not in units:
+    def units(index: int, *, leaving: bool) -> list[Unit]:
+        kept = left if leaving else entered
+        if index not in kept:
+            item = rendered[index]
             try:
-                units[index] = units_of(rendered[index].svg, entering=index in made.transitions)
+                svg = item.at_step(item.steps) if leaving and item.steps > 1 else item.svg
+                kept[index] = units_of(svg, entering=not leaving)
             except (ET.ParseError, ValueError):
-                units[index] = []
-        return units[index]
+                kept[index] = []
+        return kept[index]
 
     taken: set[str] = set()
 
@@ -627,15 +688,17 @@ def plan(rendered: Sequence[Any]) -> Plan:
         return name
 
     for index in involved:
-        mine = of(index)
         names: dict[str, str] = {}
-        partners: dict[int, int] = {}
         if index in made.transitions:
-            partners = {j: i for i, j in paired(of(index - 1), mine)}
-        before = made.names.get(index - 1, {})
-        olds = of(index - 1) if index in made.transitions else []
-        for j, unit in enumerate(mine):
-            was = before.get(olds[partners[j]].ident) if j in partners else None
-            names[unit.ident] = was or fresh(unit)
+            olds, mine = units(index - 1, leaving=True), units(index, leaving=False)
+            partners = {j: i for i, j in paired(olds, mine)}
+            before = made.names.get(index - 1, {})
+            for j, unit in enumerate(mine):
+                was = before.get(olds[partners[j]].ident) if j in partners else None
+                names[unit.ident] = was or fresh(unit)
+        if index + 1 in made.transitions:
+            # (What it has only once its clicks have shown it, its own: the slide after pairs it.)
+            for unit in units(index, leaving=True):
+                names.setdefault(unit.ident, fresh(unit))
         made.names[index] = names
     return made

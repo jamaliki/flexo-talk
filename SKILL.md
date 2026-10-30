@@ -223,6 +223,13 @@ with English words, numbers, and maths inside it kept in order.
   pictures, numbers' figures, code's lines. `{bullets: [...], highlight: [2]}` draws the other
   items faint. Shapes take `hide: true`, `dim: true`, `highlight: true`; words `[words]{dim}`.
   `stages: [[ids], [ids]]` on a figure block builds it up on one slide, a click each.
+- **Shown anew on a click** (a walk through a figure, a mechanism, a list): beside `hide`, `dim`
+  and `highlight`, any block or shape takes `click N: {hide, dim, highlight}` -- all of how it is
+  shown from click N on, held until a later `click` of its own (`click 3: {}`: plainly again):
+  `{figure: '#sn2', click 1: {highlight: [nu]}, click 2: {highlight: [lg]}, click 3: {}}`. Clicks
+  are the slide's, counted as its builds are (`click 2` comes with the second build). What a
+  figure's click does not say of its parts is as the figure says it. Python:
+  `.show(highlight=[1], click=1)`. Each step is a PDF page and a PowerPoint click.
 - **A figure that changes from slide to slide**: give each slide's figure block the same
   `frame: smc` -- each its own figure (a part added, a label changed) -- and they are drawn as
   one: laid out with each other's parts (unseen), at one scale and from one top left, so the
@@ -358,12 +365,20 @@ settings. It presents full screen and
 exports PPTX, PDF, SVG and PNG. People and agents edit the same document live.
 
 As an agent: `claude mcp add flexo-studio -- flexo studio mcp` (once, in the
-folder) gives `list_documents`, `open_document`, `read_document`,
-`edit_document`, `write_document`, `look`, and `status`. Work the loop on the
-YAML: `read_document`, `edit_document` a few lines, `look` at the slides you
-changed (pictures plus the same warnings as `summary()`), fix, and say what you
-are doing with `status`. A figure written inline in the deck is edited in the
-deck; a figure file in its own file.
+folder) gives `list_documents`, `open_document`, `outline`, `read_document`,
+`edit_document`, `write_document`, `look`, `guide`, and `status`. Work the loop
+on the YAML: `outline` (a line a slide: title, layout, objects, build steps,
+TODOs, warnings, and the user's selection as a path such as `slides[2].body[0]`),
+`read_document` with `slides: [n]` for just those slides, `edit_document` a few
+lines (its reply says what changed, warns of any slide or object deleted, and
+says what to look at), `look` once at the slides you changed (pictures plus the
+same warnings as `summary()`; `sheet: true` tiles many slides in one picture,
+`annotate: true` labels every object, shape and figure part with its path,
+`step: n` shows a build step), fix, and say what you are doing with `status`.
+`guide(topic)` teaches shapes, insets, figures and the rest, with examples that
+draw. Where valid YAML lays out badly, say it is a Flexo bug rather than nudging
+places. A figure written inline in the deck is edited in the deck; a figure file
+in its own file.
 
 ## Output notes
 
