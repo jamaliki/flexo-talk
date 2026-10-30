@@ -1,8 +1,7 @@
-# Adapted from DeckWerk's importers/pptx/import_pptx.py (preset and custom geometry), by
-# Vincent Sitzmann, under the MIT License: Copyright (c) 2026 Vincent Sitzmann. Permission is
-# hereby granted, free of charge, to any person obtaining a copy of that software, to deal in
-# it without restriction, provided this notice is kept; it is provided "as is", without
-# warranty of any kind. Flexo's changes are under the Apache License 2.0, as the rest of it.
+# Adapted from DeckWerk's importers/pptx/import_pptx.py (preset and custom geometry), by Vincent
+# Sitzmann, under the MIT License: Copyright (c) 2026 Vincent Sitzmann. Its full text is in
+# LICENSE-DeckWerk beside this file. Flexo's changes are under the Apache License 2.0, as the
+# rest of it.
 """A PowerPoint shape's geometry as Flexo draws it: one of Flexo's own kinds where it has the
 same one (a rectangle, a rounded one, an ellipse, a block arrow, a speech bubble...), with its
 settings from the preset's adjustments; else its outline as SVG path data in its box."""

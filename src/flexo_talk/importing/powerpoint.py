@@ -1,8 +1,6 @@
 # Adapted from DeckWerk's importers/pptx/import_pptx.py, by Vincent Sitzmann, under the MIT
-# License: Copyright (c) 2026 Vincent Sitzmann. Permission is hereby granted, free of charge, to
-# any person obtaining a copy of that software, to deal in it without restriction, provided this
-# notice is kept; it is provided "as is", without warranty of any kind. Flexo's changes are
-# under the Apache License 2.0, as the rest of it.
+# License: Copyright (c) 2026 Vincent Sitzmann. Its full text is in LICENSE-DeckWerk beside this
+# file. Flexo's changes are under the Apache License 2.0, as the rest of it.
 """A PowerPoint deck (``.pptx``) read into a ``Presentation``, from its file alone.
 
 A ``.pptx`` is a zip of OOXML parts: DrawingML for the shapes, PresentationML for the slides,

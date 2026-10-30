@@ -1,9 +1,8 @@
 
 # Adapted from DeckWerk's importers/keynote/import_keynote.py (mathml_to_tex), by Vincent
-# Sitzmann, under the MIT License: Copyright (c) 2026 Vincent Sitzmann. Permission is hereby
-# granted, free of charge, to any person obtaining a copy of that software, to deal in it
-# without restriction, provided this notice is kept; it is provided "as is", without warranty of
-# any kind. Flexo's changes are under the Apache License 2.0, as the rest of it.
+# Sitzmann, under the MIT License: Copyright (c) 2026 Vincent Sitzmann. Its full text is in
+# LICENSE-DeckWerk beside this file. Flexo's changes are under the Apache License 2.0, as the
+# rest of it.
 """MathML -- what Keynote's equations are kept in when written in its MathML editor -- as the
 LaTeX Flexo sets (``flexo.texmath``): tokens, rows, scripts, fractions, roots, accents, fences,
 under- and overscripts and tables; an ``<annotation encoding="application/x-tex">`` as it is.

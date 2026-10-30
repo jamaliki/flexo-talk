@@ -1,9 +1,8 @@
 # Adapted from DeckWerk's importers/keynote/import_keynote.py, by Vincent Sitzmann, under the
-# MIT License: Copyright (c) 2026 Vincent Sitzmann. Permission is hereby granted, free of charge,
-# to any person obtaining a copy of that software, to deal in it without restriction, provided
-# this notice is kept; it is provided "as is", without warranty of any kind. Flexo's changes are
-# under the Apache License 2.0, as the rest of it. DeckWerk reads Keynote's messages with
-# keynote-parser's schemas; this reads them with none (``iwa``), by the fields' numbers.
+# MIT License: Copyright (c) 2026 Vincent Sitzmann. Its full text is in LICENSE-DeckWerk beside
+# this file. Flexo's changes are under the Apache License 2.0, as the rest of it. DeckWerk reads
+# Keynote's messages with keynote-parser's schemas; this reads them with none (``iwa``), by the
+# fields' numbers.
 """A Keynote deck (``.key``) read into a ``Presentation``, from its file alone.
 
 A ``.key`` -- one file (a zip), or a package (a folder, its ``Index`` zipped) -- holds objects

@@ -1,8 +1,7 @@
 # Adapted from DeckWerk's importers/pptx/import_pptx.py (compound_file_streams, embedded_pdf),
-# by Vincent Sitzmann, under the MIT License: Copyright (c) 2026 Vincent Sitzmann. Permission
-# is hereby granted, free of charge, to any person obtaining a copy of that software, to deal in
-# it without restriction, provided this notice is kept; it is provided "as is", without
-# warranty of any kind. Flexo's changes are under the Apache License 2.0, as the rest of it.
+# by Vincent Sitzmann, under the MIT License: Copyright (c) 2026 Vincent Sitzmann. Its full text
+# is in LICENSE-DeckWerk beside this file. Flexo's changes are under the Apache License 2.0, as
+# the rest of it.
 """An object embedded in a PowerPoint deck (OLE): the PDF it holds, read as Flexo reads PDFs.
 
 An embedded object is an OLE compound file (MS-CFB). Acrobat keeps the whole document in a
