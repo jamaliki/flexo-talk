@@ -8,12 +8,17 @@
 // - the palette's Show, Highlight, Dim and Hide of what is chosen (the Mac app's Format › Show As
 //   runs them by those names), and Show All on Slide.
 // Each change is a step of its own, named for what it did ("Dim List Item 2", "Hide Picture").
+// With the stage showing the slide at a click (showsteps.js), each shows and says how it is shown
+// from that click on ("Dim List Item 2 from Click 2": its `click 2`, flexo_talk.onclick).
 //
 // `ctx` is the editor's: studio, slideAt(), blocksAt(slide, region), editSlide(mutate, options),
-// objectName(block), shapeName(index), blockId({ region, index }), pageNode(), render().
+// objectName(block), shapeName(index), blockId({ region, index }), pageNode(), render(), and
+// click() -- the click the stage shows the slide at (0: as it is before its first) -- and
+// from() -- the control choosing it, for the Show section.
 
 import { h, ui, menu } from "/static/studio/studio.js";
-import { WAYS, VERBS, NAMES, AS, PARTS, wholeOf, setWhole, partOf, setPart, partsOf, partName, anyApart, showAll, partAt } from "/static/kinds/deck/shown.js";
+import { WAYS, VERBS, NAMES, AS, PARTS, wholeOf, setWhole, partOf, setPart, partsOf, partName, anyApart, showAll, partAt,
+  saidAt, entryAt, tidyClicks, showAllAt } from "/static/kinds/deck/shown.js";
 
 const TITLES = {
   shown: "Drawn as it is",
@@ -35,6 +40,11 @@ let pressed = null;
 if (typeof document !== "undefined") document.addEventListener("contextmenu", (event) => { pressed = { x: event.clientX, y: event.clientY }; }, true);
 
 export function showStates(ctx) {
+  const click = () => ctx.click?.() || 0;
+  // From the click the stage shows: said so after what it does ("Dim Picture from Click 2").
+  const fromClick = () => (click() ? ` from Click ${click()}` : "");
+  // How `spec` (an object, or a shape) is shown as a whole at the click shown.
+  const wholeAt = (spec, shape = false) => { const said = saidAt(spec, click()); return wholeOf(said, { shape: shape && said === spec }); };
   const kindOf = (block) => (typeof block === "string" ? "text" : Object.keys(block || {}).find((key) => PARTS[key] || key === "figure") || "other");
   const blockAt = (slide, at) => ctx.blocksAt(slide || {}, at.region)[at.index];
   // What is chosen, as { blocks: [{ region, index }], shapes: [index] }, each there still.
@@ -47,7 +57,7 @@ export function showStates(ctx) {
   // How they are all shown, as a whole: one way, or "" where they differ.
   function wayOf(targets) {
     const slide = ctx.slideAt();
-    const ways = [...targets.blocks.map((at) => wholeOf(blockAt(slide, at))), ...targets.shapes.map((index) => wholeOf(slide.shapes[index], { shape: true }))];
+    const ways = [...targets.blocks.map((at) => wholeAt(blockAt(slide, at))), ...targets.shapes.map((index) => wholeAt(slide.shapes[index], true))];
     return ways.every((way) => way === ways[0]) ? ways[0] || "shown" : "";
   }
   // What they are called, for the history and the palette: "Picture", "Shape", "3 Objects".
@@ -68,10 +78,16 @@ export function showStates(ctx) {
         if (list[at.index] === undefined) continue;
         // (Words written bare are an object of words, which says how it is shown.)
         if (!list[at.index] || typeof list[at.index] !== "object") list[at.index] = { text: String(list[at.index] ?? "") };
-        setWhole(list[at.index], how);
+        setWhole(entryAt(list[at.index], click()), how);
+        tidyClicks(list[at.index]);
       }
-      for (const index of targets.shapes) if (slide.shapes?.[index]) setWhole(slide.shapes[index], how, { shape: true });
-    }, { label: `${VERBS[how]} ${called(targets)}` });
+      for (const index of targets.shapes) {
+        const shape = slide.shapes?.[index];
+        if (!shape) continue;
+        setWhole(entryAt(shape, click(), { shape: true }), how, { shape: !click() });
+        tidyClicks(shape, { shape: true });
+      }
+    }, { label: `${VERBS[how]} ${called(targets)}${fromClick()}` });
     ctx.render();
   }
   // A part of an object (`names`: its parts' names) shown `how`: one step.
@@ -79,8 +95,12 @@ export function showStates(ctx) {
     const block = blockAt(ctx.slideAt(), at);
     if (!block || typeof block !== "object" || !names.length) return;
     const what = names.length === 1 ? partName(block, names[0]) : `${names.length} ${PARTS[kindOf(block)]?.[0] || "Part"}s`;
-    ctx.editSlide((slide) => { const own = blockAt(slide, at); if (own && typeof own === "object") setPart(own, names, how); },
-      { label: `${VERBS[how]} ${what}` });
+    ctx.editSlide((slide) => {
+      const own = blockAt(slide, at);
+      if (!own || typeof own !== "object") return;
+      setPart(entryAt(own, click()), names, how);
+      tidyClicks(own);
+    }, { label: `${VERBS[how]} ${what}${fromClick()}` });
     ctx.render();
   }
 
@@ -94,6 +114,7 @@ export function showStates(ctx) {
     if (empty(targets)) return null;
     const one = targets.blocks.length === 1 && !targets.shapes.length ? targets.blocks[0] : null;
     return h("div.section.show-section", {}, h("div.section-title", {}, "Show"),
+      ctx.from?.() || null,
       segmented(wayOf(targets), "show.whole", TITLES, (how) => set(targets, how)),
       one ? partsList(one) : null);
   }
@@ -106,7 +127,7 @@ export function showStates(ctx) {
         h("span.show-part-name", {}, part.name),
         // (An item under another, in from it, as on the slide.)
         h("span.show-part-words", { title: part.label, style: part.level ? { paddingLeft: `${part.level * 12}px` } : {} }, part.label || "—"),
-        ui.select({ value: partOf(block, part.name), key: `show.part:${part.name}`, title: partName(block, part.name),
+        ui.select({ value: partOf(saidAt(block, click()), part.name), key: `show.part:${part.name}`, title: partName(block, part.name),
           options: WAYS.map((way) => ({ value: way, label: NAMES[way], title: PART_TITLES[way] })),
           onChange: (how) => setParts(at, [part.name], how) }))));
   }
@@ -127,7 +148,7 @@ export function showStates(ctx) {
   function partItem(at, event, point) {
     const block = blockAt(ctx.slideAt(), at), name = partUnder(at, event);
     if (!name) return null;
-    return submenu(`Show ${PARTS[kindOf(block)][0]} ${name}`, partOf(block, name), (how) => setParts(at, [name], how), point);
+    return submenu(`Show ${PARTS[kindOf(block)][0]} ${name}`, partOf(saidAt(block, click()), name), (how) => setParts(at, [name], how), point);
   }
   // The part under the pointer, by name: the nearest of the object's parts as drawn.
   function partUnder(at, event) {
@@ -153,15 +174,15 @@ export function showStates(ctx) {
     const out = [];
     if (!empty(targets)) {
       const now = wayOf(targets), name = called(targets);
-      out.push(...WAYS.filter((way) => way !== now).map((way) => ({ icon: "eye", label: `${VERBS[way]} ${name}`, also: [AS[way]], run: () => set(targets, way) })));
+      out.push(...WAYS.filter((way) => way !== now).map((way) => ({ icon: "eye", label: `${VERBS[way]} ${name}${fromClick()}`, also: [AS[way]], run: () => set(targets, way) })));
     }
     const slide = ctx.slideAt();
-    if (slide && anyApart(slide)) out.push({ icon: "eye", label: "Show All on Slide", hint: "Nothing on it hidden, dimmed or highlighted", run: () => showAllNow() });
+    if (slide && anyApart(slide, click())) out.push({ icon: "eye", label: `Show All on Slide${fromClick()}`, hint: "Nothing on it hidden, dimmed or highlighted", run: () => showAllNow() });
     return out;
   }
   function showAllNow() {
-    if (!ctx.slideAt() || !anyApart(ctx.slideAt())) return;
-    ctx.editSlide((slide) => { showAll(slide); }, { label: "Show All on Slide" });
+    if (!ctx.slideAt() || !anyApart(ctx.slideAt(), click())) return;
+    ctx.editSlide((slide) => { if (click()) showAllAt(slide, click()); else showAll(slide); }, { label: `Show All on Slide${fromClick()}` });
     ctx.render();
   }
   // A figure's parts chosen on a slide: the palette's Show, Highlight, Dim and Hide of them, as
@@ -170,7 +191,7 @@ export function showStates(ctx) {
     const ids = (parts?.selected || []).filter((id) => id !== parts.model?.root && (parts.nodeOf(id) || parts.groupOf(id) || parts.edgeOf?.(id) || parts.netOf?.(id)));
     if (!ids.length) return [];
     const ways = ids.map((id) => parts.shownAs(id) || "shown"), now = ways.every((way) => way === ways[0]) ? ways[0] : "";
-    return WAYS.filter((way) => way !== now).map((way) => ({ icon: "eye", label: `${VERBS[way]} ${name}`, also: [AS[way]], run: () => parts.showAs(way, ids) }));
+    return WAYS.filter((way) => way !== now).map((way) => ({ icon: "eye", label: `${VERBS[way]} ${name}${fromClick()}`, also: [AS[way]], run: () => parts.showAs(way, ids) }));
   }
 
   return { section, menuItem, partItem, commands, figureCommands, set, setParts, showAll: showAllNow, wayOf: (targets) => wayOf(live(targets)) };

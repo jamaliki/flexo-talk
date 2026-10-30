@@ -223,6 +223,13 @@ with English words, numbers, and maths inside it kept in order.
   pictures, numbers' figures, code's lines. `{bullets: [...], highlight: [2]}` draws the other
   items faint. Shapes take `hide: true`, `dim: true`, `highlight: true`; words `[words]{dim}`.
   `stages: [[ids], [ids]]` on a figure block builds it up on one slide, a click each.
+- **Shown anew on a click** (a walk through a figure, a mechanism, a list): beside `hide`, `dim`
+  and `highlight`, any block or shape takes `click N: {hide, dim, highlight}` -- all of how it is
+  shown from click N on, held until a later `click` of its own (`click 3: {}`: plainly again):
+  `{figure: '#sn2', click 1: {highlight: [nu]}, click 2: {highlight: [lg]}, click 3: {}}`. Clicks
+  are the slide's, counted as its builds are (`click 2` comes with the second build). What a
+  figure's click does not say of its parts is as the figure says it. Python:
+  `.show(highlight=[1], click=1)`. Each step is a PDF page and a PowerPoint click.
 - **A figure that changes from slide to slide**: give each slide's figure block the same
   `frame: smc` -- each its own figure (a part added, a label changed) -- and they are drawn as
   one: laid out with each other's parts (unseen), at one scale and from one top left, so the

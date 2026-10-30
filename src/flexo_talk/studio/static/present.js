@@ -15,6 +15,7 @@
 // BroadcastChannel, or, in the Mac app, through the app.
 
 import { ownResources } from "/static/studio/drawings.js";
+import { showStep } from "/static/kinds/deck/stepping.js";
 
 const NEXT = new Set(["ArrowRight", "ArrowDown", "PageDown", " ", "Enter", "click"]);
 const BACK = new Set(["ArrowLeft", "ArrowUp", "PageUp", "Backspace"]);
@@ -209,6 +210,7 @@ export function present({ pages, slides = () => [], start = 0, done = () => {}, 
     if (full === "page" && document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (full === "app") app.full_screen(false);
     root.remove();
+    kept.length = 0;
     done(deck?.slides[Math.min(state.index, Math.max(0, deck.slides.length - 1))]?.at ?? 0);
   }
 
@@ -303,6 +305,7 @@ function draw(root, role, deck, state, { paired, press, hint = "", note = "" }) 
   const goto = state.typed ? el("div", "ss-goto", `Go to Slide ${state.typed}`, el("small", "", "Return to go · Esc to cancel")) : null;
   if (role === "audience") {
     root.onclick = () => press("click");
+    drawing += 1;
     root.append(state.ended ? el("div", "ss-end", "End of slide show — click to exit") : frame(slide, state.step));
     if (!paired && goto) root.append(goto);
     // (The note before the hint, on one screen: with a presenter's view, it is said there.)
@@ -322,6 +325,7 @@ function draw(root, role, deck, state, { paired, press, hint = "", note = "" }) 
     return;
   }
   root.onclick = null;
+  drawing += 1;
   const ahead = state.ended ? null
     : state.step < slide.steps ? [slide, state.step + 1]
       : state.index + 1 < deck.slides.length ? [deck.slides[state.index + 1], 1] : null;
@@ -408,24 +412,37 @@ function clock() {
   return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-// A slide at a step of its builds, fitted to the box it is put in.
+// A slide at a step of its builds, fitted to the box it is put in. Its drawing is read once
+// and kept, with the few shown last: a click shows the next step by changing the drawing kept
+// (stepping.js), and going on to the next slide -- or back -- takes the drawing shown before,
+// the presenter's view's next slide too, never read again.
+const kept = [];  // { svg, box, drawn }: drawings read, the one used last at the end
+const KEPT = 4;
+let drawing = 0;  // each drawing of a view, for one drawing not to show a slide's twice
 function frame(slide, step) {
-  const box = el("div", "ss-slide");
-  const svg = stepped(slide?.svg || "", step, slide?.steps || 1);
-  const size = svg.match(/viewBox\s*=\s*"\s*[-\d.e]+[\s,]+[-\d.e]+[\s,]+([\d.e]+)[\s,]+([\d.e]+)/);
-  box.style.setProperty("--ratio", size && Number(size[2]) ? Number(size[1]) / Number(size[2]) : 16 / 9);
-  box.innerHTML = svg;
-  const drawing = ownResources(box.querySelector("svg"));
-  if (drawing) { drawing.removeAttribute("width"); drawing.removeAttribute("height"); }
-  return el("div", "ss-frame", box);
+  const svg = slide?.svg || "";
+  let held = kept.find((one) => one.svg === svg && one.drawn !== drawing);
+  if (held) kept.splice(kept.indexOf(held), 1);
+  else {
+    held = { svg, box: slideBox(svg) };
+    const spare = kept.findIndex((one) => one.drawn !== drawing);
+    if (kept.length >= KEPT && spare >= 0) kept.splice(spare, 1);
+  }
+  kept.push(held);
+  held.drawn = drawing;
+  showStep(held.box.querySelector("svg"), step);
+  return el("div", "ss-frame", held.box);
 }
 
-// What a slide shows at `step`: the items its lists reveal later, left out.
-function stepped(svg, step, steps) {
-  if (!svg || steps <= 1 || step >= steps) return svg.replace(/^<\?xml[^>]*>\s*/, "");
-  const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
-  parsed.querySelectorAll("[data-flexo-step]").forEach((item) => { if (Number(item.getAttribute("data-flexo-step")) > step) item.remove(); });
-  return new XMLSerializer().serializeToString(parsed.documentElement);
+// A slide's drawing read into a box of its own, as wide as its proportions let it be.
+function slideBox(svg) {
+  const box = el("div", "ss-slide");
+  const size = svg.match(/viewBox\s*=\s*"\s*[-\d.e]+[\s,]+[-\d.e]+[\s,]+([\d.e]+)[\s,]+([\d.e]+)/);
+  box.style.setProperty("--ratio", size && Number(size[2]) ? Number(size[1]) / Number(size[2]) : 16 / 9);
+  box.innerHTML = svg.replace(/^<\?xml[^>]*>\s*/, "");
+  const drawn = ownResources(box.querySelector("svg"));
+  if (drawn) { drawn.removeAttribute("width"); drawn.removeAttribute("height"); }
+  return box;
 }
 
 function el(tag, className, ...children) {
@@ -452,6 +469,8 @@ function dress() {
 .ss-slide { width: min(100cqw, calc(100cqh * var(--ratio))); aspect-ratio: var(--ratio); background: #fff; line-height: 0; overflow: hidden; }
 .ss-slide svg { display: block; width: 100%; height: 100%; text-rendering: geometricPrecision; }
 .ss-slide [data-flexo-placeholder] { display: none; }
+/* What builds in on a later click (stepping.js). */
+.ss-slide [data-flexo-later] { display: none; }
 /* A slide holding empty words drawn as presented too (the studio's _presentable): that one. */
 .ss-slide [data-flexo-editing] { display: none; }
 .ss-slide [data-flexo-presented] { display: inline; }

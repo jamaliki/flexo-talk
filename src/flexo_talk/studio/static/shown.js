@@ -119,12 +119,15 @@ export function partsOf(block) {
 // What a part of a block is called, by kind and name: "List Item 2", "Table Row 3".
 export const partName = (block, name) => `${PARTS[kindOf(block)]?.[1] || "Part"} ${name}`;
 
-// Whether anything on `slide` is shown apart: an object, a part, a shape, a figure's own parts.
-export function anyApart(slide) {
-  const says = (spec) => spec && typeof spec === "object" && Object.values(KEYS).some((key) => spec[key] !== undefined);
+// Whether anything on `slide` is shown apart: an object, a part, a shape, a figure's own parts --
+// at `click`, as its last click up to it says.
+export function anyApart(slide, click = 0) {
+  const says = (spec) => spec && typeof spec === "object" && Object.values(KEYS).some((key) => spec[key] !== undefined && spec[key] !== false
+    && !(Array.isArray(spec[key]) && !spec[key].length));
   const figure = (block) => block && typeof block === "object" && block.figure && typeof block.figure === "object" ? block.figure.figure : null;
-  return objectsOf(slide).some((block) => says(block) || says(figure(block)))
-    || (Array.isArray(slide?.shapes) ? slide.shapes : []).some((shape) => says(shape) || shape?.hidden === true);
+  const at = (spec) => (spec && typeof spec === "object" ? saidAt(spec, click) : spec);
+  return objectsOf(slide).some((block) => says(at(block)) || says(figure(block)))
+    || (Array.isArray(slide?.shapes) ? slide.shapes : []).some((shape) => says(at(shape)) || (at(shape) === shape && shape?.hidden === true));
 }
 
 // Everything on `slide` shown plainly again: its objects, their parts, a figure written in it
@@ -161,4 +164,111 @@ export function partAt(block, rest, of = null) {
   if (kind === "bullets") return parts.find((part) => part.drawn === index)?.name ?? null;
   if (kind === "code" && of !== null && of !== undefined && of !== "") return String(Number(of) + 1);
   return parts[index]?.name ?? null;
+}
+
+// -- from a click on (flexo_talk.onclick) --
+// An object or a shape says how it is shown from a click on with `click N`: a mapping of hide,
+// dim and highlight, all of how it is shown from that click on, held until a later click of its
+// own. What a figure's click does not say of its parts is as the figure says it (its own lists).
+
+const CLICK = /^click ([1-9][0-9]*)$/;
+export const clickKey = (click) => `click ${click}`;
+// The clicks `spec` says how it is shown from, in order.
+export function clicksOf(spec) {
+  if (!spec || typeof spec !== "object") return [];
+  return Object.keys(spec).map((key) => CLICK.exec(key)).filter(Boolean).map((found) => Number(found[1])).sort((a, b) => a - b);
+}
+// The last click anything on `slide` is shown anew on (0 for none).
+export function lastClick(slide) {
+  const all = [...objectsOf(slide), ...(Array.isArray(slide?.shapes) ? slide.shapes : [])];
+  return Math.max(0, ...all.flatMap((spec) => clicksOf(spec)));
+}
+// What says how `spec` is shown at `click`: its last click up to it, else itself.
+export function saidAt(spec, click = 0) {
+  const named = clicksOf(spec).filter((number) => number <= click);
+  if (!named.length) return spec;
+  const said = spec[clickKey(named[named.length - 1])];
+  return said && typeof said === "object" ? said : {};
+}
+const copied = (value) => (Array.isArray(value) ? value.map((item) => item) : value);
+// The mapping that says how `spec` is shown from `click` on, made -- as it is shown then -- if it
+// has none: `spec` itself at 0.
+export function entryAt(spec, click, { shape = false } = {}) {
+  if (!click) return spec;
+  const key = clickKey(click);
+  if (!spec[key] || typeof spec[key] !== "object") {
+    const said = saidAt(spec, click), made = {};
+    for (const name of Object.values(KEYS)) if (said[name] !== undefined && said[name] !== false) made[name] = copied(said[name]);
+    if (shape && said === spec && spec.hidden === true) made.hide = true;
+    spec[key] = made;
+  }
+  return spec[key];
+}
+// How what says it (`said`) shows it, to be compared: each key's, the figure's own (`own`: its
+// lists) for those it does not say.
+const showOf = (said, own = {}) => Object.fromEntries(Object.values(KEYS).map((name) => {
+  const value = said?.[name] !== undefined ? said[name] : own[name];
+  return [name, value === true ? true : Array.isArray(value) && value.length ? value.map(String).sort().join("\n") : ""];
+}));
+// `spec`'s clicks that say what the click before says taken away: what changes nothing is not said.
+export function tidyClicks(spec, { shape = false, own = {} } = {}) {
+  for (const click of clicksOf(spec)) {
+    const before = saidAt(spec, click - 1);
+    const was = shape && before === spec && spec.hidden === true ? { ...spec, hide: true } : before;
+    if (JSON.stringify(showOf(spec[clickKey(click)], own)) === JSON.stringify(showOf(was, own))) delete spec[clickKey(click)];
+  }
+  return spec;
+}
+// How a figure's part `id` is shown at `click` -- by `block` (a figure's), `own` its figure's own
+// lists: as its click says, the figure's own where that says nothing; null where it says nothing.
+export function figurePartAt(block, id, click, own = {}) {
+  const said = saidAt(block, click);
+  let found = null;
+  for (const [how, key] of Object.entries(KEYS)) {
+    const list = Array.isArray(said[key]) ? said[key] : said[key] === undefined && Array.isArray(own[key]) ? own[key] : [];
+    if (list.map(String).includes(String(id)) && (STRENGTH[how] || 0) > (STRENGTH[found] || 0)) found = how;
+  }
+  return found;
+}
+// A figure's parts `ids` shown `how` from `click` on (`block`, a figure's; `own`, its figure's
+// lists): every list of the click said, the figure's own copied where it said nothing, each id
+// taken out of all and put in `how`'s.
+export function setFigurePart(block, ids, how, click, own = {}) {
+  const entry = entryAt(block, click), wanted = ids.map(String);
+  for (const key of Object.values(KEYS)) {
+    if (entry[key] === true) continue;
+    const list = Array.isArray(entry[key]) ? entry[key] : Array.isArray(own[key]) ? own[key] : [];
+    const kept = list.filter((item) => !wanted.includes(String(item)));
+    if (KEYS[how] === key) kept.push(...wanted);
+    if (kept.length || (Array.isArray(own[key]) && own[key].length)) entry[key] = kept;
+    else delete entry[key];
+  }
+  tidyClicks(block, { own });
+  return block;
+}
+// `click` taken off `slide`: what each object and shape says of it gone, and what they say of
+// the clicks after it said of the click before. What was changed, counted.
+export function removeClick(slide, click) {
+  let count = 0;
+  for (const spec of [...objectsOf(slide), ...(Array.isArray(slide?.shapes) ? slide.shapes : [])]) {
+    if (!spec || typeof spec !== "object") continue;
+    const later = clicksOf(spec).filter((number) => number >= click);
+    if (!later.length) continue;
+    count += 1;
+    const moved = later.map((number) => [number, spec[clickKey(number)]]);
+    for (const [number] of moved) delete spec[clickKey(number)];
+    for (const [number, said] of moved) if (number > click) spec[clickKey(number - 1)] = said;
+  }
+  return count;
+}
+// Everything on `slide` shown plainly from `click` on: each object and shape saying so then.
+export function showAllAt(slide, click) {
+  let count = 0;
+  for (const spec of [...objectsOf(slide), ...(Array.isArray(slide?.shapes) ? slide.shapes : [])]) {
+    if (!spec || typeof spec !== "object") continue;
+    spec[clickKey(click)] = {};
+    count += 1;
+    tidyClicks(spec, { shape: (slide.shapes || []).includes(spec) });
+  }
+  return count;
 }

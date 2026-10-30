@@ -116,6 +116,36 @@ nothing moves. It is a state each in the slideshow, a page each in the PDF and a
 each in the PowerPoint. In the studio: choose shapes in the figure, **Build ›
 Appears › On Click 1**.
 
+How anything is shown can change on a click, and holds until a later click changes it again:
+a figure or a mechanism walked through part by part, a list item by item, on one slide. Beside
+its `hide`, `dim` and `highlight`, an object (or a shape) says how it is shown from a click on
+with `click N` -- the same keys, all of how it is shown from that click on (`{}`: plainly):
+
+```yaml
+body:
+- figure: '#sn2'
+  click 1: {highlight: [nucleophile, attack]}   # the rest of the figure faint
+  click 2: {highlight: [leaving, departure]}
+  click 3: {}                                   # all of it again
+- bullets: [Attack, Departure, Inversion]
+  click 1: {highlight: [1]}
+  click 2: {highlight: [2]}
+shapes:
+- {kind: ring, at: [300, 220], size: [120, 80], hide: true, click 2: {}}   # comes on click 2
+```
+
+The clicks are the slide's, counted as its builds are: `click 2` comes with its second build,
+and the slide has as many clicks as its builds take or its last `click` names. What a figure's
+click does not say of its parts is as the figure says it. Presenting, each click changes the
+slide drawn in place, forward, back or on a jump; the PDF has a page for each step (one, as a
+handout); the PowerPoint has a click for each, Transparency for what is faint (flexo's faint, on
+the page), Appear and Disappear for what is hidden and shown again, and a figure's parts lifted
+out of it to be animated, each where it is (a table's rows and cells are veiled, as PowerPoint
+animates a table whole). In Python: `slide.bullets(...).show(highlight=[1], click=1)`. In the
+studio, the builds under the slide show it at each of its clicks (‹ ›, **+** a new click, the bin
+to remove one); at a click, every **Show** -- an object's, its parts', a figure's parts' --
+shows and says how it is shown from that click on, and its **From** chooses the click.
+
 Type can be set by role: `Deck(font="IBM Plex Sans", title_font="Latin Modern
 Roman", figure_font="Figtree")` sets the words, the titles and section headings,
 and the figures each in their own family (each falls back to `font`, then the

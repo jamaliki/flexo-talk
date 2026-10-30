@@ -44,6 +44,7 @@ import { indexDrawing, patchDrawing } from "/static/kinds/deck/slidepatch.js";
 import { slidePeople } from "/static/kinds/deck/people.js";
 import { slidePortraits } from "/static/kinds/deck/portraits.js";
 import { showStates } from "/static/kinds/deck/showing.js";
+import { showSteps, shownSaid } from "/static/kinds/deck/showsteps.js";
 import { grabbingHand } from "/static/kinds/deck/grabbing.js";
 import { lazyPictures } from "/static/kinds/deck/thumbs.js";
 import { stageAhead } from "/static/kinds/deck/stageahead.js";
@@ -284,7 +285,9 @@ function buildsSaid(slide) {
       else if (block.build) said.push(name);
     }
   }
-  return said.length ? `Builds on clicks: ${said.join(", then ")}` : "Builds on clicks";
+  // (And what its clicks show anew: showsteps.js.)
+  const shown = shownSaid(slide, regionsOf(slide || {}).flatMap(({ key }) => blocksAt(slide, key).map((block) => [block, `the ${blockName(block).toLowerCase()}`])));
+  return [said.length ? `Builds on clicks: ${said.join(", then ")}` : shown ? "" : "Builds on clicks", shown].filter(Boolean).join("\n");
 }
 
 function setOption(target, key, value, fallback = undefined) {
@@ -1054,6 +1057,13 @@ export function mount(studio, container) {
     studio, slideAt: () => slideAt(), blocksAt: (slide, region) => blocksAt(slide, region), editSlide: (mutate, options) => editSlide(mutate, options),
     objectName: (block) => objectName(block), shapeName: (index) => freeShapes.nameOf?.(index) || "Shape", blockId: (at) => blockId(at), pageNode: () => pageNode,
     render: () => { placeChosen(); renderInspector(); reportFocus(); },
+    click: () => steps.click(), from: () => steps.from(),
+  });
+  // The slide shown at one of its clicks while it is edited, and what a click shows anew said
+  // there (showsteps.js).
+  const steps = showSteps({
+    slideAt: () => slideAt(), slideIndex: () => state.slide, page: () => pages[state.slide], editSlide: (mutate, options) => editSlide(mutate, options),
+    blockAt: (slide, at) => blocksAt(slide, at.region)[at.index], renderStage: () => renderStage(), render: () => { placeChosen(); renderInspector(); },
   });
   // What the inspector's Show, its menu and the palette's act on: the objects chosen, the shapes
   // chosen, or both (a figure's shapes chosen are its own: parts.js).
@@ -2059,6 +2069,8 @@ export function mount(studio, container) {
     // where it changed, the rest of its drawing left as it is (slidepatch.js) -- else put in
     // whole.
     const kept = renewed && page?.svg && pageNode?.dataset.shows.startsWith(`${state.slide}:`) ? pageNode.querySelector(":scope > svg") : null;
+    // (As it was drawn again, a click it was shown at undone, for what came to be read against it.)
+    if (kept) steps.reset(kept);
     if (kept && patchDrawing(kept, page.svg, (holder) => { holdPaused(holder); widenLines(holder); unlinked(holder); })) {
       pageNode.dataset.shows = shows;
       const paper = kept.querySelector('[id="canvas.background"]')?.getAttribute("fill");
@@ -2093,6 +2105,8 @@ export function mount(studio, container) {
       pageNode.addEventListener("contextmenu", onContext);
       pageNode.addEventListener("pointerdown", onPress);
     }
+    // (At the click it is shown at, if one is: showsteps.js.)
+    steps.apply(pageNode.querySelector(":scope > svg"));
     pageNode.querySelector(".away-title")?.replaceChildren(slideTitle(slide));
     pageNode.classList.toggle("error", Boolean(page?.error));
     pageNode.classList.toggle("pending", Boolean(pending || page?.stale));
@@ -2112,7 +2126,7 @@ export function mount(studio, container) {
     // Under the slide only what isn't shown elsewhere: its builds, who else is on it, and that
     // it is being drawn (which slide it is, the slide list says).
     clear(stageMeta,
-      page?.steps > 1 ? h("span.chip", { title: buildsSaid(slideAt()) }, icon("reveal"), `${page.steps} builds`) : null,
+      steps.bar(buildsSaid(slideAt())),
       here.map((entry) => h("span.here-chip", { style: { borderColor: colourOf(entry.who) } }, avatar(entry.who, { size: 16 }), nameOf(entry.who),
         entry.doing || entry.where?.editing ? h("span.muted", {}, ` · ${entry.doing || "editing"}`) : null)),
       h("span.spacer", { style: { flex: 1 } }),
@@ -4980,12 +4994,23 @@ export function mount(studio, container) {
       // Edited -- its first shape's words typed, sent or still on their way -- a new figure is
       // no longer one just added and left empty: Esc does not take it back (dropFresh).
       edited: () => { if (fresh && fresh.slide === own.slide && fresh.region === own.region && fresh.index === own.index) fresh = null; },
+      // Its parts shown, and said to be, from the click the stage shows the slide at (showsteps.js).
+      shownAt: (id) => steps.figureShownAt(figureAt(own), id),
+      showAt: (how, ids) => steps.figureShowAt(figureAt(own), how, ids),
+      showTitle: () => (steps.click() ? `Show from Click ${steps.click()}` : null),
     });
     // Its parts as read ahead are good to choose from at once; the read brings them up to date.
     if (ahead) figure.parts.setModel(ahead);
     const mine = figure;
     const ready = () => { if (figure === mine && mine.waiting && mine.parts.model) { const then = mine.waiting; mine.waiting = null; then(); } };
     figure.parts.act({ do: "read" }, { select: false, then: ready, failed: () => { if (figure === mine) mine.waiting = null; } });
+  }
+
+  // A figure edited on the slide, for what its clicks show of its parts (showsteps.js).
+  function figureAt(own) {
+    const parts = own.parts;
+    return { at: { region: own.region, index: own.index }, block: blocksAt(slideAt(), own.region)[own.index], own: parts?.model?.figure || {},
+      name: (ids) => (ids.length === 1 ? parts?.nameOf?.(ids[0]) || "Shape" : `${ids.length} Shapes`) };
   }
 
   function leaveFigure(render = true) {
