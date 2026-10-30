@@ -411,6 +411,49 @@ class DeckKind:
             "Look at each slide after changing it."
         )
 
+    # -- for agents (flexo.studio.agent): a brief, topics, an outline, excerpts, marks, steps,
+    # and what an edit did (flexo_talk.studio.deck_guides, deck_agent) --
+
+    def brief(self) -> str:
+        from flexo_talk.studio.deck_guides import brief
+
+        return brief()
+
+    def topics(self) -> dict[str, Any]:
+        from flexo_talk.studio.deck_guides import topics
+
+        return topics()
+
+    def outline(self, document: Any, drawing: Drawing) -> list[str]:
+        from flexo_talk.studio.deck_agent import outline
+
+        return outline(document, drawing)
+
+    def excerpt(self, text: str, numbers: list[int]) -> str:
+        from flexo_talk.studio.deck_agent import excerpt
+
+        return excerpt(text, numbers)
+
+    def marks(self, document: Any, number: int, page: Page) -> list[Any]:
+        from flexo_talk.studio.deck_agent import marks
+
+        return marks(document, number, page)
+
+    def selected(self, document: Any, where: dict[str, Any]) -> str | None:
+        from flexo_talk.studio.deck_agent import selected
+
+        return selected(document, where)
+
+    def at_step(self, page: Page, step: int) -> str:
+        from flexo_talk.studio.deck_agent import at_step
+
+        return at_step(page, step)
+
+    def report(self, before: Any, after: Any) -> dict[str, Any]:
+        from flexo_talk.studio.deck_agent import report
+
+        return report(self, before, after)
+
     def malformed(self, document: Any) -> str | None:
         """What makes a document no deck the editor can show, if anything: slides that
         are no list, deck settings that are no mapping. A wrong slide or block is said on
