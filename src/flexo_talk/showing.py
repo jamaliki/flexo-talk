@@ -34,7 +34,8 @@ true``, as decks said it before, is ``hide: true``. Words are dimmed with markup
 ``[words]{dim}``, the words' own colour drawn faint.
 
 A hidden object builds in on no click (nor does a hidden item of a list revealed item by
-item): there is nothing to show.
+item): there is nothing to show. How anything is shown may change on a click, held until a
+later one changes it again (``click 2: {highlight: [2]}``): ``flexo_talk.onclick``.
 """
 
 from __future__ import annotations
@@ -71,9 +72,12 @@ class Shown:
 
     whole: str | None = None
     parts: dict[str, str] = field(default_factory=dict)
+    named: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """A figure's parts, by how they are shown (``hidden``, ``dimmed``, ``highlighted``): as a
+    click says them (``flexo_talk.onclick``) -- a figure's own are its spec's."""
 
     def __bool__(self) -> bool:
-        return self.whole is not None or bool(self.parts)
+        return self.whole is not None or bool(self.parts) or bool(self.named)
 
 
 def stronger(one: str | None, other: str | None) -> str | None:
@@ -102,6 +106,7 @@ def written(kind: str, said: dict[str, object]) -> Shown:
             if not isinstance(value, list | tuple) or not all(isinstance(item, str) for item in value):
                 raise SettingError(key, f"{key} must be true (the whole figure) or a list of the names of the "
                                         "figure\u2019s parts.")
+            shown.named[how] = tuple(value)
             continue
         if kind not in PARTS:
             raise SettingError(key, f"A {noun} is {how} as a whole: {key}: true, not {value!r}.")
@@ -169,17 +174,33 @@ def item_paths(levels: Iterable[int]) -> list[str]:
     return paths
 
 
-def shape_state(shape: object) -> str | None:
+def shape_state(shape: object, click: int = 0) -> str | None:
     """How a slide's shape is shown: hidden (``hide``, or ``hidden`` as decks said it before),
-    dimmed or highlighted -- else ``None``."""
+    dimmed or highlighted -- else ``None``. At ``click``, as its last ``click`` up to it says
+    (``flexo_talk.onclick``), if it has one."""
+
+    from flexo_talk.onclick import shape_said
 
     if not isinstance(shape, dict):
         return None
+    said = shape_said(shape, click) if click else shape
     how = None
-    for key, state in (*KEYS.items(), ("hidden", HIDDEN)):
-        if shape.get(key) is True:
+    for key, state in (*KEYS.items(), *((("hidden", HIDDEN),) if said is shape else ())):
+        if said.get(key) is True:
             how = stronger(how, state)
     return how
+
+
+def shown_at(region: Any, index: int, click: int = 0) -> Shown | None:
+    """How a region's block (by index) is shown at ``click``: as its last ``click`` up to it says
+    (``flexo_talk.onclick``), else as it says itself."""
+
+    later = region.later.get(index) if click else None
+    if later:
+        named = [number for number in later if number <= click]
+        if named:
+            return later[max(named)]
+    return region.shown.get(index)
 
 
 def _units(block: Any, identifier: str, lines: list[int] | None) -> list[tuple[str, tuple[str, ...], bool]]:
@@ -235,27 +256,35 @@ def hidden_items(block: Any, shown: Shown | None) -> set[int]:
     return {int(ident.rsplit(".", 1)[1]) for ident, how in part_states(block, "", shown).items() if how == HIDDEN}
 
 
-def slide_states(slide: Any, lines: dict[str, list[int]] | None = None) -> dict[str, str]:
+def slide_states(
+    slide: Any, lines: dict[str, list[int]] | None = None, click: int = 0,
+    parts: dict[str, dict[str, str]] | None = None,
+) -> dict[str, str]:
     """How everything on ``slide`` is drawn, where not plainly: ``"hidden"`` or ``"dimmed"``,
     by the id it is drawn with -- an object's (``slide2.body.0``), a part's (an item,
     ``slide2.body.0.3``; a cell, ``slide2.body.1.2.0``), a shape's (``slide2.shapes.1``).
     Whatever is drawn with an id under one of these (``slide2.body.0.caption``) is drawn
-    as it is. ``lines``: each listing's lines as drawn, by the line each is of."""
+    as it is. ``lines``: each listing's lines as drawn, by the line each is of. At ``click``,
+    as what is on it says it is shown from a click on (``flexo_talk.onclick``); ``parts``: the
+    parts of the figures drawn with none of their own shown apart, by the figure's id, as at
+    that click (``onclick.figure_parts``)."""
 
     found: dict[str, str] = {}
     objects: list[tuple[str, str | None]] = []
     for name, region in slide.regions.items():
         for index, block in enumerate(region.blocks):
             identifier = f"{slide.id}.{name}.{index}"
-            shown = region.shown.get(index)
+            shown = shown_at(region, index, click)
             objects.append((identifier, shown.whole if shown else None))
+            if parts and identifier in parts:
+                found |= parts[identifier]
             if not shown:
                 continue
             if shown.whole in (HIDDEN, DIMMED):
                 found[identifier] = shown.whole
             found |= part_states(block, identifier, shown, (lines or {}).get(identifier))
     for index, shape in enumerate(slide.shapes):
-        objects.append((f"{slide.id}.shapes.{index}", shape_state(shape)))
+        objects.append((f"{slide.id}.shapes.{index}", shape_state(shape, click)))
     for identifier, how in objects:
         if how in (HIDDEN, DIMMED):
             found[identifier] = how

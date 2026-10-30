@@ -93,6 +93,19 @@ pictures, numbers' figures and code's lines by theirs. ``{bullets: [...], highli
 the list's other items faint. A shape takes ``hide: true``, ``dim: true`` and ``highlight: true``
 (``hidden: true`` is ``hide: true``, as decks said it before); words, ``[words]{dim}``
 (``flexo_talk.showing``).
+How any object or shape is shown may change on a click, held until a later click changes it
+again: ``click N`` beside its ``hide``, ``dim`` and ``highlight`` is a mapping of those same
+keys -- all of how it is shown from click N on (``{}``: plainly) -- a figure or a list walked
+through on one slide (``flexo_talk.onclick``)::
+
+  - {figure: '#sn2', click 1: {highlight: [nucleophile]}, click 2: {highlight: [leaving]}, click 3: {}}
+  - {bullets: [Attack, Departure, Inversion], click 1: {highlight: [1]}, click 2: {highlight: [2]}}
+  - {text: Why it inverts, hide: true, click 3: {}}                # comes on click 3
+
+The clicks are the slide's, counted as its builds are (``click 2`` comes with its second build);
+the slide has as many as its builds take or its last ``click`` names. What a figure's click does
+not say of its parts is as the figure says it. Each step is a page of the PDF and a click of the
+PowerPoint.
 A visualisation that changes a little from slide to slide -- a part added, a label changed,
 each slide's its own figure -- is drawn as one by giving its blocks one ``frame``: figures
 naming the same frame are laid out with each other's parts (those a slide's lacks kept room
@@ -226,6 +239,7 @@ from typing import Any
 
 import yaml
 from flexo.diagnostics import described
+from flexo.ir.semantic import FigureSpec
 from flexo.roundtrip import rewrite
 
 from flexo_talk.deck import (
@@ -248,6 +262,7 @@ from flexo_talk.deck import (
     shape_problems,
     share_of,
 )
+from flexo_talk.onclick import clicks_said, entry_problem, key_of, nearly_click
 
 SCHEMA_VERSION = 1
 
@@ -1088,7 +1103,13 @@ def add_block(
     # middle``, ``vertical: 0.25``), or anywhere on the slide, out of its place's flow (``at:
     # [x, y]``, its ``width`` its width there): see ``Region.place``. And any may be locked
     # where it is in the studio (``locked: true``).
-    _only(block, (kind, *BLOCKS[kind], *BLOCK_KEYS), f"{where} ({kind})")
+    # And how any is shown may change on a click (``click 2: {dim: true}``): flexo_talk.onclick.
+    for key in block:
+        if nearly_click(key):
+            raise DeckDocumentError(f"{where} ({kind})", f"{key} names no click: say click 2 (a space, then a number "
+                                                         f"from 1).")
+    later = clicks_said(block)
+    _only(block, (kind, *BLOCKS[kind], *BLOCK_KEYS, *map(key_of, later)), f"{where} ({kind})")
     value = block[kind]
     options = {key: block[key] for key in BLOCKS[kind] if key in block}
     here = f"{where} ({kind})"
@@ -1165,7 +1186,11 @@ def add_block(
             # ways. (Said true, it is the whole figure: as any object's, below.)
             apart = {key: block[key] for key in ("hide", "dim", "highlight") if key in block and block[key] is not True
                      and block[key] is not False and block[key] is not None}
-            region.add(_shown(_figure(base, shown, here, region), apart, here), **options)
+            made = _figure(base, shown, here, region)
+            region.add(_shown(made, apart, here), **options)
+            if later and isinstance(made, FigureSpec):
+                # (What a click does not say of its parts is as the figure says it itself.)
+                region.own[len(region.blocks) - 1] = (made.hidden, made.dimmed, made.highlighted)
             if strays and isinstance(region.blocks[-1], _Figure):
                 region.blocks[-1].said = (*region.blocks[-1].said, *strays[0])
         elif kind == "plot":
@@ -1201,6 +1226,20 @@ def add_block(
                            if not (kind == "figure" and isinstance(value, list))})
         except SettingError as error:
             raise DeckDocumentError(here, str(error)) from error
+        region.sources[-1] = dict(block)
+    for number, entry in later.items():
+        problem = entry_problem(entry)
+        if problem:
+            raise DeckDocumentError(here, f"{key_of(number)} {problem}")
+        entry = dict(entry or {})
+        if kind == "figure" and not isinstance(region.blocks[-1], _Figure):
+            # (A figure not drawn -- its file not there -- has no parts to show apart.)
+            entry = {key: value for key, value in entry.items() if not isinstance(value, list)}
+        try:
+            region.show(click=number, **entry)
+        except SettingError as error:
+            raise DeckDocumentError(f"{here} {key_of(number)}", str(error)) from error
+    if later:
         region.sources[-1] = dict(block)
     if block.get("placeholder") or (kind == "figure" and _lone_shape(value)):
         region.placeholders.add(len(region.blocks) - 1)

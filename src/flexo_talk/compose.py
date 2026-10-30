@@ -35,7 +35,7 @@ import flexo
 from flexo.artwork import load_artwork, picture_href, picture_link
 from flexo.draft import GivenUp, give_up_if_newer
 from flexo.ir.measured import TextMetrics
-from flexo.ir.semantic import TextRun
+from flexo.ir.semantic import FigureSpec, TextRun
 from flexo.kept_versions import allowed, took
 from flexo.lint import lint_compilation
 from flexo.render_common import displayed_alone, render_runs
@@ -84,6 +84,7 @@ from flexo_talk.deck import (
     object_named,
     paint_role,
 )
+from flexo_talk.onclick import clicks_said, figure_parts, last_click, mark_steps
 from flexo_talk.showing import HIDDEN, dim_words, hidden_items, mark_slide, shape_state, slide_states
 
 
@@ -739,12 +740,25 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
     shapes = _draw_shapes(canvas, slide, behind)
     # What is hidden, dimmed or highlighted drawn so, where it stands (flexo_talk.showing): and
     # what is hidden whole written natively (a PowerPoint's own lists and tables) not at all.
-    shown = slide_states(slide, canvas.code_lines)
-    mark_slide(canvas.root, shown, canvas.palette.get("canvas"))
+    # Shown anew on a click, it is drawn as it is before the first, marked with how it is at
+    # each step (flexo_talk.onclick); a click it names after the slide's builds is a step more.
+    clicks = last_click(slide)
+    shows: dict[str, tuple[str, ...]] = {}
+    if clicks:
+        canvas.steps = max(canvas.steps, clicks + 1)
+        lines = canvas.code_lines
+        steps = [slide_states(slide, lines, click, _parts_at(slide, click)) for click in range(canvas.steps)]
+        shows = mark_steps(canvas.root, steps, canvas.palette.get("canvas"))
+        shown = steps[0]
+        gone = {key for key, how in shown.items() if how == HIDDEN and all(step.get(key) == HIDDEN for step in steps)}
+    else:
+        shown = slide_states(slide, canvas.code_lines)
+        mark_slide(canvas.root, shown, canvas.palette.get("canvas"))
+        gone = {key for key, how in shown.items() if how == HIDDEN}
     dim_words(canvas.root, canvas.palette.get("canvas"))
-    if shown and not PLACEHOLDERS.get():
-        canvas.lists = [layout for layout in canvas.lists if shown.get(layout.id) != HIDDEN]
-        canvas.tables = [layout for layout in canvas.tables if shown.get(layout.id) != HIDDEN]
+    if gone and not PLACEHOLDERS.get():
+        canvas.lists = [layout for layout in canvas.lists if layout.id not in gone]
+        canvas.tables = [layout for layout in canvas.tables if layout.id not in gone]
     if f"{slide.id}.title" in empty and (not slide.subtitle_runs or f"{slide.id}.subtitle" in empty):
         # With no heading shown, the band or rule a heading is set on is not shown either.
         # While editing it stays, round the title's place, but marked as a placeholder is,
@@ -772,7 +786,31 @@ def _render_slide(deck: Deck, slide: Slide, empty: dict[str, str]) -> RenderedSl
         slide, xml_document(canvas.root), canvas.lists, list(dict.fromkeys(canvas.diagnostics)), canvas.tables,
         canvas.notes,
         canvas.steps, canvas.held, canvas.worded, canvas.settled, builds=canvas.built, shapes=shapes, shown=shown,
+        shows=shows,
     )
+
+
+def _parts_at(slide: Slide, click: int) -> dict[str, dict[str, str]]:
+    """How the parts of each figure on ``slide`` whose parts a click shows anew are shown at
+    ``click``, by the figure's id (``flexo_talk.onclick.figure_parts``): as its last click up to
+    then says them -- what that does not say, as the figure does -- else as it says before."""
+
+    found: dict[str, dict[str, str]] = {}
+    for name, region in slide.regions.items():
+        for index, first in region.stepped.items():
+            block = region.blocks[index]
+            spec = getattr(block, "figure", None)
+            if not isinstance(spec, FigureSpec):
+                continue
+            lists = first
+            later = [number for number in region.later.get(index, {}) if number <= click]
+            if later:
+                named = region.later[index][max(later)].named
+                own = region.own.get(index, first)
+                lists = tuple(named.get(how, was) for how, was in zip(("hidden", "dimmed", "highlighted"), own,
+                                                                      strict=True))
+            found[f"{slide.id}.{name}.{index}"] = figure_parts(spec, f"{slide.id}.{name}.{index}", lists)
+    return found
 
 
 def _held_back(canvas: _Canvas, slide: Slide) -> None:
@@ -2409,8 +2447,8 @@ def _draw_shapes(canvas: _Canvas, slide: Slide, behind: ET.Element | None) -> li
         layout.layout.behind = bool(shape.get("behind"))
         if shape_state(shape) == HIDDEN:
             # A ghost while edited (marked so with the rest: _render_slide); never presented or
-            # exported, nor built in on a click.
-            if not editing:
+            # exported, nor built in on a click -- unless a click shows it (flexo_talk.onclick).
+            if not editing and all(shape_state(shape, click) == HIDDEN for click in clicks_said(shape)):
                 continue
         elif shape.get("build"):
             canvas.steps += 1

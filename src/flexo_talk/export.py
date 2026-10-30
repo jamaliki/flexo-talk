@@ -36,6 +36,7 @@ from flexo_talk.pptx import (
 from flexo_talk.pptx import editable_maths as editable_maths_of
 from flexo_talk.pptx_insets import inset_views
 from flexo_talk.pptx_shapes import ShapeWriter
+from flexo_talk.pptx_steps import add_steps, lifted, name_added
 from flexo_talk.showing import HIDDEN, natively
 
 FORMATS = ("pptx", "pdf", "svg", "png")
@@ -235,7 +236,12 @@ def write_pptx(
             continue
         # (Read as it was for the deck's PDF, or its PowerPoint before, where it was: its
         # groups this one's own to take apart -- flexo.drawings_kept.)
-        drawing = drawing_of(clicks_lifted(item.svg, item.builds))
+        # What a click shows anew drawn plainly, and lifted out of what it is in (pptx_steps).
+        drawn_svg, animated, out_of = clicks_lifted(item.svg, item.builds), {}, {}
+        if item.shows:
+            natives = [layout.id for layout in (*item.lists, *item.tables)]
+            drawn_svg, animated, out_of = lifted(drawn_svg, item.slide.id, natives)
+        drawing = drawing_of(drawn_svg)
         formulas = _drop_lists(drawing.root)
         # (What a zoom inset among them shows is drawn from their drawing: a picture.)
         views = inset_views(drawing.root)
@@ -314,19 +320,27 @@ def write_pptx(
                        for shown in (name, f"{name}.caption") if shown in shapes]
             # What it writes as its own -- lists, tables, shapes, equations -- hidden, dimmed or
             # highlighted as the slide draws them (flexo_talk.showing).
-            natively(tree, item.shown, _slide_palette(deck, item.slide).get("canvas"),
+            fixed = {key: how for key, how in item.shown.items() if key not in item.shows}
+            natively(tree, fixed, _slide_palette(deck, item.slide).get("canvas"),
                      lists=[layout.id for layout in item.lists], tables=[layout.id for layout in item.tables],
                      shapes=[layout.id for layout in item.shapes])
             if item.slide.notes_text:
                 slide.notes_slide.notes_text_frame.text = item.slide.notes_text
-            steps = sorted({step for step, _, _ in clicks})
-            add_reveals(slide._element, [[(shape_id, one) for at, shape_id, one in clicks if at == step]
-                                         for step in steps])
+            called: dict[int, str] = {}
+            if item.shows:
+                # Builds and what each click shows anew, a click each (pptx_steps).
+                called = add_steps(slide._element, tree, item, clicks, animated, shapes,
+                                   _slide_palette(deck, item.slide).get("canvas"), out_of)
+            else:
+                steps = sorted({step for step, _, _ in clicks})
+                add_reveals(slide._element, [[(shape_id, one) for at, shape_id, one in clicks if at == step]
+                                             for step in steps])
             _read_in_order(tree, item.slide, over)
             # Last, as nothing more finds a shape by its id: each named as a person would.
             plain_names(tree, {f"{item.slide.id}.{region.name}.{index}": _BLOCK_NAMES.get(type(block).__name__, "Group")
                                for region in item.slide.regions.values() for index, block in enumerate(region.blocks)},
                         shapes={**drawn_over, **_shape_names(item.shapes)})
+            name_added(tree, called)
         if known is not None:
             _keep_written(known, slide, chosen)
     buffer = BytesIO()

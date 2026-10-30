@@ -1084,6 +1084,16 @@ class Region:
         self.shown: dict[int, Shown] = {}
         """How the blocks (by index) that are not simply shown are: hidden, dimmed or
         highlighted, whole or in part (see ``show``)."""
+        self.later: dict[int, dict[int, Shown]] = {}
+        """How the blocks (by index) are shown from a click on, by the click: each all of how its
+        block is shown from then (``show(click=)``, ``flexo_talk.onclick``)."""
+        self.own: dict[int, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {}
+        """The parts its figure itself hides, dims and highlights, for each figure (by index)
+        whose parts a click shows anew: what a click does not say of them."""
+        self.stepped: dict[int, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {}
+        """The figures (by index) whose parts are shown otherwise from a click on: drawn with
+        none of their parts shown apart, the slide showing them so at each step -- each with
+        its parts hidden, dimmed and highlighted before its first click."""
         """The blocks (by index) that are placeholders: put there to be made one's own (the
         studio's sample table, figure or equation), drawn faintly while editing and never
         presented or exported until changed."""
@@ -1561,7 +1571,7 @@ class Region:
 
     def show(
         self, *, hide: bool | Sequence[object] | None = None, dim: bool | Sequence[object] | None = None,
-        highlight: bool | Sequence[object] | None = None,
+        highlight: bool | Sequence[object] | None = None, click: int | None = None,
     ) -> Region:
         """How the block added last is shown (``flexo_talk.showing``): ``hide=True`` keeps it
         out of the show and the exports where it stands, its place kept (a ghost while it is
@@ -1569,7 +1579,11 @@ class Region:
         and shapes faint. Each may instead name its parts: a list's items by number (``"2.1"``
         under item 2), a table's rows (the header row 1) or cells (``"3.2"``), a gallery's
         pictures, numbers' figures or code's lines by theirs, a figure's parts by id --
-        ``highlight=[2]`` drawing the list's other items faint."""
+        ``highlight=[2]`` drawing the list's other items faint.
+
+        With ``click``, how it is shown from that click on, held until a later one of its own
+        (``flexo_talk.onclick``): ``show(highlight=[2], click=1)``, then ``show(click=2)`` to
+        show it plainly again -- a document's ``click 1: {highlight: [2]}``, ``click 2: {}``."""
 
         from flexo_talk.showing import KEYS, Shown, kind_of, part_written, written
 
@@ -1580,20 +1594,63 @@ class Region:
         said = {"hide": hide, "dim": dim, "highlight": highlight}
         kind = kind_of(block, self.sources[-1])
         made = written(kind, {key: list(value) if isinstance(value, tuple) else value for key, value in said.items()})
+        if click is not None:
+            if isinstance(click, bool) or not isinstance(click, int) or click < 1:
+                raise SettingError("click", f"click is the click it is shown so from, counted from 1, not {click!r}.")
+            had = self.later.setdefault(index, {}).get(click, Shown())
+            self.later[index][click] = Shown(made.whole or had.whole, {**had.parts, **made.parts},
+                                             {**had.named, **made.named})
+            if self.sources[-1]:
+                from flexo_talk.onclick import key_of
+
+                entry = self.sources[-1].setdefault(key_of(click), {})
+                for key, value in said.items():
+                    if value not in (None, False):
+                        entry[key] = value if value is True else [part_written(item) for item in value]
+            if kind == "figure" and isinstance(block, _Figure):
+                self._figure_steps(index)
+            return self
         if kind == "figure" and isinstance(block, _Figure):
             # A figure's parts are its own (flexo.showing): hidden, dimmed or highlighted in it.
             named = {KEYS[key]: tuple(value) for key, value in said.items() if isinstance(value, list | tuple)}
-            if named and isinstance(block.figure, FigureSpec):
+            if named and index in self.stepped:
+                self.stepped[index] = tuple(  # type: ignore[assignment]
+                    named.get(how, was) for how, was in zip(("hidden", "dimmed", "highlighted"), self.stepped[index],
+                                                            strict=True))
+            elif named and isinstance(block.figure, FigureSpec):
                 block.figure = replace(block.figure, **named)
         had = self.shown.get(index, Shown())
-        made = Shown(made.whole or had.whole, {**had.parts, **made.parts})
+        made = Shown(made.whole or had.whole, {**had.parts, **made.parts}, {**had.named, **made.named})
         if made:
             self.shown[index] = made
         if self.sources[-1]:  # a stand-in for what is missing is written as nothing
             for key, value in said.items():
                 if value not in (None, False):
                     self.sources[-1][key] = value if value is True else [part_written(item) for item in value]
+        if kind == "figure" and isinstance(block, _Figure) and index in self.later:
+            self._figure_steps(index)
         return self
+
+    def _figure_steps(self, index: int) -> None:
+        """The figure at ``index`` drawn with its parts shown as it says before its first click,
+        or -- a click showing them otherwise -- with none shown apart, the slide showing them at
+        each step (``stepped``; ``flexo_talk.onclick.figure_parts``)."""
+
+        block = self.blocks[index]
+        if not isinstance(block, _Figure) or not isinstance(block.figure, FigureSpec):
+            return
+        names = ("hidden", "dimmed", "highlighted")
+        spec = block.figure
+        first = self.stepped.get(index) or tuple(getattr(spec, how) for how in names)
+        own = self.own.setdefault(index, first)
+        later = [tuple(entry.named.get(how, was) for how, was in zip(names, own, strict=True))
+                 for entry in self.later.get(index, {}).values()]
+        if any(lists != first for lists in later):
+            self.stepped[index] = first
+            block.figure = replace(spec, hidden=(), dimmed=(), highlighted=())
+        elif index in self.stepped:
+            del self.stepped[index]
+            block.figure = replace(spec, **dict(zip(names, first, strict=True)))
 
     def stand_in(self, what: str, name: str, *, said: str | None = None) -> Region:
         """A box where the ``what`` (picture, figure, plot) in the file ``name`` would be,
@@ -2047,6 +2104,20 @@ def shape_of(written: object) -> dict[str, object]:
 
     from flexo.freeform import ShapeError, checked
 
+    from flexo_talk.onclick import click_of, entry_problem, nearly_click
+
+    # (How it is shown from a click on -- ``click 2: {dim: true}`` -- is the slide's to say:
+    # flexo_talk.onclick.)
+    later = {}
+    if isinstance(written, dict):
+        for key in written:
+            if nearly_click(key):
+                raise SettingError(str(key), f"{key} names no click: say click 2 (a space, then a number from 1).")
+        later = {key: value for key, value in written.items() if click_of(key) is not None}
+        written = {key: value for key, value in written.items() if key not in later}
+        # (A shape put in a group is shown as its group is: what it said of its clicks goes.)
+        if isinstance(written.get("shapes"), list):
+            written["shapes"] = [_unclicked(child) for child in written["shapes"]]
     try:
         made = checked(written, extra=SHAPE_KEYS)
     except ShapeError as error:
@@ -2054,7 +2125,25 @@ def shape_of(written: object) -> dict[str, object]:
     for key in SHAPE_KEYS:
         if key in made and not isinstance(made[key], bool):
             raise SettingError(key, f"{key} must be true or false, not {made[key]!r}.")
+    for key, value in later.items():
+        problem = entry_problem(value, shape=True)
+        if problem:
+            raise SettingError(key, f"{key} {problem}")
+        made[key] = dict(value or {})
     return made
+
+
+def _unclicked(shape: object) -> object:
+    """A shape in a group without what it says of the slide's clicks, nor its own shapes."""
+
+    from flexo_talk.onclick import click_of
+
+    if not isinstance(shape, dict):
+        return shape
+    kept = {key: value for key, value in shape.items() if click_of(key) is None}
+    if isinstance(kept.get("shapes"), list):
+        kept["shapes"] = [_unclicked(child) for child in kept["shapes"]]
+    return kept
 
 
 _OBJECT = re.compile(r"(body|left|right|columns\.(\d+)|columns\[(\d+)\])\[(\d+)\]")
@@ -2774,19 +2863,28 @@ class RenderedSlide:
     key: str = ""
     """What it was drawn from, all of it, as a key -- given where it is kept to export again
     (the studio's): a writer may keep what it makes of it by this (``export.write_pptx``)."""
+    shows: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """What a click shows anew -- hidden, dimmed or shown again -- by the id it is drawn with:
+    how it is shown at each step, in turn (``flexo_talk.onclick``). Its drawing is the slide
+    before its first click."""
 
     def at_step(self, step: int) -> str:
-        """The slide's SVG as it stands at ``step`` (1-based): later items hidden."""
+        """The slide's SVG as it stands at ``step`` (1-based): later items hidden, and what
+        a click shows anew shown as it is then (``flexo_talk.onclick.at_step``)."""
 
         if self.steps <= 1:
             return self.svg
         import xml.etree.ElementTree as ET
+
+        from flexo_talk.onclick import at_step
 
         root = ET.fromstring(self.svg)
         for parent in root.iter():
             for child in list(parent):
                 if int(child.get("data-flexo-step", "0")) > step:
                     parent.remove(child)
+        if self.shows:
+            at_step(root, step)
         return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
 
 
