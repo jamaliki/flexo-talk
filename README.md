@@ -826,7 +826,11 @@ whole: live co-editing with Claude and other agents, themes, figures). For a dec
   takes `#1f77b4`, `1f77b4`, `#17b`, `rgb(31, 119, 180)`, `hsl(…)`, `(0.12, 0.47, 0.71)`,
   `steelblue` or `tab:blue`, typed (Return) or pasted (at once), each one step, an alpha
   after it (`#1f77b4cc`) the fill's or line's opacity; the colours applied last sit beside
-  it. **Set Colour…** (⇧⌘C, Format) opens a small popover by what is chosen -- shapes, a
+  it. A colour's well opens the studio's picker, with the colours **On This Slide** and an
+  eyedropper for any colour on the screen -- another object's own colour, exactly and by the
+  theme's name where it has one, when it is one of the slide's (see flexo's README); **Pick
+  Colour…** (⌃⌘C, Format) is the eyedropper at once, for what is chosen. **Set Colour…**
+  (⇧⌘C, Format) opens a small popover by what is chosen -- shapes, a
   group, a text, both, a figure's shapes, or with nothing chosen the slide's background --
   naming what it will colour ("Fill of 3 Shapes", a switch for its Outline and Text): paste
   a code and it is applied, or type one and Return; a colour copied already is shown, ready
