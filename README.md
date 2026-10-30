@@ -976,6 +976,7 @@ flexo-talk studio talk.flexo          # edit it in the browser: a bundle, made i
 flexo-talk studio talk.yaml           # a deck in a folder instead, its files beside it
 flexo bundle talk.yaml -o talk.flexo  # the deck and every file it names, as one file to send
 flexo-talk build talk.flexo --trust   # built straight from a bundle, its plots' Python run
+flexo-talk import talk.pptx           # a PowerPoint or Keynote deck made a new deck: talk.flexo, here
 ```
 
 A bundle (`.flexo`, see flexo's README) holds the deck and every file it names: its theme
@@ -1004,6 +1005,45 @@ deck, and the files it names (structures, pictures, data) are copied into the de
 under `assets/<its name>/`, so the deck -- and its bundle -- holds them. In a browser, which is
 given a dropped file but not where it was, drop the figure file together with the files it
 names (see `flexo_talk.embedding`).
+
+## PowerPoint and Keynote decks, imported
+
+A talk given before, or slides a co-author sends, comes into Flexo as a deck of its own:
+`flexo-talk import talk.pptx` (or `talk.key`; `-o` names the bundle, `--folder` makes a folder),
+or in Flexo Studio File › Import Presentation…, a `.pptx` or `.key` opened with it or dropped on
+it -- which asks where the new deck goes and opens it. The source is only read. Each slide looks
+as it did:
+
+- its words, lists (their levels, bullets or numbers), equations, pictures and tables are the
+  slide's objects placed where they stood (`at`, `width`), their words with their bold, italic,
+  scripts, links and colours where these differ from the deck's ink; a text box whose
+  paragraphs differ (a heading over a list) is set as objects one under another, as its program
+  set them, a box's words in its middle or at its foot where they stood there;
+- a slide's title is its title, drawn where the deck's titles are -- the deck's look set from
+  the source's (its titles' size, weight and side, how far in they stand, no rule under them) --
+  unless it stands elsewhere, when it is placed words as any others; a title slide is set as it
+  was, its words placed;
+- shapes are Flexo's own kinds where it has them (rectangles, rounded ones, ellipses, triangles,
+  diamonds, block arrows, stars, chevrons, clouds, speech bubbles...), any other outline a path,
+  with their fills (gradients too), outlines, dashes, arrowheads, words, turns and flips; lines
+  and connectors are lines and elbows glued to the shapes and objects they join; a group is a
+  group, and one of very many shapes (a figure drawn in thousands of outlines) a picture of
+  them, made shapes again by a double-click;
+- Office Math (PowerPoint's equations) and Keynote's equations, LaTeX or MathML, are Flexo's
+  TeX, displayed or in words; a PDF embedded as an object is its picture, read as Flexo reads
+  PDFs; SmartArt the shapes PowerPoint drew it in;
+- the slide's size, its background, notes and skipped slides come too, and the source's faces
+  and colours become a theme of the deck's own (`theme.yaml`: its face, its title face, its
+  colours as a palette, its words' ink and page), a face this Mac lacks set in the nearest it
+  has (said).
+
+Nothing makes an import fail but a file that is no deck. What cannot come across -- a chart, a
+Keynote table, a movie, sound, a Windows metafile picture -- is kept as its place: a picture of
+it where the source has one (a movie's first frame), else a dashed box hidden from the show and
+every export, marked TODO (so the slide list glows where work is left, and Next TODO goes to
+each); the import's report says what became placeholders, and where. Keynote's files are read
+with no library but Python's (`flexo_talk.importing.iwa`). The PowerPoint and Keynote readers
+adapt DeckWerk's (MIT; see each file's header).
 
 ## Development
 
