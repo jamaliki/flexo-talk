@@ -228,6 +228,11 @@ with English words, numbers, and maths inside it kept in order.
   one: laid out with each other's parts (unseen), at one scale and from one top left, so the
   parts they share (by id) stay put. Keep the ids of what stays the same; put the blocks in
   the same place of the same layout, or at the same `at` and `width`.
+- **Motion between slides**: `transition: morph` (or `{kind: morph, duration: 2}`) on a slide
+  moves what it shares with the slide before into place, as Keynote's Magic Move: duplicate the
+  slide, change it, and say `transition: morph` on the copy. Shared means the same `morph:` name
+  on both objects or shapes, else the same frame, picture, figure, shape id or words, else the
+  same kind in the same place; the rest fades. PowerPoint gets its own Morph.
 - **Type by role**: `Deck(font=, title_font=, figure_font=)`; each falls back to
   `font`, then to the theme's (its `type: {title_family:, figure_family:}`, then its
   family).

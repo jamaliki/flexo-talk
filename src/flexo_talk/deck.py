@@ -256,14 +256,15 @@ SHAPE_FRAME = 960.0
 points wide (16:9, 960 by 540), they are its points, as every size in a deck is; on a slide
 of another size they are scaled with it, 960 of them across -- so a shape keeps its place
 and its proportions, a circle a circle, when the slide is made larger or smaller."""
-SHAPE_KEYS = ("behind", "build", "hidden", "locked", "hide", "dim", "highlight")
+SHAPE_KEYS = ("behind", "build", "hidden", "locked", "hide", "dim", "highlight", "morph")
 """What a shape on a slide says besides how it is drawn (``flexo.freeform``): whether it is
 drawn behind the slide's words and objects rather than over them, whether it appears on a
 click when presenting (after the slide's objects that do, in the order the shapes are
 listed), whether it is locked where it is, and how it is shown, as any object on the slide
 is (``flexo_talk.showing``): hidden (``hide``: a ghost while editing, never presented or
 exported -- ``hidden``, as decks said it before), dimmed (``dim``) or highlighted
-(``highlight``: the slide's other objects and shapes drawn faint)."""
+(``highlight``: the slide's other objects and shapes drawn faint) -- and ``morph``, the name it
+shares with what it goes with on the slide before or after (``flexo_talk.morphing``)."""
 
 _STYLE_NUMBERS: dict[str, tuple[float, float]] = {
     # PowerPoint's slides are 1 to 56 inches each way.
@@ -2052,7 +2053,11 @@ def shape_of(written: object) -> dict[str, object]:
     except ShapeError as error:
         raise SettingError(error.key, error.message) from None
     for key in SHAPE_KEYS:
-        if key in made and not isinstance(made[key], bool):
+        if key == "morph":
+            from flexo_talk.morphing import morph_name
+
+            morph_name(made.get(key))
+        elif key in made and not isinstance(made[key], bool):
             raise SettingError(key, f"{key} must be true or false, not {made[key]!r}.")
     return made
 

@@ -98,6 +98,11 @@ each slide's its own figure -- is drawn as one by giving its blocks one ``frame`
 naming the same frame are laid out with each other's parts (those a slide's lacks kept room
 for, unseen), the same way, at one scale and from one top left, so what they share stays
 where it is (``{figure: figures/step-2.yaml, frame: smc}``; ``flexo_talk.framing``).
+A slide that says ``transition: morph`` (``{kind: morph, duration: 2}``: in 2 seconds) moves what
+it shares with the slide shown before it into place, as Keynote's Magic Move: the same ``morph:``
+name on an object or a shape on both slides (``{text: Encoder, morph: enc}``), else the same
+frame, picture, figure, shape id or words, else the same kind of object in the same place; what is
+left fades (``flexo_talk.morphing``).
 A figure is drawn in the deck's theme; its own ``spacing``, ``shape_padding``,
 ``line_width`` and ``head_size`` (in its ``figure:``, each a share of the theme's) make it
 tighter, or its arrowheads smaller, than the deck's other figures: ``spacing: 0.6``.
@@ -248,6 +253,7 @@ from flexo_talk.deck import (
     shape_problems,
     share_of,
 )
+from flexo_talk.morphing import morph_name, transition_of
 
 SCHEMA_VERSION = 1
 
@@ -273,22 +279,25 @@ BLOCKS: dict[str, tuple[str, ...]] = {
 """Each block kind and the options it takes beside its value. Every kind takes ``width``
 (points): the most it takes across its place, set there as its place sets it."""
 
-BLOCK_KEYS = ("placeholder", "build", "horizontal", "vertical", "at", "locked", "hide", "dim", "highlight")
+BLOCK_KEYS = ("placeholder", "build", "horizontal", "vertical", "at", "locked", "hide", "dim", "highlight", "morph")
 """What every block takes besides its kind's options: whether it is a placeholder, whether it
 builds in on a click, where it stands across and down its place -- or, ``at: [x, y]``, where
 it is placed on the slide, out of its place's flow (its ``width`` its width there, both in
 the units the slide's shapes are placed in) -- whether it is locked where it is, and how it
 is shown: ``hide``, ``dim`` and ``highlight``, each ``true`` (the whole object) or a list of
-its parts (``flexo_talk.showing``)."""
+its parts (``flexo_talk.showing``) -- and ``morph``, the name it shares with the object it goes
+with on the slide before or after, for a slide that morphs (``flexo_talk.morphing``)."""
 
 DECK_KEYS = (
     "id", "theme", "look", "palette", "font", "title_font", "figure_font", "footer", "background",
     "conventions", "sketch", "style", "logos", "logos_on", "logo_height", "spelling",
 )
-COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes")
+COMMON_KEYS = ("layout", "notes", "footnotes", "background", "shade", "skip", "shapes", "transition")
 """The keys every slide takes. ``skip: true`` is Keynote's Skip Slide: the slide is kept,
 and edited, but the studio neither presents nor exports it. ``shapes`` are drawn where they
-are put, over its words and objects (see the module's docs)."""
+are put, over its words and objects (see the module's docs). ``transition: morph`` moves what
+the slide shares with the one shown before it into place (``{kind: morph, duration: 2}``, in 2
+seconds; ``flexo_talk.morphing``)."""
 SLIDE_KEYS: dict[str, tuple[str, ...]] = {
     "title": ("title", "subtitle", "author", "date"),
     "section": ("title", "subtitle"),
@@ -804,6 +813,10 @@ def add_slide(
     _only(data, COMMON_KEYS + SLIDE_KEYS[layout], where)
     if not isinstance(data.get("skip", False), bool):
         raise DeckDocumentError(f"{where}.skip", "skip must be true or false.")
+    try:
+        transition_of(data.get("transition"))
+    except SettingError as error:
+        raise DeckDocumentError(f"{where}.transition", str(error)) from None
     background = data.get("background")
     # A picture file, unless it names a colour (#1b2a41, or one of the theme's: accent).
     if isinstance(background, str) and not background.startswith("#") and not named_colour(background):
@@ -1098,6 +1111,10 @@ def add_block(
         raise DeckDocumentError(here, "build must be true or false.")
     if not isinstance(block.get("locked", False), bool):
         raise DeckDocumentError(here, "locked must be true or false.")
+    try:
+        morph_name(block.get("morph"))
+    except SettingError as error:
+        raise DeckDocumentError(f"{here}.morph", str(error)) from None
     point = None
     if block.get("at") is not None:
         try:
@@ -1829,6 +1846,8 @@ def _slide_data(
         data["shapes"] = [dict(shape) if isinstance(shape, dict) else shape for shape in slide.shape_sources]
     if slide.notes_text:
         data["notes"] = slide.notes_text
+    if given.get("transition") not in (None, False, "none"):
+        data["transition"] = given["transition"]
     if layout == "columns":
         data["columns"] = [
             _blocks(region, f"{where}.columns[{index}]", plots) for index, region in enumerate(slide.columns)
@@ -1890,7 +1909,7 @@ def _json_value(value: object) -> object:
 
 _SLIDE_ORDER = (
     "layout", "title", "subtitle", "author", "date", "words", "by", "dark", "align", "split", "widths", "rows",
-    "background", "shade", "body", "left", "right", "columns", "shapes", "notes", "footnotes",
+    "background", "shade", "transition", "body", "left", "right", "columns", "shapes", "notes", "footnotes",
 )
 """A slide's keys in the order a person reads them: what it is, its words, its look, its
 content, then its notes."""
