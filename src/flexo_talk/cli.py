@@ -3,8 +3,9 @@
 A Python file names its deck as a function that returns one (``deck.py:talk``,
 or a function called ``talk`` by default) or as a module-level ``deck``; a
 ``.yaml`` or ``.json`` file is a deck document (see ``flexo_talk.document``).
-``flexo-talk convert deck.py`` writes a Python deck as a document, and
-``flexo-talk studio deck.yaml`` opens one in the editor.
+``flexo-talk convert deck.py`` writes a Python deck as a document,
+``flexo-talk studio deck.yaml`` opens one in the editor, and ``flexo-talk import talk.pptx``
+makes a new deck of a PowerPoint or Keynote one (``flexo_talk.importing``).
 """
 
 from __future__ import annotations
@@ -67,7 +68,18 @@ def main(argv: list[str] | None = None) -> int:
                         "(either made if missing; a new name with no ending is a bundle)")
     studio.add_argument("--port", type=int, default=0, help="the port to serve on (default: any free one)")
     studio.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    imported = commands.add_parser("import", help="make a new deck of a PowerPoint (.pptx) or Keynote (.key) deck")
+    imported.add_argument("deck", help="talk.pptx or talk.key (only read, never changed)")
+    imported.add_argument("-o", "--output", help="the deck to make: talk.flexo, a bundle (default: the deck's name, "
+                          "here), or a folder with --folder")
+    imported.add_argument("--folder", action="store_true", help="make a folder holding the deck and its pictures")
+    imported.add_argument("--force", action="store_true", help="replace what is at the output already")
+    imported.add_argument("--quiet", action="store_true", help="say nothing as it goes")
     arguments = parser.parse_args(argv)
+    if arguments.command == "import":
+        from flexo_talk.importing.cli import run
+
+        return run(arguments)
     if arguments.command == "studio":
         from flexo.studio.server import main as studio_main
 

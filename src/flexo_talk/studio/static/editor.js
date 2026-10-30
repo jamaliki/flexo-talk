@@ -7284,6 +7284,14 @@ export function mount(studio, container) {
   // Files added to the slide, dropped or pasted: figure files, pictures, and structures into
   // the figure `part` is (where `at`, an event, says) or a figure of their own. Whether any were.
   async function addFiles(all, part, at = null, { pictures: asPictures = false } = {}) {
+    // A PowerPoint or Keynote deck becomes a deck of its own (the Mac app imports it).
+    const decks = all.filter((file) => /\.(pptx|key)$/i.test(file.name));
+    if (decks.length) {
+      all = all.filter((file) => !decks.includes(file));
+      if (window.pywebview?.api?.dropped_presentations) window.pywebview.api.dropped_presentations(decks.map((file) => file.name));
+      else toast("A PowerPoint or Keynote deck is imported with File › Import Presentation… in Flexo Studio, or flexo-talk import.", { icon: "info", seconds: 6 });
+      if (!all.length) return true;
+    }
     const scenes = new Set();
     for (const file of all) if (await sceneFile(file)) scenes.add(file);
     // Figure files first: the files they name, dropped with them, are theirs.
