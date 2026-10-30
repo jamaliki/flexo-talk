@@ -325,6 +325,81 @@ def test_builds_and_steps_are_one_timeline(tmp_path: Path) -> None:
     assert xml.count('nodeType="clickEffect"') == 3
 
 
+# -- the studio's, run in Node (shown.js) --
+
+
+def _shown(code: str) -> object:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    script = f"const S = await import({json.dumps((STATIC / 'shown.js').as_uri())});\n{code}"
+    done = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, check=True)
+    return json.loads(done.stdout)
+
+
+def test_the_studio_says_how_a_thing_is_shown_from_a_click_on_as_the_deck_does() -> None:
+    made = _shown("""
+      const list = { bullets: ["One", "Two", "Three"], highlight: [1], "click 2": { highlight: [2] } };
+      const at = [0, 1, 2, 3].map((click) => S.partOf(S.saidAt(list, click), "1"));
+      // Dimmed whole from click 1: its own said then, as it is shown then, its parts kept.
+      S.setWhole(S.entryAt(list, 1), "dimmed");
+      const one = structuredClone(list);
+      // From click 3, as it is then: said as from click 2, so not said at all.
+      S.setPart(S.entryAt(list, 3), ["2"], "highlighted");
+      S.tidyClicks(list);
+      const tidy = structuredClone(list);
+      const shape = { kind: "ring", hidden: true };
+      S.setWhole(S.entryAt(shape, 2, { shape: true }), "shown");
+      const shown = structuredClone(shape);
+      S.setWhole(S.entryAt(shape, 3, { shape: true }), "hidden");
+      S.tidyClicks(shape, { shape: true });
+      console.log(JSON.stringify({ at, one, tidy, shown, shape, last: S.lastClick({ body: [list], shapes: [shape] }),
+        clicks: S.clicksOf(list) }));
+    """)
+    assert made["at"] == ["highlighted", "highlighted", "shown", "shown"]
+    assert made["one"]["click 1"] == {"highlight": [1], "dim": True}
+    assert "click 3" not in made["tidy"] and made["tidy"]["click 2"] == {"highlight": [2]}
+    assert made["shown"] == {"kind": "ring", "hidden": True, "click 2": {}}
+    assert made["shape"] == {"kind": "ring", "hidden": True, "click 2": {}, "click 3": {"hide": True}}
+    assert made["last"] == 3 and made["clicks"] == [1, 2]
+
+
+def test_a_figures_parts_are_shown_from_a_click_on_its_own_lists_kept_where_it_says_nothing() -> None:
+    made = _shown("""
+      const own = { dim: ["store"] };
+      const block = { figure: "#pipeline", "click 1": { highlight: ["api"] } };
+      const at = (id, click) => S.figurePartAt(block, id, click, own);
+      const before = ["store", "api", "queue"].map((id) => [at(id, 0), at(id, 1)]);
+      // The store shown plainly from click 1: the figure's own dims said apart there.
+      S.setFigurePart(block, ["store"], "shown", 1, own);
+      const plain = structuredClone(block);
+      // Its queue hidden from click 2.
+      S.setFigurePart(block, ["queue"], "hidden", 2, own);
+      // Back as click 1 had it: said no more.
+      S.setFigurePart(block, ["queue"], "shown", 2, own);
+      console.log(JSON.stringify({ before, plain, after: block }));
+    """)
+    assert made["before"] == [["dimmed", "dimmed"], [None, "highlighted"], [None, None]]
+    assert made["plain"]["click 1"] == {"highlight": ["api"], "dim": []}
+    assert made["after"] == made["plain"]
+
+
+def test_a_click_taken_off_the_slide_takes_what_each_thing_says_of_it_and_moves_the_rest_sooner() -> None:
+    made = _shown("""
+      const slide = { body: [{ text: "a", "click 1": { dim: true }, "click 2": {}, "click 3": { hide: true } }],
+        shapes: [{ kind: "ring", "click 3": { dim: true } }] };
+      const count = S.removeClick(slide, 2);
+      const all = structuredClone(slide);
+      S.showAllAt(slide, 1);
+      console.log(JSON.stringify({ count, all, plain: slide }));
+    """)
+    assert made["count"] == 2
+    assert made["all"] == {"body": [{"text": "a", "click 1": {"dim": True}, "click 2": {"hide": True}}],
+                           "shapes": [{"kind": "ring", "click 2": {"dim": True}}]}
+    assert made["plain"] == {"body": [{"text": "a", "click 2": {"hide": True}}],
+                             "shapes": [{"kind": "ring", "click 2": {"dim": True}}]}
+
+
 def test_what_is_faint_before_it_appears_is_made_faint_as_it_appears(tmp_path: Path) -> None:
     # (Its Appear first: PowerPoint has a paragraph or a shape whose first animation is its Appear
     # not there before it.)
