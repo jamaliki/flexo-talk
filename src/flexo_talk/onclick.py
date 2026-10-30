@@ -109,7 +109,7 @@ def last_click(slide: Any) -> int:
     found = 0
     for region in slide.regions.values():
         for later in region.later.values():
-            found = max(found, *later)
+            found = max(found, *later, 0)
     for shape in slide.shapes:
         if isinstance(shape, dict):
             found = max(found, *clicks_said(shape), 0)

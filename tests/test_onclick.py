@@ -433,3 +433,11 @@ def test_what_is_faint_before_it_appears_is_made_faint_as_it_appears(tmp_path: P
     # Faint from click 1, appearing on click 5: faint as it appears.
     assert clicks[4] == [("appear", later, None, None), ("fade", later, None, "0.28")]
     assert not any(effect[1] in (built, later) for effect in [*start, *clicks[0], *clicks[1], *clicks[2]])
+
+
+def test_a_table_shown_anew_whole_takes_its_caption_with_it(tmp_path: Path) -> None:
+    xml, names, _ = written(tmp_path, deck_of({"title": "S", "body": [
+        {"table": [["A", "B"], ["1", "2"]], "caption": "Table one", "click 1": {"dim": True}}]}))
+    _, clicks = animations(xml)
+    assert sorted(clicks[0]) == sorted([("fade", names["Table"], None, "0.28"),
+                                        ("fade", names["Caption “Table one”"], None, "0.28")])

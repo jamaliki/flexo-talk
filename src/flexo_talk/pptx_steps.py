@@ -367,6 +367,8 @@ def add_steps(
         if name in shapes and holder in shapes:
             lifted_from.setdefault(shapes[holder], []).append(shapes[name])
     for step, shape_id, paragraphs in clicks:
+        if step < 2:
+            continue  # (there as the slide begins)
         timeline.at(step - 1).append(Effect("appear", Target(shape_id, paragraphs)))
         if paragraphs is None:
             timeline.at(step - 1).extend(Effect("appear", Target(one)) for one in lifted_from.get(shape_id, ()))
@@ -386,6 +388,10 @@ def add_steps(
             continue
         done.add(target)
         animate(timeline, target, [look(how) for how in seq])
+        # (A table's caption, set apart from it, with it.)
+        if f"{name}.caption" in shapes and Target(shapes[f"{name}.caption"]) not in done:
+            done.add(Target(shapes[f"{name}.caption"]))
+            animate(timeline, Target(shapes[f"{name}.caption"]), [look(how) for how in seq])
     covered = [name for name in tables if any(key.startswith(f"{name}.") for key in animated)]
     called: dict[int, str] = {}
     for spid, looks in veils(tree, covered, animated, page, called).items():
